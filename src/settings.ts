@@ -104,6 +104,38 @@ export class BacktestSettingTab extends PluginSettingTab {
     );
     this.field('Folder for saved results', 'Vault folder where saved results go.', settings.snapshotFolder, 'Backtests', () => null, (v) => (settings.snapshotFolder = v.trim() || 'Backtests'));
 
+    new Setting(containerEl).setName('Results and writing').setHeading();
+    new Setting(containerEl)
+      .setName('How results first appear')
+      .setDesc('Full shows everything. Compact shows one line per strategy that opens on a click, which suits a note with several strategies.')
+      .addDropdown((d) =>
+        d
+          .addOptions({ full: 'Full', compact: 'Compact' })
+          .setValue(settings.resultView)
+          .onChange(async (v) => {
+            settings.resultView = v as Settings['resultView'];
+            await this.host.saveSettings();
+          }),
+      );
+    new Setting(containerEl)
+      .setName('Check for orders when Obsidian starts')
+      .setDesc("Runs every strategy in the vault shortly after start-up and shows how many orders are due in the status bar. This fetches prices for every strategy's tickers.")
+      .addToggle((t) =>
+        t.setValue(settings.ordersOnStartup).onChange(async (v) => {
+          settings.ordersOnStartup = v;
+          await this.host.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName('Look tickers up while writing')
+      .setDesc('Suggests matching tickers and marks ones that do not exist. What you type on a universe line is sent to Yahoo or Binance to search.')
+      .addToggle((t) =>
+        t.setValue(settings.tickerLookup).onChange(async (v) => {
+          settings.tickerLookup = v;
+          await this.host.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName('Drafting from plain English').setDesc(DRAFT_PRIVACY).setHeading();
     new Setting(containerEl)
       .setName('Provider')

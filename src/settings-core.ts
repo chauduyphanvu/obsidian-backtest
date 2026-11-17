@@ -18,6 +18,12 @@ export interface Settings {
   ordersNote: string;
   /** Vault folder for saved results. */
   snapshotFolder: string;
+  /** How a result first appears: everything, or one line that opens on a click. */
+  resultView: 'full' | 'compact';
+  /** Work out today's orders when Obsidian starts and show the count in the status bar. */
+  ordersOnStartup: boolean;
+  /** Look tickers up at Yahoo and Binance while a strategy is being written. */
+  tickerLookup: boolean;
   llmProvider: 'anthropic' | 'openai';
   /** Empty means the provider's own address. */
   llmBaseUrl: string;
@@ -40,6 +46,9 @@ export const DEFAULT_SETTINGS: Settings = {
   writeProperties: false,
   ordersNote: '',
   snapshotFolder: 'Backtests',
+  resultView: 'full',
+  ordersOnStartup: true,
+  tickerLookup: true,
   llmProvider: 'anthropic',
   llmBaseUrl: '',
   llmModel: '',
@@ -122,6 +131,9 @@ export function normalizeSettings(saved: unknown): Settings {
     writeProperties: typeof given.writeProperties === 'boolean' ? given.writeProperties : d.writeProperties,
     ordersNote: text('ordersNote'),
     snapshotFolder: folder || d.snapshotFolder,
+    resultView: given.resultView === 'full' || given.resultView === 'compact' ? given.resultView : d.resultView,
+    ordersOnStartup: typeof given.ordersOnStartup === 'boolean' ? given.ordersOnStartup : d.ordersOnStartup,
+    tickerLookup: typeof given.tickerLookup === 'boolean' ? given.tickerLookup : d.tickerLookup,
     llmProvider: given.llmProvider === 'anthropic' || given.llmProvider === 'openai' ? given.llmProvider : d.llmProvider,
     llmBaseUrl: text('llmBaseUrl'),
     llmModel: text('llmModel'),

@@ -1,12 +1,10 @@
 import type { Backtest, Segment } from './backtest.ts';
 import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
-import type { Trade } from './engine.ts';
-import { DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, price, s, signedPct, stamp, timeTicks } from './dom.ts';
+import { DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { tokenizeBlock } from './highlight.ts';
 import { renderDeepStats } from './render-stats.ts';
+import { renderPositions, renderTrades } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
-
-const MAX_TRADE_ROWS = 500;
 
 /** The strategy as written: the block replaces its own text, so the result has to show it. */
 function source(el: HTMLElement, text: string): void {
@@ -193,66 +191,14 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   }
 
   segments(root, bt);
-  positions(root, bt, intraday);
-  trades(root, run.trades, intraday);
+  renderPositions(root, bt, intraday);
+  renderTrades(root, run.trades, intraday);
   cleanups.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: benchmark.equity, benchmarkLabel: benchmark.label, cashReturn: run.cashReturn }));
   for (const section of view.sections ?? []) {
     const stop = section(root);
     if (stop) cleanups.push(stop);
   }
   return () => cleanups.forEach((stop) => stop());
-}
-
-function positions(root: HTMLElement, bt: Backtest, intraday: boolean): void {
-  const table = h(h(root, 'div', 'bt-wide'), 'table', 'bt-table');
-  const head = h(h(table, 'thead'), 'tr');
-  for (const [text, num] of [['Ticker', 0], ['Weight', 1], ['Now', 0], ['Trades', 1], ['Won', 1], ['Average trade', 1]] as const) {
-    h(head, 'th', num ? 'bt-num' : undefined, text);
-  }
-  const body = h(table, 'tbody');
-  for (const st of bt.run.states) {
-    const closed = bt.run.trades.filter((t) => t.asset === st.name && t.reason !== 'open');
-    const row = h(body, 'tr');
-    h(row, 'td', undefined, st.name);
-    h(row, 'td', 'bt-num', pct(st.weight, 0));
-    const now = st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash';
-    h(row, 'td', undefined, now + (st.pending ? `, ${st.pending === 'buy' ? 'buys' : 'sells'} at the next open` : ''));
-    h(row, 'td', 'bt-num', String(closed.length));
-    h(row, 'td', 'bt-num', closed.length ? pct(closed.filter((t) => t.ret > 0).length / closed.length, 0) : '–');
-    h(row, 'td', 'bt-num', closed.length ? signedPct(closed.reduce((a, t) => a + t.ret, 0) / closed.length) : '–');
-  }
-}
-
-function trades(root: HTMLElement, all: Trade[], intraday: boolean): void {
-  if (all.length === 0) return;
-  const d = h(root, 'details', 'bt-details');
-  h(d, 'summary', undefined, `Trades (${all.length})`);
-  // Built on first open: a long run can have thousands of rows.
-  d.addEventListener(
-    'toggle',
-    () => {
-      const shown = all.slice(-MAX_TRADE_ROWS).reverse();
-      if (shown.length < all.length) h(d, 'div', 'bt-note', `Showing the latest ${shown.length} of ${all.length}.`);
-      const table = h(h(d, 'div', 'bt-scroll'), 'table', 'bt-table');
-      const head = h(h(table, 'thead'), 'tr');
-      for (const [text, num] of [['Ticker', 0], ['Bought', 0], ['At', 1], ['Sold', 0], ['At', 1], ['Return', 1], ['Profit', 1], ['Exit', 0]] as const) {
-        h(head, 'th', num ? 'bt-num' : undefined, text);
-      }
-      const body = h(table, 'tbody');
-      for (const t of shown) {
-        const row = h(body, 'tr');
-        h(row, 'td', undefined, t.asset);
-        h(row, 'td', undefined, stamp(t.entryT, intraday));
-        h(row, 'td', 'bt-num', price(t.entryPrice));
-        h(row, 'td', undefined, t.reason === 'open' ? '–' : stamp(t.exitT, intraday));
-        h(row, 'td', 'bt-num', price(t.exitPrice));
-        h(row, 'td', 'bt-num', signedPct(t.ret));
-        h(row, 'td', 'bt-num', (t.pnl > 0 ? '+' : '') + minus(money(t.pnl)));
-        h(row, 'td', undefined, t.reason === 'open' ? 'still held' : t.reason === 'signal' ? 'sell rule' : t.reason);
-      }
-    },
-    { once: true },
-  );
 }
 
 function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Backtest, intraday: boolean): void {

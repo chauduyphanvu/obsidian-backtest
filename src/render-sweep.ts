@@ -2,6 +2,7 @@
 
 import type { Backtest, Stats } from './backtest.ts';
 import { h, minus, niceStep, pct, s } from './dom.ts';
+import type { Defaults } from './dsl.ts';
 import {
   METRICS,
   isDeclared,
@@ -24,6 +25,10 @@ export interface SweepInput {
   source: string;
   backtest: Backtest;
   parse: Parse;
+  /** The defaults `parse` applies, for parsing the same text somewhere `parse` can't go (a worker). */
+  defaults?: Partial<Defaults>;
+  /** Writes parameter values back into the block (fractions for percentages); absent where the block can't be edited. */
+  apply?: (values: Record<string, number>) => void;
 }
 
 /** Shared by the parts of a section: observers to disconnect, and whether the section is gone. */

@@ -206,6 +206,7 @@ export default class BacktestBlocks extends Plugin {
   private async renderStrategy(source: string, el: HTMLElement, child: MarkdownRenderChild, notePath: string, force: boolean): Promise<void> {
     this.dispose(child);
     const runner = this.runner();
+    const defaults = defaultsFrom(this.settings);
     const retry = (refetch: boolean) => () => void this.renderStrategy(source, el, child, notePath, refetch);
     try {
       const { spec, errors, warnings } = runner.parse(source);
@@ -229,8 +230,8 @@ export default class BacktestBlocks extends Plugin {
             to: bt.run.t[bt.run.t.length - 1],
             intraday,
           }),
-        (root) => renderSweep(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides) }),
-        (root) => renderLuck(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides) }),
+        (root) => renderSweep(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides), defaults }),
+        (root) => renderLuck(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides), defaults }),
         (root) =>
           renderActions(root, [
             { label: 'Save trades as CSV', run: () => this.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
