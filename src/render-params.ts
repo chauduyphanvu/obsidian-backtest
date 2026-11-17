@@ -111,6 +111,9 @@ export interface ParamBarInput {
 
 let nextId = 0;
 
+/** An error's message as a sentence: messages in this plugin do not end with a full stop. */
+const sentence = (e: unknown) => `${(e instanceof Error ? e.message : String(e)).replace(/[.\s]+$/, '')}.`;
+
 /** The "Parameters" bar. The bar is built once and never redrawn, so the slider under a finger survives. Returns a cleanup function. */
 export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () => void {
   const { params, hook } = input;
@@ -183,7 +186,7 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
       },
       (e: unknown) => {
         if (seq !== latest) return;
-        say(`These values do not run. ${e instanceof Error ? e.message : String(e)} The result below is still the last one that ran.`);
+        say(`These values do not run. ${sentence(e)} The result below is still the last one that ran.`);
         // A drag that ends on values that do not run leaves the last good result half drawn.
         if (settled && last && !lastSettled) {
           lastSettled = true;
@@ -239,7 +242,7 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
       },
       (e: unknown) => {
         reset.disabled = write.disabled = false;
-        say(`Couldn't write the values to the block. ${e instanceof Error ? e.message : String(e)}`);
+        say(`Couldn't write the values to the block. ${sentence(e)}`);
       },
     );
   });

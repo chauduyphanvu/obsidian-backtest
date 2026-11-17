@@ -72,6 +72,14 @@ test('orders for several tickers share one sentence, and a long list is counted'
   assert.equal(compactFacts(run('universe: A, B, C, D\nbuy when close > 11', data)).order, 'buys 4 tickers at the next open');
 });
 
+test('a strategy with no name shows its tickers, so folded blocks can be told apart', () => {
+  const data = { A: bars([10, 11, 12]), B: bars([10, 11, 12]), C: bars([10, 11, 12]), D: bars([10, 11, 12]) };
+  assert.equal(compactFacts(run('universe: A\nbuy when true', data)).tickers, 'A');
+  assert.equal(compactFacts(run('universe: A, B, C\nbuy when true', data)).tickers, 'A, B, C');
+  assert.equal(compactFacts(run('universe: A, B, C, D\nbuy when true', data)).tickers, '4 tickers');
+  assert.equal(compactFacts(run('name: Mine\nuniverse: A\nbuy when true', data)).tickers, null);
+});
+
 test('a block is keyed by its note and its name, or by its place when it has no name', () => {
   assert.equal(blockStateKey('Notes/A.md', 'Trend', 0), blockStateKey('Notes/A.md', 'Trend', 3));
   assert.equal(blockStateKey('Notes/A.md', 'Trend', 0), blockStateKey('Notes/A.md', 'trend', 1));

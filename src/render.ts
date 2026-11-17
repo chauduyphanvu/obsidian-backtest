@@ -103,6 +103,8 @@ export function blockStateKey(notePath: string, name: string | null, index: numb
 }
 
 export interface CompactFacts {
+  /** The tickers, for a strategy with no name, so folded blocks can be told apart. */
+  tickers: string | null;
   figures: string[];
   holding: string;
   /** What is due at the next open, or null. */
@@ -115,12 +117,13 @@ export function compactFacts(out: RunOutput): CompactFacts {
   const intraday = run.t.some((t) => t % DAY !== 0);
   const long = run.states.filter((st) => st.long);
   const holding = long.length === 0 ? 'In cash' : long.length === 1 ? `Long ${long[0].name} since ${stamp(long[0].since!, intraday)}` : `Holds ${long.length} of ${run.states.length}`;
-  const tickers = (names: string[]) => (names.length <= 2 ? names.join(' and ') : `${names.length} tickers`);
+  const list = (names: string[], most = 2, joiner = ' and ') => (names.length <= most ? names.join(joiner) : `${names.length} tickers`);
   const named = (side: 'buy' | 'sell') => run.states.filter((st) => st.pending === side).map((st) => st.name);
   const buys = named('buy');
   const sells = named('sell');
-  const due = [...(buys.length ? [`buys ${tickers(buys)}`] : []), ...(sells.length ? [`sells ${tickers(sells)}`] : [])];
+  const due = [...(buys.length ? [`buys ${list(buys)}`] : []), ...(sells.length ? [`sells ${list(sells)}`] : [])];
   return {
+    tickers: out.spec.name ? null : list(out.spec.universe.map((a) => a.name), 3, ', '),
     figures: [`${signedPct(stats.cagr)} a year`, `worst drawdown ${pct(stats.maxDrawdown)}`],
     holding,
     order: due.length ? `${due.join(' and ')} at the next open` : null,
@@ -246,10 +249,11 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   const fold = h(head, 'button', 'bt-fold');
   fold.type = 'button';
   chevron(fold);
-  h(fold, 'span', 'bt-title', first.spec.name ?? 'Backtest');
-  const line = h(fold, 'span', 'bt-fold-facts');
+  const text = h(fold, 'span', 'bt-fold-text');
+  h(text, 'span', 'bt-title', first.spec.name ?? 'Backtest');
+  const line = h(text, 'span', 'bt-fold-facts');
   const facts = compactFacts(first);
-  for (const text of [...facts.figures, facts.holding]) h(line, 'span', 'bt-fold-fact', text);
+  for (const fact of [...(facts.tickers ? [facts.tickers] : []), ...facts.figures, facts.holding]) h(line, 'span', 'bt-fold-fact', fact);
   if (facts.order) h(line, 'span', 'bt-fold-fact bt-fold-order', facts.order);
   const noteCount = notesOf(view, first).length;
   if (noteCount > 0) h(line, 'span', 'bt-fold-mark', noteCount === 1 ? '1 note' : `${noteCount} notes`);
@@ -326,6 +330,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   const setOpen = (open: boolean) => {
     root.classList.toggle('bt-folded', !open);
     fold.setAttribute('aria-expanded', String(open));
+    fold.title = open ? 'Fold this result to one line' : 'Open this result';
     body.hidden = refresh.hidden = !open;
     if (open && !built) {
       built = true;

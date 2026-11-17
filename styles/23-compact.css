@@ -13,9 +13,8 @@
 .bt-root button.bt-fold:active {
   display: flex;
   flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 10px;
+  align-items: flex-start;
+  gap: 6px;
   min-width: 0;
   height: auto;
   margin: 0;
@@ -39,8 +38,8 @@
 
 .bt-chevron {
   display: inline-flex;
-  align-self: center;
   flex: none;
+  padding-top: 5px;
   color: var(--text-muted);
   transition: transform 0.12s ease;
 }
@@ -53,13 +52,19 @@
   }
 }
 
-.bt-fold-facts {
+.bt-fold-text {
   display: flex;
   flex: 1 1 auto;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 12px;
   min-width: 0;
+}
+/* Each fact wraps on its own, beside the name when there is room. */
+.bt-fold-facts {
+  display: contents;
+}
+.bt-fold-fact {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
