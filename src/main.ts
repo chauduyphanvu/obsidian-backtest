@@ -213,24 +213,24 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** What a strategy block can do because of where it sits in its note: write values back into it, and have its open or folded state remembered. */
-  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'stateKey'> {
+  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'stateKey' | 'blockKey'> {
     const info = ctx.getSectionInfo(el);
     const found = info ? findBlock(info.text, info.lineStart, source) : null;
     if (!found) return {};
     const stateKey = blockStateKey(ctx.sourcePath, found.block.name, found.index);
     const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-    if (!(file instanceof TFile)) return { stateKey };
+    if (!(file instanceof TFile)) return { stateKey, blockKey: stateKey };
     // The block's line is asked for again now: the note may have moved it since it was drawn.
     const apply = (values: Record<string, number>): Promise<void> => writeValuesInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, values);
-    return { stateKey, apply };
+    return { stateKey, blockKey: stateKey, apply };
   }
 
   private liveHost(): LiveHost {
     return {
       // One drawing at a time: a newer edit or closing the panel aborts `signal`, which stops the run, and a draw that fails lets go of it too.
-      show: (source, el, { notePath, apply, signal }) => {
+      show: (source, el, { notePath, blockKey, apply, signal }) => {
         const child = new MarkdownRenderChild(el);
-        return drawHeld(() => this.blocks.renderStrategy(source, el, child, { notePath, apply, compact: false, panel: true }), () => this.blocks.dispose(child), signal);
+        return drawHeld(() => this.blocks.renderStrategy(source, el, child, { notePath, blockKey, apply, compact: false, panel: true }), () => this.blocks.dispose(child), signal);
       },
       pricesReady: (source) => this.pricesReady(source),
       errors: (source) => this.results.runner().parse(source).errors,

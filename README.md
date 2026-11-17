@@ -1205,6 +1205,7 @@ Layout of `src/`:
 - `price-store.ts`: the saved price files, in the vault and in memory, the column names of the CSV files read, and whether a block's prices are all saved and fresh.
 - `results.ts`: running a block's text and keeping the result, so a block drawn again, the other blocks, the orders and the note properties reuse a recent run.
 - `strategy-block.ts`: a strategy block's drawings: running it or reusing a kept result, drawing the result and its sections, and what a drawing leaves behind until the block is drawn again or goes away.
+- `store.ts`: small records kept in the plugin's folder, one file for each, written a moment after they change and merged with any copy a sync brought in meanwhile.
 - `vault-writes.ts`: writing into the vault: a note's `bt_` properties once its blocks have rendered, saved results under a dated name, and the CSV helper's cleaned copies under a free name.
 - `compare.ts`, `dashboard.ts`, `orders.ts`, `orders-badge.ts`, `export.ts`, `rewrite.ts`: the compare block, the `backtests` block (its parser, sorting and running), orders, the status bar count of orders, the files, notes and properties a result can become, and writing parameter values into a block's text.
 - `sweep.ts`, `luck.ts`, `rng.ts`: parameter sweeps and the luck checks (reshuffled history, random entries, walk-forward), and the seeded random numbers they use.

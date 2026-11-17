@@ -52,7 +52,7 @@ export class ResultCache<T> {
 }
 
 /** Plain data as text with object keys in order, so equal data gives equal text. A key holding `undefined` counts as absent. */
-function stable(value: unknown): string {
+export function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const keys = Object.keys(value).filter((k) => (value as Record<string, unknown>)[k] !== undefined).sort();
@@ -62,7 +62,7 @@ function stable(value: unknown): string {
 }
 
 /** A 53-bit hash (cyrb53) of the text. */
-function hash(text: string): number {
+export function hash(text: string): number {
   let a = 0xdeadbeef;
   let b = 0x41c6ce57;
   for (let i = 0; i < text.length; i++) {

@@ -5,7 +5,9 @@ import { h } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 import { hintFor } from './fixes.ts';
 import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, waitFor, type Choice, type Shown } from './live-core.ts';
+import { blockStateKey } from './render.ts';
 import { debounce } from './result-cache.ts';
+import { findBlock } from './rewrite.ts';
 
 export const VIEW_TYPE_LIVE = 'backtest-live';
 
@@ -16,7 +18,7 @@ export interface LiveHost {
    * when the run fails. When `signal` aborts before then, the run is stopped and the draw resolves with nothing drawn. A draw
    * that fails lets go of what it held.
    */
-  show(source: string, el: HTMLElement, opts: { notePath: string; apply: (values: Record<string, number>) => Promise<void>; signal: AbortSignal }): Promise<() => void>;
+  show(source: string, el: HTMLElement, opts: { notePath: string; blockKey?: string; apply: (values: Record<string, number>) => Promise<void>; signal: AbortSignal }): Promise<() => void>;
   /** True when the block parses and every ticker's prices are already saved, so running it needs no download. */
   pricesReady(source: string): Promise<boolean>;
   /** The block's problems, empty when it can run. */
@@ -242,7 +244,7 @@ export class LiveView extends ItemView {
       el.remove();
     };
     try {
-      dispose = await this.host.show(selected.text, el, { notePath: reading.note, apply: (values) => this.apply(reading, selected, values), signal });
+      dispose = await this.host.show(selected.text, el, { notePath: reading.note, blockKey: this.blockKeyOf(reading, selected), apply: (values) => this.apply(reading, selected, values), signal });
       if (id !== this.runId) return drop();
       if (this.result && this.sameBlock(selected)) restoreOpen(el, openDetails(this.result.el));
       await settle();
@@ -259,6 +261,14 @@ export class LiveView extends ItemView {
     this.problem = null;
     this.arrived(reading, selected);
     this.body.scrollTop = scroll;
+  }
+
+  /** The key the note's own drawing of this block has (main.ts placeInNote), so both count as one block. */
+  private blockKeyOf(reading: BlockReading, selected: Shown): string | undefined {
+    const lines = reading.view.editor.getValue().split('\n');
+    const at = locateBlock(lines, selected.text, selected.index);
+    const found = at ? findBlock(lines.join('\n'), at.first - 1, selected.text) : null;
+    return found ? blockStateKey(reading.note, found.block.name, found.index) : undefined;
   }
 
   private showProblem(reading: BlockReading, selected: Shown, problem: Problem): void {

@@ -33,6 +33,8 @@ export interface StrategyOptions {
   apply?: (values: Record<string, number>) => Promise<void>;
   /** Keys the block's remembered open or folded state; without one it is not remembered. */
   stateKey?: string;
+  /** Which block of which note this is (render.ts blockStateKey), the same in the note and in the preview panel; absent when that can't be told. */
+  blockKey?: string;
   /** Start folded or open, instead of following the setting. */
   compact?: boolean;
   /** Drawn in the preview panel: a failed run rejects instead of drawing its own message, and the note's properties are left alone. */
@@ -118,6 +120,7 @@ export class StrategyBlocks {
         // A kept note carries the values that made its result.
         const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
         return [
+          // Regimes and crises: right after "More statistics".
           (root) =>
             renderPriceCharts(root, {
               data: shown.data,
@@ -130,6 +133,7 @@ export class StrategyBlocks {
           (root) => renderDebug(root, { backtest: bt, intraday, save: (title, csv) => this.host.saveFile(title, 'csv', csv) }),
           (root) => renderSweep(root, tryValues),
           (root) => renderLuck(root, tryValues),
+          // Versions: after the luck checks.
           (root) =>
             renderActions(root, [
               { label: 'Save trades as CSV', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
