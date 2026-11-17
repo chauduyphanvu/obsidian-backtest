@@ -401,7 +401,7 @@ interface Picking {
 
 function picking(el: HTMLElement, result: SweepResult, apply: (values: Record<string, number>) => void): Picking {
   const params = result.params;
-  const where = params.length === 1 ? 'click or tap it on the chart' : params.length === 2 ? 'click or tap its cell' : 'click or tap its cell or its row in the table';
+  const hint = params.length === 1 ? 'To try another value, click or tap it on the chart.' : `To try other values, click or tap a cell${params.length >= 3 ? ' or a row in the table' : ''}.`;
   const self: Picking = {
     el,
     picked: null,
@@ -417,7 +417,7 @@ function picking(el: HTMLElement, result: SweepResult, apply: (values: Record<st
     el.replaceChildren();
     const p = self.picked;
     if (!p) {
-      h(el, 'span', 'bt-sweep-pick-hint', `To try other values, ${where}.`);
+      h(el, 'span', 'bt-sweep-pick-hint', hint);
       return;
     }
     el.append('Picked: ');
@@ -803,6 +803,8 @@ function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary, pick
   h(head, 'th', 'bt-num', 'Trades');
   const body = h(table, 'tbody');
   const rows: [SweepPoint, HTMLTableRowElement][] = [];
+  /** Where the row with the button goes after a pick here: under the table and its note. */
+  let below: Element = wrap;
   sum.ranked.slice(0, TABLE_ROWS).forEach((q, i) => {
     const row = h(body, 'tr', q === sum.declared ? 'bt-sweep-row-declared' : undefined);
     h(row, 'td', 'bt-num', String(i + 1));
@@ -813,11 +815,11 @@ function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary, pick
     rows.push([q, row]);
     row.classList.add('bt-sweep-pickable');
     row.tabIndex = 0;
-    row.addEventListener('click', () => pick.pick(q, wrap));
+    row.addEventListener('click', () => pick.pick(q, below));
     row.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
-      pick.pick(q, wrap);
+      pick.pick(q, below);
     });
   });
   if (pick) {
@@ -825,5 +827,5 @@ function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary, pick
     pick.marks.set('table', mark);
     mark(pick.picked);
   }
-  if (sum.declaredRank !== null) h(el, 'div', 'bt-note', sum.declaredRank <= TABLE_ROWS ? 'The row in bold holds the values in the note.' : `The values in the note rank ${ordinal(sum.declaredRank)}.`);
+  if (sum.declaredRank !== null) below = h(el, 'div', 'bt-note', sum.declaredRank <= TABLE_ROWS ? 'The row in bold holds the values in the note.' : `The values in the note rank ${ordinal(sum.declaredRank)}.`);
 }
