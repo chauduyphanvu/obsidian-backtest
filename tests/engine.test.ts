@@ -63,6 +63,22 @@ test('rebalancing returns held assets to their weights at the first open of a pe
   assert.equal(run('universe: A 50%, B 50%\ncapital: 1000\nrebalance: monthly\nbuy when true', { A: A2, B }).run.equity[3], 2250);
 });
 
+test('on mixed calendars each ticker is rebalanced at its own first bar of the period', () => {
+  // Thursday 30 January to Tuesday 4 February 2020. CRY trades every day, STK on weekdays, so
+  // February starts on Saturday for CRY and on Monday for STK.
+  const [jan30, jan31, feb1, feb2, feb3, feb4] = [30, 31, 32, 33, 34, 35].map((d) => Date.UTC(2020, 0, d));
+  const CRY = bars([10, 20, 20, 20, 20, 20], { start: jan30 });
+  const STK = bars([10, 10, 10, 20], { opens: [10, 10, 10, 10], times: [jan30, jan31, feb3, feb4] });
+  const r = run('universe: STK 50%, CRY 50%\ncapital: 1000\nrebalance: monthly\nbuy when true', { STK, CRY });
+  assert.deepEqual(r.run.t, [jan30, jan31, feb1, feb2, feb3, feb4]);
+  // 50 shares each at 10 on 31 January; CRY doubles that day: 500 + 1000.
+  // Saturday: CRY goes back to 750 of 1500, selling 12.5 shares at 20 and leaving 250 in cash.
+  // Monday: STK's first February bar, so it buys 25 shares with that 250 to reach 750.
+  assert.deepEqual(r.run.equity, [1000, 1500, 1500, 1500, 1500, 2250]);
+  assert.deepEqual(r.run.exposure.slice(2), [1250 / 1500, 1250 / 1500, 1, 1]);
+  assert.deepEqual(r.run.states.map((s) => s.shares), [75, 37.5]);
+});
+
 test('stop loss fills at the stop, or at the open when the bar gaps through it', () => {
   const spec = 'universe: A\ncapital: 1000\nstop loss: 10%\nbuy when true';
   // Entry at 100 on day 1. Day 2 trades down to 85: out at 90.

@@ -171,7 +171,6 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   let cash = p.capital;
   let costs = 0;
   let interest = 0;
-  let prevPeriod: number | null = null;
   const trades: Trade[] = [];
   const equity: number[] = [];
   const exposure: number[] = [];
@@ -272,10 +271,9 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       }
     }
 
-    // Open: yesterday's orders and the scheduled rebalance, sells before buys.
-    const period = periodKey(t, p.rebalance);
-    const rebalance = prevPeriod !== null && period !== prevPeriod;
-    prevPeriod = period;
+    // Open: yesterday's orders and the scheduled rebalance, sells before buys. Each asset is
+    // rebalanced at its own first bar of a period, so a ticker closed on the period's first day still is.
+    const rebalances = (a: A) => a.i > 0 && periodKey(a.bars.t[a.i], p.rebalance) !== periodKey(a.bars.t[a.i - 1], p.rebalance);
     const isLive = new Set(live);
     const mark = (a: A) => (a.shares === 0 ? 0 : a.shares * (isLive.has(a) ? a.bars.o[a.i] : a.lastClose));
     const equityAtOpen = cash + assets.reduce((s, a) => s + mark(a), 0);
@@ -288,7 +286,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const open = a.bars.o[a.i];
       if (entering.has(a)) {
         buys.push({ a, notional: riskNotional(a, weights.get(a)!, equityAtOpen, open, a.i - 1), entry: true });
-      } else if (rebalance && a.shares > 0) {
+      } else if (a.shares > 0 && rebalances(a)) {
         const delta = weights.get(a)! * equityAtOpen - a.shares * open;
         if (delta < 0) sell(a, -delta / open, open);
         else buys.push({ a, notional: delta, entry: false });
