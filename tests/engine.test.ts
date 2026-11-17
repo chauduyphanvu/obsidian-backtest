@@ -63,6 +63,22 @@ test('rebalancing returns held assets to their weights at the first open of a pe
   assert.equal(run('universe: A 50%, B 50%\ncapital: 1000\nrebalance: monthly\nbuy when true', { A: A2, B }).run.equity[3], 2250);
 });
 
+test('on mixed calendars each ticker is rebalanced at its own first bar of the period', () => {
+  // Thursday 30 January to Tuesday 4 February 2020. CRY trades every day, STK on weekdays, so
+  // February starts on Saturday for CRY and on Monday for STK.
+  const [jan30, jan31, feb1, feb2, feb3, feb4] = [30, 31, 32, 33, 34, 35].map((d) => Date.UTC(2020, 0, d));
+  const CRY = bars([10, 20, 20, 20, 20, 20], { start: jan30 });
+  const STK = bars([10, 10, 10, 20], { opens: [10, 10, 10, 10], times: [jan30, jan31, feb3, feb4] });
+  const r = run('universe: STK 50%, CRY 50%\ncapital: 1000\nrebalance: monthly\nbuy when true', { STK, CRY });
+  assert.deepEqual(r.run.t, [jan30, jan31, feb1, feb2, feb3, feb4]);
+  // 50 shares each at 10 on 31 January; CRY doubles that day: 500 + 1000.
+  // Saturday: CRY goes back to 750 of 1500, selling 12.5 shares at 20 and leaving 250 in cash.
+  // Monday: STK's first February bar, so it buys 25 shares with that 250 to reach 750.
+  assert.deepEqual(r.run.equity, [1000, 1500, 1500, 1500, 1500, 2250]);
+  assert.deepEqual(r.run.exposure.slice(2), [1250 / 1500, 1250 / 1500, 1, 1]);
+  assert.deepEqual(r.run.states.map((s) => s.shares), [75, 37.5]);
+});
+
 test('stop loss fills at the stop, or at the open when the bar gaps through it', () => {
   const spec = 'universe: A\ncapital: 1000\nstop loss: 10%\nbuy when true';
   // Entry at 100 on day 1. Day 2 trades down to 85: out at 90.
@@ -217,6 +233,25 @@ test('a cash rate ticker pays its close at the previous bar, as a yearly percent
   assert.equal(r.cashRateNote, 'Cash earns the R rate');
 });
 
+test('on an hourly run, a daily benchmark and a daily cash rate count only once their day has ended', () => {
+  const HOUR = 3_600_000;
+  const A = bars(Array.from({ length: 72 }, () => 10), { step: HOUR });
+  // The benchmark earns a day at 36.5% (1001), buys at the open of 2 January at 10 and doubles
+  // that day, then again on the 3rd.
+  const B = bars([10, 20, 40]);
+  const R = bars([36.5, 73, 73]);
+  const r = run('universe: A\ncapital: 1000\nbenchmark: B\ncash rate: R\nbuy when false', { A, B, R });
+  const bench = r.benchmark.equity;
+  // 2 January's close is known when its 23:00 bar ends at midnight, not at 00:00.
+  assert.deepEqual([bench[24], bench[46], bench[47], bench[70], bench[71]], [1000, 1000, 2002, 2002, 4004]);
+  // Cash earns nothing until the 1 January rate is known at the end of that day; it then pays
+  // 36.5% for each hour until the 2 January rate of 73% is known.
+  const hourly = (rate: number) => rate / 365 / 24;
+  assert.equal(r.run.cashReturn[23], 0);
+  assert.ok(near(r.run.cashReturn[24], hourly(0.365)) && near(r.run.cashReturn[47], hourly(0.365)));
+  assert.ok(near(r.run.cashReturn[48], hourly(0.73)));
+});
+
 test('Sharpe and Sortino measure returns above the cash rate', () => {
   const t = [day(0), day(1), day(2)];
   // Returns +10% and -10% against 1% a step from cash: excess +9% and -11%.
@@ -226,6 +261,18 @@ test('Sharpe and Sortino measure returns above the cash rate', () => {
   assert.ok(near(s.sortino, (-0.01 / Math.sqrt(0.11 ** 2 / 2)) * perYear));
   // With no cash rate the mean return here is 0.
   assert.ok(near(computeStats(t, [100, 110, 99], 100, [1, 1, 1]).sharpe, 0));
+});
+
+test('a run that only earns the cash rate has a Sharpe and Sortino of 0, not rounding noise', () => {
+  // Never invested at 4% a year: each step's return equals the cash return up to rounding (about 1e-20).
+  const A = bars(Array.from({ length: 20 }, () => 100));
+  const r = run('universe: A\ncapital: 10000\ncash rate: 4%\nbuy when false', { A });
+  assert.ok(r.stats.totalReturn > 0);
+  assert.equal(r.stats.sharpe, 0);
+  assert.equal(r.stats.sortino, 0);
+  // A real spread above 1e-12 a step still counts.
+  const s = computeStats([day(0), day(1), day(2)], [100, 100 + 1e-8, 100], 100, [1, 1, 1]);
+  assert.ok(s.sharpe !== 0 && s.sortino !== 0);
 });
 
 test('bars held counts completed bars since the entry fill', () => {
@@ -257,9 +304,32 @@ test('ATR stops use the ATR at the signal bar and keep it for the position', () 
   // The trailing level is the highest completed high (101 after bar 2) minus 2.
   const trail = run('universe: A\ntrailing stop: 1 atr(2)\nbuy when atr(2) > 0', { A: atrBars({ o: 100, h: 100.5, l: 98.5, c: 99 }) });
   assert.deepEqual(trail.run.trades.map((t) => [t.exitPrice, t.reason]), [[99, 'trailing stop']]);
-  // Bought on bar 1 after a signal at bar 0, where ATR(2) is unknown: no stop at all.
-  const none = run('universe: A\nstop loss: 2 atr(2)\nbuy when true', { A: atrBars({ o: 100, h: 101, l: 50, c: 97 }) });
-  assert.deepEqual(none.run.trades.map((t) => t.reason), ['open']);
+});
+
+test('an entry whose ATR stop distance is still unknown at the signal waits for a later signal', () => {
+  // The signal at bar 0, where ATR(2) is unknown, is not acted on; the one at bar 1 fills at bar 2
+  // with its stop at 100 - 2 * 2 = 96, which bar 3's low of 50 takes.
+  const r = run('universe: A\nstop loss: 2 atr(2)\nbuy when true', { A: atrBars({ o: 100, h: 101, l: 50, c: 97 }) });
+  assert.deepEqual(r.run.trades.map((t) => [t.entryT, t.exitPrice, t.reason]), [[day(2), 96, 'stop loss']]);
+  assert.deepEqual(r.run.skipped, [{ asset: 'A', input: 'stop loss', n: 2, count: 1 }]);
+  assert.ok(r.notes.includes('1 buy signal for A was not acted on while the 2-bar ATR for the stop loss was still unknown.'));
+  // In rank mode the chosen ticker is skipped until the next decision, here the next bar.
+  const ranked = run('universe: A\nhold: top 1 by close\ntake profit: 2 atr(2)', { A: atrBars({ o: 100, h: 101, l: 99, c: 100 }) });
+  assert.deepEqual(ranked.run.trades.map((t) => t.entryT), [day(2)]);
+  assert.deepEqual(ranked.run.skipped, [{ asset: 'A', input: 'take profit', n: 2, count: 1 }]);
+});
+
+test('a buy rule still warming up at the start of the run gets a note with the day it became known', () => {
+  const A = bars(Array.from({ length: 20 }, () => 10));
+  assert.deepEqual(run('universe: A\nbuy when close > sma(10)', { A }).notes, [
+    'The buy rule for A was unknown until 2020-01-10 while its indicators warmed up, so A could not be bought before then.',
+  ]);
+  assert.deepEqual(run('universe: A\nbuy when close > sma(50)', { A }).notes, [
+    'The buy rule for A was unknown for the whole run: its indicators need more bars than the prices have.',
+  ]);
+  // A few bars, or a "from" after the warm-up, are not worth a note.
+  assert.deepEqual(run('universe: A\nbuy when close > sma(5)', { A }).notes, []);
+  assert.deepEqual(run('universe: A\nfrom: 2020-01-12\nbuy when close > sma(10)', { A }).notes, []);
 });
 
 test('a stop set in a for section applies to that ticker only', () => {

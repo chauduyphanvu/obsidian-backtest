@@ -197,6 +197,19 @@ test('a price compared with a fixed number warns when the prices come from Yahoo
   assert.deepEqual(parse('universe: SPY\nbuy when close > open and volume > 1000 and close > sma(20) * 1.1').warnings, []);
 });
 
+test('the interval must suit the benchmark\'s source too', () => {
+  fails('universe: binance:BTCUSDT\ninterval: 1h\nbenchmark: SPY\nbuy when true', /Yahoo data comes as 1d or 1w bars, not "1h"/, 2);
+  fails('universe: csv:data/x.csv\ninterval: 2d\nbenchmark: binance:BTCUSDT\nbuy when true', /Binance intervals/, 2);
+  ok('universe: binance:BTCUSDT\ninterval: 1h\nbenchmark: binance:ETHUSDT\nbuy when true');
+});
+
+test('index levels are not adjusted, so comparing them with a number gives no warning', () => {
+  assert.deepEqual(parse('universe: SPY\nbuy when close of ^VIX < 20').warnings, []);
+  assert.deepEqual(parse('universe: ^GSPC, ^NDX\nbuy when close > 4000').warnings, []);
+  // One adjusted ticker among them is enough for the warning.
+  assert.equal(parse('universe: ^GSPC, SPY\nbuy when close > 4000').warnings.length, 1);
+});
+
 test('slippage, cash rate and test from', () => {
   const spec = ok('universe: SPY\nfrom: 2010-01-01\nto: 2020-12-31\ntest from: 2018-01-01\nslippage: 0.05%\ncash rate: 4.5%\nbuy when true');
   assert.deepEqual([spec.slippageBps, spec.cash, spec.testFrom], [5, { k: 'fixed', rate: 0.045 }, Date.UTC(2018, 0, 1)]);
@@ -272,4 +285,23 @@ test('calendar values', () => {
   const json = JSON.stringify(buy);
   for (const name of ['month', 'weekday', 'day', 'year', 'month_end', 'month_start']) assert.match(json, new RegExp(`"k":"cal","name":"${name}"`));
   errorOf('universe: SPY\nbuy when month', /needs a condition/);
+});
+
+test('one name for two different price sources is an error, wherever the second one is named', () => {
+  const said = (src: string) => parseSpec(src).errors.map((e) => [e.line, e.message]);
+  const twice = (a: string, b: string, name = 'SPY') => `${name} is used for two different things here: ${a} and ${b}. Rename the CSV file or use one of them.`;
+  assert.deepEqual(said('universe: SPY\nbenchmark: csv:Benchmarks/SPY.csv\nbuy when close of csv:Alt/SPY.csv > 0'), [
+    [2, twice('yahoo:SPY', 'csv:Benchmarks/SPY.csv')],
+    [3, twice('yahoo:SPY', 'csv:Alt/SPY.csv')],
+  ]);
+  assert.deepEqual(said('universe: csv:Data/SPY.csv\nbenchmark: SPY\nbuy when true'), [[2, twice('csv:Data/SPY.csv', 'yahoo:SPY')]]);
+  assert.deepEqual(said('universe: csv:Data/gold.csv\ncash rate: binance:GOLD\nbuy when true'), [[2, twice('csv:Data/gold.csv', 'binance:GOLD', 'gold')]]);
+  assert.deepEqual(said('universe: SPY\nbenchmark: csv:B/^IRX.csv\ncash rate: ^IRX\nbuy when true'), [[3, twice('csv:B/^IRX.csv', 'yahoo:^IRX', '^IRX')]]);
+  assert.deepEqual(said('universe: SPY\nbuy when true'), []);
+  assert.deepEqual(parseSpec('universe: SPY\nbuy when true', { defaults: { cashRate: 'csv:x/SPY.csv' } }).errors.map((e) => [e.line, e.message]), [
+    [1, twice('yahoo:SPY', 'csv:x/SPY.csv')],
+  ]);
+  // The same source twice is one ticker, and a bare name reads the CSV of that name.
+  ok('universe: csv:Data/gold.csv\nbenchmark: csv:Data/gold.csv\nbuy when close of gold > 0 and close of csv:Data/gold.csv > 0');
+  ok('universe: SPY\nbenchmark: yahoo:SPY\ncash rate: ^IRX\nbuy when close of yahoo:SPY > 0');
 });

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { computeStats } from '../src/backtest.ts';
 import { calmar, deepStats, periodReturns, rollingReturns, sortino, underwater } from '../src/stats.ts';
 import { DAY, near } from './helpers.ts';
 
@@ -80,9 +81,37 @@ test('sortino: mean over downside deviation, annualised', () => {
   assert.ok(near(sortino(t, [100, 110, 99, 108.9]), Math.sqrt(365.25 / 3), 1e-9));
 });
 
+test('sortino with cash returns measures returns above them, as computeStats does', () => {
+  // Steps of +10%, -10%, +10% against 1% a step from cash: excess +9%, -11%, +9%.
+  const t = [0, 1, 2, 3].map((i) => d(2024, 1, 1) + i * DAY);
+  const equity = [100, 110, 99, 108.9];
+  const cash = [0, 0.01, 0.01, 0.01];
+  const expected = (0.07 / 3 / Math.sqrt(0.11 ** 2 / 3)) * Math.sqrt(365.25);
+  assert.ok(near(sortino(t, equity, cash), expected, 1e-9));
+  assert.ok(near(computeStats(t, equity, 100, [1, 1, 1, 1], cash).sortino, expected, 1e-9));
+  assert.ok(near(deepStats(t, equity, cash).sortino, expected, 1e-9));
+  // A series that starts later uses the cash returns from its own first value.
+  assert.ok(near(deepStats([d(2023, 12, 31), ...t], [NaN, ...equity], [0, 0.5, ...cash.slice(1)]).sortino, expected, 1e-9));
+});
+
 test('sortino is 0 without a down step', () => {
   const t = [0, 1, 2, 3].map((i) => d(2024, 1, 1) + i * DAY);
   assert.equal(sortino(t, [100, 101, 101, 105]), 0);
+});
+
+test('sortino is 0 when the only falls are rounding noise', () => {
+  const t = [0, 1, 2].map((i) => d(2024, 1, 1) + i * DAY);
+  // A fall of 1e-14 has a downside deviation of 7e-15: below 1e-12, so it counts as none.
+  assert.equal(sortino(t, [1, 1 - 1e-14, 1 + 2e-14]), 0);
+});
+
+test('a series that starts with NaN is measured from its first value', () => {
+  // The first two points (November) have no value: the series starts at 110 on 15 December.
+  const late = [NaN, NaN, ...A_E.slice(2)];
+  assert.deepEqual(deepStats(A_T, late), deepStats(A_T.slice(2), A_E.slice(2)));
+  const months = periodReturns(A_T, late, 'month');
+  assert.deepEqual(months[0], { key: '2023-12', t: d(2023, 12, 1), ret: 121 / 110 - 1, partial: true });
+  assert.equal(months.length, 4);
 });
 
 test('calmar: return per year over the worst drawdown', () => {

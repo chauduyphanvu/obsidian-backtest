@@ -158,8 +158,14 @@ export const PARAM_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*(.*)$/;
 const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
 const PARAM_VALUE = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(${NUM})(?:\s+step\s+(${NUM}))?)?$`, 'id');
 const MAX_PARAM_VALUES = 200;
-/** `2 atr(14)`, `2.5 atr` or `k atr(n)`; a name needs a space before atr, so a parameter called `flatr` stays itself. */
-const ATR_DISTANCE = /^(\d+(?:\.\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*(?=\s))\s*atr\s*(?:\(\s*([^)]*?)\s*\))?$/i;
+/** `2 atr(14)`, `2.5 atr` or `k atr(n)`; a name needs a space before atr, so a parameter called `flatr` stays itself. The period is trimmed by the caller. */
+const ATR_DISTANCE = /^(\d+(?:\.\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*(?=\s))\s*atr\s*(?:\(([^)]*)\))?$/i;
+/** A setting's name: words with runs of spaces between them, so no two parts of the pattern compete for the same spaces. */
+const SETTING_NAME = /^([A-Za-z]+(?: +[A-Za-z]+)*)\s*:/;
+const SETTING_LINE = new RegExp(SETTING_NAME.source + String.raw`\s*(.*)$`);
+/** Deepest an expression may nest: brackets, function calls and operators each add a level. */
+const MAX_DEPTH = 64;
+const TOO_DEEP = `This rule nests too deeply. Keep it to at most ${MAX_DEPTH} levels of brackets, functions and operators`;
 const DAY = 86_400_000;
 
 /** Where a problem is: a line, and columns in it when they are known. */
@@ -309,6 +315,10 @@ class ExprParser {
   private i = 0;
   private toks: Tok[];
   private ctx: ExprContext;
+  /** How deep the parse is in nested brackets, calls and prefix operators. */
+  private nesting = 0;
+  /** Depth of each expression built so far; leaves are 1. */
+  private depths = new WeakMap<Expr, number>();
 
   constructor(toks: Tok[], ctx: ExprContext) {
     this.toks = toks;
@@ -362,15 +372,34 @@ class ExprParser {
     if (isBool(e)) throw new SpecError(at(t), `${what} needs a number, not a condition`);
     return e;
   }
+  /** Runs `fn` one level deeper, refusing to go past MAX_DEPTH before the call stack runs out. */
+  private deeper<T>(fn: () => T): T {
+    if (++this.nesting > MAX_DEPTH) throw new SpecError(at(this.peek()), TOO_DEEP);
+    try {
+      return fn();
+    } finally {
+      this.nesting--;
+    }
+  }
+  /** `e` with its depth recorded; a chain such as a + b + c + ... grows one level per term. */
+  private node<T extends Expr>(e: T, t: Tok, ...kids: Expr[]): T {
+    let d = 1;
+    for (const k of kids) d = Math.max(d, 1 + (this.depths.get(k) ?? 1));
+    if (d > MAX_DEPTH) throw new SpecError(at(t), TOO_DEEP);
+    this.depths.set(e, d);
+    return e;
+  }
 
   private or(): Expr {
-    let a = this.and();
-    while (this.isId('or')) {
-      const t = this.next();
-      const b = this.and();
-      a = { k: 'logic', op: 'or', a: this.needBool(a, t, 'or'), b: this.needBool(b, t, 'or') };
-    }
-    return a;
+    return this.deeper(() => {
+      let a = this.and();
+      while (this.isId('or')) {
+        const t = this.next();
+        const b = this.and();
+        a = this.node({ k: 'logic', op: 'or', a: this.needBool(a, t, 'or'), b: this.needBool(b, t, 'or') }, t, a, b);
+      }
+      return a;
+    });
   }
 
   private and(): Expr {
@@ -378,7 +407,7 @@ class ExprParser {
     while (this.isId('and')) {
       const t = this.next();
       const b = this.not();
-      a = { k: 'logic', op: 'and', a: this.needBool(a, t, 'and'), b: this.needBool(b, t, 'and') };
+      a = this.node({ k: 'logic', op: 'and', a: this.needBool(a, t, 'and'), b: this.needBool(b, t, 'and') }, t, a, b);
     }
     return a;
   }
@@ -386,7 +415,8 @@ class ExprParser {
   private not(): Expr {
     if (this.isId('not')) {
       const t = this.next();
-      return { k: 'not', a: this.needBool(this.not(), t, 'not') };
+      const a = this.deeper(() => this.not());
+      return this.node({ k: 'not', a: this.needBool(a, t, 'not') }, t, a);
     }
     return this.cmp();
   }
@@ -427,7 +457,7 @@ class ExprParser {
     const op = this.cmpOp();
     if (!op) return a;
     const b = this.sum();
-    const e: Expr = { k: 'cmp', op, a: this.needNum(a, t, 'A comparison'), b: this.needNum(b, t, 'A comparison') };
+    const e: Expr = this.node({ k: 'cmp', op, a: this.needNum(a, t, 'A comparison'), b: this.needNum(b, t, 'A comparison') }, t, a, b);
     const pa = barePrice(a);
     const pb = barePrice(b);
     const price = pa !== undefined && isFixed(b) ? pa : pb !== undefined && isFixed(a) ? pb : undefined;
@@ -440,7 +470,7 @@ class ExprParser {
     while (this.isOp('+') || this.isOp('-')) {
       const t = this.next();
       const b = this.prod();
-      a = { k: 'bin', op: t.s as '+' | '-', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) };
+      a = this.node({ k: 'bin', op: t.s as '+' | '-', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) }, t, a, b);
     }
     return a;
   }
@@ -450,7 +480,7 @@ class ExprParser {
     while (this.isOp('*') || this.isOp('/')) {
       const t = this.next();
       const b = this.unary();
-      a = { k: 'bin', op: t.s as '*' | '/', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) };
+      a = this.node({ k: 'bin', op: t.s as '*' | '/', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) }, t, a, b);
     }
     return a;
   }
@@ -458,7 +488,8 @@ class ExprParser {
   private unary(): Expr {
     if (this.isOp('-')) {
       const t = this.next();
-      return { k: 'neg', a: this.needNum(this.unary(), t, '"-"') };
+      const a = this.deeper(() => this.unary());
+      return this.node({ k: 'neg', a: this.needNum(a, t, '"-"') }, t, a);
     }
     return this.postfix();
   }
@@ -474,13 +505,13 @@ class ExprParser {
         this.expect(']');
         const pos = findPos(e);
         if (pos) throw new SpecError(span(open, this.toks[this.i - 1]), `"${POSITION[pos]}" can't be read for an earlier bar with [n]`);
-        e = { k: 'lag', a: e, n: v };
+        e = this.node({ k: 'lag', a: e, n: v }, open, e);
       } else if (this.isOp('of')) {
         const of = this.next();
         const sym = this.next();
         const pos = findPos(e);
         if (pos) throw new SpecError(span(of, sym), `"${POSITION[pos]}" belongs to the open position, so it can't be read with "of"`);
-        e = { k: 'of', a: e, asset: this.ctx.resolveAsset(sym) };
+        e = this.node({ k: 'of', a: e, asset: this.ctx.resolveAsset(sym) }, of, e);
       } else {
         return e;
       }
@@ -560,7 +591,7 @@ class ExprParser {
     const want = fn === 'abs' ? 1 : 2;
     if (args.length !== want) throw new SpecError(this.spanFrom(start), `${fn}() takes ${want} value${want > 1 ? 's' : ''}`);
     for (const a of args) this.needNum(a.e, t, `${fn}()`);
-    return { k: 'math', fn, args: args.map((a) => a.e) };
+    return this.node({ k: 'math', fn, args: args.map((a) => a.e) }, t, ...args.map((a) => a.e));
   }
 
   private indicator(t: Tok): Expr {
@@ -591,7 +622,7 @@ class ExprParser {
       }
       return n;
     });
-    return { k: 'ind', fn: t.s, src, args: nums };
+    return this.node({ k: 'ind', fn: t.s, src, args: nums }, t, ...(src ? [src] : []));
   }
 }
 
@@ -607,6 +638,13 @@ function parseRef(text: string, defaultSource: Source, where: At): AssetRef {
   if (!/^[A-Za-z0-9^._=-]+$/.test(raw)) throw new SpecError(where, `"${raw}" is not a ticker`);
   const id = raw.toUpperCase();
   return { name: id, source, id };
+}
+
+/** The error for a ref whose name is already taken by a different source or file; null when there is no clash. */
+function clash(ref: AssetRef, known: AssetRef[]): string | null {
+  const other = known.find((a) => a.name.toLowerCase() === ref.name.toLowerCase());
+  if (!other || (other.source === ref.source && other.id === ref.id)) return null;
+  return `${other.name} is used for two different things here: ${other.source}:${other.id} and ${ref.source}:${ref.id}. Rename the CSV file or use one of them.`;
 }
 
 function parseDate(text: string, where: At): number {
@@ -738,16 +776,17 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       return;
     }
     let m: RegExpMatchArray | null;
-    if ((m = text.match(/^for\s+(.+?)\s*:$/i))) {
+    const forName = /^for\s/i.test(text) && text.endsWith(':') ? text.slice(4, -1).trim() : '';
+    if (forName) {
       open = null;
-      scope = m[1].toLowerCase() === 'all' ? null : m[1];
+      scope = forName.toLowerCase() === 'all' ? null : forName;
     } else if ((m = text.match(/^(buy|sell)\s+when\b(.*)$/i))) {
       const exprFrom = text.length - m[2].length;
       const rule: RawRule = { side: m[1].toLowerCase() as 'buy' | 'sell', scope, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
       open = rule;
       rawRules.push(rule);
       guard(() => lex(m![2], line, lead + exprFrom, rule.toks));
-    } else if ((m = text.match(/^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$/)) && SETTINGS.includes(m[1].toLowerCase().replace(/\s+/g, ' '))) {
+    } else if ((m = text.match(SETTING_LINE)) && SETTINGS.includes(m[1].toLowerCase().replace(/\s+/g, ' '))) {
       open = null;
       const key = m[1].toLowerCase().replace(/\s+/g, ' ').replace(/^symbol$/, 'universe');
       const keyAt = { line, from: lead, to: lead + m[1].length };
@@ -766,7 +805,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       guard(() => lex(text, line, lead, rule.toks));
     } else if ((m = text.match(PARAM_LINE))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Give the parameter another name, such as my_${m[1].toLowerCase()}`));
-    } else if ((m = text.match(/^([A-Za-z][A-Za-z ]*?)\s*:/))) {
+    } else if ((m = text.match(SETTING_NAME))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `Unknown setting "${m[1]}". Settings: ${SETTINGS.join(', ')}`));
     } else {
       errors.push({ line, message: 'Not a setting or a rule. Rules start with "buy when" or "sell when"' });
@@ -832,7 +871,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     }
     const mult = plain(m[1], where, `The ${what} distance`, '2 atr(14)');
     if (!(mult > 0)) throw new SpecError(where, `The ${what} distance must be above 0`);
-    return { k: 'atr', mult, n: period(m[2] ?? '', where, 'atr()', 1) };
+    return { k: 'atr', mult, n: period(m[2]?.trim() ?? '', where, 'atr()', 1) };
   };
 
   const defaultSource = get('data', oneOf(['yahoo', 'binance'] as const, 'data'), defaults.dataSource as Source);
@@ -897,6 +936,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const known = [...universe, ...extras].find((a) => a.name.toLowerCase() === lower);
     if (known) return known.name;
     const ref = parseRef(sym.s, defaultSource, at(sym));
+    const problem = clash(ref, [...universe, ...extras]);
+    if (problem) throw new SpecError(at(sym), problem);
     const same = [...universe, ...extras].find((a) => a.name.toLowerCase() === ref.name.toLowerCase());
     if (same) return same.name;
     extras.push(ref);
@@ -958,6 +999,16 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   }
 
   const interval = get('interval', (v) => v.toLowerCase(), '1d');
+  const benchmark = get(
+    'benchmark',
+    (v, w) => {
+      const ref = parseRef(v, defaultSource, w);
+      const problem = clash(ref, [...universe, ...extras]);
+      if (problem) throw new SpecError(w, problem);
+      return ref;
+    },
+    null as AssetRef | null,
+  );
   const cashSetting = settings.get('cash rate');
   const parseCash = (text: string, where: At): CashRate => {
     const m = text.match(/^(-?\d+(?:\.\d+)?)\s*(%)?$/);
@@ -978,9 +1029,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       errors.push({ line: 1, message: `The default cash rate "${defaults.cashRate}" in the plugin settings can't be read. Use a percentage, such as 4%, or a ticker, such as ^IRX` });
     }
   }
+  const cashClash = cash.k === 'ticker' ? clash(cash.ref, [...universe, ...extras, ...(benchmark ? [benchmark] : [])]) : null;
+  if (cashClash) errors.push(diag(cashSetting?.valueAt ?? { line: 1 }, cashClash));
 
   // The cash-rate ticker is left out: a yield only needs daily closes, which Yahoo serves for any interval.
-  const sources = new Set([...universe, ...extras].map((a) => a.source));
+  const sources = new Set([...universe, ...extras, ...(benchmark ? [benchmark] : [])].map((a) => a.source));
   const intervalAt = settings.get('interval')?.valueAt ?? { line: 1 };
   if (sources.has('yahoo') && !YAHOO_INTERVALS.includes(interval)) {
     errors.push(diag(intervalAt, `Yahoo data comes as 1d or 1w bars, not "${interval}"`));
@@ -1029,9 +1082,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const weighting = get(
     'weighting',
     (v, w): Sizing => {
-      const m = v.match(/^inverse\s+volatility\s*\(\s*([^)]*?)\s*\)$/i);
-      if (!m || !m[1]) throw new SpecError(w, 'Write it as inverse volatility(60): the number of bars to measure volatility over');
-      return { k: 'invvol', n: period(m[1], w, 'inverse volatility()', 2) };
+      const m = v.match(/^inverse\s+volatility\s*\(([^)]*)\)$/i);
+      if (!m || !m[1].trim()) throw new SpecError(w, 'Write it as inverse volatility(60): the number of bars to measure volatility over');
+      return { k: 'invvol', n: period(m[1].trim(), w, 'inverse volatility()', 2) };
     },
     null as Sizing | null,
   );
@@ -1043,7 +1096,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const share = percentage(m[1], w, 'risk per trade', 1);
       const mult = plain(m[2], w, 'The risk distance', '1% at 2 atr(14)');
       if (!(mult > 0)) throw new SpecError(w, 'The risk distance must be above 0');
-      return { k: 'risk', risk: share, mult, n: period(m[3] ?? '', w, 'atr()', 1) };
+      return { k: 'risk', risk: share, mult, n: period(m[3]?.trim() ?? '', w, 'atr()', 1) };
     },
     null as Sizing | null,
   );
@@ -1053,12 +1106,13 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     errors.push(diag(riskLine!.keyAt, `"risk per trade" sizes each position once, when it is bought, so it can't be combined with "rebalance: ${rebalance}". Remove one of them`));
   }
 
-  const sourceOf = (name: string) => [...universe, ...extras].find((a) => a.name === name)?.source;
+  // Yahoo adjusts prices for dividends and splits, but not index levels (tickers starting with ^).
+  const adjusted = (name: string) => [...universe, ...extras].some((a) => a.name === name && a.source === 'yahoo' && !a.id.startsWith('^'));
   const seen = new Set<string>();
   for (const c of priceChecks) {
     const names = c.asset !== null ? [c.asset] : c.scope !== null ? [c.scope] : universe.map((a) => a.name);
     const key = `${c.at.line}:${c.at.from}:${c.at.to}`;
-    if (seen.has(key) || !names.some((n) => sourceOf(n) === 'yahoo')) continue;
+    if (seen.has(key) || !names.some(adjusted)) continue;
     seen.add(key);
     warnings.push(diag(c.at, 'This compares a price with a fixed number. Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded.'));
   }
@@ -1067,7 +1121,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     name: get('name', (v) => v, null as string | null),
     universe,
     extras,
-    benchmark: get('benchmark', (v, w) => parseRef(v, defaultSource, w), null as AssetRef | null),
+    benchmark,
     from,
     to,
     testFrom,

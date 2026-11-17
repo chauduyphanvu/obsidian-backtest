@@ -143,6 +143,38 @@ export function periodEnds(t: number[], key: (t: number) => number): number[] {
   });
 }
 
+/**
+ * When each bar ends: its start plus the series' step, the smallest gap between its bars. A step of
+ * 20 days or more is counted in calendar months, so a monthly bar dated the 1st ends on the 1st of
+ * the next month even though February's gap is shorter. With fewer than two bars the end is unknown (NaN).
+ */
+export function barEnds(t: number[]): number[] {
+  let step = Infinity;
+  for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) step = Math.min(step, t[i] - t[i - 1]);
+  if (!Number.isFinite(step)) return t.map(() => NaN);
+  if (step < 20 * DAY) return t.map((x) => x + step);
+  const months = Math.max(1, Math.round(step / (30.4375 * DAY)));
+  let prev = -Infinity;
+  return t.map((x) => {
+    const d = new Date(x);
+    d.setUTCMonth(d.getUTCMonth() + months);
+    return (prev = Math.max(prev, d.getTime()));
+  });
+}
+
+/**
+ * For each bar of `to`, the index of the latest bar of `from` that had ended by the time that bar
+ * ended, or -1 when none had. Reading another series through this never sees a bar still in progress.
+ */
+export function alignByEnd(from: number[], to: number[]): number[] {
+  const fromEnd = barEnds(from);
+  let j = -1;
+  return barEnds(to).map((end) => {
+    while (j + 1 < from.length && fromEnd[j + 1] <= end) j++;
+    return j;
+  });
+}
+
 /** 1 on the first bar of each period; unknown on the series' first bar, whose period may have begun earlier. */
 export function periodStarts(t: number[], key: (t: number) => number): number[] {
   return t.map((x, i) => (i === 0 ? NaN : key(x) !== key(t[i - 1]) ? 1 : 0));

@@ -1,6 +1,8 @@
+import { DAY, stamp } from './dom.ts';
 import type { Spec } from './dsl.ts';
-import { simulate, type RunResult, type Signals, type Trade } from './engine.ts';
+import { simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
 import { Evaluator } from './evaluate.ts';
+import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
 export interface Stats {
@@ -41,22 +43,36 @@ export interface Backtest {
   stats: Stats;
   tradeStats: TradeStats;
   drawdown: number[];
+  /** Aligned with `run.t`; NaN before the benchmark's first bar, whose statistics start there. */
   benchmark: { label: string; equity: number[]; drawdown: number[]; stats: Stats };
   /** Interest earned on cash. */
   interest: number;
   cashRateNote: string;
   /** Before and from `test from`; null when it is not set. */
   segments: Segment[] | null;
+  /** Plain sentences about how the run went that the reader should know, such as a benchmark with a shorter history. */
+  notes: string[];
 }
 
 const YEAR = 365.25 * 86_400_000;
+/** A deviation per step below this is floating-point noise, not risk. */
+export const NOISE = 1e-12;
 
+/** Fall from the highest value so far at each step; NaN where the value is unknown. */
 export function drawdowns(equity: number[]): number[] {
   let peak = -Infinity;
   return equity.map((e) => {
-    peak = Math.max(peak, e);
+    if (Number.isNaN(e)) return NaN;
+    if (e > peak) peak = e;
     return e / peak - 1;
   });
+}
+
+/** The worst drawdown, as a fraction at or below 0. A loop, since spreading a long run into Math.min overflows the stack. */
+export function maxDrawdown(equity: number[]): number {
+  let worst = 0;
+  for (const d of drawdowns(equity)) if (d < worst) worst = d;
+  return worst;
 }
 
 /** `cashReturn[i]` is what cash earned from bar i - 1 to bar i; Sharpe and Sortino measure returns above it. */
@@ -81,10 +97,10 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
   return {
     totalReturn: total,
     cagr: (1 + total) ** (1 / years) - 1,
-    maxDrawdown: Math.min(...drawdowns(equity)),
+    maxDrawdown: maxDrawdown(equity),
     volatility: sd * Math.sqrt(perYear),
-    sharpe: sdExcess > 0 ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
-    sortino: downside > 0 ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
+    sharpe: sdExcess >= NOISE ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
+    sortino: downside >= NOISE ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
     exposure: exposure.reduce((s, x) => s + x, 0) / exposure.length,
   };
 }
@@ -97,6 +113,69 @@ export function computeTradeStats(trades: Trade[]): TradeStats {
     winRate: closed.length ? closed.filter((t) => t.ret > 0).length / closed.length : NaN,
     avgReturn: closed.length ? closed.reduce((s, t) => s + t.ret, 0) / closed.length : NaN,
   };
+}
+
+/** A rule unknown for more bars than this at the start of the run gets a note. */
+const FEW_BARS = 5;
+
+/** Notes on rules still warming up at the run's first bar, one per rule and date. */
+function warmupNotes(spec: Spec, data: Map<string, Bars>, signals: Map<string, Signals>, run: RunResult, intraday: boolean): string[] {
+  const last = run.t[run.t.length - 1];
+  const byWhen = new Map<string, { what: string; known: number | null; names: string[] }>();
+  for (const a of spec.universe) {
+    const { t } = data.get(a.name)!;
+    const sig = signals.get(a.name)!;
+    const unknown = (i: number) => (Number.isNaN(sig.buy[i]) ? 'buy rule' : sig.score && !Number.isFinite(sig.score[i]) ? 'ranking score' : null);
+    let first = 0;
+    while (first < t.length && t[first] < run.t[0]) first++;
+    const what = unknown(first);
+    if (!what) continue;
+    let i = first;
+    while (i < t.length && t[i] <= last && unknown(i)) i++;
+    if (i - first <= FEW_BARS) continue;
+    const known = i < t.length && t[i] <= last ? t[i] : null;
+    const key = `${what} ${known}`;
+    if (!byWhen.has(key)) byWhen.set(key, { what, known, names: [] });
+    byWhen.get(key)!.names.push(a.name);
+  }
+  return [...byWhen.values()].map(({ what, known, names }) => {
+    const subject = names.length === 1 ? `The ${what} for ${names[0]} was` : `The ${what}s for ${list(names)} were`;
+    return known === null
+      ? `${subject} unknown for the whole run: ${names.length === 1 ? 'its' : 'their'} indicators need more bars than the prices have.`
+      : `${subject} unknown until ${stamp(known, intraday)} while ${names.length === 1 ? 'its' : 'their'} indicators warmed up, so ${list(names)} could not be bought before then.`;
+  });
+}
+
+const INPUT: Record<Skipped['input'], (n: number) => string> = {
+  'risk per trade': (n) => `the ${n}-bar ATR for risk per trade`,
+  'inverse volatility': (n) => `the ${n}-bar volatility for inverse volatility weighting`,
+  'stop loss': (n) => `the ${n}-bar ATR for the stop loss`,
+  'trailing stop': (n) => `the ${n}-bar ATR for the trailing stop`,
+  'take profit': (n) => `the ${n}-bar ATR for the take profit`,
+};
+
+/** One note per input that held entries back, naming the tickers and how many. */
+function skippedNotes(skipped: Skipped[]): string[] {
+  const groups = new Map<string, Skipped[]>();
+  for (const s of skipped) {
+    const key = `${s.input} ${s.n}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(s);
+  }
+  return [...groups.values()].map((rows) => {
+    const total = rows.reduce((sum, r) => sum + r.count, 0);
+    const signals = `${total} buy signal${total === 1 ? '' : 's'}`;
+    const verb = total === 1 ? 'was' : 'were';
+    const input = INPUT[rows[0].input](rows[0].n);
+    return rows.length === 1
+      ? `${signals} for ${rows[0].asset} ${verb} not acted on while ${input} was still unknown.`
+      : `${signals} ${verb} not acted on while ${input} was still unknown: ${rows.map((r) => `${r.asset} ${r.count}`).join(', ')}.`;
+  });
+}
+
+/** "A", "A and B", "A, B and C". */
+function list(names: string[]): string {
+  return names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 function cashRateNote(spec: Spec): string {
@@ -145,13 +224,27 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     data,
     always,
   );
-  // A named benchmark can trade on other days than the strategy: carry its last value.
-  let j = -1;
-  const benchEquity = run.t.map((t) => {
-    while (j + 1 < bench.t.length && bench.t[j + 1] <= t) j++;
-    return j < 0 ? spec.capital : bench.equity[j];
-  });
+  // A named benchmark can trade on other days or bars than the strategy: carry the value of its
+  // latest bar that had ended by the end of each of the strategy's bars.
+  // Before its first bar the benchmark has no value; while that bar is still open it is the capital.
+  const at = alignByEnd(bench.t, run.t);
+  const benchEquity = run.t.map((t, i) => (at[i] >= 0 ? bench.equity[at[i]] : t >= bench.t[0] ? spec.capital : NaN));
   const benchExposure = run.t.map(() => 1);
+  /**
+   * Statistics of the run's bars s to e - 1, with growth measured from the close of bar `base`, or
+   * from the series' first value when it starts later.
+   */
+  const measure = (eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats => {
+    while (base < e && Number.isNaN(eq[base])) base++;
+    const cut = (xs: number[]) => xs.slice(base, e);
+    return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
+  };
+
+  const intraday = run.t.some((t) => t % DAY !== 0);
+  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped)];
+  if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
+    notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
+  }
 
   let segments: Segment[] | null = null;
   if (spec.testFrom !== null) {
@@ -159,19 +252,15 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     const cut = run.t.findIndex((t) => t >= split);
     const k = cut < 0 ? run.t.length : cut;
     const day = new Date(split).toISOString().slice(0, 10);
-    const part = (label: string, s: number, e: number, mine: (t: Trade) => boolean): Segment => {
-      const t = run.t.slice(s, e);
-      const slice = (xs: number[]) => xs.slice(s, e);
-      const stats = (eq: number[], ex: number[]) => computeStats(t, eq, eq[0], ex, slice(run.cashReturn));
-      return {
-        label,
-        from: t.length ? t[0] : split,
-        to: t.length ? t[t.length - 1] : split,
-        stats: stats(slice(run.equity), slice(run.exposure)),
-        benchmarkStats: stats(slice(benchEquity), slice(benchExposure)),
-        tradeStats: computeTradeStats(run.trades.filter(mine)),
-      };
-    };
+    // Each part's growth runs from the last close before it, so the parts multiply to the whole run.
+    const part = (label: string, s: number, e: number, mine: (t: Trade) => boolean): Segment => ({
+      label,
+      from: s < e ? run.t[s] : split,
+      to: s < e ? run.t[e - 1] : split,
+      stats: measure(run.equity, run.exposure, Math.max(0, s - 1), s, e),
+      benchmarkStats: measure(benchEquity, benchExposure, Math.max(0, s - 1), s, e),
+      tradeStats: computeTradeStats(run.trades.filter(mine)),
+    });
     segments = [
       part(`Before ${day}`, 0, k, (tr) => tr.entryT < split),
       part(`From ${day}`, k, run.t.length, (tr) => tr.entryT >= split),
@@ -182,17 +271,18 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     spec,
     data,
     run,
-    stats: computeStats(run.t, run.equity, spec.capital, run.exposure, run.cashReturn),
+    stats: measure(run.equity, run.exposure, 0, 0, run.t.length, spec.capital),
     tradeStats: computeTradeStats(run.trades),
     drawdown: drawdowns(run.equity),
     benchmark: {
       label: spec.benchmark ? `${spec.benchmark.name} buy & hold` : spec.rank ? 'Equal-weight buy & hold' : 'Buy & hold',
       equity: benchEquity,
       drawdown: drawdowns(benchEquity),
-      stats: computeStats(run.t, benchEquity, spec.capital, benchExposure, run.cashReturn),
+      stats: measure(benchEquity, benchExposure, 0, 0, run.t.length, spec.capital),
     },
     interest: run.interest,
     cashRateNote: cashRateNote(spec),
     segments,
+    notes,
   };
 }
