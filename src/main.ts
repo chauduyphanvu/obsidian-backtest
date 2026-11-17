@@ -4,7 +4,6 @@ import { extractBlocks } from './blocks.ts';
 import { cashIndex, parseCompare, type Curve } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
-import { csvColumnNames, type DataDeps } from './data.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
 import { HOUR, isIntraday, isoDate } from './format.ts';
@@ -12,12 +11,12 @@ import { GalleryModal } from './gallery-modal.ts';
 import { LIMITS, LimitError, WeighedCache, resultBytes } from './limits.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
-import { ReadyMemo, drawHeld, loadNeeds } from './live-core.ts';
+import { drawHeld } from './live-core.ts';
 import { LiveView, VIEW_TYPE_LIVE, liveEditorExtension, openLivePanel, pokeLiveViews, type LiveHost } from './live-view.ts';
-import type { Spec } from './dsl.ts';
 import { failedStatus, mapLimit, ordersSavePlan, statusFrom, type StrategyStatus } from './orders.ts';
 import { OrdersBadge } from './orders-badge.ts';
 import { OrdersModal } from './orders-view.ts';
+import { PriceStore } from './price-store.ts';
 import { renderActions } from './render-actions.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
@@ -32,7 +31,7 @@ import { Runner, type RunOutput } from './runner.ts';
 import { SymbolLookup } from './symbols.ts';
 import { BlockDrawing, blockRuns, shutdownWorkers, type BlockRuns } from './worker-client.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
-import { parseSpec, type Defaults } from './dsl.ts';
+import type { Defaults, Spec } from './dsl.ts';
 
 /** Puts text at the cursor; a block starts on its own line. */
 function place(editor: Editor, text: string): void {
@@ -46,12 +45,6 @@ const KEPT_BLOCK_STATES = 500;
 const PROPERTY_DELAY = 1000;
 /** Strategies run side by side when today's orders are worked out. */
 const ORDERS_CONCURRENCY = 3;
-/**
- * Saved price files kept in memory, by their total length in characters, which is about a byte each. A Binance ticker's
- * smaller bars come to several megabytes each, so the files are not counted alone. The least recently used go first.
- */
-const KEPT_PRICE_TEXT = 60_000_000;
-const KEPT_PRICE_FILES = 200;
 /** After the last change to a setting, how long to wait before blocks on screen are told their defaults changed. */
 const DEFAULTS_CHECK_MS = 400;
 
@@ -82,11 +75,18 @@ interface StrategyOptions {
 
 export default class BacktestBlocks extends Plugin {
   settings: Settings = normalizeSettings(null);
-  private memory = new WeighedCache<string>({ maxEntries: KEPT_PRICE_FILES, maxAgeMs: Infinity, weigh: (text) => text.length, maxWeight: KEPT_PRICE_TEXT });
-  /** Whether each kind of block's prices are all saved and fresh, which the preview panel asks at every pause in typing. */
-  private ready = new ReadyMemo();
+  private prices = new PriceStore({
+    files: this.app.vault.adapter,
+    cacheDir: normalizePath(`${this.manifest.dir}/cache`),
+    normalize: normalizePath,
+    fetchText: async (url) => {
+      const res = await requestUrl({ url, throw: false });
+      // The services explain a bad ticker in a JSON body, which the parsers turn into a message.
+      if (res.status >= 400 && !res.text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
+      return res.text;
+    },
+  });
   private results = this.keptResults(6 * HOUR);
-  private dataDeps: DataDeps | null = null;
   /** What to run before a rendered block draws again or goes away. */
   private disposers = new WeakMap<MarkdownRenderChild, () => void>();
   private propertyWrites = new Map<string, { (): void; cancel(): void }>();
@@ -94,8 +94,6 @@ export default class BacktestBlocks extends Plugin {
   private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
   private ordersBadge: OrdersBadge | null = null;
   private symbolLookup: SymbolLookup | null = null;
-  /** Column names of the CSV files read so far, for completion after `column(`. A file that is deleted or renamed is forgotten. */
-  private csvColumns = new Map<string, string[]>();
   /** The strategy blocks on screen with the defaults each was drawn with, so each can say when the settings have since changed. */
   private onScreen = new Map<MarkdownRenderChild, { source: string; drawn: Defaults; say: (changed: boolean) => void }>();
   private checkDefaults = debounce(() => {
@@ -133,16 +131,13 @@ export default class BacktestBlocks extends Plugin {
       new StrategySuggest(this.app, {
         defaults: () => defaultsFrom(this.settings),
         lookup: () => this.lookup(),
-        csvColumns: (path) => this.csvColumns.get(normalizePath(path)),
+        csvColumns: (path) => this.prices.columns(path),
         csvPaths: () => this.app.vault.getFiles().filter((f) => f.extension.toLowerCase() === 'csv').map((f) => f.path),
       }),
     );
 
-    const forgetColumns = (path: string) => {
-      for (const known of this.csvColumns.keys()) if (known === path || known.startsWith(`${path}/`)) this.csvColumns.delete(known);
-    };
-    this.registerEvent(this.app.vault.on('delete', (file) => forgetColumns(file.path)));
-    this.registerEvent(this.app.vault.on('rename', (_file, oldPath) => forgetColumns(oldPath)));
+    this.registerEvent(this.app.vault.on('delete', (file) => this.prices.forgetColumns(file.path)));
+    this.registerEvent(this.app.vault.on('rename', (_file, oldPath) => this.prices.forgetColumns(oldPath)));
 
     this.addCommand({
       id: 'insert-strategy',
@@ -216,7 +211,7 @@ export default class BacktestBlocks extends Plugin {
     await this.saveData(this.settings);
     // Defaults are part of every result's key, but the freshness window is not.
     this.results = this.keptResults(this.settings.cacheHours * HOUR);
-    this.ready.changed();
+    this.prices.ready.changed();
     // Blocks already on screen keep the defaults they were drawn with and say so; this runs once typing in a setting has paused.
     this.checkDefaults();
   }
@@ -227,69 +222,21 @@ export default class BacktestBlocks extends Plugin {
   }
 
   async clearPrices(): Promise<void> {
-    this.memory.clear();
-    this.ready.changed();
+    this.prices.forget();
     this.results.clear();
-    const dir = this.cacheDir();
-    if (await this.app.vault.adapter.exists(dir)) await this.app.vault.adapter.rmdir(dir, true);
+    await this.prices.removeSaved();
     new Notice('Saved prices cleared. Strategy blocks fetch again when they next render.');
   }
 
   /** The ticker lookup while its setting is on; null means nothing is ever requested. */
   private lookup(): SymbolLookup | null {
     if (!this.settings.tickerLookup) return null;
-    const deps = this.deps();
+    const deps = this.prices.deps();
     return (this.symbolLookup ??= new SymbolLookup({ now: deps.now, fetchText: deps.fetchText, sleep: deps.sleep }));
   }
 
-  private cacheDir(): string {
-    return normalizePath(`${this.manifest.dir}/cache`);
-  }
-
-  private deps(): DataDeps {
-    if (this.dataDeps) return this.dataDeps;
-    const adapter = this.app.vault.adapter;
-    const file = (key: string) => `${this.cacheDir()}/${key}.json`;
-    // One object for the plugin's life, so several blocks asking for the same ticker share a download.
-    this.dataDeps = {
-      now: () => Date.now(),
-      sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
-      fetchText: async (url) => {
-        const res = await requestUrl({ url, throw: false });
-        // The services explain a bad ticker in a JSON body, which the parsers turn into a message.
-        if (res.status >= 400 && !res.text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
-        return res.text;
-      },
-      readVaultFile: async (path) => {
-        const p = normalizePath(path);
-        if (!(await adapter.exists(p))) {
-          this.csvColumns.delete(p);
-          return null;
-        }
-        const text = await adapter.read(p);
-        if (p.toLowerCase().endsWith('.csv')) this.csvColumns.set(p, csvColumnNames(text));
-        return text;
-      },
-      cacheRead: async (key) => {
-        const hit = this.memory.get(key);
-        if (hit !== undefined) return hit;
-        if (!(await adapter.exists(file(key)))) return null;
-        const text = await adapter.read(file(key));
-        this.memory.set(key, text);
-        return text;
-      },
-      cacheWrite: async (key, text) => {
-        this.memory.set(key, text);
-        this.ready.changed();
-        if (!(await adapter.exists(this.cacheDir()))) await adapter.mkdir(this.cacheDir());
-        await adapter.write(file(key), text);
-      },
-    };
-    return this.dataDeps;
-  }
-
   private runner(freshForMs = this.settings.cacheHours * HOUR): Runner {
-    return new Runner(this.deps(), defaultsFrom(this.settings), { freshForMs });
+    return new Runner(this.prices.deps(), defaultsFrom(this.settings), { freshForMs });
   }
 
   /** One drawing of a block. The defaults are read from the settings here, once, and everything made from the drawing uses them. */
@@ -297,7 +244,7 @@ export default class BacktestBlocks extends Plugin {
     return new BlockDrawing({
       source,
       defaults: defaultsFrom(this.settings),
-      deps: this.deps(),
+      deps: this.prices.deps(),
       freshForMs: opts.freshForMs ?? this.settings.cacheHours * HOUR,
       runs,
       anyway: opts.anyway,
@@ -488,31 +435,9 @@ export default class BacktestBlocks extends Plugin {
     };
   }
 
-  /**
-   * True when running the block needs no download: it parses, and every ticker's saved prices are fresh. The panel asks at
-   * every pause in typing, so the answer is kept for the kind of block it is (loadNeeds) until a price file is written or
-   * removed, or the oldest saved file stops being fresh. Parsing a saved file of smaller bars takes tens of milliseconds.
-   */
-  private async pricesReady(source: string): Promise<boolean> {
-    const defaults = defaultsFrom(this.settings);
-    const { spec } = parseSpec(source, { defaults });
-    if (!spec) return false;
-    const needs = loadNeeds(spec);
-    const known = this.ready.get(needs);
-    if (known !== undefined) return known;
-    const turn = this.ready.turn();
-    const freshForMs = this.settings.cacheHours * HOUR;
-    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
-    try {
-      const { prices, warnings } = await new Runner(offline, defaults, { freshForMs }).loadPrices(spec);
-      // Loading prices warns only when a download failed and a saved copy, or nothing for a ticker's smaller bars, stood in.
-      // So a warning means this block needs a download, whatever else it says.
-      const ready = prices.every((p) => !p.stale) && warnings.length === 0;
-      this.ready.set(needs, ready, ready ? Math.min(...prices.map((p) => p.fetched)) + freshForMs : Infinity, turn);
-      return ready;
-    } catch {
-      return false;
-    }
+  /** Whether running the block needs no download (PriceStore.pricesReady), with the settings as they are now. */
+  private pricesReady(source: string): Promise<boolean> {
+    return this.prices.pricesReady(source, defaultsFrom(this.settings), this.settings.cacheHours * HOUR);
   }
 
   /**
