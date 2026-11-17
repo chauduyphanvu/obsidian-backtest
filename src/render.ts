@@ -1,6 +1,7 @@
 import type { Backtest, Segment } from './backtest.ts';
 import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
 import { DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
+import { hintFor } from './fixes.ts';
 import { tokenizeBlock } from './highlight.ts';
 import { renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderDeepStats } from './render-stats.ts';
@@ -40,6 +41,8 @@ export function renderErrors(el: HTMLElement, errors: Diagnostic[], src: string)
     h(li, 'span', undefined, e.message);
     const text = lines[e.line - 1]?.trim();
     if (text) h(li, 'code', 'bt-error-src', text);
+    const hint = hintFor(lines, e);
+    if (hint) h(li, 'span', 'bt-error-hint', hint);
   }
   source(root, src);
 }

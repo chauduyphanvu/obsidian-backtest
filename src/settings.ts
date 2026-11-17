@@ -128,7 +128,7 @@ export class BacktestSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('Look tickers up while writing')
-      .setDesc('Suggests matching tickers and marks ones that do not exist. What you type on a universe line is sent to Yahoo or Binance to search.')
+      .setDesc('Suggests matching tickers and marks ones that do not exist. The tickers in your strategies, and what you type where a ticker goes, are sent to Yahoo to search. Nothing else from your notes is sent.')
       .addToggle((t) =>
         t.setValue(settings.tickerLookup).onChange(async (v) => {
           settings.tickerLookup = v;

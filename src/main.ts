@@ -1,3 +1,4 @@
+import type { EditorView } from '@codemirror/view';
 import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { runBacktest } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
@@ -6,7 +7,7 @@ import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE } from './dashboard.ts';
 import type { DataDeps } from './data.ts';
 import { DAY, isoDate } from './dom.ts';
-import { StrategySuggest, strategyEditor } from './editor.ts';
+import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
 import { GalleryModal } from './gallery-modal.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
@@ -26,6 +27,7 @@ import { renderSweep } from './render-sweep.ts';
 import { ResultCache, cacheKey, csvPaths, csvVersions, debounce } from './result-cache.ts';
 import { findBlock, setParamValues, setParamValuesInNote } from './rewrite.ts';
 import { Runner, lookbackBars, type RunOutput } from './runner.ts';
+import { SymbolLookup } from './symbols.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
 
 /** Puts text at the cursor; a block starts on its own line. */
@@ -73,6 +75,7 @@ export default class BacktestBlocks extends Plugin {
   /** Whether each block was left open (true) or folded (false), for blocks drawn again within a session. */
   private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
   private ordersBadge: OrdersBadge | null = null;
+  private symbolLookup: SymbolLookup | null = null;
 
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
@@ -99,8 +102,14 @@ export default class BacktestBlocks extends Plugin {
     this.registerView(VIEW_TYPE_LIVE, (leaf) => new LiveView(leaf, this.liveHost()));
     this.registerEditorExtension(liveEditorExtension(pokeLiveViews));
 
-    this.registerEditorExtension(strategyEditor(() => defaultsFrom(this.settings)));
-    this.registerEditorSuggest(new StrategySuggest(this.app));
+    this.registerEditorExtension(strategyEditor(() => defaultsFrom(this.settings), { lookup: () => this.lookup() }));
+    this.registerEditorSuggest(
+      new StrategySuggest(this.app, {
+        defaults: () => defaultsFrom(this.settings),
+        lookup: () => this.lookup(),
+        csvPaths: () => this.app.vault.getFiles().filter((f) => f.extension.toLowerCase() === 'csv').map((f) => f.path),
+      }),
+    );
 
     this.addCommand({
       id: 'insert-strategy',
@@ -132,6 +141,14 @@ export default class BacktestBlocks extends Plugin {
       id: 'clear-prices',
       name: 'Clear saved prices',
       callback: () => void this.clearPrices(),
+    });
+    this.addCommand({
+      id: 'fix-at-cursor',
+      name: 'Fix the problem at the cursor',
+      editorCallback: (editor) => {
+        const view = (editor as unknown as { cm?: EditorView }).cm;
+        if (!view || !applyFixAtCursor(view)) new Notice('There is no fix to offer at the cursor.');
+      },
     });
     this.addCommand({ id: 'open-live', name: 'Open strategy preview', callback: () => void openLivePanel(this.app) });
     this.addCommand({
@@ -172,6 +189,13 @@ export default class BacktestBlocks extends Plugin {
     const dir = this.cacheDir();
     if (await this.app.vault.adapter.exists(dir)) await this.app.vault.adapter.rmdir(dir, true);
     new Notice('Saved prices cleared. Strategy blocks fetch again when they next render.');
+  }
+
+  /** The ticker lookup while its setting is on; null means nothing is ever requested. */
+  private lookup(): SymbolLookup | null {
+    if (!this.settings.tickerLookup) return null;
+    const deps = this.deps();
+    return (this.symbolLookup ??= new SymbolLookup({ now: deps.now, fetchText: deps.fetchText, sleep: deps.sleep }));
   }
 
   private cacheDir(): string {
