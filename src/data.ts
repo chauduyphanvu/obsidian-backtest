@@ -1,4 +1,5 @@
-import { columnName, emptyBars, MAX_COLUMNS, type AssetRef, type Bars, type Column, type UnreadColumn } from './types.ts';
+import { intervalMs, YAHOO_INSIDE_DAYS } from './dsl.ts';
+import { columnName, emptyBars, MAX_COLUMNS, sliceBars, type AssetRef, type Bars, type Column, type UnreadColumn } from './types.ts';
 
 const DAY = 86_400_000;
 const FRESH_FOR = 6 * 3_600_000;
@@ -78,6 +79,54 @@ export function parseYahoo(json: string, now: number, weekly = false): Bars {
     if (c == null) continue;
     const f = adj[i] != null ? adj[i]! / c : 1;
     push(bars, day, q.open?.[i] * f, q.high?.[i] * f, q.low?.[i] * f, c * f, q.volume?.[i] ?? 0);
+  }
+  return bars;
+}
+
+/**
+ * Yahoo's intraday chart JSON to the smaller bars `magnify` looks inside daily bars with, `step` long. What Yahoo's chart
+ * API was seen to do (November 2026, saved in tests/fixtures/yahoo-inside-*.json): it serves 2m to 30m bars for the last 60
+ * days and 1h bars for the last 730, and answers an older request with an error; its intraday bars are adjusted for splits
+ * but not for dividends, and come without an adjusted close; it leaves out the trading periods outside the regular
+ * session; and `meta.tradingPeriods` gives each day's regular session, with that day's offset from UTC. A bar can come
+ * with nulls, as the half-hour bar of a day that closes early does, and while a session is open the last bar is the latest
+ * trade, with its own time. So a day is kept only when its bars cover its whole session, one after another, every one
+ * a valid bar, and the session is over by `now`; the bars of other days are left out, and the bars of those days count as
+ * missing. Times are the exchange's clock read as UTC, as parseYahoo dates its daily bars by the exchange's day, so each
+ * day's bars fall inside that day's daily bar.
+ */
+export function parseYahooInside(json: string, now: number, step: number): Bars {
+  const body = JSON.parse(json);
+  const result = body?.chart?.result?.[0];
+  if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo returned no data');
+  const ts: number[] = result.timestamp ?? [];
+  const q = result.indicators?.quote?.[0] ?? {};
+  const days: unknown = result.meta?.tradingPeriods;
+  const bars = emptyBars();
+  if (!Array.isArray(days)) return bars;
+  let i = 0;
+  for (const day of days as { start: number; end: number; gmtoffset: number }[][]) {
+    const kept = emptyBars();
+    let whole = Array.isArray(day) && day.length > 0;
+    for (const session of whole ? day : []) {
+      const [start, end, offset] = [session.start * 1000, session.end * 1000, session.gmtoffset * 1000];
+      let next = start;
+      while (i < ts.length && ts[i] * 1000 < start) i++;
+      for (; i < ts.length && ts[i] * 1000 < end; i++) {
+        const [o, h, l, c] = [q.open?.[i], q.high?.[i], q.low?.[i], q.close?.[i]];
+        if (ts[i] * 1000 !== next || [o, h, l, c].some((x) => typeof x !== 'number')) {
+          whole = false;
+          continue;
+        }
+        const length = kept.t.length;
+        push(kept, next + offset, o, h, l, c, q.volume?.[i] ?? 0);
+        if (kept.t.length === length) whole = false;
+        next += step;
+      }
+      if (next < end || end > now) whole = false;
+    }
+    if (!whole) continue;
+    for (let k = 0; k < kept.t.length; k++) push(bars, kept.t[k], kept.o[k], kept.h[k], kept.l[k], kept.c[k], kept.v[k]);
   }
   return bars;
 }
@@ -305,9 +354,14 @@ export function parseCsv(text: string): Bars {
 export { SLASHED as CSV_SLASHED_DATE, detectSeparator as detectCsvSeparator, parseTime as parseCsvTime, slashedDatesAreDayFirst, splitLine as splitCsvLine };
 
 async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Promise<Bars> {
+  const now = Math.floor(deps.now() / 1000);
+  // Intraday bars come for a recent window only, asked for whole (see insideReach).
+  const days = YAHOO_INSIDE_DAYS[interval];
   const path =
     `/v8/finance/chart/${encodeURIComponent(ref.id)}` +
-    `?period1=0&period2=${Math.floor(deps.now() / 1000)}&interval=${interval === '1w' ? '1wk' : '1d'}&events=div%2Csplit&includeAdjustedClose=true`;
+    (days
+      ? `?period1=${insideReach('yahoo', interval, deps.now()) / 1000}&period2=${now}&interval=${interval}`
+      : `?period1=0&period2=${now}&interval=${interval === '1w' ? '1wk' : '1d'}&events=div%2Csplit&includeAdjustedClose=true`);
   let failure: unknown;
   for (let attempt = 0; attempt < YAHOO_HOSTS.length; attempt++) {
     if (attempt > 0) await deps.sleep?.(YAHOO_WAITS[attempt - 1]);
@@ -324,7 +378,7 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Prom
       continue;
     }
     try {
-      return parseYahoo(text, deps.now(), interval === '1w');
+      return days ? parseYahooInside(text, deps.now(), intervalMs(interval)) : parseYahoo(text, deps.now(), interval === '1w');
     } catch (e) {
       if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Check the ticker.`);
       throw e;
@@ -358,13 +412,17 @@ function loaded(source: Loaded['source'], bars: Bars, fetched: number, warning: 
   return { bars, warning, source, through: bars.t[bars.t.length - 1], fetched, stale };
 }
 
-/** Fetches, saves and returns fresh bars; on failure falls back to the saved copy when there is one. */
-async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null): Promise<Loaded> {
+/**
+ * Fetches, saves and returns fresh bars; on failure falls back to the saved copy when there is one. Bars before `keepFrom`
+ * are not kept, so a saved series that grows at every refresh stays within it.
+ */
+async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null, keepFrom = -Infinity): Promise<Loaded> {
   try {
-    const bars = ref.source === 'yahoo' ? await fetchYahoo(ref, interval, deps) : await fetchBinance(ref, interval, since, cached?.bars ?? null, deps);
+    let bars = ref.source === 'yahoo' ? await fetchYahoo(ref, interval, deps) : await fetchBinance(ref, interval, since, cached?.bars ?? null, deps);
+    if (keepFrom > -Infinity) bars = barsFrom(bars, keepFrom);
     if (bars.t.length === 0) throw new Error('no bars returned');
     const fetched = deps.now();
-    await deps.cacheWrite(key, JSON.stringify({ fetched, since: cached?.since ?? since, bars } satisfies Cached));
+    await deps.cacheWrite(key, JSON.stringify({ fetched, since: Math.max(cached?.since ?? since, keepFrom), bars } satisfies Cached));
     return loaded(ref.source, bars, fetched);
   } catch (e) {
     if (e instanceof NoPrices) throw e;
@@ -384,7 +442,7 @@ const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
  * `since` is the earliest time the run needs, lookback included; sources that serve whole histories ignore it.
  * Calls that need the same download while one is running share it.
  */
-export async function loadBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number }): Promise<Loaded> {
+export async function loadBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number; keepFrom?: number }): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
     if (text === null) throw new Error(`No file at ${ref.id}`);
@@ -410,8 +468,43 @@ export async function loadBars(ref: AssetRef, interval: string, since: number, d
   let download = byKey.get(slot);
   if (!download) {
     const map = byKey;
-    download = refresh(ref, interval, since, deps, key, cached).finally(() => map.delete(slot));
+    download = refresh(ref, interval, since, deps, key, cached, opts?.keepFrom).finally(() => map.delete(slot));
     byKey.set(slot, download);
   }
   return download;
+}
+
+/** The bars at or after `since`. */
+export function barsFrom(bars: Bars, since: number): Bars {
+  let i = 0;
+  while (i < bars.t.length && bars.t[i] < since) i++;
+  // Through sliceBars, so a CSV file's extra columns stay with their bars.
+  return sliceBars(bars, i);
+}
+
+/**
+ * The most smaller bars `magnify` loads and saves for one ticker: 69 days of 1m bars, 347 days of 5m bars, 2.9 years of
+ * 15m bars or 11.4 years of 1h bars. It is 100 of Binance's pages, about 6 MB saved, and 6 MB in memory while a block holds it.
+ */
+export const INSIDE_BARS = 100_000;
+
+/**
+ * The earliest time a source's smaller bars of size `interval` are loaded from at `now` for magnify, counted back from the
+ * start of the day in UTC, so runs on one day load the same bars: Yahoo's intraday window with a day to spare (its limit
+ * is counted from the moment of the request), or INSIDE_BARS bars on Binance. Yahoo's daily bars are loaded from the start.
+ */
+export function insideReach(source: AssetRef['source'], interval: string, now: number): number {
+  const today = Math.floor(now / DAY) * DAY;
+  if (source === 'binance') return today - INSIDE_BARS * intervalMs(interval);
+  const days = YAHOO_INSIDE_DAYS[interval];
+  return days ? today - (days - 1) * DAY : 0;
+}
+
+/**
+ * The smaller bars `magnify` looks inside `ref`'s bars with, from `since`: loaded and saved like a ticker's own bars, under
+ * their own interval, with Binance's kept to INSIDE_BARS (insideReach) as later refreshes add to them.
+ */
+export function loadInsideBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number }): Promise<Loaded> {
+  const keepFrom = ref.source === 'binance' ? insideReach('binance', interval, deps.now()) : undefined;
+  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom });
 }

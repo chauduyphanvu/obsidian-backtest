@@ -178,6 +178,7 @@ Only universe is required. Add the others when the description asks for them or 
   fill: close                       fill each order at the close the rule was read at; the default, next open, fills at the next bar's open
   commission: 1                     a charge per order in the account's money, added to costs; also 0.005 per share, or 0.005 per share, min 1, max 1%
   entries: 3                        build each position in up to 3 entries, each a third of its weight; needs an add when rule
+  magnify: 1h                       follow stops and targets through 1h bars inside each bar, so a stop and a target in one bar are taken in the order they were reached; smaller than interval and dividing it; Yahoo gives 2m 5m 15m 30m 1h inside 1d bars (last 60 days, 730 for 1h) and 1d inside 1w bars; rules still read the strategy's own bars
 universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, csv:Data/gold.csv for a CSV file in the vault. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
 Stops are checked on top of the sell rule. With no sell rule a position is held until a stop closes it or the run ends.
 

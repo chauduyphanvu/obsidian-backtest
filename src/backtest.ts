@@ -1,7 +1,8 @@
+import { INSIDE_BARS } from './data.ts';
 import { DAY, stamp } from './dom.ts';
-import type { Spec } from './dsl.ts';
-import { SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
-import { clocksApart, ofReads, specEvaluator } from './evaluate.ts';
+import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
+import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
+import { clocksApart, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -227,6 +228,64 @@ function closeReadNotes(spec: Spec, data: Map<string, Bars>, intraday: boolean):
   return notes;
 }
 
+/**
+ * With `magnify`, what was looked inside: for each ticker from when (its first bar in the run that has smaller bars, or
+ * none), why not earlier, how many bars with a level inside them were followed through their smaller bars, and how many
+ * in that time were read whole. Tickers that read alike share a note.
+ */
+function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intraday: boolean): string[] {
+  const size = spec.magnify;
+  if (!size || !run.inside) return [];
+  const window = (source: string) =>
+    source === 'yahoo' && YAHOO_INSIDE_DAYS[size]
+      ? ` (Yahoo gives ${size} bars for the last ${YAHOO_INSIDE_DAYS[size]} days)`
+      : source === 'binance'
+        ? ` (at most ${INSIDE_BARS.toLocaleString('en-US')} ${size} bars are loaded for a ticker)`
+        : '';
+  const groups = new Map<string, { names: string[]; from: number | null; source: string; looked: number; whole: number }>();
+  for (const r of run.inside) {
+    const source = spec.universe.find((a) => a.name === r.asset)!.source;
+    const t = data.get(r.asset)!.t;
+    const all = r.from !== null && r.from === t[firstAtOrAfter(t, run.t[0])];
+    const key = `${all ? 'all' : r.from} ${all ? '' : source}`;
+    if (!groups.has(key)) groups.set(key, { names: [], from: all ? -Infinity : r.from, source, looked: 0, whole: 0 });
+    const g = groups.get(key)!;
+    g.names.push(r.asset);
+    g.looked += r.looked;
+    g.whole += r.whole;
+  }
+  const notes: string[] = [];
+  const firstStop = 'when a bar holds both a stop and a target the stop is taken first';
+  for (const g of groups.values()) {
+    const one = g.names.length === 1;
+    const their = one ? 'its' : 'their';
+    const held =
+      g.looked === 0
+        ? `none of them held a stop or target inside ${one ? 'its' : 'their'} range`
+        : `${g.looked} ${g.looked === 1 ? 'bar held a stop or target and was' : 'bars held a stop or target and were'} followed through them`;
+    if (g.from === null) {
+      notes.push(`No ${size} bars of ${list(g.names)} reach into this run${window(g.source)}, so ${their} bars are read whole, and ${firstStop}.`);
+      continue;
+    }
+    if (g.from === -Infinity) notes.push(`Looked inside every bar of ${list(g.names)} using ${their} ${size} bars: ${held}.`);
+    else {
+      notes.push(
+        `Looked inside the bars of ${list(g.names)} from ${stamp(g.from, intraday)} on, using ${their} ${size} bars${window(g.source)}: ${held}. Before that, bars are read whole, and ${firstStop}.`,
+      );
+    }
+    if (g.whole > 0) {
+      notes.push(
+        `In that time ${g.whole} ${g.whole === 1 ? 'bar' : 'bars'} of ${list(g.names)} with a stop or target inside ${g.whole === 1 ? 'it was' : 'them were'} read whole, because ${g.whole === 1 ? 'its' : 'their'} ${size} bars were missing or did not match ${g.whole === 1 ? 'it' : 'them'}.`,
+      );
+    }
+  }
+  const csv = spec.universe.filter((a) => a.source === 'csv').map((a) => a.name);
+  if (csv.length) {
+    notes.push(`${list(csv)} ${csv.length === 1 ? 'is a CSV file, which has' : 'are CSV files, which have'} no smaller bars, so ${csv.length === 1 ? 'its' : 'their'} bars are read whole.`);
+  }
+  return notes;
+}
+
 export const CLOSE_FILL_NOTE =
   'Orders fill at the same close the rules were read at (fill: close). The result assumes you can trade at that closing price, which a real order can only come near by being placed just before the close.';
 
@@ -291,7 +350,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   };
 
   const intraday = run.t.some((t) => t % DAY !== 0);
-  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped)];
+  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec)];
   if (run.smallTrades) {
     const n = run.smallTrades;
     notes.push(
@@ -299,6 +358,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     );
   }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
+  notes.push(...insideNotes(spec, data, run, intraday));
   if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
     notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
   }

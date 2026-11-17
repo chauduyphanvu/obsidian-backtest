@@ -1,4 +1,4 @@
-import type { CashRate, Commission, Fill, Rebalance, Sizing, StopLevel, Stops } from './dsl.ts';
+import { intervalMs, type CashRate, type Commission, type Fill, type Rebalance, type Sizing, type StopLevel, type Stops } from './dsl.ts';
 import type { BarRule, PosState } from './evaluate.ts';
 import * as ind from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
@@ -66,8 +66,19 @@ export type ExitWhy =
   | { k: 'rule'; t: number }
   /** A ranking decision, which read the ticker's bar `t`, did not keep it. */
   | { k: 'rank'; t: number; rank: RankPlace }
-  /** A stop or the target: the level the bar reached, the highest price a trailing stop trailed from, and whether the bar opened beyond the level, so the fill was at the open. */
-  | { k: 'level'; level: number; high: number | null; atOpen: boolean };
+  /**
+   * A stop or the target: the level the bar reached, the highest price a trailing stop trailed from, and whether the bar
+   * opened beyond the level, so the fill was at the open. With `magnify`, `inside` says how the bar was read: looked
+   * inside, when `atOpen` is about the smaller bar the level was reached in, or as a whole bar, and why.
+   */
+  | { k: 'level'; level: number; high: number | null; atOpen: boolean; inside?: InsideWhy };
+
+/**
+ * How a bar with a stop or target inside its range was read with `magnify`: through its smaller bars, with the start of
+ * the one the level was reached in, or as a whole bar because its smaller bars were not there, were not all there, or
+ * did not match it (see lookInside).
+ */
+export type InsideWhy = { k: 'inside'; t: number } | { k: 'whole'; why: Exclude<InsideVerdict, { ok: true }>['why'] };
 
 export interface TradeWhy {
   /** The ticker's bar whose close the buy was read at: the signal, or the bar a ranking decision read. */
@@ -191,6 +202,12 @@ export interface SimParams {
   commission?: Commission;
   /** Entries a position is built in: the first by the buy rule or a ranking, the rest by the add signal. Absent means 1. */
   entries?: number;
+  /**
+   * The size of the smaller bars to look inside each bar with, for the stops and targets of the assets whose smaller bars
+   * `data` holds under insideKey; `interval` is the size of the assets' own bars. Absent means none.
+   */
+  magnify?: string;
+  interval?: string;
 }
 
 /** Per asset, aligned with its bars. */
@@ -234,6 +251,18 @@ export interface RunResult {
   /** With a commission: the commission paid, part of `costs`, and how many adds and rebalancing trades were not made because it would have been too large a share of them. */
   commission?: number;
   smallTrades?: number;
+  /** With `magnify`: for each asset that had smaller bars, in the universe's order, what was looked inside. */
+  inside?: InsideReport[];
+}
+
+/** What `magnify` did for one asset. */
+export interface InsideReport {
+  asset: string;
+  /** The first bar of the run that has smaller bars, from which on bars were looked inside; null when none has. */
+  from: number | null;
+  /** Bars from `from` on with a stop or target inside their range: looked inside, or read as whole bars because their smaller bars were missing, not all there or did not match. */
+  looked: number;
+  whole: number;
 }
 
 const DAY = 86_400_000;
@@ -252,6 +281,91 @@ export function commissionFee(c: Commission, value: number, shares: number): num
   const fee = Math.max(c.fee * shares, c.min);
   return c.max === null ? fee : Math.min(fee, c.max * value);
 }
+
+/** Where `data` holds an asset's smaller bars of size `interval`, for `magnify`. A ticker's name has no space, so no ticker is called this. */
+export const insideKey = (name: string, interval: string): string => `${name} ${interval}`;
+/** Whether a key of `data` is an insideKey, not a ticker. */
+export const isInsideKey = (key: string): boolean => key.includes(' ');
+
+/** A bar's smaller bars as its stops and targets move through them: their starts, and their opens, highs and lows on the bar's own scale. */
+export interface InsidePath {
+  t: number[];
+  o: number[];
+  h: number[];
+  l: number[];
+}
+
+/** A bar's smaller bars can be looked inside, or why not: there are none, some are missing, or they do not match the bar. */
+export type InsideVerdict = { ok: true; path: InsidePath } | { ok: false; why: 'none' | 'missing' | 'mismatch' };
+
+/** How far smaller bars, scaled, may stray from the open, high, low or close of the bar they make up: this share of its range. */
+export const INSIDE_TOLERANCE = 0.25;
+
+/**
+ * The path inside the bar with open `o`, high `h`, low `l` and close `c`, from its smaller bars `small` at indexes `from` up
+ * to `to`, of which there must be `count` (0: any number from 1). The smaller bars may come from another series than the
+ * bar, such as Yahoo's intraday bars, which are not adjusted for dividends, under its adjusted daily bars; a split or a
+ * dividend changes that adjustment only between two days. So they are scaled by one factor: the root of the smallest times
+ * the largest of the bar's open, high, low and close divided by their first open, highest high, lowest low and last close.
+ * Scaled, those four must each lie within INSIDE_TOLERANCE of the bar's range of the bar's own, or the smaller bars
+ * describe another path. The path then takes the bar's own prices where the smaller bars put them: the first open is
+ * the bar's open, the first highest high its high and the first lowest low its low, and every other price is kept
+ * inside the bar's range. So nothing inside the bar trades where the bar did not, and only the order comes from the
+ * smaller bars.
+ */
+export function lookInside(o: number, h: number, l: number, c: number, small: Bars, from: number, to: number, count: number): InsideVerdict {
+  if (to <= from) return { ok: false, why: 'none' };
+  if (count > 0 && to - from !== count) return { ok: false, why: 'missing' };
+  let hi = from;
+  let lo = from;
+  for (let j = from + 1; j < to; j++) {
+    if (small.h[j] > small.h[hi]) hi = j;
+    if (small.l[j] < small.l[lo]) lo = j;
+  }
+  const first = small.o[from];
+  const last = small.c[to - 1];
+  const ratios = [o / first, h / small.h[hi], l / small.l[lo], c / last];
+  const k = Math.sqrt(Math.min(...ratios) * Math.max(...ratios));
+  const off = Math.max(Math.abs(k * first - o), Math.abs(k * small.h[hi] - h), Math.abs(k * small.l[lo] - l), Math.abs(k * last - c));
+  if (!(off <= INSIDE_TOLERANCE * (h - l))) return { ok: false, why: 'mismatch' };
+  const within = (x: number) => Math.min(h, Math.max(l, x));
+  const path: InsidePath = { t: [], o: [], h: [], l: [] };
+  for (let j = from; j < to; j++) {
+    const oj = j === from ? o : within(k * small.o[j]);
+    path.t.push(small.t[j]);
+    path.o.push(oj);
+    path.h.push(Math.max(j === hi ? h : within(k * small.h[j]), oj));
+    path.l.push(Math.min(j === lo ? l : within(k * small.l[j]), oj));
+  }
+  return { ok: true, path };
+}
+
+/** The index of the first of `t` at or after `at` (t sorted). */
+export function firstAtOrAfter(t: number[], at: number): number {
+  let a = 0;
+  let b = t.length;
+  while (a < b) {
+    const m = (a + b) >> 1;
+    if (t[m] < at) a = m + 1;
+    else b = m;
+  }
+  return a;
+}
+
+/**
+ * The smaller bars inside an asset's bar `i`, as simulate reads them: those that start within the bar's span, which is
+ * `interval` from its start. A Binance bar must hold every one of them, since Binance makes a bar every interval around the
+ * clock; for Yahoo, the loader keeps only days whose regular session it has in full (data.ts parseYahooInside).
+ */
+export function insideBar(bars: Bars, i: number, source: string, small: Bars, interval: string, magnify: string): InsideVerdict {
+  const span = intervalMs(interval);
+  const from = firstAtOrAfter(small.t, bars.t[i]);
+  const to = firstAtOrAfter(small.t, bars.t[i] + span);
+  return lookInside(bars.o[i], bars.h[i], bars.l[i], bars.c[i], small, from, to, insideCount(source, span, intervalMs(magnify)));
+}
+
+/** How many smaller bars a bar of `span` must hold: all of them on Binance, any number from 1 elsewhere. */
+const insideCount = (source: string, span: number, small: number): number => (source === 'binance' ? span / small : 0);
 
 function periodKey(t: number, mode: Rebalance): number {
   const d = new Date(t);
@@ -289,6 +403,11 @@ function periodKey(t: number, mode: Rebalance): number {
  * watched from that bar on; one bought at a close only from its asset's next bar, since the range
  * of the bar it was bought at came before the fill. The trailing level starts from the fill's price
  * before slippage (the open, or the close) and moves with the highs of later completed bars.
+ *
+ * With `magnify`, a bar that opens between the stop and the target and holds one of them in its range (the stop at the
+ * highest the trailing level could reach in it) is read as its smaller bars, one after another, with the same rule: so
+ * the smaller bars decide which level comes first and where a gap between them fills, and the trailing level moves with
+ * each smaller bar that has ended. Rules, rankings and every fill other than a stop's or a target's stay on the bars.
  */
 export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<string, Signals>): RunResult {
   const atClose = p.fill === 'close';
@@ -356,6 +475,10 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       addT: 0,
       entryList: [] as TradeEntry[],
       addList: [] as AddWhy[],
+
+      // With magnify: the smaller bars, where each bar's start and end among them, how many a bar must hold, the first
+      // bar of the run that has any, and the bars with a level inside them that were looked inside or read whole.
+      inside: null as { bars: Bars; from: Int32Array; to: Int32Array; count: number; first: number; looked: number; whole: number } | null,
     };
   });
   type A = (typeof assets)[number];
@@ -371,6 +494,24 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   for (const a of assets) {
     while (a.i + 1 < a.bars.t.length && a.bars.t[a.i + 1] < start) a.i++;
     if (a.i >= 0) a.lastClose = a.bars.c[a.i];
+  }
+
+  const span = p.magnify && p.interval ? intervalMs(p.interval) : NaN;
+  for (const a of assets) {
+    const small = span > 0 ? data.get(insideKey(a.name, p.magnify!)) : undefined;
+    if (!small) continue;
+    const n = a.bars.t.length;
+    const from = new Int32Array(n);
+    const to = new Int32Array(n);
+    let first = -1;
+    for (let i = 0, j = 0; i < n; i++) {
+      while (j < small.t.length && small.t[j] < a.bars.t[i]) j++;
+      from[i] = j;
+      while (j < small.t.length && small.t[j] < a.bars.t[i] + span) j++;
+      to[i] = j;
+      if (first < 0 && to[i] > from[i] && a.bars.t[i] >= start && a.bars.t[i] <= end) first = i;
+    }
+    a.inside = { bars: small, from, to, count: insideCount(a.source, span, intervalMs(p.magnify!)), first, looked: 0, whole: 0 };
   }
 
   const memo = new Map<string, number[]>();
@@ -580,6 +721,31 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     a.addList.push({ signalT: a.addT, ...size, average: a.entryPrice, stopLoss: why.stopLoss, takeProfit: why.takeProfit });
   };
 
+  /** The trailing level when the highest price since entry is `high`; -Infinity without a trailing stop. */
+  const trailFrom = (a: A, high: number) => (!a.trail ? -Infinity : 'mul' in a.trail ? high * a.trail.mul : high - a.trail.dist);
+  /**
+   * Checks a bar, or one of its smaller bars with `inside`, against the stops and the target, and closes the position when
+   * the low reaches the stop or the high the target; true when it did. Otherwise the bar's high moves the trailing level
+   * for the bars after it.
+   */
+  const reach = (a: A, t: number, o: number, h: number, l: number, inside?: InsideWhy): boolean => {
+    const trail = trailFrom(a, a.highWater);
+    const stop = Math.max(a.hard, trail);
+    const how = inside ? { inside } : {};
+    if (l <= stop && o < a.target) {
+      const trailing = trail > a.hard;
+      close(a, t, Math.min(o, stop), trailing ? 'trailing stop' : 'stop loss', { k: 'level', level: stop, high: trailing ? a.highWater : null, atOpen: o < stop, ...how });
+    } else if (h >= a.target) {
+      close(a, t, Math.max(o, a.target), 'take profit', { k: 'level', level: a.target, high: null, atOpen: o > a.target, ...how });
+    } else {
+      a.highWater = Math.max(a.highWater, h);
+      return false;
+    }
+    a.armed = false;
+    a.stoppedT = t;
+    return true;
+  };
+
   /** The first input a buy signalled at bar `idx` needs that is still unknown there, with its period; null when all are known. */
   const missingInput = (a: A, idx: number): { input: WarmupInput; n: number } | null => {
     if (p.sizing.k === 'risk' && Number.isNaN(atrAt(a, p.sizing.n, idx))) return { input: 'risk per trade', n: p.sizing.n };
@@ -755,25 +921,25 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     if (!atClose) fillOrders(t, live, isLive);
 
     // Inside the bar: the open comes first, so a gap through the stop or the target fills there;
-    // when stop and target both lie inside the bar, the stop is taken first.
+    // when stop and target both lie inside the bar, the stop is taken first. With magnify, a bar that opens between the
+    // levels and holds one in its range is followed through its smaller bars instead, each read the same way.
     for (const a of live) {
       if (a.shares === 0) continue;
       const { o, h, l } = { o: a.bars.o[a.i], h: a.bars.h[a.i], l: a.bars.l[a.i] };
-      const trail = !a.trail ? -Infinity : 'mul' in a.trail ? a.highWater * a.trail.mul : a.highWater - a.trail.dist;
-      const stop = Math.max(a.hard, trail);
-      if (l <= stop && o < a.target) {
-        const trailing = trail > a.hard;
-        close(a, t, Math.min(o, stop), trailing ? 'trailing stop' : 'stop loss', { k: 'level', level: stop, high: trailing ? a.highWater : null, atOpen: o < stop });
-        a.armed = false;
-        a.stoppedT = t;
-      } else if (h >= a.target) {
-        close(a, t, Math.max(o, a.target), 'take profit', { k: 'level', level: a.target, high: null, atOpen: o > a.target });
-        a.armed = false;
-        a.stoppedT = t;
-      } else {
-        // The trailing level only moves on completed bars.
-        a.highWater = Math.max(a.highWater, h);
+      const ins = a.inside;
+      if (ins && o > Math.max(a.hard, trailFrom(a, a.highWater)) && o < a.target && h > l && (h >= a.target || l <= Math.max(a.hard, trailFrom(a, Math.max(a.highWater, h))))) {
+        const seen = lookInside(o, h, l, a.bars.c[a.i], ins.bars, ins.from[a.i], ins.to[a.i], ins.count);
+        if (seen.ok) {
+          ins.looked++;
+          const path = seen.path;
+          for (let j = 0; j < path.t.length && !reach(a, t, path.o[j], path.h[j], path.l[j], { k: 'inside', t: path.t[j] }); j++);
+          continue;
+        }
+        if (ins.first >= 0 && a.i >= ins.first) ins.whole++;
+        reach(a, t, o, h, l, { k: 'whole', why: seen.why });
+        continue;
       }
+      reach(a, t, o, h, l);
     }
 
     // Close: read the rules, then (with fill: close) fill what they decided, then mark the book.
@@ -918,5 +1084,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     cashReturn,
     skipped,
     ...(charge ? { commission, smallTrades } : {}),
+    ...(p.magnify
+      ? { inside: assets.flatMap((a) => (a.inside ? [{ asset: a.name, from: a.inside.first < 0 ? null : a.bars.t[a.inside.first], looked: a.inside.looked, whole: a.inside.whole }] : [])) }
+      : {}),
   };
 }

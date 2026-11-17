@@ -170,6 +170,13 @@ setting(
   'Builds each position in up to that many entries, each a step of its whole size: the buy rule makes the first and the add rule each later one. It needs an add rule, and the entries together never go above the ticker’s weight.',
   'entries: 3\nadd when close > last entry price * 1.03',
 );
+setting(
+  'magnify',
+  'magnify: 1h',
+  'look inside each bar with 1h bars, for stops and targets',
+  'Follows a bar that holds a stop or target through smaller bars inside it, such as 1h bars inside daily ones, so the order in which the stop and the target are reached is read, not assumed. Rules stay on the strategy’s own bars, and Yahoo gives 2m to 1h bars inside daily bars for recent days only and 1d bars inside weekly ones.',
+  'magnify: 1h',
+);
 
 /** Names of a function's arguments, in the order INDICATORS lists their defaults. */
 const ARGUMENTS: Record<string, string[]> = {

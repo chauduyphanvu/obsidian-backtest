@@ -112,6 +112,8 @@ export interface Spec {
   commission?: Commission;
   /** The number of entries a position is built in; absent when the block has no `entries` line. */
   entries?: number;
+  /** The smaller bar size each bar is looked inside with, for stops and targets; absent when the block has no `magnify` line. */
+  magnify?: string;
 }
 
 export interface Defaults {
@@ -207,12 +209,25 @@ export const CALENDAR: CalName[] = ['month', 'day', 'weekday', 'year', 'month_st
 export const POSITION: Record<PosName, string> = { bars_held: 'bars held', entry_price: 'entry price', last_entry_price: 'last entry price', entries_made: 'entries made' };
 export const BINANCE_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const YAHOO_INTERVALS = ['1d', '1w'];
+/**
+ * The bars Yahoo serves inside its daily bars, with the days of history each reaches back: its chart API answers a request
+ * for older ones with "The requested range must be within the last 60 days" (730 for 1h). Its 1m bars reach back 30 days
+ * but only 8 days a request, so they are not offered. Inside a weekly bar, Yahoo's daily bars serve its whole history.
+ */
+export const YAHOO_INSIDE_DAYS: Record<string, number> = { '2m': 60, '5m': 60, '15m': 60, '30m': 60, '1h': 730 };
+const UNIT_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 };
+
+/** The length of a bar size such as 5m, 1h, 1d or 1w in milliseconds; NaN for anything else. */
+export function intervalMs(interval: string): number {
+  const m = interval.match(/^(\d+)([mhdw])$/);
+  return m ? Number(m[1]) * UNIT_MS[m[2]] : NaN;
+}
 export const REBALANCE: Rebalance[] = ['never', 'weekly', 'monthly', 'quarterly', 'yearly'];
 
 export const SETTINGS = [
   'name', 'universe', 'symbol', 'from', 'to', 'data', 'interval', 'capital', 'costs', 'size', 'rebalance', 'benchmark',
   'stop loss', 'trailing stop', 'take profit', 'slippage', 'cash rate', 'test from', 'hold', 'weighting', 'risk per trade', 'fill',
-  'commission', 'entries',
+  'commission', 'entries', 'magnify',
 ];
 /** The settings a `for TICKER:` section can hold. */
 export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
@@ -866,6 +881,34 @@ function clash(ref: AssetRef, known: AssetRef[]): string | null {
   return `${other.name} is used for two different things here: ${other.source}:${other.id} and ${ref.source}:${ref.id}. Rename the CSV file or use one of them.`;
 }
 
+/** The largest of the usual bar sizes that fits a whole number of times into `interval`; null when none is smaller. */
+function sizeInside(interval: string): string | null {
+  const big = intervalMs(interval);
+  return ['1d', '1h', '15m', '5m', '1m'].find((s) => intervalMs(s) < big && big % intervalMs(s) === 0) ?? null;
+}
+
+/** Why `magnify: size` can't look inside the strategy's `interval` bars of these sources; null when it can. */
+function magnifyProblem(size: string, interval: string, sources: Source[]): string | null {
+  const small = intervalMs(size);
+  const big = intervalMs(interval);
+  if (Number.isNaN(big)) return null;
+  const example = sizeInside(interval);
+  const such = example ? `, such as ${example}` : '';
+  if (Number.isNaN(small)) return `magnify takes a bar size smaller than the strategy's ${interval} bars${such}`;
+  if (small >= big) {
+    return example ? `magnify needs bars shorter than the strategy's ${interval} bars${such}` : `${interval} bars are the shortest there are, so magnify can't look inside them`;
+  }
+  if (big % small !== 0) return `A ${interval} bar does not hold a whole number of ${size} bars. Use a size that divides it${such}`;
+  if (sources.every((s) => s === 'csv')) return 'magnify looks inside bars with smaller bars from Yahoo or Binance, and CSV files have none';
+  if (sources.includes('yahoo')) {
+    if (interval === '1w' && size !== '1d') return `Yahoo can look inside weekly bars with 1d bars only, not ${size}`;
+    const offered = Object.keys(YAHOO_INSIDE_DAYS);
+    if (interval === '1d' && !offered.includes(size)) return `Yahoo can look inside daily bars with ${offered.join(', ')} bars, not ${size}`;
+  }
+  if (sources.includes('binance') && !BINANCE_INTERVALS.includes(size)) return `Binance can look inside bars with ${BINANCE_INTERVALS.filter((s) => intervalMs(s) < big && big % intervalMs(s) === 0).join(', ')} bars, not ${size}`;
+  return null;
+}
+
 function parseDate(text: string, where: At): number {
   const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const ms = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
@@ -1378,6 +1421,10 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   } else if (sources.has('binance') && !BINANCE_INTERVALS.includes(interval)) {
     errors.push(diag(intervalAt, `Binance intervals: ${BINANCE_INTERVALS.join(', ')}`));
   }
+  const magnify = get('magnify', (v) => v.toLowerCase(), null as string | null);
+  const magnifyLine = settings.get('magnify');
+  const magnifyError = magnify !== null && universe.length > 0 ? magnifyProblem(magnify, interval, universe.map((a) => a.source)) : null;
+  if (magnifyError) errors.push(diag(magnifyLine!.valueAt, magnifyError));
 
   const from = get('from', parseDate, null as number | null);
   const to = get('to', (v, w) => parseDate(v, w) + DAY - 1, null as number | null);
@@ -1481,6 +1528,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const commission = settings.has('commission') ? get('commission', parseCommission, null) : (defaults.commission ?? null);
   if (commission) spec.commission = commission;
   if (entries !== null) spec.entries = entries;
+  if (magnify !== null) spec.magnify = magnify;
 
   errors.sort((a, b) => a.line - b.line);
   warnings.sort((a, b) => a.line - b.line);

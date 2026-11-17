@@ -1,7 +1,8 @@
 import { runBacktest, type Backtest } from './backtest.ts';
-import { loadBars, type DataDeps, type Loaded } from './data.ts';
+import { barsFrom, insideReach, loadBars, loadInsideBars, type DataDeps, type Loaded } from './data.ts';
+import { insideKey } from './engine.ts';
 import { paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
-import { sliceBars, type AssetRef, type Bars } from './types.ts';
+import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
 const DAY = 86_400_000;
 const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w: 7 * DAY };
@@ -113,13 +114,6 @@ export function lookbackBars(spec: Spec): number {
   return bars;
 }
 
-/** The bars at or after `since`. */
-function barsFrom(bars: Bars, since: number): Bars {
-  let i = 0;
-  while (i < bars.t.length && bars.t[i] < since) i++;
-  return sliceBars(bars, i);
-}
-
 export interface RunOutput {
   spec: Spec;
   backtest: Backtest;
@@ -167,12 +161,41 @@ export class Runner {
     const loaded = await Promise.all(
       [...refs.values()].map(async (r) => ({ name: r.name, ...(await loadBars(r, spec.interval, since, this.deps, force, { freshForMs: this.freshForMs })) })),
     );
-    return {
-      // Saved prices can reach further back than this run asks for; the same block must give the same answer.
-      data: new Map(loaded.map((l) => [l.name, barsFrom(l.bars, since)])),
-      warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
-      prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })),
-    };
+    const warnings = loaded.flatMap((l) => (l.warning ? [l.warning] : []));
+    // Saved prices can reach further back than this run asks for; the same block must give the same answer.
+    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, since)]));
+    if (spec.magnify) {
+      for (const inside of await this.loadInside(spec, spec.magnify, force)) {
+        if (inside.warning) warnings.push(inside.warning);
+        if (inside.bars) data.set(insideKey(inside.name, spec.magnify), inside.bars);
+      }
+    }
+    return { data, warnings, prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })) };
+  }
+
+  /**
+   * The smaller bars of each Yahoo and Binance ticker in the universe, for `magnify`, from the run's first day (no history
+   * before it is needed, as nothing is held there) or the earliest the source gives them, whichever is later. A ticker
+   * whose smaller bars can't be loaded is read as whole bars, with a warning; one whose window does not reach into the
+   * run gets none, which the run's notes say.
+   */
+  private loadInside(spec: Spec, interval: string, force: boolean): Promise<{ name: string; bars: Bars | null; warning: string | null }[]> {
+    const now = this.deps.now();
+    return Promise.all(
+      spec.universe
+        .filter((a) => a.source !== 'csv')
+        .map(async (a) => {
+          const since = Math.max(spec.from ?? 0, insideReach(a.source, interval, now));
+          if (spec.to !== null && spec.to < since) return { name: a.name, bars: emptyBars(), warning: null };
+          try {
+            const l = await loadInsideBars(a, interval, since, this.deps, force, { freshForMs: this.freshForMs });
+            return { name: a.name, bars: barsFrom(l.bars, since), warning: l.warning };
+          } catch (e) {
+            const why = e instanceof Error ? e.message : String(e);
+            return { name: a.name, bars: null, warning: `${why.replace(/\.$/, '')}. ${a.name}'s bars were not looked inside.` };
+          }
+        }),
+    );
   }
 
   async run(spec: Spec, force = false): Promise<RunOutput> {

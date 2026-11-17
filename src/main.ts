@@ -484,8 +484,9 @@ export default class BacktestBlocks extends Plugin {
     if (!spec) return false;
     const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
     try {
-      const { prices } = await new Runner(offline, defaultsFrom(this.settings), { freshForMs: this.settings.cacheHours * HOUR }).loadPrices(spec);
-      return prices.every((p) => !p.stale);
+      const { prices, warnings } = await new Runner(offline, defaultsFrom(this.settings), { freshForMs: this.settings.cacheHours * HOUR }).loadPrices(spec);
+      // A warning here means something could not be read without a download, such as a magnified ticker's smaller bars.
+      return prices.every((p) => !p.stale) && warnings.length === 0;
     } catch {
       return false;
     }

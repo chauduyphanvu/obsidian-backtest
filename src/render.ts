@@ -259,6 +259,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() =
   const intraday = isIntraday(bt);
   const stops: (() => void)[] = [];
   const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, fillSentence(spec)];
+  if (spec.magnify) facts.push(`A bar with a stop or target inside it is followed through its ${spec.magnify} bars, where it has them.`);
   if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}${run.commission ? `, of which ${money(run.commission)} commission` : ''}.`);
   facts.push(bt.interest > 0 ? `${bt.cashRateNote}: ${money(bt.interest)} of interest.` : `${bt.cashRateNote}.`);
   h(root, 'div', 'bt-note', facts.join(' '));
