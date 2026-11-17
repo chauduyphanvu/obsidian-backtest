@@ -1,0 +1,6 @@
+universe: TRND 50%, MREV 30%, CHOP 15%
+capital: 100000
+costs: 10 bps
+rebalance: monthly
+fill: close
+buy when true

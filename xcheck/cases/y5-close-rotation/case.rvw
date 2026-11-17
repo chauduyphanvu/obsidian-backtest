@@ -1,0 +1,12 @@
+language 1
+strategy "y5: ROC rotation, close fills" {
+  universe   symbols("TRND", "MREV", "CHOP", "LATE")
+  // Rearview ranks at the close of the first trading day of the month; [1] reads the month's last
+  // day, where we rank.
+  mom        roc(close, 63)
+  enter long when mom[1] > -1
+  rank by    mom[1]
+  size       equal weight, max 2 positions
+  rebalance  monthly
+  fill       same_close
+}

@@ -1,0 +1,8 @@
+language 1
+strategy "y1: close fills" {
+  universe   symbols("TRND")
+  enter long when close > sma(close, 30) and not (close < sma(close, 30))
+  exit when  close < sma(close, 30)
+  size       100% of equity, max 1 positions
+  fill       same_close
+}

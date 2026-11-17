@@ -1,0 +1,9 @@
+language 1
+strategy "y4: close fills, trailing stop" {
+  universe   symbols("VOLA")
+  enter long when close > highest(high, 20)[1] and not (close < lowest(low, 10)[1])
+  exit when  close < lowest(low, 10)[1]
+  trail      8%
+  size       100% of equity, max 1 positions
+  fill       same_close
+}
