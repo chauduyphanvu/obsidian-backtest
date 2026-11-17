@@ -1,0 +1,121 @@
+/* Prices and trades: a ticker's price with the periods held, buys and sells marked. */
+
+.bt-root {
+  --bt-price-band: color-mix(in srgb, var(--bt-strategy) 14%, transparent);
+}
+.theme-dark .bt-root {
+  --bt-price-band: color-mix(in srgb, var(--bt-strategy) 22%, transparent);
+}
+
+.bt-price-body {
+  margin-top: 4px;
+  min-width: 0;
+}
+.bt-price-picker {
+  margin: 8px 0 4px;
+}
+.bt-price-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bt-root .bt-price-pick {
+  height: auto;
+  padding: 2px 10px;
+  box-shadow: none;
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+.bt-root .bt-price-pick:hover {
+  color: var(--text-normal);
+  background: var(--background-secondary);
+}
+.bt-root .bt-price-pick[aria-pressed='true'] {
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  border-color: var(--text-normal);
+}
+.bt-root .bt-price-select {
+  max-width: 100%;
+  font-size: var(--font-ui-smaller);
+}
+.bt-price-summary {
+  margin: 8px 0 6px;
+}
+
+.bt-price-legend .bt-key[hidden] {
+  display: none;
+}
+.bt-price-sw {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+}
+.bt-price-sw-line {
+  height: 1.5px;
+  background: var(--text-muted);
+}
+.bt-price-sw-band {
+  height: 10px;
+  background: var(--bt-price-band);
+}
+.bt-price-glyph {
+  flex: none;
+  overflow: visible;
+}
+
+.bt-price-band {
+  fill: var(--bt-price-band);
+}
+.bt-price-line {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.bt-price-ring {
+  fill: var(--background-primary);
+  stroke: var(--background-primary);
+  stroke-linejoin: round;
+}
+.bt-price-ring-buy {
+  stroke-width: 4;
+}
+.bt-price-ring-sell {
+  stroke-width: 5.5;
+}
+.bt-price-buy {
+  fill: var(--bt-strategy);
+}
+.bt-price-sell {
+  fill: var(--background-primary);
+  stroke: var(--bt-strategy);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+.bt-price-dot {
+  fill: var(--text-muted);
+}
+
+.bt-price-tip-row {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: space-between;
+  gap: 14px;
+}
+.bt-price-tip-label {
+  color: var(--text-muted);
+}
+.bt-price-tip-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bt-price-tip-sep {
+  margin: 4px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
