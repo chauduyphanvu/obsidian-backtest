@@ -1,6 +1,6 @@
 // The count of today's orders in the status bar, worked out quietly after start-up.
 
-import { problemsOf, todoRows, type StrategyStatus } from './orders.ts';
+import { actionWord, problemsOf, timingPhrase, todoRows, type StrategyStatus } from './orders.ts';
 
 export type BadgeState = { kind: 'checking' } | { kind: 'failed'; message: string } | { kind: 'ready'; statuses: StrategyStatus[] };
 
@@ -36,7 +36,7 @@ function problemLines(list: StrategyStatus[]): string[] {
 }
 
 export function badgeView(state: BadgeState): BadgeView {
-  if (state.kind === 'checking') return { text: 'Checking orders…', tooltip: 'Working out the orders for the next open.', mark: 'none', orders: 0 };
+  if (state.kind === 'checking') return { text: 'Checking orders…', tooltip: "Working out today's orders.", mark: 'none', orders: 0 };
   if (state.kind === 'failed') {
     return { text: "Couldn't check orders", tooltip: ["Couldn't check the strategies.", state.message, 'Click to open the orders window.'].filter(Boolean).join('\n'), mark: 'error', orders: 0 };
   }
@@ -50,11 +50,11 @@ export function badgeView(state: BadgeState): BadgeView {
 
   const rows = todoRows(list);
   const mark = list.some((s) => problemsOf(s).length > 0) ? 'warning' : 'none';
-  const orders = rows.map(({ status, order }) => `${order.action === 'buy' ? 'Buy' : 'Sell'} ${order.ticker}, ${status.strategy}`);
+  const orders = rows.map(({ status, order }) => `${actionWord(order)} ${order.ticker} ${timingPhrase(order.when)}, ${status.strategy}`);
   const more = orders.length - LISTED;
   const lines =
     rows.length === 0
-      ? ['No strategy has an order for the next open.', ...problems, 'Click to see what each one holds.']
+      ? ['No strategy has an order.', ...problems, 'Click to see what each one holds.']
       : [...orders.slice(0, LISTED), ...(more > 0 ? [`and ${more} more`] : []), ...problems, 'Click to open the orders window.'];
   return { text: ordersText(rows.length), tooltip: lines.join('\n'), mark, orders: rows.length };
 }

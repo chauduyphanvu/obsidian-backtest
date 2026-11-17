@@ -232,6 +232,19 @@ test('snapshot: front matter, a text fence, figures, positions and trades, newes
   assert.ok(!md.includes('```strategy'));
 });
 
+test('snapshot: positions say when an order fills, in the words of the positions table', () => {
+  const closeFill = result({
+    source: 'name: Close mover\nuniverse: SPY, TLT, GLD\ncapital: 10000\nfill: close\nbuy when true',
+    states: [state('SPY', false, { pending: 'buy' }), state('TLT', true, { filled: { side: 'buy', shares: 10, price: 90 } }), state('GLD', false, { filled: { side: 'sell', shares: 10, price: 150 } })],
+  });
+  const md = snapshotMarkdown({ name: 'Close mover', source: 'universe: SPY, TLT, GLD', backtest: closeFill, now: NOW });
+  assert.ok(md.includes('| SPY | 50% | In cash, buys at the next close |'));
+  assert.ok(md.includes('| TLT | 50% | Long since 2020-01-07, bought at the last close |'));
+  assert.ok(md.includes('| GLD | 50% | In cash, sold at the last close |'));
+  const open = result({ states: [state('SPY', true, { pending: 'sell' })] });
+  assert.ok(snapshotMarkdown({ name: 'x', source: 'x', backtest: open, now: NOW }).includes('| SPY | 50% | Long since 2020-01-07, sells at the next open |'));
+});
+
 test('snapshot: the before and after table appears when the run has a test date', () => {
   const part = (label: string, from: number, to: number, o: Partial<Stats>): Segment => ({
     label,

@@ -65,6 +65,11 @@ test('the prompt names every setting, function, series, calendar value and posit
   }
 });
 
+test('the prompt says where a rule fills, with both settings of fill', () => {
+  assert.ok(SYSTEM_PROMPT.includes('A rule that holds at a close fills at the next open, or with fill: close at that same close.'));
+  assert.match(SYSTEM_PROMPT, /^ {2}fill: close /m);
+});
+
 test('the prompt states the limits and the rules about what not to write', () => {
   for (const part of [/no shorting/, /no leverage/, /no options/, /NOTE:/, /Never invent syntax/, /one "buy when" or one "sell when"/, /YYYY-MM-DD/, /Do not invent settings, functions/, /before the first "for" line/]) {
     assert.match(SYSTEM_PROMPT, part);

@@ -3,7 +3,7 @@
 import { isoDate, minus, pct } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 import type { AssetState } from './engine.ts';
-import { barTime, mapLimit, statusFrom, type OrderRow } from './orders.ts';
+import { actionWord, barTime, mapLimit, statusFrom, timingPhrase, TIMINGS, type OrderRow } from './orders.ts';
 import type { RunOutput } from './runner.ts';
 
 export const SORTS = ['return', 'drawdown', 'sharpe', 'name'] as const;
@@ -95,7 +95,7 @@ export interface DoneRow {
   now: string;
   /** The tickers held now. */
   held: string[];
-  /** The orders for the next open in words, one line for each of selling and buying; empty for none. */
+  /** The orders in words, one line for each of selling and buying at each timing; empty for none. */
   next: string[];
   orders: number;
   /** The last bar the figures rest on, such as "2026-11-13". */
@@ -115,15 +115,20 @@ function holding(states: AssetState[]): { now: string; held: string[] } {
   return { now, held };
 }
 
-/** "Sell TLT, GLD" and "Buy SPY": sells first, as in today's orders. */
+/**
+ * "Sell TLT, GLD", "Buy SPY at the next close", "Bought SPY at the last close": sells first, as in today's orders.
+ * An order for the next open, the usual one, says no time.
+ */
 function nextLines(orders: OrderRow[]): string[] {
-  const line = (verb: string, action: OrderRow['action']) => {
-    const tickers = orders.filter((o) => o.action === action).map((o) => o.ticker);
-    if (tickers.length === 0) return [];
-    const more = tickers.length - MORE_AFTER;
-    return [`${verb} ${tickers.slice(0, MORE_AFTER).join(', ')}${more > 0 ? ` and ${more} more` : ''}`];
-  };
-  return [...line('Sell', 'sell'), ...line('Buy', 'buy')];
+  return TIMINGS.flatMap((when) =>
+    (['sell', 'buy'] as const).flatMap((action) => {
+      const tickers = orders.filter((o) => o.when === when && o.action === action).map((o) => o.ticker);
+      if (tickers.length === 0) return [];
+      const more = tickers.length - MORE_AFTER;
+      const named = `${tickers.slice(0, MORE_AFTER).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+      return [`${actionWord({ action, when })} ${named}${when === 'next open' ? '' : ` ${timingPhrase(when)}`}`];
+    }),
+  );
 }
 
 export function rowFrom(note: string, name: string, out: RunOutput, now: number): DoneRow {
@@ -180,7 +185,7 @@ export const COLUMNS: Column[] = [
   { key: 'sharpe', label: 'Sharpe ratio', num: true },
   { key: 'trades', label: 'Trades', num: true },
   { key: 'now', label: 'Now', num: false, hint: 'What the strategy holds after the last bar' },
-  { key: 'next', label: 'Next', num: false, hint: 'Orders for the next open' },
+  { key: 'next', label: 'Next', num: false, hint: 'Orders for the next open, unless a line gives another time. Bought and Sold were made at the last close by a strategy with fill: close' },
   { key: 'through', label: 'Prices through', num: false, hint: 'The last bar the figures rest on' },
 ];
 

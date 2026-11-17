@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { complete, hitCompletions, localTickers, tickerPosition, tickers } from '../src/complete.ts';
 import { shortOf } from '../src/docs.ts';
 import { SETTINGS } from '../src/dsl.ts';
-import { lineKind, tokenize, tokenizeBlock } from '../src/highlight.ts';
+import { lineKind, lineKinds, tokenize, tokenizeBlock } from '../src/highlight.ts';
 
 const BLOCK = `name: Three sleeves
 universe: SPY 50%, binance:BTCUSDT 20%, csv:Data/gold.csv 30%
@@ -24,6 +24,18 @@ test('settings: key, tickers, numbers, free text, comments', () => {
   assert.deepEqual(shown(1), ['key:universe', 'ticker:SPY', 'number:50%', 'ticker:binance:BTCUSDT', 'number:20%', 'ticker:csv:Data/gold.csv', 'number:30%']);
   assert.deepEqual(shown(2), ['key:costs', 'number:10 bps', 'comment:# per side']);
   assert.deepEqual(shown(3), ['key:stop loss', 'number:8%']);
+});
+
+test('fill is a key with plain values, like rebalance', () => {
+  const kinds = (line: string) => tokenizeBlock([line])[0].map((t) => `${t.kind}:${line.slice(t.from, t.to)}`);
+  assert.deepEqual(kinds('fill: next open'), ['key:fill', 'value:next', 'value:open']);
+  assert.deepEqual(kinds('fill: close  # at the close'), ['key:fill', 'value:close', 'comment:# at the close']);
+});
+
+test('a line that ends in a carriage return is coloured as without it', () => {
+  const crlf = BLOCK.map((line) => `${line}\r`);
+  assert.deepEqual(tokenizeBlock(crlf), tokenizeBlock(BLOCK));
+  assert.deepEqual(lineKinds(crlf), lineKinds(BLOCK));
 });
 
 test('rules, continuation lines and "of" tickers', () => {
@@ -190,8 +202,7 @@ test('completion descriptions come from the help table', () => {
   assert.equal(inSection.detail, `${shortOf('stop loss')}, for TLT only`);
 });
 
-test('fill: the setting and its two values complete once the language has it', () => {
-  if (!SETTINGS.includes('fill')) SETTINGS.push('fill');
+test('fill: the setting and its two values complete', () => {
   assert.deepEqual(labels([], 'fi'), ['fill']);
   assert.equal(complete(BLOCK, [], 'fi')!.items[0].detail, shortOf('fill'));
   assert.deepEqual(labels([], 'fill: '), ['next open', 'close']);

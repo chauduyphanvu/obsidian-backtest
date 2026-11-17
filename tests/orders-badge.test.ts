@@ -7,17 +7,18 @@ import { DAY, T0 } from './helpers.ts';
 // An HTMLElement is what the plugin passes in.
 null as unknown as HTMLElement satisfies BadgeElement;
 
-function status(strategy: string, orders: Array<[OrderRow['action'], string]> = [], more: Partial<StrategyStatus> = {}): StrategyStatus {
+function status(strategy: string, orders: Array<[OrderRow['action'], string, OrderRow['when']?]> = [], more: Partial<StrategyStatus> = {}): StrategyStatus {
   return {
     note: `${strategy}.md`,
     strategy,
     asOf: T0 + 2 * DAY,
     interval: '1d',
-    orders: orders.map(([action, ticker]) => ({ ticker, action, weight: action === 'buy' ? 0.5 : 0, value: 100, lastClose: 10, since: null })),
+    orders: orders.map(([action, ticker, when = 'next open']) => ({ ticker, action, when, weight: action === 'buy' ? 0.5 : 0, value: 100, lastClose: 10, since: null })),
     holdings: [],
     equity: 1000,
     warnings: [],
     error: null,
+    closeFill: false,
     stale: false,
     ...more,
   };
@@ -36,15 +37,28 @@ test('orders due are counted in words, with one order in the singular', () => {
 
 test('the tooltip lists the orders in words, sells first', () => {
   const v = ready([status('Trend following', [['buy', 'TLT'], ['sell', 'SPY']]), status('Pullback', [['buy', 'QQQ']])]);
-  assert.equal(v.tooltip, ['Sell SPY, Trend following', 'Buy QQQ, Pullback', 'Buy TLT, Trend following', 'Click to open the orders window.'].join('\n'));
+  assert.equal(v.tooltip, ['Sell SPY at the next open, Trend following', 'Buy QQQ at the next open, Pullback', 'Buy TLT at the next open, Trend following', 'Click to open the orders window.'].join('\n'));
   assert.equal(v.mark, 'none');
   assert.equal(v.orders, 3);
+});
+
+test('the tooltip gives each order its own timing, and the count is every order the window lists', () => {
+  const list = [
+    status('Open', [['buy', 'SPY']]),
+    { ...status('Close', [['buy', 'TLT', 'next close'], ['buy', 'GLD', 'last close'], ['sell', 'QQQ', 'last close']]), closeFill: true },
+  ];
+  const v = ready(list);
+  assert.equal(
+    v.tooltip,
+    ['Buy SPY at the next open, Open', 'Buy TLT at the next close, Close', 'Sold QQQ at the last close, Close', 'Bought GLD at the last close, Close', 'Click to open the orders window.'].join('\n'),
+  );
+  assert.deepEqual([v.text, v.orders], ['4 orders today', todoRows(list).length]);
 });
 
 test('a long list of orders is cut after five', () => {
   const v = ready([status('S', ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((t) => ['buy', t] as [OrderRow['action'], string]))]);
   const lines = v.tooltip.split('\n');
-  assert.deepEqual(lines.slice(0, 5), ['A', 'B', 'C', 'D', 'E'].map((t) => `Buy ${t}, S`));
+  assert.deepEqual(lines.slice(0, 5), ['A', 'B', 'C', 'D', 'E'].map((t) => `Buy ${t} at the next open, S`));
   assert.equal(lines[5], 'and 2 more');
   assert.equal(v.text, '7 orders today');
 });
@@ -52,7 +66,7 @@ test('a long list of orders is cut after five', () => {
 test('no orders says so and offers the holdings', () => {
   const v = ready([status('Trend'), status('Pullback')]);
   assert.deepEqual([v.text, v.mark, v.orders], ['No orders today', 'none', 0]);
-  assert.equal(v.tooltip, 'No strategy has an order for the next open.\nClick to see what each one holds.');
+  assert.equal(v.tooltip, 'No strategy has an order.\nClick to see what each one holds.');
 });
 
 test('a vault with no strategies shows nothing at all', () => {
@@ -68,13 +82,13 @@ test('strategies that could not run or have old prices mark the count and are na
   ]);
   assert.equal(v.text, '2 orders today');
   assert.equal(v.mark, 'warning');
-  assert.equal(v.tooltip, ['Sell GLD, Stale two', 'Buy TLT, Trend', "1 strategy couldn't be checked.", '2 strategies have old prices.', 'Click to open the orders window.'].join('\n'));
+  assert.equal(v.tooltip, ['Sell GLD at the next open, Stale two', 'Buy TLT at the next open, Trend', "1 strategy couldn't be checked.", '2 strategies have old prices.', 'Click to open the orders window.'].join('\n'));
 });
 
 test('one strategy with old prices is named in the singular', () => {
   const v = ready([status('A', [], { stale: true }), status('B')]);
   assert.deepEqual([v.text, v.mark], ['No orders today', 'warning']);
-  assert.match(v.tooltip, /^No strategy has an order for the next open\.\n1 strategy has old prices\.\n/);
+  assert.match(v.tooltip, /^No strategy has an order\.\n1 strategy has old prices\.\n/);
 });
 
 test('a warning about the prices marks the count too', () => {
@@ -97,7 +111,7 @@ test('when no strategy could be checked the badge says so and is marked as an er
 });
 
 test('while checking, and when the check itself failed', () => {
-  assert.deepEqual(badgeView({ kind: 'checking' }), { text: 'Checking orders…', tooltip: 'Working out the orders for the next open.', mark: 'none', orders: 0 });
+  assert.deepEqual(badgeView({ kind: 'checking' }), { text: 'Checking orders…', tooltip: "Working out today's orders.", mark: 'none', orders: 0 });
   const failed = badgeView({ kind: 'failed', message: 'The vault could not be read' });
   assert.deepEqual([failed.text, failed.mark], ["Couldn't check orders", 'error']);
   assert.equal(failed.tooltip, "Couldn't check the strategies.\nThe vault could not be read\nClick to open the orders window.");
@@ -224,7 +238,7 @@ test('the first check waits a few seconds, then shows the count', async () => {
   assert.equal(log.scans, 1);
   assert.equal(el!.textContent, '1 order today');
   assert.equal(el!.hidden, false);
-  assert.equal(el!.attrs.get('aria-label'), 'Buy TLT, Trend\nClick to open the orders window.');
+  assert.equal(el!.attrs.get('aria-label'), 'Buy TLT at the next open, Trend\nClick to open the orders window.');
   assert.deepEqual(log.notices, []);
   badge.stop();
 });

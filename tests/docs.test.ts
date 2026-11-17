@@ -4,10 +4,6 @@ import { test } from 'node:test';
 import { ALL_DOCS, FIXED_VALUES, docFor, functionSignature, helpAt, shortOf, valueId } from '../src/docs.ts';
 import { BINANCE_INTERVALS, CALENDAR, INDICATORS, POSITION, REBALANCE, SERIES, SETTINGS, parseSpec } from '../src/dsl.ts';
 
-/** `fill` is being added to SETTINGS by another change; its entries are checked once it is there. */
-const PENDING = ['fill'];
-const known = (id: string) => !PENDING.includes(id.split('=')[0]) || SETTINGS.includes(id.split('=')[0]);
-
 test('every setting, function, series, calendar value, position value and fixed value has an entry', () => {
   const missing: string[] = [];
   const need = (id: string) => {
@@ -60,7 +56,6 @@ function blockAround(example: string): string {
 test('every example parses in a minimal block', () => {
   const failures: string[] = [];
   for (const d of ALL_DOCS) {
-    if (!known(d.id) && !SETTINGS.includes(d.id.split('=')[0])) continue;
     const block = blockAround(d.example);
     const { errors } = parseSpec(block);
     if (errors.length) failures.push(`${d.id}: ${errors.map((e) => `line ${e.line}: ${e.message}`).join('; ')}\n${block}`);
@@ -255,8 +250,7 @@ test('fill has help and values keyed by its name', () => {
   assert.equal(valueId('Fill', 'Next  Open'), 'fill=next open');
 });
 
-test('with fill in the language, its name and values have help', () => {
-  if (!SETTINGS.includes('fill')) SETTINGS.push('fill');
+test('hovering fill and its values shows their help', () => {
   const lines = ['universe: SPY', 'fill: next open', 'fill: close', 'buy when true'];
   const id = (row: number, col: number) => helpAt(lines, row, col)?.doc.id;
   assert.equal(id(1, 1), 'fill');

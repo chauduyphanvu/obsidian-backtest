@@ -170,7 +170,7 @@ export function placeHoldings(lengths: number[], first: number, last: number, rn
   });
 }
 
-/** Buy at the close before each entry and sell at the close before each exit, so both fill at those opens. */
+/** Buy at the close before each entry and sell at the close before each exit, so both fill at the opens that follow, or at those closes with `fill: close`. */
 function holdingSignals(bars: Bars, holdings: Holding[]): Signals {
   const buy = new Array<number>(bars.t.length).fill(0);
   const sell = new Array<number>(bars.t.length).fill(0);
@@ -191,7 +191,7 @@ export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Ho
   }
   const s = bt.spec;
   // The strategy's own setup with its stops off and no ranking: the placed holdings decide everything.
-  const params: SimParams = { assets: s.universe, from: s.from, to: s.to, capital: s.capital, costBps: s.costBps, slippageBps: s.slippageBps, rebalance: s.rebalance, stops: {}, cash: s.cash, sizing: s.sizing, rank: null };
+  const params: SimParams = { assets: s.universe, from: s.from, to: s.to, capital: s.capital, costBps: s.costBps, slippageBps: s.slippageBps, rebalance: s.rebalance, stops: {}, cash: s.cash, sizing: s.sizing, rank: null, fill: s.fill };
   const signals = new Map(s.universe.map((a) => [a.name, holdingSignals(bt.data.get(a.name)!, holdings.get(a.name)!)]));
   return { holdings, run: simulate(params, bt.data, signals) };
 }

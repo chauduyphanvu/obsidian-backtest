@@ -1,8 +1,8 @@
 import type { Backtest, Segment } from './backtest.ts';
 import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
-import { DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
+import { colourSource, DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { hintFor } from './fixes.ts';
-import { tokenizeBlock } from './highlight.ts';
+import { pendingTiming, timingPhrase } from './orders.ts';
 import { renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderDeepStats } from './render-stats.ts';
 import { renderPositions, renderTrades } from './render-trades.ts';
@@ -10,18 +10,7 @@ import type { RunOutput } from './runner.ts';
 
 /** The strategy as written: the block replaces its own text, so the result has to show it. */
 function source(el: HTMLElement, text: string): void {
-  const pre = h(el, 'pre', 'bt-source');
-  const lines = text.trim().split('\n');
-  tokenizeBlock(lines).forEach((tokens, i) => {
-    const line = lines[i];
-    let at = 0;
-    for (const t of tokens) {
-      if (t.from > at) pre.append(line.slice(at, t.from));
-      h(pre, 'span', `bt-tok bt-tok-${t.kind}`, line.slice(t.from, t.to));
-      at = t.to;
-    }
-    pre.append(line.slice(at) + (i < lines.length - 1 ? '\n' : ''));
-  });
+  colourSource(h(el, 'pre', 'bt-source'), text.trim());
 }
 
 export function renderLoading(el: HTMLElement, text: string): void {
@@ -110,9 +99,12 @@ export interface CompactFacts {
   tickers: string | null;
   figures: string[];
   holding: string;
-  /** What is due at the next open, or null. */
+  /** What is waiting for the next open or close, or was done at the last close, or null. */
   order: string | null;
 }
+
+/** When a rule's order fills, as the result's fine print says it. */
+export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill === 'close' ? 'A rule seen at a close fills at that close.' : 'A rule seen at a close fills at the next open.');
 
 /** What a folded block shows besides its name, worded like the positions table. */
 export function compactFacts(out: RunOutput): CompactFacts {
@@ -125,11 +117,19 @@ export function compactFacts(out: RunOutput): CompactFacts {
   const buys = named('buy');
   const sells = named('sell');
   const due = [...(buys.length ? [`buys ${list(buys)}`] : []), ...(sells.length ? [`sells ${list(sells)}`] : [])];
+  const made = (side: 'buy' | 'sell') => run.states.filter((st) => st.filled?.side === side).map((st) => st.name);
+  const bought = made('buy');
+  const sold = made('sell');
+  const done = [...(bought.length ? [`bought ${list(bought)}`] : []), ...(sold.length ? [`sold ${list(sold)}`] : [])];
+  const order = [
+    ...(due.length ? [`${due.join(' and ')} ${timingPhrase(pendingTiming(out.spec.fill))}`] : []),
+    ...(done.length ? [`${done.join(' and ')} at the last close`] : []),
+  ];
   return {
     tickers: out.spec.name ? null : list(out.spec.universe.map((a) => a.name), 3, ', '),
     figures: [`${signedPct(stats.cagr)} a year`, `worst drawdown ${pct(stats.maxDrawdown)}`],
     holding,
-    order: due.length ? `${due.join(' and ')} at the next open` : null,
+    order: order.length ? order.join(', ') : null,
   };
 }
 
@@ -209,7 +209,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() =
   const { run } = bt;
   const intraday = isIntraday(bt);
   const stops: (() => void)[] = [];
-  const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, 'A rule seen at a close fills at the next open.'];
+  const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, fillSentence(spec)];
   if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}.`);
   facts.push(bt.interest > 0 ? `${bt.cashRateNote}: ${money(bt.interest)} of interest.` : `${bt.cashRateNote}.`);
   h(root, 'div', 'bt-note', facts.join(' '));

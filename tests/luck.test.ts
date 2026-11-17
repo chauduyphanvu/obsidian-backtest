@@ -152,6 +152,25 @@ test('random timing keeps each ticker\'s trade count and holding lengths, never 
   }
 });
 
+test('random timing on a fill: close strategy keeps each holding\'s length and fills at closes', () => {
+  const rng = makeRng(11);
+  const data: Record<string, Bars> = { A: walk(rng, 400, 0.08), B: walk(rng, 400, 0.08) };
+  const bt = backtest('universe: A 60%, B 40%\nfill: close\nstop loss: 2%\nbuy when close > sma(5)\nsell when close < sma(5)', data);
+  const lengths = (trades: { asset: string; bars: number }[], name: string) => trades.filter((t) => t.asset === name).map((t) => Math.max(1, t.bars)).sort((a, b) => a - b);
+  assert.ok(bt.run.trades.length > 20 && bt.run.trades.some((t) => t.reason === 'stop loss'));
+  for (let seed = 1; seed <= 10; seed++) {
+    const v = randomTiming(bt, makeRng(seed));
+    for (const name of ['A', 'B']) assert.deepEqual(lengths(v.run.trades, name), lengths(bt.run.trades, name));
+    assert.ok(v.run.trades.length > 0 && v.run.trades.every((t) => t.reason === 'signal'));
+    // The rule's own fills are at closes, so the placed ones are too: the price is the close of the bar it filled on.
+    for (const t of v.run.trades) {
+      const b = data[t.asset];
+      assert.equal(t.entryPrice, b.c[b.t.indexOf(t.entryT)]);
+      assert.equal(t.exitPrice, b.c[b.t.indexOf(t.exitT)]);
+    }
+  }
+});
+
 test('random picks for a ranking: only tickers its rules allow, on its decision bars, no more at once than it holds, about as many trades', async () => {
   const rng = makeRng(4);
   const data = Object.fromEntries(['A', 'B', 'C', 'D', 'E'].map((n) => [n, walk(rng, 700)]));
