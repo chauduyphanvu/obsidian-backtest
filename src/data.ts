@@ -53,7 +53,10 @@ function push(bars: Bars, t: number, o: number, h: number, l: number, c: number,
   bars.v.push(Number.isFinite(v) ? v : 0);
 }
 
-/** Yahoo chart JSON to bars adjusted for splits and dividends, without a bar that is still trading. */
+/**
+ * Yahoo chart JSON to bars adjusted for splits and dividends, without a bar that is still trading.
+ * Today's daily bar counts once the regular session it belongs to has closed.
+ */
 export function parseYahoo(json: string, now: number, weekly = false): Bars {
   const body = JSON.parse(json);
   const result = body?.chart?.result?.[0];
@@ -62,12 +65,15 @@ export function parseYahoo(json: string, now: number, weekly = false): Bars {
   const q = result.indicators?.quote?.[0] ?? {};
   const adj: (number | null)[] = result.indicators?.adjclose?.[0]?.adjclose ?? [];
   const offset = (result.meta?.gmtoffset ?? 0) * 1000;
-  const today = Math.floor((now + offset) / DAY) * DAY;
+  const localDay = (ms: number) => Math.floor((ms + offset) / DAY) * DAY;
+  const today = localDay(now);
   const span = weekly ? 7 * DAY : DAY;
+  const sessionEnd: unknown = result.meta?.currentTradingPeriod?.regular?.end;
+  const closedToday = !weekly && typeof sessionEnd === 'number' && now >= sessionEnd * 1000 && localDay(sessionEnd * 1000) === today;
   const bars = emptyBars();
   for (let i = 0; i < ts.length; i++) {
-    const day = Math.floor((ts[i] * 1000 + offset) / DAY) * DAY;
-    if (day + span > today) break;
+    const day = localDay(ts[i] * 1000);
+    if (day + span > today && !(closedToday && day === today)) break;
     const c = q.close?.[i];
     if (c == null) continue;
     const f = adj[i] != null ? adj[i]! / c : 1;

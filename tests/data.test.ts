@@ -31,6 +31,26 @@ test('yahoo bars are adjusted, dated by the exchange day, and stop before today'
   assert.equal(parseYahoo(json, now + DAY).t.length, 3);
 });
 
+test("yahoo keeps today's daily bar once the regular session has closed", () => {
+  // Friday 5 January 2024 trades 9:30 to 16:00 in New York (UTC-5): 14:30 to 21:00 UTC.
+  const session = (start: number, end: number) => {
+    const body = JSON.parse(yahoo(stamps, [100, 101, 110, 120], [100, 101, 110, 120]));
+    body.chart.result[0].meta.currentTradingPeriod = { regular: { start: start / 1000, end: end / 1000, gmtoffset: -18000, timezone: 'EST' } };
+    return JSON.stringify(body);
+  };
+  const [open, close] = [Date.UTC(2024, 0, 5, 14, 30), Date.UTC(2024, 0, 5, 21, 0)];
+  const days = (json: string, now: number, weekly = false) => parseYahoo(json, now, weekly).t.map((t) => new Date(t).getUTCDate());
+  assert.deepEqual(days(session(open, close), close - 60_000), [2, 3, 4]);
+  assert.deepEqual(days(session(open, close), close), [2, 3, 4, 5]);
+  // Without the field, today's bar waits for the next day as before.
+  assert.deepEqual(days(yahoo(stamps, [100, 101, 110, 120], [100, 101, 110, 120]), close), [2, 3, 4]);
+  // A session that ended on an earlier day says nothing about today's bar.
+  const thursday = (h: number) => Date.UTC(2024, 0, 4, h);
+  assert.deepEqual(days(session(thursday(14), thursday(21)), close), [2, 3, 4]);
+  // Weekly bars are unchanged: this week's bar is still open.
+  assert.deepEqual(days(session(open, close), close + 60_000, true), []);
+});
+
 test('yahoo errors surface', () => {
   assert.throws(() => parseYahoo(JSON.stringify({ chart: { result: null, error: { description: 'No data found, symbol may be delisted' } } }), 0), /delisted/);
 });
