@@ -153,3 +153,47 @@ test('daily and longer intervals reach 1.6 times as far back, for days without t
   await assert.rejects(runner.run(parsed('universe: BTCUSDT\ndata: binance\nfrom: 2023-06-01\nbuy when true')));
   assert.equal(asked[0], Date.UTC(2023, 5, 1) - 400 * 86_400_000);
 });
+
+/** A CSV file of `n` bars, `stepDays` apart from 1 January 2000, with closes 1, 2, 3, … */
+const spaced = (n: number, stepDays: number) =>
+  ['date,open,high,low,close', ...Array.from({ length: n }, (_, i) => {
+    const d = new Date(Date.UTC(2000, 0, 1) + i * stepDays * 86_400_000).toISOString().slice(0, 10);
+    return `${d},${i + 1},${i + 1},${i + 1},${i + 1}`;
+  })].join('\n');
+
+test("a CSV file's lookback is counted in its own bars, whatever the block's interval", async () => {
+  // Weekly rows and a 100-bar average: the 400 days the daily interval would give hold only 57 weekly bars.
+  const weekly = new Runner(deps({ 'w.csv': spaced(1500, 7) }));
+  const w = weekly.parse('universe: csv:w.csv\nfrom: 2020-01-01\nbuy when close > sma(100)\nsell when close < sma(100)').spec!;
+  const wd = (await weekly.loadPrices(w)).data.get('w')!;
+  const before = wd.t.filter((t) => t < w.from!).length;
+  assert.ok(before >= lookbackBars(w), `${before} weekly bars before "from", ${lookbackBars(w)} needed`);
+  // A rising series is above its average from the first bar, so the buy seen at that close fills at the next open.
+  const out = await weekly.run(w);
+  const start = wd.t.findIndex((t) => t >= w.from!);
+  assert.equal(out.backtest.run.trades[0]?.entryT, wd.t[start + 1]);
+
+  // Minute rows: about as many bars as the lookback before "from", not the whole file.
+  const minutes = ['date,open,high,low,close', ...Array.from({ length: 20_000 }, (_, i) => {
+    const t = new Date(Date.UTC(2020, 0, 1) + i * 60_000).toISOString().slice(0, 16).replace('T', ' ');
+    return `${t},1,1,1,1`;
+  })].join('\n');
+  const minute = new Runner(deps({ 'm.csv': minutes }));
+  const m = minute.parse('universe: csv:m.csv\nfrom: 2020-01-10\nbuy when close > sma(300)').spec!;
+  const md = (await minute.loadPrices(m)).data.get('m')!;
+  const kept = md.t.filter((t) => t < m.from!).length;
+  assert.ok(kept >= lookbackBars(m) && kept < 2 * lookbackBars(m), `${kept} minute bars kept before "from", ${lookbackBars(m)} needed`);
+
+  // A daily file loads exactly as before: the block's daily interval already fits it.
+  const daily = new Runner(deps({ 'd.csv': spaced(3000, 1) }));
+  const dspec = daily.parse('universe: csv:d.csv\nfrom: 2005-01-01\nbuy when close > sma(50)').spec!;
+  const dd = (await daily.loadPrices(dspec)).data.get('d')!;
+  assert.equal(dd.t[0], dspec.from! - Math.ceil(lookbackBars(dspec) * 1.6) * 86_400_000);
+});
+
+test('a cash-rate ticker that cannot load says where the cash rate comes from', async () => {
+  // A block with no cash rate line reads it from the settings, so the ticker named in the message is nowhere in the block.
+  const runner = new Runner(deps({ 'prices/a.csv': csv([10, 11, 12]) }), { cashRate: 'csv:rates/missing.csv' });
+  const { spec } = runner.parse('universe: csv:prices/a.csv\nbuy when close > 1');
+  await assert.rejects(runner.run(spec!), /No file at rates\/missing\.csv\. It is the ticker the cash rate is read from: the block's "cash rate" line, or without one the plugin's "Interest on cash" setting\./);
+});

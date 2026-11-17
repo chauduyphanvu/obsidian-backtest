@@ -160,14 +160,37 @@ export class Runner {
     for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...cash]) {
       if (!refs.has(r.name)) refs.set(r.name, r);
     }
-    const step = Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)];
-    const since = spec.from === null ? 0 : spec.from - Math.ceil(lookbackBars(spec) * (step >= DAY ? NON_TRADING : 1)) * step;
-    const loaded = await Promise.all(
-      [...refs.values()].map(async (r) => ({ name: r.name, ...(await loadBars(r, spec.interval, since, this.deps, force, { freshForMs: this.freshForMs })) })),
-    );
+    const lookback = lookbackBars(spec);
+    const sinceFor = (step: number) => (spec.from === null ? 0 : spec.from - Math.ceil(lookback * (step >= DAY ? NON_TRADING : 1)) * step);
+    const since = sinceFor(Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)]);
+    /**
+     * A CSV file's bars are the size its rows are, which `interval` does not set, so its lookback is worked out from its own
+     * rows: from the shortest gap between them as for a download, and at least `lookback` rows, which counts the nights and
+     * weekends of intraday rows. A daily file keeps what the daily interval gave it.
+     */
+    const csvSince = (t: number[]): number => {
+      if (spec.from === null) return 0;
+      let gap = Infinity;
+      for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) gap = Math.min(gap, t[i] - t[i - 1]);
+      let first = t.findIndex((x) => x >= spec.from!);
+      if (first < 0) first = t.length;
+      const counted = first - lookback > 0 ? t[first - lookback] : -Infinity;
+      return Math.min(Number.isFinite(gap) ? sinceFor(gap) : since, counted);
+    };
+    const load = async (r: AssetRef) => {
+      try {
+        return await loadBars(r, spec.interval, since, this.deps, force, { freshForMs: this.freshForMs });
+      } catch (e) {
+        if (!(spec.cash.k === 'ticker' && spec.cash.ref.name === r.name)) throw e;
+        // Without a cash rate line the ticker comes from the settings, so the block itself never names it.
+        const why = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
+        throw new Error(`${why} It is the ticker the cash rate is read from: the block's "cash rate" line, or without one the plugin's "Interest on cash" setting.`);
+      }
+    };
+    const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, csv: r.source === 'csv', ...(await load(r)) })));
     const warnings = loaded.flatMap((l) => (l.warning ? [l.warning] : []));
     // Saved prices can reach further back than this run asks for; the same block must give the same answer.
-    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, since)]));
+    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, l.csv ? csvSince(l.bars.t) : since)]));
     if (spec.magnify) {
       for (const inside of await this.loadInside(spec, spec.magnify, force)) {
         if (inside.warning) warnings.push(inside.warning);

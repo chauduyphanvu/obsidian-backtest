@@ -394,7 +394,6 @@ export class StrategySuggest extends EditorSuggest<Completion> {
   /** Counts triggers, so an answer for text that has since changed is dropped. */
   private turn = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private settle: (() => void) | null = null;
 
   constructor(app: App, options: SuggestOptions = {}) {
     super(app);
@@ -446,11 +445,13 @@ export class StrategySuggest extends EditorSuggest<Completion> {
       }, SUGGEST_DELAY_MS);
       return own;
     }
+    // A request that a newer key overtakes never answers: Obsidian takes an empty answer as "nothing matches", closes the
+    // list and forgets where it was, so the newer request's hits would then have nowhere to show.
     return new Promise<Completion[]>((resolve) => {
-      this.settle = () => resolve([]);
       this.timer = setTimeout(() => {
-        this.settle = null;
-        void fetchHits().then((all) => resolve(turn === this.turn ? all : []));
+        void fetchHits().then((all) => {
+          if (turn === this.turn) resolve(all);
+        });
       }, SUGGEST_DELAY_MS);
     });
   }
@@ -470,8 +471,6 @@ export class StrategySuggest extends EditorSuggest<Completion> {
   private cancel(): void {
     this.turn++;
     clearTimeout(this.timer);
-    this.settle?.();
-    this.settle = null;
   }
 
   renderSuggestion(item: Completion, el: HTMLElement): void {

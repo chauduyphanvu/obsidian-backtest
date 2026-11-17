@@ -121,6 +121,20 @@
   display: block;
   touch-action: pan-y;
 }
+/* Their aria-labels are for screen readers. Obsidian would show each as a tooltip over the content, and over an svg its
+   tooltip code throws; this variable is what it checks first. */
+.bt-svg,
+.bt-params,
+.bt-debug-scroll,
+.bt-dash-table,
+.bt-csv-files,
+.bt-gallery-list,
+.bt-csv-filter,
+.bt-llm-input,
+.bt-debug-picker,
+.bt-price-picker {
+  --no-tooltip: true;
+}
 .bt-grid {
   stroke: var(--background-modifier-border);
   stroke-width: 1;
