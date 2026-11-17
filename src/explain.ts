@@ -317,6 +317,10 @@ class Explainer {
         return reads ? `${out}; ${reads}` : out;
       }
       if (x.k === 'lag') return `${plural(x.n, 'bar')} earlier${i - x.n >= 0 ? `, on ${this.date(this.bars.t[i - x.n])}` : ''}`;
+      if (x.k === 'ind' && x.fn === 'supertrend_up') {
+        const trend = at(x, i);
+        return Number.isNaN(trend) ? '' : `${trend === 1 ? 'uptrend' : 'downtrend'}, the line is at ${fixed(at({ ...x, fn: 'supertrend' }, i), 2)}`;
+      }
       return this.reads(x, asset, i);
     };
 

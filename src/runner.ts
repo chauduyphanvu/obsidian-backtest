@@ -8,6 +8,8 @@ const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w
 const MIN_LOOKBACK = 250;
 /** Recursive averages (EMA, RSI, ATR) depend on where they started; this many periods makes that negligible. */
 const SETTLE = 5;
+/** How far back before the run `bars_since` looks for the last bar its condition held, on top of what the condition itself needs. */
+const BARS_SINCE_REACH = 250;
 /** Daily and longer bars skip weekends and holidays, so a run of trading bars spans more calendar time. */
 const NON_TRADING = 1.6;
 /** The parser refuses longer periods, so a range reaching past this needs no more history. */
@@ -41,6 +43,31 @@ function exprLookback(e: Expr, w: Widest): number {
           return src + SETTLE * Math.max(a, b);
         case 'macd_signal':
           return src + SETTLE * (Math.max(a, b) + c);
+        case 'stoch_k':
+          return a + b;
+        case 'stoch_d':
+          return a + b + c;
+        case 'adx':
+          return 1 + 2 * SETTLE * a;
+        case 'plus_di':
+        case 'minus_di':
+        case 'supertrend':
+        case 'supertrend_up':
+          return 1 + SETTLE * a;
+        case 'mfi':
+          return 1 + a;
+        case 'obv':
+          return 1;
+        case 'percent_rank':
+        case 'correl':
+          return src + a + 1;
+        case 'hma':
+          return src + a + Math.floor(Math.sqrt(a));
+        case 'keltner_upper':
+        case 'keltner_lower':
+          return Math.max(src + SETTLE * a, 1 + SETTLE * c);
+        case 'bars_since':
+          return src + BARS_SINCE_REACH;
         default:
           return src + a;
       }

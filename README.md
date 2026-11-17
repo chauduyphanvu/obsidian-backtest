@@ -202,7 +202,9 @@ These are the bar's own values for the ticker the rule belongs to: `open`, `high
 
 ### Functions
 
-Most functions read a series and take one or more periods. Without a series they read the one in the table. To read another, write it first: `sma(volume, 20)`, or `sma(rsi(2), 5)`. Periods must be plain numbers or parameters, whole numbers from 1 to 10000. A Bollinger `width` can be any number above 0. Empty brackets use the defaults: `macd()`, `rsi()`, `atr()`.
+Most functions read a series and take one or more periods. Without a series they read the one in the table. To read another, write it first: `sma(volume, 20)`, or `sma(rsi(2), 5)`. Periods must be plain numbers or parameters, whole numbers from 1 to 10000. `slope`, `zscore`, `cci`, `hma` and `correl` need a period of at least 2. A Bollinger or Keltner `width` and the supertrend `mult` can be any number above 0. Empty brackets use the defaults: `macd()`, `rsi()`, `atr()`.
+
+Some functions read the ticker's own high, low, close and volume and take no series, as `atr` does: `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `obv`, `vwap`, `supertrend` and `supertrend_up`. `mfi`, `obv` and `vwap` need volume. A ticker whose prices have none, such as most indexes on Yahoo or a CSV file without a `volume` column, stops the run with "X has no volume, which mfi() needs". `bars_since` takes a condition instead of a series, and `correl` takes the other ticker's series first.
 
 | Function | Arguments (defaults) | Meaning |
 | --- | --- | --- |
@@ -218,6 +220,28 @@ Most functions read a series and take one or more periods. Without a series they
 | `macd_signal` | `macd_signal(fast = 12, slow = 26, signal = 9)` | Average of the macd line over `signal` bars. |
 | `bb_upper` | `bb_upper(n = 20, width = 2)` | Upper Bollinger band: the average plus `width` standard deviations. |
 | `bb_lower` | `bb_lower(n = 20, width = 2)` | Lower Bollinger band: the average minus `width` standard deviations. |
+| `stoch_k` | `stoch_k(n = 14, smooth = 3)` | Stochastic %K, 0 to 100: where the close sits in the range of the last n bars, averaged over `smooth` bars. |
+| `stoch_d` | `stoch_d(n = 14, smooth = 3, d = 3)` | Stochastic %D: `stoch_k` averaged over `d` more bars. |
+| `adx` | `adx(n = 14)` | Average directional index, 0 to 100: how strong a trend is, whichever way it points. |
+| `plus_di` | `plus_di(n = 14)` | Plus directional indicator, 0 to 100: how much of the range was upward movement. |
+| `minus_di` | `minus_di(n = 14)` | Minus directional indicator, 0 to 100: how much of the range was downward movement. |
+| `cci` | `cci(n = 20)` | Commodity channel index of the typical price. |
+| `williams_r` | `williams_r(n = 14)` | Williams %R, -100 to 0: how far the close is below the highest high of the last n bars. |
+| `mfi` | `mfi(n = 14)` | Money flow index, 0 to 100, a volume-weighted RSI. |
+| `obv` | `obv()` | On-balance volume: a running total of volume, up on rising closes and down on falling ones. |
+| `vwap` | `vwap(n = 20)` | Volume-weighted average of the typical price over the last n bars. |
+| `keltner_upper` | `keltner_upper(n = 20, width = 2, atr = 10)` or `keltner_upper(series, n, width, atr)` | Upper Keltner channel: the exponential average plus `width` average true ranges. |
+| `keltner_lower` | `keltner_lower(n = 20, width = 2, atr = 10)` or `keltner_lower(series, n, width, atr)` | Lower Keltner channel: the exponential average minus `width` average true ranges. |
+| `supertrend` | `supertrend(n = 10, mult = 3)` | Supertrend line: under the price in an uptrend, over it in a downtrend. |
+| `supertrend_up` | `supertrend_up(n = 10, mult = 3)` | A condition: true in an uptrend. `buy when supertrend_up(10, 3)` is a whole rule. |
+| `wma` | `wma(n)` or `wma(series, n)` | Weighted average of the last n values; the newest weighs most. |
+| `hma` | `hma(n)` or `hma(series, n)` | Hull moving average: smooth, with little lag. |
+| `median` | `median(n)` or `median(series, n)` | Median of the last n values. |
+| `zscore` | `zscore(n)` or `zscore(series, n)` | How many standard deviations the value is above its n-bar average. |
+| `percent_rank` | `percent_rank(n)` or `percent_rank(series, n)` | Where the value ranks among the previous n values, 0 to 100. |
+| `slope` | `slope(n)` or `slope(series, n)` | Least-squares slope over n bars, in the series' units per bar. Divide by the price for a fraction: `slope(90) / close > 0.1%`. |
+| `correl` | `correl(other, n)` | Correlation, -1 to 1, between this ticker's close and another series, such as `correl(close of SPY, 60)`. |
+| `bars_since` | `bars_since(condition)` | Bars since the condition was last true: `bars_since(close crosses above sma(50)) < 10`. |
 | `min` | `min(a, b)` | The smaller value. |
 | `max` | `max(a, b)` | The larger value. |
 | `abs` | `abs(x)` | The value without its sign. |
@@ -230,6 +254,26 @@ How they are computed:
 - `stdev` divides by n, not by n - 1. The Bollinger bands use the same `stdev`.
 - `macd_signal` is an exponential average of the macd line.
 - `highest` reads the high and `lowest` the low, unless you give another series.
+
+The functions added later each have one exact definition:
+
+- `stoch_k` is 100 * (close - lowest low) / (highest high - lowest low) over the last n bars, averaged over `smooth` bars with a simple average (`smooth = 1` leaves it raw), and `stoch_d` is the simple average of that over `d` more bars. A range with no height gives no value. The first n + smooth - 2 bars are unknown.
+- `williams_r` is -100 * (highest high - close) / (highest high - lowest low) over the last n bars.
+- `cci` is the typical price, (high + low + close) / 3, minus its simple average over n bars, divided by 0.015 times its mean absolute deviation from that average. A window of equal values gives no value.
+- `mfi` takes each bar's money flow, the typical price times the volume, as flowing in when the typical price rose from the bar before and out when it fell, adds up each over the last n bars, and gives 100 - 100 / (1 + in / out). With no flow out it is 100, and with none either way it is 50, as for `rsi`. The first n bars are unknown.
+- `obv` starts at 0 on the first bar and then adds the bar's volume when the close rose and takes it off when it fell. It has no fixed starting level, so compare it with itself, as in `obv() > sma(obv(), 20)`, not with a number.
+- `vwap` is the sum of the typical price times the volume over the last n bars, over the sum of their volume. It is a rolling average, not one that restarts each day, and it is unknown while none of the n bars traded.
+- `plus_di`, `minus_di` and `adx` are Wilder's. The true range and the upward and downward movement (a rise in the high that is larger than the fall in the low, and the other way round) start with the second bar. Each is smoothed with Wilder's smoothing (1 / n) seeded with the simple average of the first n; the DI lines are 100 times the smoothed movement over the smoothed true range, and `adx` is the same smoothing of 100 * |+DI - -DI| / (+DI + -DI), seeded with the simple average of the first n of those. The first n bars of the DI lines are unknown, and the first 2n - 1 of `adx`. They start from the second bar, where `atr` counts the first bar's high minus low.
+- `keltner_upper` and `keltner_lower` are the exponential average of the series (close, unless you give another) over n bars, as `ema` gives it, plus or minus `width` times the `atr` over `atr` bars, which always reads the ticker's own bars.
+- `supertrend` has bands at (high + low) / 2 plus and minus `mult` times `atr(n)`. The upper band only falls and the lower only rises while the trend lasts: each takes the new value only when it is nearer the price, or when the close of the bar before had crossed it. In a downtrend the close above the upper band makes an uptrend, and in an uptrend the close below the lower band makes a downtrend. The line is the lower band in an uptrend and the upper band in a downtrend, and `supertrend_up` is true in an uptrend. The first bar where `atr` is known starts in a downtrend, so the trend a run starts with is the one the history before `from` leads to.
+- `wma` weighs the last n values 1 to n, the newest n. `hma` is `wma` over the root of n (rounded down) of 2 * `wma` over half of n (rounded down) minus `wma` over n.
+- `median` is the middle of the last n values, or the mean of the two middle ones when n is even.
+- `zscore` is the value minus its simple average over n bars, divided by `stdev` of the same bars (which divides by n, not n - 1). A window of equal values gives no value.
+- `percent_rank` is 100 times the number of the previous n values that are below this one, divided by n. Earlier values equal to this one do not count as below it. The first n bars are unknown.
+- `slope` is the slope of the least-squares straight line through the last n values, against the bar number. A window of equal values has slope 0.
+- `correl` is the Pearson correlation of the one-bar changes (value over the bar before, minus 1) of this ticker's close and of the series written first, over the last n bars. The other series is read as `of` reads it (rule 6): at each bar of this ticker, from the other ticker's latest bar that had ended, and with `fill: close` from one bar earlier on another clock. On a day when the other ticker had no new bar its change is 0. A series that does not change over the n bars gives no value.
+- `bars_since` is 0 on a bar where its condition is true, and otherwise the number of bars since it last was. It is unknown until the condition has been true once, and after a bar where the condition was unknown it is unknown until the condition is next true. It counts back only as far as the prices loaded, which is the history the condition needs plus 250 bars (rule 4).
+- Every function above that needs a full window gives no value while the window has fewer than n known values, so a gap of unknown values makes it unknown until it is full of known ones again. `adx`, `plus_di`, `minus_di`, `supertrend`, `supertrend_up` and `obv`, like `ema`, stay unknown once an unknown value has reached them.
 
 ### Calendar values
 
@@ -310,7 +354,7 @@ the messages are:
 
 ```text
 Line 2: "lots" is not a cost. Write it as 5 bps or 0.05%
-Line 3: Unknown name "smaa". Series: open, high, low, close, volume. Functions: sma, ema, rsi, roc, stdev, highest, lowest, atr, macd, macd_signal, bb_upper, bb_lower, min, max, abs. Dates: month, day, weekday, year, month_start, month_end
+Line 3: Unknown name "smaa". Series: open, high, low, close, volume. Functions: sma, ema, rsi, roc, stdev, highest, lowest, atr, macd, macd_signal, bb_upper, bb_lower, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, keltner_upper, keltner_lower, supertrend, supertrend_up, wma, hma, median, zscore, percent_rank, slope, correl, bars_since, min, max, abs. Dates: month, day, weekday, year, month_start, month_end
 Line 4: The rule ends too early
 ```
 
@@ -424,6 +468,33 @@ sell when close < sma(200)
   or close of ^VIX > 35
 ```
 
+**Trend direction and strength.** Hold SPY while the supertrend points up, the trend is strong (ADX above 20) and the close is above its 50-bar volume-weighted average. Leave as soon as the supertrend turns down. `supertrend_up` is a condition, so it needs no comparison.
+
+```strategy
+name: Supertrend with trend strength
+universe: SPY
+from: 2005-01-01
+costs: 5 bps
+
+buy when supertrend_up(10, 3) and adx(14) > 20 and close > vwap(50)
+sell when not supertrend_up(10, 3)
+```
+
+**A dip after a fresh high, away from bonds.** Buy QQQ when the stochastic is oversold within 30 bars of a 100-bar high, and its returns do not move with TLT's. Sell when the stochastic is overbought, or 60 bars after the last 100-bar high. `bars_since` counts from the last bar its condition was true, and `correl` reads TLT as `of` does.
+
+```strategy
+name: Oversold dips after a high
+universe: QQQ
+from: 2005-01-01
+costs: 5 bps
+
+buy when stoch_k(14, 3) < 20
+  and bars_since(close > highest(100)[1]) < 30
+  and correl(close of TLT, 60) < 0.3
+sell when stoch_k(14, 3) > 80
+  or bars_since(close > highest(100)[1]) > 60
+```
+
 **Binance, hourly bars, ATR stop and risk sizing.** A breakout on hourly bars. The stop sits 3 average true ranges below the fill. The position is sized so that a fall to that distance loses 1% of equity, up to the weight (here 100%). Set `from` on short intervals: the plugin stops after 300 requests of 1000 bars each.
 
 ```strategy
@@ -487,7 +558,7 @@ These are the engine's rules. Each is exact.
 1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker. With `fill: close` it fills at that same close instead, and so does everything else that would fill at the next open: ranking decisions, rebalancing and buying again after a stop (rules 17, 18, 23, 26, 27 and 31 say how).
 2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders". With `fill: close` it has filled at that last close, so nothing is left pending, except an order from a ranking decision made at a time a ticker had no bar, which fills at that ticker's next close.
 3. The run starts on `from`, or on the first day every ticker in the universe has prices if that is later. Tickers read only with `of`, and the benchmark, do not delay the start. The result warns when the run starts more than 7 days after `from`. It ends on `to`, or on the last bar.
-4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr` and `macd` count five times their period, because they depend on where they started. A period or lag given by a parameter with a range counts at the largest value of its range, so the sliders, "Try other parameter values" and "Was it luck?" can try any value in it on the prices already loaded. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
+4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr`, `macd`, `plus_di`, `minus_di`, `keltner_upper`, `keltner_lower`, `supertrend` and `supertrend_up` count five times their period, and `adx` ten times, because they depend on where they started. `bars_since` adds 250 bars to what its condition needs, and counts back no further than the prices loaded. A period or lag given by a parameter with a range counts at the largest value of its range, so the sliders, "Try other parameter values" and "Was it luck?" can try any value in it on the prices already loaded. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
 5. The run has one step for each time at which any ticker in the universe has a bar. A ticker with no bar that day keeps its last close for valuing the position.
 6. A value read with `of`, the benchmark's value and a cash-rate ticker's yield come from that series' latest bar that had ended by the end of the strategy's bar. A bar ends at its start plus its series' step, the shortest gap between its bars. From a step of 20 days on, the step is counted in calendar months, so a monthly bar dated the 1st ends on the 1st of the next month. Daily series on the same dates line up day for day, whichever days each trades; a weekly bar dated Monday is read from the following Monday; an hourly rule reads a daily bar from that day's 23:00 bar on. With `fill: close`, a rule reads a ticker that keeps other hours than its own ticker one bar early: from that ticker's latest bar that had ended by the time the rule's own bar began, so never its bar of the same day, week or hour. Two tickers keep other hours when the prices show it: they come from different sources (Yahoo, Binance or a CSV file), they have bars on different days of the week (crypto trades at weekends, stocks do not), or their bars are of different sizes. A stock's rule that reads `close of binance:BTCUSDT` therefore reads Bitcoin's previous day, and an hourly rule reads a daily bar from the next day's first hour on. Tickers on the same hours are read as before, and the result notes that it takes the other ticker's close as known at the moment of the fill, which is not true for a market that closes later, such as a New York stock read by a Tokyo one. Binance tickers of one bar size all close at the same moment and get no such note. The benchmark and a cash-rate ticker decide no orders and are read the same way with either fill.
 
@@ -540,7 +611,7 @@ These are the engine's rules. Each is exact.
 
 **Unknown values**
 
-33. A value is unknown while an indicator is still warming up, when you look back past the start of the data, when a ticker read with `of` has no bar that has ended yet, after a division by 0, and when `crosses` needs a previous bar that is unknown. `month_start` is unknown on the first bar of the data.
+33. A value is unknown while an indicator is still warming up, when you look back past the start of the data, when a ticker read with `of` has no bar that has ended yet, after a division by 0, and when `crosses` needs a previous bar that is unknown. `bars_since` is unknown until its condition has been true. `month_start` is unknown on the first bar of the data.
 34. A comparison with an unknown value is unknown. `and` is false if either side is false, and otherwise unknown if either side is unknown. `or` is true if either side is true, and otherwise unknown if either side is unknown. `not` of unknown is unknown.
 35. A rule only fires when it is true. Unknown never buys or sells, and counts as "not holding" for the re-arm rule.
 
@@ -875,13 +946,13 @@ Nothing else leaves your vault. There is no telemetry, no analytics, no update c
 **What has been checked**
 
 - Unit tests cover the language, the indicators, the engine's rules (fills, costs, slippage, stops, gaps, rebalancing, ranking, sizing, warm-up, interest, reading other tickers by bar end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders and the status bar count, the `backtests` block, the explanation of each trade, rewriting parameter values in a note, the background jobs with a fake worker, the starter strategies and the CSV helper, hover help, fixes and the ticker lookup with a fake network, exports, settings and drafting with a fake model.
-- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 29 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. Five of the 29 cases fill at the close, against Rearview's `fill same_close`. The check found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar (and, with `fill: close`, where it starts), slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
+- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 29 strategy pairs and 55 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. Five of the 29 cases fill at the close, against Rearview's `fill same_close`. The check found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar (and, with `fill: close`, where it starts), slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR (which also moves `keltner_upper`, `keltner_lower` and `supertrend` by a bar), how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. Of the 22 functions added after the first twelve, 20 are compared with Rearview's on every bar of every ticker, to 1e-9: `obv` through a sum of signed volume and `vwap` through Rearview's `vwma` of the typical price, and `correl` only on tickers that have every day. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
 - An independent review of the engine and the statistics, which confirmed each finding with a script. It found defects that are now fixed, each with a test: on mixed calendars (stocks with crypto) a ticker could miss its rebalance and a ranking buy could leave its slot in cash; a ticker with longer bars, a daily benchmark or a daily yield on shorter bars could be read before its bar had ended; entries were sized or left without their ATR stop while those inputs warmed up; and results could depend on which prices happened to be saved. It also corrected statistics (a benchmark whose prices start later, Sharpe and Sortino made of rounding noise, the `test from` split, two different Sortino ratios), and runs of more than about 125,000 bars no longer fail. A review finds what it looks for; this one does not show that no other defects remain.
 - A trial in a running desktop Obsidian 1.15, with live prices, of the parts that depend on Obsidian itself. These worked: the Parameters bar and its sliders; writing values into the block from the bar and from a sweep, in reading view and in live preview, including right after typing in the note; "Explain this trade"; the sweep in the background worker; the strategy preview panel as the cursor, the text and the problems change; "Fix the problem at the cursor" and the underlines; the `backtests` block; the starter strategies window; the CSV helper's file list and its reading of a file; folded results with the Compact setting; and the count in the status bar.
 
 **What has not been checked against anything**
 
-The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars. The cross-check of `fill: close` uses daily bars only.
+The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars. The cross-check of `fill: close` uses daily bars only. The direction `supertrend_up` (the line it follows is compared), `bars_since`, and `correl` on tickers with missing days or other calendars have nothing to compare with either; the unit tests check each against a second implementation written from its definition, on thousands of random bars.
 
 Also not checked:
 
@@ -909,7 +980,7 @@ node xcheck/run.ts # optional cross-check; needs the second backtester's command
 
 Obsidian loads one script for a plugin, so the background worker is built into `main.js`: `npm run build` bundles `src/worker.ts` first (`esbuild.config.mjs`) and embeds its text in the main bundle, which starts it from that text.
 
-The cross-check runs 29 cases and 24 indicator expressions. It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
+The cross-check runs 29 cases and 55 indicator expressions. It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
 
 Pushing a tag equal to the `version` in `manifest.json` runs `.github/workflows/release.yml`. It runs the tests, builds, and creates a draft GitHub release with `main.js`, `manifest.json` and `styles.css` attached. `versions.json` maps each plugin version to the minimum Obsidian version.
 

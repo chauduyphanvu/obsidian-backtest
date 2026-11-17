@@ -77,8 +77,10 @@ test('every function signature carries the defaults from INDICATORS', () => {
     const m = sig.match(/^(\w+)\((.*)\)$/);
     assert.ok(m && m[1] === name, `${name}: ${sig}`);
     const args = m![2] === '' ? [] : m![2].split(', ');
-    assert.equal(args.length, def.params.length, `${name}: ${sig} has the wrong number of arguments`);
-    args.forEach((a, i) => {
+    // A function that needs a series or a condition first shows it before its numbers, with no default.
+    const lead = def.lead ? 1 : 0;
+    assert.equal(args.length, def.params.length + lead, `${name}: ${sig} has the wrong number of arguments`);
+    args.slice(lead).forEach((a, i) => {
       const [, dflt] = a.split(' = ');
       assert.equal(dflt === undefined ? null : Number(dflt), def.params[i], `${name} argument ${i}: ${a}`);
     });

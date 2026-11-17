@@ -18,7 +18,8 @@ case's Rearview run under `runs/<case>/`, and `report.json`.
 ## The data
 
 `data.ts` generates nine tickers over 3,000 weekdays from 2 January 2013 (1 January, 4 July and
-25 December are holidays), in whole cents, written once in Rearview's import format. Our engine
+25 December are holidays), in whole cents, written once in Rearview's import format. Volume changes from bar to bar (a hash of the ticker and
+the bar, so the prices do not move), for the indicators that weigh by it; no case's rules read it. Our engine
 reads the same `bars.csv` through `parseCsv`, a ticker at a time.
 
 | Ticker | Shape |
@@ -41,7 +42,7 @@ compared exactly. `series/w.csv` gives Rearview the per-ticker weights of the re
 ## What is compared
 
 - **Indicators**: our values against `rvw eval` on every bar of every ticker, warm-up included,
-  to 1e-9.
+  to 1e-9: the first twelve functions and the later ones listed under "Indicator differences".
 - **Each case** in `cases/<name>/`: `case.strategy` (ours), `case.rvw` (Rearview's) and
   `case.json` (what it tests, how to compare, which documented differences it may show). Rearview
   runs in a cash account with 6 share decimals, fills at the next open, commission and slippage
@@ -85,6 +86,24 @@ run held at the same time as an explained one (`knock`).
 | Sharpe | above the cash rate, √(steps a year), population deviation | no cash rate, √252, sample deviation | rescaled, without a cash rate |
 | Stops after a top-up | stay at the first fill | move to the average cost | not combined (stops in rotation aren't checked) |
 
+## Indicator differences
+
+Every indicator expression matches on every bar of every ticker, with the same first bar, except where this table says so.
+Where a definition has no single standard, both engines keep the one written in `README.md` and in the docs; the choices
+are below.
+
+| | Ours | Rearview | How the check handles it |
+|---|---|---|---|
+| `atr`, and what is built on it (`keltner_upper`, `keltner_lower`, `supertrend`) | first true range = first bar's high - low | starts on the second bar | compared from bar 400, as `atr(14)` |
+| `plus_di`, `minus_di`, `adx` | Wilder's: true range and movement from the second bar | the same | none: identical, first bar included |
+| `stoch_k(n, smooth)`, `stoch_d(n, smooth, d)` | `%K` averaged over `smooth` bars (3 unless given), `%D` over `d` more | `stoch_k(n)` is raw, `stoch_d(n, m)` averages it | `stoch_k(n, 1)` against `stoch_k(n)`, and the smoothed forms against `sma` of theirs |
+| `obv` | running total from 0 on the first bar | none | the change in ours over 100 bars against `sum` of volume times the sign of the change in the close |
+| `vwap(n)` | volume-weighted average of the typical price (high + low + close) / 3 | `vwma(x, n)` of any series | `vwma((high + low + close) / 3, n)` |
+| `hma(n)` | `n / 2` and `sqrt(n)` rounded down | the same | none; Hull's formula leaves the rounding open |
+| `percent_rank(n)` | the share of the previous `n` values strictly below this one | the same | none |
+| `correl(other, n)` | the other ticker's value at each of this ticker's bars, as `of` reads it, so both changes span the same days | the other ticker's own previous day | tickers that have every day; HOLE, with missing days, is left out |
+| `supertrend_up`, `bars_since` | conditions on bars | none | not compared; `supertrend`'s line is |
+
 ## Not covered
 
 Rearview has nothing to compare these with, or compares them only through a rule that differs:
@@ -92,4 +111,5 @@ inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entr
 rules, calendar values (`month`, `month_start`, ...), yearly rebalancing, ranking with
 `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with
 weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and
-weekly or intraday bars.
+weekly or intraday bars. Among the functions: `supertrend_up`, `bars_since`, and `correl` of tickers
+with missing days or on other calendars.

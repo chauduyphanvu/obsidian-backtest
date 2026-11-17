@@ -131,11 +131,21 @@ export interface ParseResult {
   warnings: Diagnostic[];
 }
 
-/**
- * Indicators. `src` is the series used when none is given (null: the function takes no series).
- * `params` lists the numeric parameters with their defaults (null: required).
- */
-export const INDICATORS: Record<string, { src: SeriesName | null; params: (number | null)[] }> = {
+export interface IndicatorDef {
+  /** The series used when none is given (null: the function takes no series). */
+  src: SeriesName | null;
+  /** The numeric parameters with their defaults (null: required). */
+  params: (number | null)[];
+  /** Parameters that are any number above 0 rather than a whole period, by position, with what a message calls them. */
+  real?: Record<number, string>;
+  /** The shortest the first period can be, when that is more than 1. */
+  min?: number;
+  /** A first argument the function cannot do without: the other ticker's series, or a condition. */
+  lead?: 'series' | 'condition';
+}
+
+/** Functions that read a series or a condition and take periods. Those that need high, low or volume read the ticker's own bars. */
+export const INDICATORS: Record<string, IndicatorDef> = {
   sma: { src: 'close', params: [null] },
   ema: { src: 'close', params: [null] },
   rsi: { src: 'close', params: [14] },
@@ -146,9 +156,34 @@ export const INDICATORS: Record<string, { src: SeriesName | null; params: (numbe
   atr: { src: null, params: [14] },
   macd: { src: 'close', params: [12, 26] },
   macd_signal: { src: 'close', params: [12, 26, 9] },
-  bb_upper: { src: 'close', params: [20, 2] },
-  bb_lower: { src: 'close', params: [20, 2] },
+  bb_upper: { src: 'close', params: [20, 2], real: { 1: 'band width' } },
+  bb_lower: { src: 'close', params: [20, 2], real: { 1: 'band width' } },
+  stoch_k: { src: null, params: [14, 3] },
+  stoch_d: { src: null, params: [14, 3, 3] },
+  adx: { src: null, params: [14] },
+  plus_di: { src: null, params: [14] },
+  minus_di: { src: null, params: [14] },
+  cci: { src: null, params: [20], min: 2 },
+  williams_r: { src: null, params: [14] },
+  mfi: { src: null, params: [14] },
+  obv: { src: null, params: [] },
+  vwap: { src: null, params: [20] },
+  keltner_upper: { src: 'close', params: [20, 2, 10], real: { 1: 'band width' } },
+  keltner_lower: { src: 'close', params: [20, 2, 10], real: { 1: 'band width' } },
+  supertrend: { src: null, params: [10, 3], real: { 1: 'multiplier' } },
+  supertrend_up: { src: null, params: [10, 3], real: { 1: 'multiplier' } },
+  wma: { src: 'close', params: [null] },
+  hma: { src: 'close', params: [null], min: 2 },
+  median: { src: 'close', params: [null] },
+  zscore: { src: 'close', params: [null], min: 2 },
+  percent_rank: { src: 'close', params: [null] },
+  slope: { src: 'close', params: [null], min: 2 },
+  correl: { src: 'close', params: [null], min: 2, lead: 'series' },
+  bars_since: { src: null, params: [], lead: 'condition' },
 };
+
+/** Functions whose value is a condition, 1 or 0, so a rule can be written with them alone. */
+export const CONDITIONS = ['supertrend_up'];
 
 export const SERIES: SeriesName[] = ['open', 'high', 'low', 'close', 'volume'];
 export const CALENDAR: CalName[] = ['month', 'day', 'weekday', 'year', 'month_start', 'month_end'];
@@ -264,6 +299,8 @@ export function isBool(e: Expr): boolean {
       return true;
     case 'cal':
       return e.name === 'month_start' || e.name === 'month_end';
+    case 'ind':
+      return CONDITIONS.includes(e.fn);
     case 'lag':
     case 'of':
       return isBool(e.a);
@@ -689,25 +726,39 @@ class ExprParser {
     const args = this.args();
     let src: Expr | null = def.src ? { k: 'series', name: def.src } : null;
     let rest = args;
-    if (def.src && args.length > 0 && (args[0].e.k !== 'num' || args.length > def.params.length)) {
+    if (def.lead === 'condition') {
+      const example = `${t.s}(close crosses above sma(50))`;
+      if (args.length !== 1) throw new SpecError(this.spanFrom(start), `${t.s}() takes one condition, as in ${example}`);
+      if (!isBool(args[0].e)) throw new SpecError(args[0].at, `${t.s}() needs a condition, not a number, as in ${example}`);
+      src = args[0].e;
+      rest = [];
+    } else if (def.lead === 'series') {
+      if (args.length === 0 || args[0].e.k === 'num') throw new SpecError(this.spanFrom(start), `${t.s}() needs the other ticker's series first, as in ${t.s}(close of SPY, 60)`);
       src = this.needNum(args[0].e, t, `${t.s}()`);
-      const pos = findPos(src);
-      if (pos) throw new SpecError(args[0].at, `"${POSITION[pos]}" can't go inside ${t.s}(): it only exists while a position is open`);
+      rest = args.slice(1);
+    } else if (def.src && args.length > 0 && (args[0].e.k !== 'num' || args.length > def.params.length)) {
+      src = this.needNum(args[0].e, t, `${t.s}()`);
       rest = args.slice(1);
     }
-    if (rest.length > def.params.length) throw new SpecError(this.spanFrom(start), `${t.s}() takes at most ${def.params.length} number${def.params.length > 1 ? 's' : ''}`);
-    const isBand = t.s === 'bb_upper' || t.s === 'bb_lower';
+    if (src) {
+      const pos = findPos(src);
+      if (pos) throw new SpecError(args[0].at, `"${POSITION[pos]}" can't go inside ${t.s}(): it only exists while a position is open`);
+    }
+    if (rest.length > def.params.length) {
+      throw new SpecError(this.spanFrom(start), def.params.length === 0 ? `${t.s}() takes no arguments` : `${t.s}() takes at most ${def.params.length} number${def.params.length > 1 ? 's' : ''}`);
+    }
     const nums = def.params.map((dflt, i) => {
       const a = rest[i];
       if (!a) {
-        if (dflt === null) throw new SpecError(this.spanFrom(start), `${t.s}() needs a period, as in ${t.s}(20)`);
+        if (dflt === null) throw new SpecError(this.spanFrom(start), `${t.s}() needs a period, as in ${t.s}(${def.lead === 'series' ? 'close of SPY, 20' : '20'})`);
         return dflt;
       }
       if (a.e.k !== 'num') throw new SpecError(a.at, `${t.s}() periods must be plain numbers`);
       const n = a.e.v;
-      const multiplier = isBand && i === 1;
-      if (multiplier ? n <= 0 : !Number.isInteger(n) || n < 1 || n > 10000) {
-        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${multiplier ? 'band width' : 'period'}`);
+      const noun = def.real?.[i];
+      const shortest = i === 0 ? (def.min ?? 1) : 1;
+      if (noun ? n <= 0 : !Number.isInteger(n) || n < shortest || n > 10000) {
+        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${noun ?? 'period'}${!noun && shortest > 1 ? `. It needs at least ${shortest}` : ''}`);
       }
       return n;
     });

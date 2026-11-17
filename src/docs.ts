@@ -171,6 +171,28 @@ const ARGUMENTS: Record<string, string[]> = {
   macd_signal: ['fast', 'slow', 'signal'],
   bb_upper: ['n', 'width'],
   bb_lower: ['n', 'width'],
+  stoch_k: ['n', 'smooth'],
+  stoch_d: ['n', 'smooth', 'd'],
+  adx: ['n'],
+  plus_di: ['n'],
+  minus_di: ['n'],
+  cci: ['n'],
+  williams_r: ['n'],
+  mfi: ['n'],
+  obv: [],
+  vwap: ['n'],
+  keltner_upper: ['n', 'width', 'atr'],
+  keltner_lower: ['n', 'width', 'atr'],
+  supertrend: ['n', 'mult'],
+  supertrend_up: ['n', 'mult'],
+  wma: ['n'],
+  hma: ['n'],
+  median: ['n'],
+  zscore: ['n'],
+  percent_rank: ['n'],
+  slope: ['n'],
+  correl: ['n'],
+  bars_since: [],
 };
 
 const FUNCTION_TEXT: Record<string, [string, string]> = {
@@ -186,6 +208,79 @@ const FUNCTION_TEXT: Record<string, [string, string]> = {
   macd_signal: ['average of the macd line', 'Exponential average of the macd line over signal bars.'],
   bb_upper: ['upper Bollinger band', 'Upper Bollinger band: the average plus width standard deviations.'],
   bb_lower: ['lower Bollinger band', 'Lower Bollinger band: the average minus width standard deviations.'],
+  stoch_k: [
+    'stochastic %K, 0 to 100',
+    'Stochastic %K, from 0 to 100: where the close sits between the lowest low and the highest high of the last n bars, averaged over smooth bars (1 for no averaging).',
+  ],
+  stoch_d: ['stochastic %D: stoch_k averaged over d bars', 'Stochastic %D: stoch_k, with the same n and smooth, averaged over d more bars.'],
+  adx: [
+    'average directional index, 0 to 100',
+    'Wilder’s average directional index, from 0 to 100: how strong the trend is, whichever way, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di).',
+  ],
+  plus_di: [
+    'plus directional indicator, 0 to 100',
+    'Wilder’s plus directional indicator, from 0 to 100: the Wilder average over n bars of upward movement, divided by that of the true range, times 100.',
+  ],
+  minus_di: [
+    'minus directional indicator, 0 to 100',
+    'Wilder’s minus directional indicator, from 0 to 100: the Wilder average over n bars of downward movement, divided by that of the true range, times 100.',
+  ],
+  cci: [
+    'commodity channel index of the typical price',
+    'Commodity channel index: the typical price (high + low + close) / 3 minus its n-bar average, divided by 0.015 times its mean absolute deviation from that average.',
+  ],
+  williams_r: [
+    'Williams %R, -100 to 0',
+    'Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) over the last n bars.',
+  ],
+  mfi: [
+    'money flow index, 0 to 100',
+    'Money flow index, from 0 to 100: 100 - 100 / (1 + money flowing in / money flowing out) over the last n bars, where a bar’s flow is its typical price times its volume, counted in when the typical price rose and out when it fell.',
+  ],
+  obv: [
+    'on-balance volume, a running total',
+    'On-balance volume: a running total that adds a bar’s volume when the close rose and takes it off when it fell, starting at 0 on the first bar.',
+  ],
+  vwap: ['volume-weighted average price of the last n bars', 'Volume-weighted average of the typical price (high + low + close) / 3 over the last n bars.'],
+  keltner_upper: [
+    'upper Keltner channel',
+    'Upper Keltner channel: the n-bar exponential average plus width times the average true range over atr bars, which is read from the ticker’s own bars.',
+  ],
+  keltner_lower: [
+    'lower Keltner channel',
+    'Lower Keltner channel: the n-bar exponential average minus width times the average true range over atr bars, which is read from the ticker’s own bars.',
+  ],
+  supertrend: [
+    'supertrend line, under the price in an uptrend',
+    'Supertrend line: bands at (high + low) / 2 plus and minus mult average true ranges over n bars, each moving only towards the price until the close crosses it, the lower band in an uptrend and the upper in a downtrend.',
+  ],
+  supertrend_up: ['condition: the supertrend is in an uptrend', 'A condition that is true while the supertrend is in an uptrend, with its line under the price, and false in a downtrend.'],
+  wma: ['weighted average of the last n values', 'Linearly weighted average of the last n values, the newest weighing n and the oldest 1.'],
+  hma: [
+    'Hull moving average',
+    'Hull moving average: the weighted average over sqrt(n) bars of twice the weighted average over n / 2 bars minus the one over n bars, with n / 2 and sqrt(n) rounded down.',
+  ],
+  median: ['median of the last n values', 'Median of the last n values, the mean of the two middle ones when n is even.'],
+  zscore: [
+    'standard deviations from the n-bar average',
+    'How many standard deviations the value is from its average over the last n values, dividing by n as stdev does, and unknown when they are all equal.',
+  ],
+  percent_rank: ['share of the previous n values below this one', 'The share of the previous n values that are below this one, from 0 to 100.'],
+  slope: ['least-squares slope over n bars, per bar', 'Slope of the least-squares line through the last n values, in the series’ units per bar.'],
+  correl: [
+    'correlation with another ticker, -1 to 1',
+    'Correlation, from -1 to 1, of the one-bar changes of this ticker’s close and of the series written first, over the last n bars, unknown when either one is constant.',
+  ],
+  bars_since: ['bars since a condition was last true', 'Bars since the condition was last true: 0 on a bar where it is, and unknown until it has been true.'],
+};
+
+/** What a function's text says about the series it reads, where the usual sentence is not the whole story. */
+const SERIES_TEXT: Record<string, string> = {
+  mfi: 'It takes no series and needs volume.',
+  obv: 'It takes no series and needs volume.',
+  vwap: 'It takes no series and needs volume.',
+  correl: 'It reads close for this ticker; the series written first is read as of reads it, so it lines up with this ticker’s bars.',
+  bars_since: 'It takes no series, only a condition.',
 };
 
 const FUNCTION_EXAMPLE: Record<string, string> = {
@@ -201,20 +296,43 @@ const FUNCTION_EXAMPLE: Record<string, string> = {
   macd_signal: 'buy when macd() crosses above macd_signal()',
   bb_upper: 'buy when close > bb_upper(20, 2)',
   bb_lower: 'buy when close < bb_lower(20, 2)',
+  stoch_k: 'buy when stoch_k(14, 3) < 20',
+  stoch_d: 'buy when stoch_k() crosses above stoch_d()',
+  adx: 'buy when adx(14) > 25 and plus_di(14) > minus_di(14)',
+  plus_di: 'buy when plus_di(14) > minus_di(14)',
+  minus_di: 'sell when minus_di(14) > plus_di(14)',
+  cci: 'buy when cci(20) < -100',
+  williams_r: 'buy when williams_r(14) < -80',
+  mfi: 'buy when mfi(14) < 20',
+  obv: 'buy when obv() > sma(obv(), 20)',
+  vwap: 'buy when close > vwap(20)',
+  keltner_upper: 'buy when close > keltner_upper(20, 2, 10)',
+  keltner_lower: 'buy when close < keltner_lower(20, 2, 10)',
+  supertrend: 'buy when close > supertrend(10, 3)',
+  supertrend_up: 'buy when supertrend_up(10, 3)',
+  wma: 'buy when close > wma(20)',
+  hma: 'buy when close > hma(21)',
+  median: 'buy when close > median(20)',
+  zscore: 'buy when zscore(20) < -2',
+  percent_rank: 'buy when percent_rank(100) > 95',
+  slope: 'buy when slope(90) / close > 0.1%',
+  correl: 'buy when correl(close of SPY, 60) < 0.5',
+  bars_since: 'buy when bars_since(close crosses above sma(50)) < 10',
 };
 
-/** The call as written, with each default from INDICATORS: `rsi(n = 14)`, `sma(n)`. */
+/** The call as written, with each default from INDICATORS: `rsi(n = 14)`, `sma(n)`, and a leading series or condition where the function needs one. */
 export function functionSignature(name: string): string {
   const def = INDICATORS[name];
   const names = ARGUMENTS[name];
-  return `${name}(${def.params.map((d, i) => (d === null ? names[i] : `${names[i]} = ${d}`)).join(', ')})`;
+  const lead = def.lead === 'series' ? ['other'] : def.lead === 'condition' ? ['condition'] : [];
+  return `${name}(${[...lead, ...def.params.map((d, i) => (d === null ? names[i] : `${names[i]} = ${d}`))].join(', ')})`;
 }
 
 for (const name of Object.keys(INDICATORS)) {
   const def = INDICATORS[name];
   const [short, meaning] = FUNCTION_TEXT[name];
   const sample = `${name}(volume, ${def.params.map((d) => d ?? 20).join(', ')})`;
-  const series = def.src === null ? 'It takes no series.' : `Without a series it reads ${def.src}; write another first, as in ${sample}.`;
+  const series = SERIES_TEXT[name] ?? (def.src === null ? 'It takes no series.' : `Without a series it reads ${def.src}; write another first, as in ${sample}.`);
   add('function', name, functionSignature(name), short, `${meaning} ${series}`, FUNCTION_EXAMPLE[name]);
 }
 add('function', 'min', 'min(a, b)', 'the smaller value', 'The smaller of two values.', 'buy when close > min(sma(20), sma(50))');

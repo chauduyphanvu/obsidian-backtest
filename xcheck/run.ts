@@ -108,8 +108,8 @@ function prepareData(): Ctx {
 
 // ---------------------------------------------------------------- indicators
 
-/** Ours, Rearview's, and the bar from which they must agree (null: every bar, warm-up included). */
-const INDICATORS: [string, string, number | null][] = [
+/** Ours, Rearview's, the bar from which they must agree (null: every bar, warm-up included), and the tickers compared (all when absent). */
+const INDICATORS: [string, string, number | null, string[]?][] = [
   ['sma(20)', 'sma(close, 20)', null],
   ['ema(20)', 'ema(close, 20)', null],
   ['ema(50)', 'ema(close, 50)', null],
@@ -136,6 +136,45 @@ const INDICATORS: [string, string, number | null][] = [
   // Documented: our first true range is the first bar's high - low, Rearview's starts on the second
   // bar, so ours is known a bar earlier and the two converge as Wilder's smoothing forgets the seed.
   ['atr(14)', 'atr(14)', 400],
+  // Our stoch_k averages the raw value over `smooth` bars (1 leaves it raw); Rearview's stoch_k is raw and its stoch_d(n, m) is
+  // the m-bar average of that, so the smoothed forms are compared with sma of theirs.
+  ['stoch_k(14, 1)', 'stoch_k(14)', null],
+  ['stoch_k(14, 3)', 'sma(stoch_k(14), 3)', null],
+  ['stoch_d(10, 1, 4)', 'stoch_d(10, 4)', null],
+  ['stoch_d(14, 3, 3)', 'sma(sma(stoch_k(14), 3), 3)', null],
+  ['williams_r(14)', 'williams_r(14)', null],
+  ['cci(20)', 'cci(20)', null],
+  ['mfi(14)', 'mfi(14)', null],
+  ['mfi(5)', 'mfi(5)', null],
+  // Rearview has no on-balance volume. The change in ours over 100 bars is the sum of the volume with the sign of the change
+  // in the close. Closes are whole cents, so a change is 0 or at least 0.0099..., and times a million, clamped to -1..1, it is its sign.
+  ['obv() - obv()[100]', 'sum(volume * max(-1, min(1, change(close, 1) * 1000000)), 100)', null],
+  // Ours weighs the typical price, which Rearview's vwma can be given as the series.
+  ['vwap(20)', 'vwma((high + low + close) / 3, 20)', null],
+  ['plus_di(14)', 'plus_di(14)', null],
+  ['minus_di(14)', 'minus_di(14)', null],
+  ['adx(14)', 'adx(14)', null],
+  ['adx(5)', 'adx(5)', null],
+  // Same documented ATR difference as atr(14): ours is atr(n) as the first twelve functions have it.
+  ['keltner_upper(20, 2, 20)', 'keltner_upper(20, 2)', 400],
+  ['keltner_lower(20, 1.5, 20)', 'keltner_lower(20, 1.5)', 400],
+  ['supertrend(10, 3)', 'supertrend(10, 3)', 400],
+  ['supertrend(20, 1.5)', 'supertrend(20, 1.5)', 400],
+  ['wma(20)', 'wma(close, 20)', null],
+  ['wma(rsi(14), 10)', 'wma(rsi(close, 14), 10)', null],
+  ['hma(21)', 'hma(close, 21)', null],
+  ['hma(16)', 'hma(close, 16)', null],
+  ['median(20)', 'median(close, 20)', null],
+  ['median(volume, 7)', 'median(volume, 7)', null],
+  ['zscore(20)', 'zscore(close, 20)', null],
+  ['zscore(volume, 30)', 'zscore(volume, 30)', null],
+  ['percent_rank(100)', 'percent_rank(close, 100)', null],
+  ['slope(20)', 'slope(close, 20)', null],
+  ['slope(close - open, 10)', 'slope(close - open, 10)', null],
+  // Another ticker's closes line up day for day on tickers that have every day. HOLE has no bar on some days: ours takes the
+  // other ticker's change over the same days as HOLE's own, Rearview's takes its change from the day before.
+  ['correl(close of MREV, 60)', 'correl(close, close("MREV"), 60)', null, ['TRND', 'MREV', 'CHOP', 'VOLA', 'GAPY', 'LATE', 'WK1', 'WK2']],
+  ['correl(close of TRND, 20)', 'correl(close, close("TRND"), 20)', null, ['TRND', 'MREV', 'CHOP', 'VOLA', 'GAPY', 'LATE', 'WK1', 'WK2']],
 ];
 
 interface IndicatorResult {
@@ -155,7 +194,7 @@ function checkIndicators(ctx: Ctx): IndicatorResult[] {
   rvw(RVW, args);
   const values = readEval(out);
   const ev = new Evaluator(ctx.data);
-  return INDICATORS.map(([ours, theirs, settle], i) => {
+  return INDICATORS.map(([ours, theirs, settle, only], i) => {
     const { spec, errors } = parseSpec(`universe: ${tickers[0]}\nhold: top 1 by ${ours}`);
     if (!spec) throw new Error(`Can't parse ${ours}: ${JSON.stringify(errors)}`);
     let compared = 0;
@@ -163,6 +202,7 @@ function checkIndicators(ctx: Ctx): IndicatorResult[] {
     let ok = true;
     const warm: string[] = [];
     for (const tk of tickers) {
+      if (only && !only.includes(tk)) continue;
       const bars = ctx.data.get(tk)!;
       const mine = ev.eval(spec.rank!.by, tk);
       const theirsByDate = values.get(tk)!.get(`i${i}`)!;
