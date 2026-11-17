@@ -104,8 +104,9 @@ The `universe` line lists tickers, separated by commas, each with an optional we
 - Put `yahoo:`, `binance:` or `csv:` in front of a ticker to choose its source: `universe: SPY, binance:BTCUSDT`.
 - Write Yahoo tickers the way Yahoo spells them: `SPY`, `BRK-B`, `BTC-USD`, `^GSPC`. Binance tickers are market symbols such as `BTCUSDT`. Letters in Yahoo and Binance tickers are turned into capitals. A ticker may hold letters, digits and `^ . _ = -`.
 - A CSV ticker is a path from the vault's root, such as `csv:Data/gold.csv`. The path cannot contain spaces or commas. Rules and the result call it by the file name without `.csv`, here `gold`.
-- Sources can be mixed, but one `interval` applies to every ticker, so it has to be valid for each source.
+- Sources can be mixed, but one `interval` applies to every ticker, so it has to be valid for the source of each one, the benchmark's included. A cash-rate ticker is the exception: it only needs daily closes.
 - A ticker listed twice is an error.
+- Two different sources cannot share a name in one block. A CSV file named like a ticker the block also uses, such as `csv:Data/SPY.csv` with `SPY`, gives "SPY is used for two different things here: yahoo:SPY and csv:Data/SPY.csv. Rename the CSV file or use one of them." This covers the universe, tickers read with `of`, the benchmark and the cash-rate ticker. Writing a CSV ticker's bare name, as in `close of gold`, reads that file.
 
 Weights:
 
@@ -175,9 +176,9 @@ From loosest to tightest, the order is:
 
 So `not close > 1 + 2 * 3 or close < 0 and volume > 5` reads as `(not (close > 1 + (2 * 3))) or ((close < 0) and (volume > 5))`.
 
-A rule has to be a condition: `buy when sma(200)` is an error. Both sides of a comparison have to be numbers, and `and`, `or` and `not` need conditions on their sides.
+A rule has to be a condition: `buy when sma(200)` is an error. Both sides of a comparison have to be numbers, and `and`, `or` and `not` need conditions on their sides. A rule can nest at most 64 levels of brackets, functions and operators, a long chain such as `a + b + c + ...` counting one level for each term; deeper is an error.
 
-Another ticker: `sma(200) of SPY` and `close of ^VIX` read a value from a ticker that does not have to be in the universe. `of` applies to the value just before it, so write `(close - open) of SPY` to apply it to a whole expression. A ticker that is not in the universe is loaded from the default source (the `data` line or the plugin setting), or from the source you name, as in `close of binance:BTCUSDT`. For each bar of the rule's own ticker, you get that other ticker's latest bar at or before that time.
+Another ticker: `sma(200) of SPY` and `close of ^VIX` read a value from a ticker that does not have to be in the universe. `of` applies to the value just before it, so write `(close - open) of SPY` to apply it to a whole expression. A ticker that is not in the universe is loaded from the default source (the `data` line or the plugin setting), or from the source you name, as in `close of binance:BTCUSDT`. For each bar of the rule's own ticker, you get the other ticker's latest bar that had ended by the time this bar ended (rule 6 under "How the simulation works"). Daily tickers on the same dates line up day for day; a weekly bar dated Monday is read from the following Monday, once its week is over.
 
 Earlier bars: `close[5]` is the close five bars back. It works on any value: `highest(20)[1]` is the highest high of the 20 bars before this one.
 
@@ -299,7 +300,7 @@ Line 3: Unknown name "smaa". Series: open, high, low, close, volume. Functions: 
 Line 4: The rule ends too early
 ```
 
-Besides errors, the parser gives one kind of note that does not stop the run: a comparison of a price with a fixed number on Yahoo data, such as `close > 100`. Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded. Compare a price with an average, a percentage or an earlier price instead. The note appears as an underline in the editor and under the title in the result.
+Besides errors, the parser gives one kind of note that does not stop the run: a comparison of a price with a fixed number on Yahoo data, such as `close > 100`. Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded. Compare a price with an average, a percentage or an earlier price instead. There is no note when every ticker the comparison reads is an index (its ticker starts with `^`), because Yahoo does not adjust index levels. The note appears as an underline in the editor and under the title in the result.
 
 ### Worked examples
 
@@ -382,7 +383,7 @@ sell when sma(fast) < sma(slow)
 stop loss: stop
 ```
 
-**Another ticker as a filter.** Hold QQQ while it is above its 200-day average and the VIX is below 25. Leave when the trend breaks or the VIX goes above 35. The VIX is not in the universe, so it is only read, never traded. You will see the fixed-price note on these lines. A volatility index has no dividends or splits to adjust, so it does not matter here.
+**Another ticker as a filter.** Hold QQQ while it is above its 200-day average and the VIX is below 25. Leave when the trend breaks or the VIX goes above 35. The VIX is not in the universe, so it is only read, never traded. It is an index, which Yahoo does not adjust, so comparing it with a fixed number gets no note.
 
 ```strategy
 name: QQQ unless volatility spikes
@@ -441,65 +442,75 @@ These are the engine's rules. Each is exact.
 1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker.
 2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders".
 3. The run starts on `from`, or on the first day every ticker in the universe has prices if that is later. Tickers read only with `of`, and the benchmark, do not delay the start. The result warns when the run starts more than 7 days after `from`. It ends on `to`, or on the last bar.
-4. Bars before the start still feed the indicators, so `sma(200)` is known on the first day. Yahoo and CSV give the whole history. For Binance the plugin fetches 500 bars before `from`, so a longer lookback leaves the rules unknown for longer.
+4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr` and `macd` count five times their period, because they depend on where they started. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
 5. The run has one step for each time at which any ticker in the universe has a bar. A ticker with no bar that day keeps its last close for valuing the position.
+6. A value read with `of`, the benchmark's value and a cash-rate ticker's yield come from that series' latest bar that had ended by the end of the strategy's bar. A bar ends at its start plus its series' step, the shortest gap between its bars. From a step of 20 days on, the step is counted in calendar months, so a monthly bar dated the 1st ends on the 1st of the next month. Daily series on the same dates line up day for day, whichever days each trades; a weekly bar dated Monday is read from the following Monday; an hourly rule reads a daily bar from that day's 23:00 bar on.
 
 **Sizing and cash**
 
-6. Equity is cash plus every position at its latest close. Money is in cash until a rule buys. Positions can hold fractions of a share.
-7. A buy of a ticker with weight w spends w times equity, valued at the open of the fill, but never more than the cash available. The rest stays in cash.
-8. A position is sized once, when it is bought. It then drifts with the price until it is sold or a rebalance resizes it.
-9. With `weighting: inverse volatility(n)`, the tickers being held or bought share out the sum of their configured weights in proportion to 1 divided by their volatility, the standard deviation of the last n one-bar returns up to the last close before the fill. A ticker whose volatility is unknown or 0 keeps its configured weight.
-10. With `risk per trade: r at m atr(n)`, the buy is for r times equity, divided by m times the ATR, shares. The ATR is its value at the close before the fill. The value of the buy is capped at the ticker's weight, and the size is fixed at entry. Without a known ATR the weight is used. The distance used for sizing is separate from any `stop loss` line.
+7. Equity is cash plus every position at its latest close. Money is in cash until a rule buys. Positions can hold fractions of a share.
+8. A buy of a ticker with weight w spends w times equity, valued at the open of the fill, but never more than the cash available. The rest stays in cash.
+9. A position is sized once, when it is bought. It then drifts with the price until it is sold or a rebalance resizes it.
+10. With `weighting: inverse volatility(n)`, the tickers being held or bought share out the sum of their configured weights in proportion to 1 divided by their volatility, the standard deviation of the last n one-bar returns up to the last close before the fill. A ticker whose volatility is 0 keeps its configured weight.
+11. With `risk per trade: r at m atr(n)`, the buy is for r times equity, divided by m times the ATR, shares. The ATR is its value at the close before the fill. The value of the buy is capped at the ticker's weight, and the size is fixed at entry. The distance used for sizing is separate from any `stop loss` line.
+
+**Warm-up**
+
+12. A buy is not taken while an input it needs is still unknown at the close of the signal: the ATR for `risk per trade`, the volatility for `weighting: inverse volatility`, or the ATR of an ATR stop loss, trailing stop or take profit. The buy fills after the first later close at which the inputs are known and the buy rule still holds. In a `hold` strategy the ticker is skipped until the next decision.
+13. The result notes how many buy signals each such input held back (signals on consecutive bars count once). It also notes when a buy rule or `hold` score was unknown for more than 5 bars at the start of the run, with the day it became known.
 
 **Costs, slippage and interest**
 
-11. `costs` is a percentage of the value of every fill: buys, sells, stops, targets and rebalancing trades. On a buy it is paid on top of the price; on a sell it comes out of the proceeds.
-12. `slippage` makes each fill worse by that fraction: a buy fills at the price times (1 + slippage), a sell, including a stop or a target, at the price times (1 - slippage). Costs are charged on the slipped value.
-13. Between two bars, cash earns the rate times the calendar days between them divided by 365, using the rate known at the earlier bar. With a ticker, the rate is that ticker's latest close at or before the earlier bar, read as a yearly percentage: a close of 4.2 is 4.2%. Only cash earns interest.
+14. `costs` is a percentage of the value of every fill: buys, sells, stops, targets and rebalancing trades. On a buy it is paid on top of the price; on a sell it comes out of the proceeds.
+15. `slippage` makes each fill worse by that fraction: a buy fills at the price times (1 + slippage), a sell, including a stop or a target, at the price times (1 - slippage). Costs are charged on the slipped value.
+16. Between two bars, cash earns the rate times the calendar days between them divided by 365, using the rate known at the earlier bar. With a ticker, the rate is the close of its latest bar that had ended by the end of the earlier bar (rule 6), read as a yearly percentage: a close of 4.2 is 4.2%. Before that ticker's first such bar cash earns nothing. Only cash earns interest.
 
 **Rebalancing**
 
-14. With a `rebalance` other than `never`, on the first bar of each new period every ticker that is held, and has a bar on that day, goes back to its target weight at that bar's open. Sells are made before buys. A rebalance resizes held positions only; it never opens one. A ticker with no bar on that day waits for the next period. Weeks start on Monday; months, quarters and years follow the calendar in UTC.
-15. Rebalancing trades are slipped and charged like any other. They change a position without closing it, so they are not listed as trades.
-16. With inverse-volatility weighting, the weights are worked out again at each rebalance.
+17. With a `rebalance` other than `never`, each held ticker goes back to its target weight at the open of its own first bar in each new period, so a ticker that does not trade on the period's first day is rebalanced at its first bar after it. The weight is measured against equity at that open. Sells are made before buys. A rebalance resizes held positions only; it never opens one. Weeks start on Monday; months, quarters and years follow the calendar in UTC.
+18. When a ticker's top-up finds too little cash, for example because another ticker is trimmed only at its own first bar a day later, the rest stays wanted. It is bought at that ticker's later bars in the same period as cash comes in, and lapses when the period ends. A position sold or stopped in the meantime is owed nothing. A top-up only spends cash there is, so nothing is borrowed.
+19. Rebalancing trades are slipped and charged like any other. They change a position without closing it, so they are not listed as trades.
+20. With inverse-volatility weighting, the weights are worked out again at each rebalance.
 
 **Stops, targets and gaps**
 
-17. Stops and targets are set when the position opens, from the fill price, slippage included. A stop loss is the fill price times (1 - x), or the fill price minus x ATR. A take profit is the fill price times (1 + x), or the fill price plus x ATR.
-18. An ATR distance uses the ATR at the close before the fill and keeps it for the life of the position. If the ATR is unknown then, that level is not set.
-19. The trailing level is the highest high since entry times (1 - x), or minus x ATR. It moves only at the end of a bar: a bar's high counts from the next bar on. On the entry bar it trails the open.
-20. After the bar's open orders, each position is checked against the bar. If the low reaches the stop (the higher of the stop loss and the trailing level), it exits at the stop, or at the open if the bar opened below it. If the high reaches the take profit, it exits at the target, or at the open if the bar opened above it.
-21. If both levels lie inside the bar, the stop is taken first. If the bar opens at or above the target, the target fills at the open, even if the bar later falls through the stop.
-22. A position can be stopped out on the bar it is bought.
-23. Within a bar, the order is: pending sells fill at the open; then the rebalance and pending buys, sells first; then stops and targets; then, at the close, the rules are read for the next open.
-24. A sell rule and the stops both apply, whichever comes first. A buy is skipped when the sell rule is also true at the same close.
+21. Stops and targets are set when the position opens, from the fill price, slippage included. A stop loss is the fill price times (1 - x), or the fill price minus x ATR. A take profit is the fill price times (1 + x), or the fill price plus x ATR.
+22. An ATR distance uses the ATR at the close before the fill and keeps it for the life of the position. That ATR is always known, because a buy waits for it (rule 12).
+23. The trailing level is the highest high since entry times (1 - x), or minus x ATR. It moves only at the end of a bar: a bar's high counts from the next bar on. On the entry bar it trails the open.
+24. After the bar's open orders, each position is checked against the bar. If the low reaches the stop (the higher of the stop loss and the trailing level), it exits at the stop, or at the open if the bar opened below it. If the high reaches the take profit, it exits at the target, or at the open if the bar opened above it.
+25. If both levels lie inside the bar, the stop is taken first. If the bar opens at or above the target, the target fills at the open, even if the bar later falls through the stop.
+26. A position can be stopped out on the bar it is bought.
+27. Within a bar, the order is: pending sells fill at the open; then the rebalance (with any top-up still owed) and pending buys, sells first; then stops and targets; then, at the close, the rules are read for the next open.
+28. A sell rule and the stops both apply, whichever comes first. A buy is skipped when the sell rule is also true at the same close.
 
 **Re-arming**
 
-25. After an exit by stop loss, trailing stop or take profit, the buy rule has to be false, or unknown, at one close before it can buy that ticker again. A sell-rule exit does not wait. In a `hold` strategy this rule does not apply: a stopped-out ticker can be chosen again at the next decision.
+29. After an exit by stop loss, trailing stop or take profit, the buy rule has to be false, or unknown, at one close before it can buy that ticker again. A sell-rule exit does not wait. In a `hold` strategy this rule does not apply: a stopped-out ticker can be chosen again at the next decision.
 
 **Ranking (`hold`)**
 
-26. With `hold: top N by score`, a decision is made at each close when `rebalance` is `never`, and otherwise at the last bar of each period. The tickers that can be chosen are those whose buy rule is true (every ticker if there is no buy rule), whose sell rule is not true, and whose score is known.
-27. The N highest scores are chosen. Ties go to the ticker listed first. Chosen tickers not held are bought at the next open, and held tickers not chosen are sold.
-28. Between decisions, a sell rule or a stop can still exit a position. The freed slot waits for the next decision. Each ticker held gets `size` divided by N.
+30. With `hold: top N by score`, a decision is made at each close when `rebalance` is `never`, and otherwise at the last bar of each period. The tickers that can be chosen are those whose buy rule is true (every ticker if there is no buy rule), whose sell rule is not true, and whose score is known.
+31. The N highest scores are chosen. Ties go to the ticker listed first. Held tickers not chosen are sold at their next open. Chosen tickers not held are bought once every sell of that decision has filled, at their own next open from then on: the same open as the last sell when both trade then. A buy that has not filled stays wanted until it fills or the next decision replaces it, and a decision that keeps a ticker cancels a sell of it that has not filled. When cash is short, the best score is bought first.
+32. Between decisions, a sell rule or a stop can still exit a position. The freed slot waits for the next decision. Each ticker held gets `size` divided by N.
 
 **Unknown values**
 
-29. A value is unknown while an indicator is still warming up, when you look back past the start of the data, when a ticker read with `of` has no bar yet, after a division by 0, and when `crosses` needs a previous bar that is unknown. `month_start` is unknown on the first bar of the data.
-30. A comparison with an unknown value is unknown. `and` is false if either side is false, and otherwise unknown if either side is unknown. `or` is true if either side is true, and otherwise unknown if either side is unknown. `not` of unknown is unknown.
-31. A rule only fires when it is true. Unknown never buys or sells, and counts as "not holding" for the re-arm rule.
+33. A value is unknown while an indicator is still warming up, when you look back past the start of the data, when a ticker read with `of` has no bar that has ended yet, after a division by 0, and when `crosses` needs a previous bar that is unknown. `month_start` is unknown on the first bar of the data.
+34. A comparison with an unknown value is unknown. `and` is false if either side is false, and otherwise unknown if either side is unknown. `or` is true if either side is true, and otherwise unknown if either side is unknown. `not` of unknown is unknown.
+35. A rule only fires when it is true. Unknown never buys or sells, and counts as "not holding" for the re-arm rule.
 
 **Benchmark, statistics and the split**
 
-32. The benchmark holds the same weights as the strategy (or the one ticker you name) from the first open the strategy could have bought at, with the same costs, slippage, rebalancing and cash rate, and no rules or stops. A `hold` strategy is compared with holding every ticker in equal parts of the same total size.
-33. Return per year is the compound growth rate over the time the run covers, in years of 365.25 days. Worst drawdown is the lowest value of equity divided by its highest previous value, minus 1, at the closes.
-34. Sharpe ratio: for each step, take the return of equity minus what cash earned over the same step. Divide the mean of those by their standard deviation (dividing by the count, not by the count minus 1), and multiply by the square root of the steps in a year, where steps a year is the number of steps divided by the years covered. It is not scaled with 252. The benchmark's Sharpe ratio is worked out the same way.
-35. The volatility shown under "Time invested" is the standard deviation of the one-step returns times the same square root. "Time invested" is the average share of equity held in positions at the closes.
-36. The trade count and the share won count closed trades only. A trade is won when its return after costs is above 0. A position still open at the end is not sold in the run: equity values it at the last close, and it is listed as "still held". Its return counts the exit cost as if it were sold at that close, without slippage.
-37. A trade's return is its sell price times (1 - costs) over its buy price times (1 + costs), minus 1, with slippage in both prices. Its profit is cash in and out of that ticker, rebalancing trades included.
-38. `test from` splits one run in two, at that date. It is not a second run: nothing is reset or re-fitted, and a position open at the date carries over. Each part is measured on its own, from its own first value. A trade belongs to the part in which it was bought.
+36. The benchmark holds the same weights as the strategy (or the one ticker you name) from the first open the strategy could have bought at, with the same costs, slippage, rebalancing and cash rate, and no rules or stops. A `hold` strategy is compared with holding every ticker in equal parts of the same total size.
+37. A benchmark whose prices start after the run does is measured from its own first bar. Before then it has no value, its line starts there, and its figures, and those of each `test from` part, cover only its own dates. The result notes it when the benchmark starts more than 7 days after the run.
+38. Return per year is the compound growth rate over the time the run covers, in years of 365.25 days. Worst drawdown is the lowest value of equity divided by its highest previous value, minus 1, at the closes.
+39. Sharpe ratio: for each step, take the return of equity minus what cash earned over the same step. Divide the mean of those by their standard deviation (dividing by the count, not by the count minus 1), and multiply by the square root of the steps in a year, where steps a year is the number of steps divided by the years covered. It is not scaled with 252. The benchmark's Sharpe ratio is worked out the same way.
+40. The Sortino ratio takes the same returns above cash and divides their mean by their downside deviation: the square root of the mean, over every step, of the squared returns below 0 (a step at or above 0 counts as 0). It is scaled the same way, and is the same figure in the parameter sweep and under "More statistics".
+41. A Sharpe or Sortino ratio is 0 when the deviation it divides by is below 1e-12 a step. That is rounding noise, not risk: a run that only earns a fixed cash rate would otherwise show a ratio made of noise, such as -3.42.
+42. The volatility shown under "Time invested" is the standard deviation of the one-step returns times the same square root. "Time invested" is the average share of equity held in positions at the closes.
+43. The trade count and the share won count closed trades only. A trade is won when its return after costs is above 0. A position still open at the end is not sold in the run: equity values it at the last close, and it is listed as "still held". Its return counts the exit cost as if it were sold at that close, without slippage.
+44. A trade's return is its sell price times (1 - costs) over its buy price times (1 + costs), minus 1, with slippage in both prices. Its profit is cash in and out of that ticker, rebalancing trades included.
+45. `test from` splits one run in two, at that date. It is not a second run: nothing is reset or re-fitted, and a position open at the date carries over. Each part is measured from the last close before it, so the second part includes the move into its first day and the two parts' growth multiplies to the whole run's. A trade belongs to the part in which it was bought.
 
 ## Reading a result
 
@@ -508,17 +519,17 @@ From the top:
 1. **Title and summary.** The `name` (or "Backtest"), then a line of what was run: tickers and weights, sizing, rebalancing, bar size, costs, slippage, stops, and parameter values.
 2. **Refresh prices.** A button that fetches the prices again and runs the block again.
 3. **The strategy as written**, coloured.
-4. **Notes.** Prices that could not be refreshed (see "Prices and privacy"), the parser's notes with their line number, and a warning when the run starts more than 7 days after `from`.
+4. **Notes.** Prices that could not be refreshed (see "Prices and privacy"); notes from the run itself: buy signals held back while a sizing or stop input warmed up, a buy rule or `hold` score still unknown at the start of the run, and a benchmark whose prices start later; the parser's notes with their line number; and a warning when the run starts more than 7 days after `from`.
 5. **Six figures.** Return per year, total return, worst drawdown and Sharpe ratio, each with the benchmark's value underneath. Then "Time invested", with volatility a year underneath. Then "Trades": the count of closed trades, how many were won and the average return. It says "none closed yet" when only open positions exist, and "the buy rule never fired" when there were none.
-6. **The chart.** The strategy and the benchmark on a log scale, with the final value of each in the key above it. Underneath, the drawdown from the previous high. Hover or tap to see the date, both values, both drawdowns and the share invested. With `test from`, the test period is shaded.
+6. **The chart.** The strategy and the benchmark on a log scale, with the final value of each in the key above it. Underneath, the drawdown from the previous high. Hover or tap to see the date, both values, both drawdowns and the share invested. A benchmark whose prices start later is drawn from its first value, and shows "–" before it. With `test from`, the test period is shaded.
 7. **A short note.** The dates, the starting money, "A rule seen at a close fills at the next open.", costs paid, and interest earned on cash. Then "Prices through" a date, from Yahoo, Binance or your CSV files.
 8. **Before and after the test date**, only with `test from`. A table of return per year (strategy and benchmark), worst drawdown, Sharpe ratio and trades, for each part.
 9. **Positions.** One row for each ticker: its weight, whether you are long since a date or in cash, whether an order is waiting for the next open, the closed trades, the share won and the average trade.
 10. **Trades.** A list you open, newest first: ticker, bought, price, sold, price, return after costs, profit and how it ended: "sell rule", "stop loss", "trailing stop", "take profit" or "still held". It shows the latest 500 trades. Intraday times are in UTC.
-11. **More statistics.** A table for the strategy and the benchmark: Sortino ratio, return per year divided by worst drawdown, best and worst year, the share of months with a gain, the longest time below a previous high, and best and worst month. Then a chart of the return in each calendar year, and a table of the strategy's return by month. Years the data only partly covers are faded. The Sortino ratio here is the mean return divided by the downside deviation (steps with a loss), scaled the same way as Sharpe. Unlike the Sharpe ratio, it does not take off what cash earned.
+11. **More statistics.** A table for the strategy and the benchmark: Sortino ratio, return per year divided by worst drawdown, best and worst year, the share of months with a gain, the longest time below a previous high, and best and worst month. Then a chart of the return in each calendar year, and a table of the strategy's return by month. Years the data only partly covers are faded. The Sortino ratio here takes off what cash earned, like the Sharpe ratio, and is the same figure as in the parameter sweep (rule 40 under "How the simulation works"). A benchmark whose prices start later is measured from its first value.
 12. **Prices and trades.** The price of one ticker with the periods you held it shaded, and a marker for each buy and sell. With more than one ticker there is one button for each, or a list when there are more than 12. Above it: the number of trades, the share of the time held, and what holding it throughout returned. When there are too many trades to mark at the chart's width, only the shaded bands are drawn.
 13. **Try other parameter values.** Shown when a parameter is declared with a range, such as `fast = 50 in 20..100 step 10`. A button runs every combination of the ranges, up to 2,000 combinations. Then it shows a chart for one ranged parameter, or a heatmap for two. They show where the values written in the note rank among all the variants, the median variant, and whether the best variant's neighbours do similarly well. With `test from` set, the view starts on the period before the date, the best variant is chosen on that period, and its result after the date is shown. The line under the reading says which period chose the best values ("Best before 2015-01-01: fast = 40, slow = 250"). If you switch the view to the whole run or to the period after the date, that line no longer suggests values, because values picked there have seen the test period and their later result would not be a fair test. Nothing is written back to the note.
-14. **Was it luck?** A button that runs three checks. *Reshuffled history* resamples the run's returns in blocks, to give a range for return per year and for worst drawdown. It shows how much the path and the drawdown depended on the order of the returns; it says nothing about whether the average return will persist, because every version is made from the run's own returns. *Random entries* makes the same number and length of trades at random times, to see how often random timing does as well. *Walk-forward* runs only when a parameter has a range: it picks the best values on a training window, applies them to the next unseen window, and repeats.
+14. **Was it luck?** A button that runs three checks. *Reshuffled history* resamples the run's returns in blocks, to give a range for return per year and for worst drawdown. It shows how much the path and the drawdown depended on the order of the returns; it says nothing about whether the average return will persist, because every version is made from the run's own returns. *Random entries* makes the same number and length of trades at random times, to see how often random timing does as well. *Walk-forward* runs only when a parameter has a range: it picks the best values on a training window, applies them to the next unseen window, and repeats. Each window is measured from the last close before it, so the test windows' growth multiplies to the line's.
 15. **Save buttons.** "Save trades as CSV", "Save value history as CSV" and "Keep this result as a note" (see "Saving results").
 
 A result is kept in memory (the latest 40), so scrolling or switching views does not run it again. It runs again when the block's text or the plugin's defaults change, when the modified time of a CSV file it reads changes (or the file goes missing), when the kept result is older than the "Keep saved prices for" time, or when you press Refresh prices.
@@ -562,9 +573,9 @@ The command "Show today's orders" opens a window. It runs every `strategy` block
 
 - **To do at the next open.** One row for each order: Buy or Sell, the ticker, the size, the strategy (click it to open its note), the last close, and which bar it is based on, such as "Based on the close of 2026-11-13". For strategies with bars shorter than a day the row shows the time too, in UTC, such as "Based on the 5m bar starting 2026-11-13 14:05 UTC". Sells are listed first. A buy's size is its target share of the strategy and about how many dollars that is at the backtest's current value, which grows or shrinks from the block's `capital`. A sell is the whole position. Scale the percentage to your own money. The dollar figures are about the backtest, not about your account.
 - **Holding.** Strategies that hold something or have no order, and what they hold.
-- **Problems.** A block that could not run, prices that are out of date, and any warning from loading prices. For daily bars, prices are out of date when they end more than 4 calendar days ago. For bars shorter than a day, they are out of date when the last bar is more than 3 bars old.
+- **Problems.** A block that could not run, prices that are out of date, and any warning from loading prices. For daily bars, prices are out of date when they end more than 4 calendar days ago. For bars shorter than a day, they are out of date when the last bar is more than 3 bars old, and for weekly bars when it is more than 2 bars old.
 
-The header says which bar the orders are based on. The orders are for the open after that bar. When the strategies with orders end on different bars, the header shows the oldest and says so, and each row shows its own. Yahoo's bar for the current day is left out, even after the close, so until the next day the orders can refer to yesterday's close. Check the date.
+The header says which bar the orders are based on. The orders are for the open after that bar. When the strategies with orders end on different bars, the header shows the oldest and says so, and each row shows its own. Yahoo's bar for the current day is used once the exchange's regular session has closed, when Yahoo's answer gives that time; until then, and when it does not, the orders refer to the previous close. Check the date.
 
 Refresh prices downloads each ticker once, however many strategies use it, then runs the strategies again, three at a time. "Save as note" writes the same list to the note named in the "Note for today's orders" setting, creating it if it does not exist and replacing its whole contents each time. The generated note starts with the property `backtest_orders: true`. An existing note is replaced only if it has that property; otherwise nothing is written and the window says "<path> already exists and was not made by Backtest Blocks. Choose another note in settings." With no note set, it says so. Nothing in the window places an order.
 
@@ -575,7 +586,7 @@ A block with no `name` is listed under its note's file name, or "file name 1", "
 Three buttons under a result write files to the "Folder for saved results" (default `Backtests`), created if needed. A file is named `<name> trades|value|result <date>`, where `<name>` is the block's `name` (or "Backtest") with characters that Obsidian cannot use in a file name replaced by spaces, and `<date>` is the day it was saved, in UTC. If the file exists, ` (2)`, ` (3)` and so on are added. A notice shows the path.
 
 - **Save trades as CSV** has the columns `ticker`, `bought`, `buy_price`, `sold`, `sell_price`, `return_pct`, `profit`, `bars` and `exit`. Open positions have no `sold` or `sell_price`. `exit` is `signal`, `stop loss`, `trailing stop`, `take profit` or `open`.
-- **Save value history as CSV** has the columns `date`, `strategy`, the benchmark's label (such as `SPY buy & hold`) and `drawdown_pct`, one row for each step of the run.
+- **Save value history as CSV** has the columns `date`, `strategy`, the benchmark's label (such as `SPY buy & hold`) and `drawdown_pct`, one row for each step of the run. The benchmark's field is empty before its first price.
 - **Keep this result as a note** writes a note with the tag `backtest/snapshot` and a `created` date. It holds the strategy as plain text in a `text` block, so it does not run again, then the figures, the split before and after the test date if there is one, the positions now, and the latest 30 trades.
 
 ### Note properties
@@ -674,7 +685,7 @@ The command palette shows each name with "Backtest Blocks:" in front.
 
 ### Where prices come from
 
-- **Yahoo.** The unofficial chart endpoint behind Yahoo Finance, on `query1.finance.yahoo.com` and `query2.finance.yahoo.com`. Yahoo does not publish it as an API, can change or rate-limit it without notice, and its terms allow personal use only. The plugin asks for the whole history each time, as daily or weekly bars. If a request fails or Yahoo sends something other than price data, it tries again, on `query1`, then `query2`, then `query1`, waiting 0.5 and then 1.5 seconds. Open, high, low and close are adjusted for splits and dividends. The bar for the current day is left out. A ticker Yahoo does not know gives "Yahoo has no prices for X. Check the ticker."
+- **Yahoo.** The unofficial chart endpoint behind Yahoo Finance, on `query1.finance.yahoo.com` and `query2.finance.yahoo.com`. Yahoo does not publish it as an API, can change or rate-limit it without notice, and its terms allow personal use only. The plugin asks for the whole history each time, as daily or weekly bars. If a request fails or Yahoo sends something other than price data, it tries again, on `query1`, then `query2`, then `query1`, waiting 0.5 and then 1.5 seconds. Open, high, low and close are adjusted for splits and dividends. The bar for the current day is left out until the exchange's regular session has closed, when Yahoo's answer gives that time, and otherwise until the next day; weekly bars wait for the week to end. A ticker Yahoo does not know gives "Yahoo has no prices for X. Check the ticker."
 - **Binance.** The public market-data endpoint `data-api.binance.vision` (klines, 1000 bars a request). It needs no key. The bar still open is left out. A refresh asks only for bars newer than the saved ones. A ticker it does not know gives "Binance has no market called X".
 - **CSV files in your vault.** Read directly, with no network. The file needs a header row with a date column (`date`, `time`, `timestamp` or `datetime`) and `open`, `high`, `low` and `close` columns; `volume` is optional. The separator can be a comma, semicolon or tab. Dates can be `2024-01-31` (with an optional time, read as UTC), `01/31/2024`, `31/01/2024` (read as day first when some first number is above 12 and no second number is), `31.01.2024`, or Unix seconds or milliseconds. An `adj close` column, if present, adjusts the other prices. Rows with an unreadable date, a price at or below 0, or a high or low that does not contain the open and close are skipped. Rows are sorted by date. Prices are not saved: the file is read each time a block runs. A result is kept in memory (see "Reading a result"), and it runs again when the file's modified time changes.
 
@@ -699,12 +710,13 @@ Nothing else leaves your vault. There is no telemetry, no analytics, no update c
 
 **What has been checked**
 
-- Unit tests cover the language, the indicators, the engine's rules (fills, costs, slippage, stops, gaps, rebalancing, ranking, sizing, interest, the test split), the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders, exports, settings and drafting with a fake model.
-- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 24 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. It found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar, slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`.
+- Unit tests cover the language, the indicators, the engine's rules (fills, costs, slippage, stops, gaps, rebalancing, ranking, sizing, warm-up, interest, reading other tickers by bar end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders, exports, settings and drafting with a fake model.
+- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 24 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. It found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar, slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
+- An independent review of the engine and the statistics, which confirmed each finding with a script. It found defects that are now fixed, each with a test: on mixed calendars (stocks with crypto) a ticker could miss its rebalance and a ranking buy could leave its slot in cash; a ticker with longer bars, a daily benchmark or a daily yield on shorter bars could be read before its bar had ended; entries were sized or left without their ATR stop while those inputs warmed up; and results could depend on which prices happened to be saved. It also corrected statistics (a benchmark whose prices start later, Sharpe and Sortino made of rounding noise, the `test from` split, two different Sortino ratios), and runs of more than about 125,000 bars no longer fail. A review finds what it looks for; this one does not show that no other defects remain.
 
 **What has not been checked against anything**
 
-The second backtester has nothing to compare these with, so they rest on the unit tests only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars.
+The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars.
 
 Also not checked:
 
@@ -715,7 +727,7 @@ Also not checked:
 
 **Limits of any backtest**
 
-- Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded. A rule that compares a price with a fixed number, such as `close > 100`, then means something different in 2005 than today. The plugin warns about it on that line. Compare with averages, percentages or earlier prices.
+- Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded. A rule that compares a price with a fixed number, such as `close > 100`, then means something different in 2005 than today. The plugin warns about it on that line, unless every ticker it reads is an index, which Yahoo does not adjust. Compare with averages, percentages or earlier prices.
 - Yahoo only lists tickers that exist now. A test over a basket of today's tickers is a test of survivors, which flatters the results.
 - A backtest overstates what to expect, and more so after you have tried many variants. Each rule, parameter or variant you try on the same history raises the chance that the one that looks best fits noise. `test from`, "Try other parameter values" and "Was it luck?" help you see this. They do not remove it.
 - Real fills differ from the next open: spreads, size and liquidity, outages, and your taxes are not in the numbers.
@@ -729,7 +741,7 @@ npm run build      # type check, then bundle into dist/
 node xcheck/run.ts # optional cross-check; needs the second backtester's command-line tool
 ```
 
-The cross-check needs Rearview's command-line tool, found through the `RVW` environment variable. Without it the script says so and exits 0.
+The cross-check needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
 
 Pushing a tag equal to the `version` in `manifest.json` runs `.github/workflows/release.yml`. It runs the tests, builds, and creates a draft GitHub release with `main.js`, `manifest.json` and `styles.css` attached. `versions.json` maps each plugin version to the minimum Obsidian version.
 

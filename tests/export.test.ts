@@ -48,6 +48,12 @@ test('equity CSV: values to the cent and the strategy drawdown in percent', () =
   );
 });
 
+test('equity CSV: a benchmark with no value yet has an empty field', () => {
+  const t = [utc(2020, 1, 1), utc(2020, 1, 2), utc(2020, 1, 3)];
+  const csv = equityCsv(t, [100, 110, 99], [NaN, 100, 105], 'B buy & hold', false);
+  assert.equal(csv, ['date,strategy,B buy & hold,drawdown_pct', '2020-01-01,100.00,,0.00', '2020-01-02,110.00,100.00,0.00', '2020-01-03,99.00,105.00,-10.00', ''].join('\n'));
+});
+
 test('equity CSV: a benchmark label with a comma is quoted, and intraday dates carry the time', () => {
   const csv = equityCsv([utc(2020, 1, 2, 14, 30), utc(2020, 1, 2, 14, 31)], [1, 2], [1, 1], 'A, B buy & hold', true);
   assert.equal(csv, 'date,strategy,"A, B buy & hold",drawdown_pct\n2020-01-02 14:30,1.00,1.00,0.00\n2020-01-02 14:31,2.00,1.00,0.00\n');

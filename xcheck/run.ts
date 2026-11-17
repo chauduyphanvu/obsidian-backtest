@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runBacktest } from '../src/backtest.ts';
 import { parseCsv } from '../src/data.ts';
@@ -15,7 +15,13 @@ import { readEval, readRun, rvw, type RvFill, type RvRun } from './rearview.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, '..', '.scratch', 'xcheck');
-const RVW = process.env.RVW ?? '/Users/vu/Workspace/mac-backtester/target/release/rvw';
+/** Rearview's command-line tool: RVW when set, else `rvw` on PATH; empty when neither is there. */
+function findRvw(): string {
+  if (process.env.RVW) return existsSync(process.env.RVW) ? process.env.RVW : '';
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) if (dir && existsSync(join(dir, 'rvw'))) return join(dir, 'rvw');
+  return '';
+}
+const RVW = findRvw();
 const DAY = 86_400_000;
 
 // Rearview rounds every fill price to a millionth of a dollar (up for buys, down for sells).
@@ -658,8 +664,9 @@ function table(head: string[], rows: string[][]): string {
 }
 
 function main(): number {
-  if (!existsSync(RVW)) {
-    console.log(`Skipped: no Rearview CLI at ${RVW}. Set RVW to its path to run the cross-check.`);
+  if (!RVW) {
+    const where = process.env.RVW ? `at ${process.env.RVW}` : 'on PATH';
+    console.log(`Skipped: no Rearview CLI ${where}. Set RVW to its path, or put rvw on PATH, to run the cross-check.`);
     return 0;
   }
   mkdirSync(OUT, { recursive: true });

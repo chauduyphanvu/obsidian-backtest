@@ -41,7 +41,9 @@ export function tradesCsv(trades: Trade[], intraday: boolean): string {
 export function equityCsv(t: number[], strategy: number[], benchmark: number[], benchmarkLabel: string, intraday: boolean): string {
   const drawdown = drawdowns(strategy);
   let out = csvLine(['date', 'strategy', benchmarkLabel, 'drawdown_pct']);
-  for (let i = 0; i < t.length; i++) out += csvLine([stamp(t[i], intraday), fixed(strategy[i], 2), fixed(benchmark[i], 2), fixed(drawdown[i] * 100, 2)]);
+  // A benchmark whose prices start later has no value (NaN) before then: leave the field empty.
+  const cell = (x: number) => (Number.isFinite(x) ? fixed(x, 2) : '');
+  for (let i = 0; i < t.length; i++) out += csvLine([stamp(t[i], intraday), cell(strategy[i]), cell(benchmark[i]), cell(drawdown[i] * 100)]);
   return out;
 }
 

@@ -147,6 +147,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       rankPos: Infinity,
       // The last signal or decision for this asset was held back while an input warmed up.
       heldBack: false,
+      // The rebalance period whose top-up could not be fully paid for; it is completed as cash arrives.
+      owed: null as number | null,
     };
   });
   type A = (typeof assets)[number];
@@ -204,17 +206,20 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     a.cashOut += value - fee;
     a.shares -= shares;
   };
-  const buy = (a: A, notional: number, price: number) => {
+  /** Buys up to `notional` with the cash there is; returns what it spent. */
+  const buy = (a: A, notional: number, price: number): number => {
     const spend = Math.min(notional, cash / (1 + cost));
-    if (spend <= 0) return;
+    if (spend <= 0) return 0;
     cash -= spend * (1 + cost);
     costs += spend * cost;
     a.cashIn += spend * (1 + cost);
     a.shares += spend / (price * (1 + slip));
+    return spend;
   };
   const close = (a: A, t: number, price: number, reason: ExitReason) => {
     const exitPrice = reason === 'open' ? price : price * (1 - slip);
     if (reason !== 'open') sell(a, a.shares, price);
+    a.owed = null;
     trades.push({
       asset: a.name,
       entryT: a.entryT,
@@ -332,6 +337,11 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         const delta = weights.get(a)! * equityAtOpen - a.shares * open;
         if (delta < 0) sell(a, -delta / open, open);
         else buys.push({ a, notional: delta, entry: false });
+      } else if (a.shares > 0 && a.owed === periodKey(a.bars.t[a.i], p.rebalance)) {
+        // The rest of this period's top-up; a debt from an earlier period has lapsed.
+        const delta = weights.get(a)! * equityAtOpen - a.shares * open;
+        if (delta > 0) buys.push({ a, notional: delta, entry: false });
+        else a.owed = null;
       }
       // A ranking buy stays wanted until it fills or the next decision replaces it.
       if (!(p.rank && a.pending === 'buy')) a.pending = null;
@@ -342,7 +352,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         a.cashIn = 0;
         a.cashOut = 0;
       }
-      buy(a, notional, a.bars.o[a.i]);
+      const spent = buy(a, notional, a.bars.o[a.i]);
+      if (!entry) a.owed = notional - spent > 1e-9 * notional ? periodKey(a.bars.t[a.i], p.rebalance) : null;
       if (entry && a.shares > 0) {
         openPosition(a, t, a.bars.o[a.i]);
         a.pending = null;

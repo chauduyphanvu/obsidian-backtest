@@ -79,6 +79,27 @@ test('on mixed calendars each ticker is rebalanced at its own first bar of the p
   assert.deepEqual(r.run.states.map((s) => s.shares), [75, 37.5]);
 });
 
+test('a rebalance top-up short of cash is completed at the ticker\'s later bars in the period, once cash arrives', () => {
+  // Thursday 30 January to Tuesday 4 February 2020. STK (weekdays) doubles on the 31st; CRY trades
+  // every day, so its February rebalance comes on Saturday, before STK's trim on Monday.
+  const [jan30, jan31, feb3, feb4] = [30, 31, 34, 35].map((d) => Date.UTC(2020, 0, d));
+  const STK = bars([10, 20, 20, 20], { opens: [10, 10, 20, 20], times: [jan30, jan31, feb3, feb4] });
+  const CRY = bars([10, 10, 10, 10, 10, 20], { opens: [10, 10, 10, 10, 10, 10], start: jan30 });
+  const r = run('universe: STK 50%, CRY 50%\ncapital: 1000\nrebalance: monthly\nbuy when true', { STK, CRY });
+  // 50 shares each on the 31st: STK 1000, CRY 500. Saturday and Sunday: CRY wants 250 more for
+  // its 750, with no cash. Monday: STK sells 12.5 shares at 20 down to 750, and CRY's top-up buys
+  // 25 shares at 10 with that 250. Tuesday CRY doubles: 750 + 75 * 20.
+  assert.deepEqual(r.run.equity, [1000, 1500, 1500, 1500, 1500, 2250]);
+  assert.deepEqual(r.run.exposure, [0, 1, 1, 1, 1, 1]);
+  assert.deepEqual(r.run.states.map((s) => s.shares), [37.5, 75]);
+  // A ticker stopped out while it is owed a top-up gets nothing: CRY's 10% stop takes it out at 9 on
+  // Sunday (450 in cash), and Monday's trim of STK to half of 1450 leaves 725 in cash.
+  const stopped = bars([10, 10, 10, 10, 10, 20], { opens: [10, 10, 10, 10, 10, 10], lows: [10, 10, 10, 8.5, 10, 10], start: jan30 });
+  const out = run('universe: STK 50%, CRY 50%\ncapital: 1000\nrebalance: monthly\nbuy when true\nfor CRY:\n  stop loss: 10%', { STK, CRY: stopped });
+  assert.deepEqual(out.run.equity, [1000, 1500, 1500, 1450, 1450, 1450]);
+  assert.deepEqual(out.run.states.map((s) => s.shares), [36.25, 0]);
+});
+
 test('stop loss fills at the stop, or at the open when the bar gaps through it', () => {
   const spec = 'universe: A\ncapital: 1000\nstop loss: 10%\nbuy when true';
   // Entry at 100 on day 1. Day 2 trades down to 85: out at 90.
