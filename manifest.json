@@ -3,7 +3,7 @@
   "name": "Backtest Blocks",
   "version": "0.1.0",
   "minAppVersion": "1.11.4",
-  "description": "Write a trading strategy in a readable rule language inside a note and see its backtest rendered underneath.",
+  "description": "Write a long-or-flat trading strategy as readable rules in a note and see its backtest drawn underneath.",
   "author": "Vu",
   "isDesktopOnly": false
 }
