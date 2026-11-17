@@ -192,6 +192,53 @@
   overflow-wrap: anywhere;
 }
 
+.bt-csv-signals {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+.bt-csv-signal {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.bt-csv-signal:last-child {
+  border-bottom: none;
+}
+.bt-csv-signal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+.bt-csv-signal-name {
+  font-weight: var(--font-semibold);
+}
+.bt-csv-signal-stats {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.bt-csv-signal-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 3px;
+}
+.bt-csv-signal-rule code {
+  flex: 1 1 14em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bt-csv-signal-rule button {
+  flex: none;
+}
+
 @container bt-csv (max-width: 480px) {
   .bt-csv-actions > button {
     flex: 1 1 100%;

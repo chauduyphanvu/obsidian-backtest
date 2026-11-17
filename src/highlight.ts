@@ -71,7 +71,16 @@ function expression(line: string, from: number, to: number, params: Set<string>,
     else {
       const word = m[2].toLowerCase();
       const pair = (word === 'bars' || word === 'entry') && line.slice(end, to).match(word === 'bars' ? /^\s+held\b/i : /^\s+price\b/i);
-      if (pair) {
+      // A column's name is read as written, so it can start with a digit or sit in quotes with spaces in it.
+      const column = word === 'column' && line.slice(end, to).match(/^(\s*)\((\s*)("[^"]*"?|[A-Za-z0-9_]+)/);
+      if (column) {
+        const open = end + column[1].length;
+        const name = open + 1 + column[2].length;
+        out.push({ from: start, to: end, kind: 'function' }, { from: open, to: open + 1, kind: 'operator' }, { from: name, to: name + column[3].length, kind: 'series' });
+        re.lastIndex = name + column[3].length;
+      } else if (word === 'column' && /^\s*\(/.test(line.slice(end, to))) {
+        out.push({ from: start, to: end, kind: 'function' });
+      } else if (pair) {
         out.push({ from: start, to: end + pair[0].length, kind: 'series' });
         re.lastIndex = end + pair[0].length;
       } else if (KEYWORDS.includes(word)) out.push({ from: start, to: end, kind: 'keyword' });

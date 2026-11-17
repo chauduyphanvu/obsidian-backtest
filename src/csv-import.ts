@@ -1,6 +1,7 @@
 // Reading a price file the way the plugin does, so a person can see what it will make of it, and cleaning one it cannot read.
 import { CSV_HEADERS, CSV_SLASHED_DATE, detectCsvSeparator, parseCsv, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
 import { parseSpec } from './dsl.ts';
+import { columnName, MAX_COLUMNS, type Bars } from './types.ts';
 
 const DAY = 86_400_000;
 /** Raw rows kept for display. */
@@ -50,14 +51,34 @@ interface Shown {
   ambiguousDates: boolean;
 }
 
+/** A column beyond the prices that a rule can read by name. */
+export interface CsvSignal {
+  /** What a rule calls it: `column(<name>)`. */
+  name: string;
+  /** The header as the file spells it. */
+  header: string;
+  /** The first and the last row that has a number in this column. */
+  first: { date: string; value: number };
+  last: { date: string; value: number };
+  /** Rows with a number in this column. */
+  count: number;
+}
+
 export interface CsvRead extends Shown {
   read: true;
   rows: number;
   first: string;
   last: string;
+  /** False for a file with only a date and columns: a strategy can read its columns but cannot trade it. */
+  priced: boolean;
+  /** The first rows and the last, as prices; empty for a file with no prices. */
   head: CsvRow[];
   /** The last rows, without any already in `head`. */
   tail: CsvRow[];
+  /** The columns a rule can read by name, in file order. */
+  signals: CsvSignal[];
+  /** Plain sentences about columns no rule can read. */
+  unreadable: string[];
   /** Plain sentences about anything that looks wrong. */
   doubts: string[];
 }
@@ -79,6 +100,8 @@ export type CsvCleaned =
       dropped: number;
       /** What was filled in, changed or left out, in plain sentences. */
       notes: string[];
+      /** The names a rule reads the other columns of the file by, which are kept in the copy. */
+      columns: string[];
       sample: CsvRow[];
       first: string;
       last: string;
@@ -88,6 +111,10 @@ export type CsvCleaned =
 export type CsvInsert = { ok: true; text: string; note: string | null } | { ok: false; reason: string };
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+/** How a row of a column is dated, in the words the helper window uses. */
+export const SIGNAL_DATING =
+  "A row counts as known at the close of the day it is dated. Date each row with the day whose close its value was computed from: a rule on Tuesday's close can use a row dated Tuesday, and its order fills at Wednesday's open.";
 
 interface Table {
   header: string[];
@@ -258,6 +285,8 @@ interface Parsed {
   l: number;
   c: number;
   v: number;
+  /** The row as the file has it. */
+  row: string[];
 }
 
 interface Tally {
@@ -295,7 +324,7 @@ function readRows(rows: string[][], c: Cols, dayFirst: boolean, read: Reader, ye
     else if (l > Math.min(o, cl) || h < Math.max(o, cl)) tally.shape++;
     else {
       const v = c.volume >= 0 ? read.number(f[c.volume]) : 0;
-      good.push({ t, o, h, l, c: cl, v: Number.isFinite(v) ? v : 0 });
+      good.push({ t, o, h, l, c: cl, v: Number.isFinite(v) ? v : 0, row: f });
     }
   }
   const dates = good.map((g) => g.t);
@@ -405,24 +434,38 @@ function slashedExample(value: string): string {
   return `${value} is ${iso(m[1], m[3])} month first, or ${iso(m[3], m[1])} day first`;
 }
 
+/** Doubts about how the dates were read: the order of the rows, and dates that could be written two ways. */
+function dateDoubts(t: Table, dateColumn: number, dates: number[]): string[] {
+  const out: string[] = [];
+  const order = orderNote(dates);
+  if (order) out.push(order);
+  const values = t.rows.map((r) => r[dateColumn] ?? '');
+  if (ambiguousOf(values)) out.push(`The dates could be read two ways: ${slashedExample(firstSlashed(values)!)}. They were read month first. If the file is day first, say so below.`);
+  const slashes = slashedOrder(values);
+  if (slashes.dayFirst && slashes.monthFirst) out.push('The dates mix day first and month first, so the ones that cannot be read as month first were skipped.');
+  return out;
+}
+
+/** Doubts about the times of the rows read: a time of day, and long gaps. */
+function timeDoubts(times: number[]): string[] {
+  const out: string[] = [];
+  const timed = times.find((x) => x % DAY !== 0);
+  if (timed !== undefined) {
+    out.push(`Some dates have a time of day, such as ${isoOf(timed)}. Times are read as UTC. A file of daily prices should have plain dates, such as 2024-01-31.`);
+  }
+  const gap = gaps(times);
+  if (gap) out.push(gap);
+  return out;
+}
+
 function doubtsOf(t: Table, cols: Cols, bars: { t: number[]; v: number[] }, tally: Tally, dates: number[]): string[] {
   const out: string[] = [];
   const skipped = leftOut(tally, t.rows.length, 'were skipped');
   if (skipped) out.push(skipped);
-  const order = orderNote(dates);
-  if (order) out.push(order);
-  const values = t.rows.map((r) => r[cols.date] ?? '');
-  if (ambiguousOf(values)) out.push(`The dates could be read two ways: ${slashedExample(firstSlashed(values)!)}. They were read month first. If the file is day first, say so below.`);
-  const slashes = slashedOrder(values);
-  if (slashes.dayFirst && slashes.monthFirst) out.push('The dates mix day first and month first, so the ones that cannot be read as month first were skipped.');
+  out.push(...dateDoubts(t, cols.date, dates));
   if (cols.volume < 0) out.push('The file has no volume column, so volume is 0 on every bar and a rule that reads volume cannot work.');
   else if (bars.v.every((v) => v === 0)) out.push('Volume is 0 on every bar, so a rule that reads volume cannot work.');
-  const timed = bars.t.find((x) => x % DAY !== 0);
-  if (timed !== undefined) {
-    out.push(`Some dates have a time of day, such as ${isoOf(timed)}. Times are read as UTC. A file of daily prices should have plain dates, such as 2024-01-31.`);
-  }
-  const gap = gaps(bars.t);
-  if (gap) out.push(gap);
+  out.push(...timeDoubts(bars.t));
   if (bars.t.length <= STARTER_AVERAGE) {
     out.push(`Only ${plural(bars.t.length, 'row')}. The trend rule in the starter strategy uses a ${STARTER_AVERAGE}-bar average and would never act on this file.`);
   }
@@ -484,6 +527,31 @@ export function inspectCsv(text: string): CsvInspection {
     return { read: false, header, rawRows, columns: guess, ambiguousDates: t !== null && column !== null && ambiguousOf(t.rows.map((r) => r[column] ?? '')), reason: reasonFor(t, named, guess, error) };
   }
 
+  const signals = signalsOf(bars);
+  const unreadable = unreadableOf(bars);
+  if (bars.unpriced) {
+    const dayFirst = slashedDatesAreDayFirst(t.rows.map((r) => r[named.date!] ?? ''));
+    const dates = t.rows.map((r) => STRICT.date(r[named.date!] ?? '', dayFirst)).filter(Number.isFinite);
+    const tally: Tally = { date: t.rows.length - dates.length, missing: 0, zero: 0, shape: 0, duplicate: dates.length - bars.t.length };
+    const skipped = leftOut(tally, t.rows.length, 'were skipped');
+    return {
+      read: true,
+      priced: false,
+      header,
+      rawRows,
+      columns: named,
+      ambiguousDates: ambiguousOf(t.rows.map((r) => r[named.date!] ?? '')),
+      rows: bars.t.length,
+      first: isoOf(bars.t[0]),
+      last: isoOf(bars.t[bars.t.length - 1]),
+      head: [],
+      tail: [],
+      signals,
+      unreadable,
+      doubts: [...(skipped ? [skipped] : []), ...dateDoubts(t, named.date!, dates), ...timeDoubts(bars.t)],
+    };
+  }
+
   const cols: Cols = { date: named.date!, open: named.open!, high: named.high!, low: named.low!, close: named.close!, volume: named.volume ?? -1, adj: named.adjClose ?? -1 };
   const dayFirst = slashedDatesAreDayFirst(t.rows.map((r) => r[cols.date] ?? ''));
   const mine = readRows(t.rows, cols, dayFirst, STRICT, false);
@@ -494,6 +562,7 @@ export function inspectCsv(text: string): CsvInspection {
   const tail = all.slice(Math.max(SAMPLE_ROWS, n - SAMPLE_ROWS)).map(at);
   return {
     read: true,
+    priced: true,
     header,
     rawRows,
     columns: named,
@@ -503,11 +572,70 @@ export function inspectCsv(text: string): CsvInspection {
     last: isoOf(bars.t[n - 1]),
     head,
     tail,
+    signals,
+    unreadable,
     doubts: doubtsOf(t, cols, bars, mine.tally, mine.dates),
   };
 }
 
+/** The columns a rule can read, with where each one starts and ends. */
+function signalsOf(bars: Bars): CsvSignal[] {
+  return (bars.columns ?? []).map((c) => {
+    const known = c.v.flatMap((x, i) => (Number.isNaN(x) ? [] : [i]));
+    const at = (i: number) => ({ date: isoOf(bars.t[i]), value: c.v[i] });
+    return { name: c.name, header: c.header, first: at(known[0]), last: at(known[known.length - 1]), count: known.length };
+  });
+}
+
+/** The columns no rule can read, in plain sentences: those the parser could not name apart, and those past the limit. */
+function unreadableOf(bars: Bars): string[] {
+  const out: string[] = [];
+  const past: string[] = [];
+  for (const u of bars.unread ?? []) {
+    if (u.limit) past.push(u.name);
+    else out.push(`${u.why[0].toUpperCase()}${u.why.slice(1)}.`);
+  }
+  if (past.length) out.push(`Only the first ${MAX_COLUMNS} columns of a file can be read. These were left out: ${past.join(', ')}.`);
+  return out;
+}
+
 const CLEAN_HEADER = 'date,open,high,low,close,volume';
+const KNOWN_HEADERS: readonly string[] = Object.values(CSV_HEADERS).flat();
+
+/** A header written into a comma-separated line: in quotes when it holds a comma or a quote. */
+const csvField = (text: string): string => (/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
+
+interface Kept {
+  header: string;
+  name: string;
+  /** One number for each row of the cleaned copy; NaN where the cell holds none. */
+  values: number[];
+}
+
+/**
+ * The columns of the file that no role in the copy uses and that hold numbers, as a rule would read them by name: the
+ * ones to keep in a cleaned copy, and notes on what was left out or kept. A column the plugin reads as a date or a price
+ * by its header is not one of them.
+ */
+function extraColumnsOf(t: Table, used: Set<number>, parsed: Parsed[], read: Reader): { kept: Kept[]; notes: string[] } {
+  const notes: string[] = [];
+  const found = t.header
+    .flatMap((header, i) => (header !== '' && !used.has(i) && !KNOWN_HEADERS.includes(header.toLowerCase()) ? [{ i, header, name: columnName(header) }] : []))
+    .filter((c) => c.name !== '')
+    .map((c) => ({ header: c.header, name: c.name, values: parsed.map((p) => read.number(p.row[c.i])) }))
+    .filter((c) => c.values.some((v) => !Number.isNaN(v)));
+  const kept: Kept[] = [];
+  const past: string[] = [];
+  for (const c of found) {
+    const same = kept.find((k) => k.name === c.name);
+    if (same) notes.push(`The column "${c.header}" was left out: a rule would call it ${c.name}, as it does "${same.header}".`);
+    else if (kept.length === MAX_COLUMNS) past.push(c.header);
+    else kept.push(c);
+  }
+  if (past.length) notes.push(`Only the first ${MAX_COLUMNS} columns of a file can be read, so these were left out: ${past.join(', ')}.`);
+  if (kept.length) notes.push(`The other columns with numbers in them were kept, and a rule reads them by name: ${kept.map((c) => c.name).join(', ')}.`);
+  return { kept, notes };
+}
 const ROLES: [CsvRole | 'adjClose', string][] = [
   ['date', 'date'],
   ['open', 'open'],
@@ -549,7 +677,8 @@ export function remapCsv(text: string, mapping: CsvMapping): CsvCleaned {
     volume: mapping.volume ?? -1,
     adj: mapping.adjClose ?? -1,
   };
-  const { parsed, tally } = readRows(t.rows, cols, dayFirst, lenientReader(t.sep, changed), true);
+  const lenient = lenientReader(t.sep, changed);
+  const { parsed, tally } = readRows(t.rows, cols, dayFirst, lenient, true);
   if (parsed.length === 0) {
     const worst = (Object.entries(tally) as [keyof Tally, number][]).reduce((a, b) => (b[1] > a[1] ? b : a))[0];
     const because = {
@@ -578,19 +707,22 @@ export function remapCsv(text: string, mapping: CsvMapping): CsvCleaned {
   }
   if (mapping.volume === null) notes.push('There is no volume column, so volume is 0 on every bar, as it is for any file without one.');
   if (mapping.adjClose !== null) notes.push('Prices are scaled by the adjusted close, as the plugin does for a file that has an "Adj Close" column.');
+  const extra = extraColumnsOf(t, new Set(chosen.map(([, i]) => i)), parsed, lenient);
   if (changed.numbers) notes.push('Numbers written with a decimal comma or with thousands separators were rewritten with a decimal point.');
   if (ambiguousOf(values)) notes.push(`Dates such as ${firstSlashed(values)} were read ${dayFirst ? 'day first' : 'month first'}.`);
   const dropped = tallyTotal(tally);
   const left = leftOut(tally, t.rows.length, 'were left out');
   if (left) notes.push(left);
 
-  const lines = parsed.map((p) => `${isoOf(p.t)},${p.o},${p.h},${p.l},${p.c},${p.v}`);
+  notes.push(...extra.notes);
+  const lines = parsed.map((p, r) => `${isoOf(p.t)},${p.o},${p.h},${p.l},${p.c},${p.v}${extra.kept.map((c) => `,${Number.isNaN(c.values[r]) ? '' : c.values[r]}`).join('')}`);
   return {
     ok: true,
-    text: `${CLEAN_HEADER}\n${lines.join('\n')}\n`,
+    text: `${CLEAN_HEADER}${extra.kept.map((c) => `,${csvField(c.header)}`).join('')}\n${lines.join('\n')}\n`,
     rows: parsed.length,
     dropped,
     notes,
+    columns: extra.kept.map((c) => c.name),
     sample: parsed.slice(0, SAMPLE_ROWS + 2).map(rowOf),
     first: isoOf(parsed[0].t),
     last: isoOf(parsed[parsed.length - 1].t),
@@ -627,6 +759,20 @@ export function csvTicker(path: string): CsvInsert {
   const viaOf = parseSpec(`symbol: csv:${PROBE}.csv\nbuy when close of csv:${path} > sma(5)`);
   const ofOk = viaOf.errors.length === 0 && viaOf.spec?.extras.length === 1 && viaOf.spec.extras[0].id === path;
   return { ok: true, text: `csv:${path}`, note: ofOk ? null : 'This path works on a universe or symbol line, but not after "of" in a rule, because of its characters.' };
+}
+
+/**
+ * The text that reads one column of this file in a rule, checked with the parser. It names the file after "of", which works
+ * wherever the rule is; a path whose characters cannot be written after "of" can only be read as the ticker the rule belongs
+ * to, which a file with no prices cannot be.
+ */
+export function csvColumn(path: string, name: string, priced: boolean): CsvInsert {
+  const blank = blankIn(path);
+  if (blank) return { ok: false, reason: blank };
+  const viaOf = parseSpec(`symbol: csv:${PROBE}.csv\nbuy when column(${name}) of csv:${path} > 0`);
+  if (viaOf.errors.length === 0 && viaOf.spec?.extras.length === 1 && viaOf.spec.extras[0].id === path) return { ok: true, text: `column(${name}) of csv:${path}`, note: null };
+  if (!priced) return { ok: false, reason: `This file has no prices, so a strategy can only read it by writing its path after "of", and the characters of "${path}" do not allow that. Rename the file.` };
+  return { ok: true, text: `column(${name})`, note: 'This path cannot be written after "of", so the file has to be the one the rule belongs to: put it on the universe or symbol line.' };
 }
 
 /** A complete small block that trades this file on a trend rule, fenced, ending with a newline. */

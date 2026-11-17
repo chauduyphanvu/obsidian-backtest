@@ -1,7 +1,7 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { loadBars, type DataDeps, type Loaded } from './data.ts';
 import { paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
-import type { AssetRef, Bars } from './types.ts';
+import { sliceBars, type AssetRef, type Bars } from './types.ts';
 
 const DAY = 86_400_000;
 const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w: 7 * DAY };
@@ -25,6 +25,7 @@ function exprLookback(e: Expr, w: Widest): number {
     case 'num':
     case 'bool':
     case 'series':
+    case 'column':
     case 'pos':
       return 0;
     case 'cal':
@@ -116,8 +117,7 @@ export function lookbackBars(spec: Spec): number {
 function barsFrom(bars: Bars, since: number): Bars {
   let i = 0;
   while (i < bars.t.length && bars.t[i] < since) i++;
-  if (i === 0) return bars;
-  return { t: bars.t.slice(i), o: bars.o.slice(i), h: bars.h.slice(i), l: bars.l.slice(i), c: bars.c.slice(i), v: bars.v.slice(i) };
+  return sliceBars(bars, i);
 }
 
 export interface RunOutput {

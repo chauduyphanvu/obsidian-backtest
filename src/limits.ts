@@ -20,7 +20,7 @@ export interface SizeLimits {
  * Every ceiling of a single backtest. Measured on an Apple M5 Max (Node 26, and Chrome for the window): a run costs 0.4 to
  * 1.6 µs per bar (less per bar with more tickers), about 15 ns per rule part per bar, and about 1 ns per price inside the
  * window of `sma`, `stdev`, `highest` or `lowest`, which add their whole window up again at every bar. A ranking adds little
- * and the number of parameters nothing. In memory, prices take about 64 bytes a bar, a result about 100 bytes a step and
+ * and the number of parameters nothing. In memory, prices take about 64 bytes a bar, each column of a CSV file 8 more, a result about 100 bytes a step and
  * 600 a trade, and each rule part about 5 bytes a bar while the run lasts. A phone is taken as 2 to 10 times slower.
  */
 export const LIMITS = {
@@ -151,9 +151,13 @@ export function anywayLabel(error: LimitError): string {
 /** About how many bytes a kept result holds: its prices, its steps and its trades. */
 export function resultBytes(out: Pick<RunOutput, 'data'> & { backtest: Pick<Backtest, 'run'> }): number {
   let bars = 0;
-  for (const b of out.data.values()) bars += b.t.length;
+  let columnValues = 0;
+  for (const b of out.data.values()) {
+    bars += b.t.length;
+    columnValues += b.t.length * (b.columns?.length ?? 0);
+  }
   const { run } = out.backtest;
-  return 64 * bars + 100 * run.t.length + 600 * run.trades.length;
+  return 64 * bars + 8 * columnValues + 100 * run.t.length + 600 * run.trades.length;
 }
 
 /**

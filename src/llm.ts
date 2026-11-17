@@ -138,7 +138,7 @@ Write nothing else: no greeting, no explanation of the rules, no text in the fen
 
 ## Limits
 
-A strategy is long or flat: each ticker is either held or not, and cash earns the cash rate. There is no shorting, no leverage (weights never exceed 100%), no options, no futures and no margin. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w) or a CSV file in the vault. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo.
+A strategy is long or flat: each ticker is either held or not, and cash earns the cash rate. There is no shorting, no leverage (weights never exceed 100%), no options, no futures and no margin. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w) or a CSV file in the vault. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo, except as the numeric columns of a CSV file the description names.
 If the description asks for something outside these limits, write the closest long-or-flat strategy the language can express and say in a NOTE what you left out or changed. Never invent syntax to cover it.
 
 ## Layout
@@ -194,6 +194,7 @@ Rules written outside any "for" section are shared and apply to every ticker tha
 Compare with > < >= <= == !=, or the words above and below (the same as > and <). "crosses above" and "crosses below" mean the moment a value changes sides: sma(50) crosses above sma(200). Join conditions with and, or, not and parentheses. Arithmetic with + - * / works on numbers: close > sma(200) * 1.02. A percentage is a number: roc(20) > 5% is the same as roc(20) > 0.05. true and false are conditions too (also written always and never).
 Earlier bars: close[1] is the previous bar's close, close[5] the close five bars back, highest(20)[1] the highest high of the 20 bars before this one.
 Another ticker: sma(200) of SPY, close of ^VIX < 25. The ticker need not be in the universe. Put "of" right after the value it applies to.
+A column of a CSV file: column(score) of csv:Data/signals.csv reads the numeric column called score, as a number like close: column(score) of signals > 0.7, sma(column(score) of signals, 10), column(score) of signals crosses above 0. Name the file with csv: the first time it is written, in the universe or after "of"; after that its file name alone does (signals). column(score) with no "of" reads a column of the ticker the rule belongs to, which must then be a CSV file. A column's name is its header in lower case with an underscore for each run of spaces or punctuation; a header with spaces may be written in quotes: column("News Sentiment"). A row counts as known at the close of the day it is dated. A file with only a date and columns can be read with "of" but not traded. Never invent a file or a column the description does not name.
 Compare prices with averages, percentages or earlier prices rather than fixed price levels: Yahoo prices are adjusted for later dividends and splits.
 
 Series (the bar's values): open high low close volume

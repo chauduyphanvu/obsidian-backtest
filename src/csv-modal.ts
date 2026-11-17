@@ -1,5 +1,5 @@
 import { Modal, type App } from 'obsidian';
-import { cleanedPath, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvUnread, type DateOrder } from './csv-import.ts';
+import { cleanedPath, csvColumn, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, SIGNAL_DATING, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvSignal, type CsvUnread, type DateOrder } from './csv-import.ts';
 import { h, price } from './dom.ts';
 
 export interface CsvHost {
@@ -50,6 +50,9 @@ function columnLabels(header: string[]): string[] {
 }
 
 const volume = (v: number) => Math.round(v).toLocaleString('en-US');
+/** A column's value as short as it can be without hiding what it is. */
+const value = (x: number) => (Number.isInteger(x) ? x.toLocaleString('en-US') : String(Number(x.toPrecision(6))));
+const signalStats = (s: CsvSignal, rows: number) => `${value(s.first.value)} on ${s.first.date} to ${value(s.last.value)} on ${s.last.date}. ${s.count.toLocaleString('en-US')} of ${rows.toLocaleString('en-US')} rows have a number.`;
 const cellsOf = (r: CsvRow) => [r.date, price(r.open), price(r.high), price(r.low), price(r.close), volume(r.volume)];
 
 export class CsvModal extends Modal {
@@ -188,6 +191,12 @@ export class CsvModal extends Modal {
     h(root, 'div', 'bt-csv-title', 'The plugin can read this file.');
     const adjusted = found.columns.adjClose === null ? '' : ` Prices are scaled by the "${found.header[found.columns.adjClose]}" column.`;
     h(root, 'p', 'bt-csv-lead', `${found.rows.toLocaleString('en-US')} rows, from ${found.first} to ${found.last}.${adjusted}`);
+    if (!found.priced) {
+      h(root, 'p', 'bt-csv-lead', 'This file has no prices. A strategy can read its columns but cannot trade it.');
+      for (const doubt of found.doubts) h(root, 'div', 'bt-warning', doubt);
+      this.signals(root, file.path, found);
+      return;
+    }
     // A column that has the usual name needs no explanation.
     const used = (key: keyof CsvMapping, label: string) => {
       const i = found.columns[key];
@@ -198,6 +207,7 @@ export class CsvModal extends Modal {
     this.table(root, COLUMNS.map((c) => ({ label: c.label, from: used(c.key, c.label) })), rows);
     for (const doubt of found.doubts) h(root, 'div', 'bt-warning', doubt);
     this.actions(root, file.path);
+    this.signals(root, file.path, found);
     const fix = h(root, 'details', 'bt-csv-fix');
     fix.open = found.ambiguousDates;
     h(fix, 'summary', undefined, 'Something looks wrong? Choose the columns or the date order yourself');
@@ -245,6 +255,38 @@ export class CsvModal extends Modal {
     if (strategy.ok) h(row, 'button', 'mod-cta', 'Insert a strategy using it').addEventListener('click', () => this.deliver(box, strategy.text));
     if (ticker.note) h(box, 'div', NOTE, ticker.note);
     if (!strategy.ok) h(box, 'div', NOTE, strategy.reason);
+  }
+
+  /** The columns a rule can read, each with a button that inserts the text that reads it, and why any could not be read. */
+  private signals(parent: HTMLElement, path: string, found: CsvRead): void {
+    for (const sentence of found.unreadable) h(parent, 'div', 'bt-warning', sentence);
+    if (found.signals.length === 0) return;
+    const box = h(parent, 'div', 'bt-csv-actions-box');
+    h(box, 'div', 'bt-csv-label', found.priced ? 'Other columns a rule can read' : 'Columns a rule can read');
+    const list = h(box, 'ul', 'bt-csv-signals');
+    let note: string | null = null;
+    let reason: string | null = null;
+    for (const signal of found.signals) {
+      const li = h(list, 'li', 'bt-csv-signal');
+      const head = h(li, 'div', 'bt-csv-signal-head');
+      h(head, 'code', 'bt-csv-signal-name', signal.name);
+      if (signal.header !== signal.name) h(head, 'span', 'bt-csv-from', `from "${signal.header}"`);
+      h(li, 'div', 'bt-csv-signal-stats', signalStats(signal, found.rows));
+      const rule = csvColumn(path, signal.name, found.priced);
+      if (!rule.ok) {
+        reason = rule.reason;
+        continue;
+      }
+      note = rule.note;
+      const row = h(li, 'div', 'bt-csv-signal-rule');
+      h(row, 'code', undefined, rule.text);
+      const insert = h(row, 'button', undefined, 'Insert');
+      insert.setAttribute('aria-label', `Insert ${rule.text}`);
+      insert.addEventListener('click', () => this.deliver(box, rule.text));
+    }
+    if (reason) h(box, 'div', 'bt-warning', reason);
+    if (note) h(box, 'div', NOTE, note);
+    h(box, 'div', NOTE, SIGNAL_DATING);
   }
 
   /** Puts the text in the note, or shows it to copy when no note is open for editing. */

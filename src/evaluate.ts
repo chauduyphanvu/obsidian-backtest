@@ -36,9 +36,46 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
 /** Functions that weigh bars by volume, and so mean nothing on prices that have none. */
 const NEEDS_VOLUME = ['mfi', 'obv', 'vwap'];
 
-/** The Evaluator a spec's rules are read with, by the run and by everything that explains or redoes it. */
+/**
+ * The Evaluator a spec's rules are read with, by the run and by everything that explains or redoes it.
+ * A file of columns with no prices can be read by `of`, but not traded, compared with or used for a cash rate.
+ */
 export function specEvaluator(spec: Spec, data: Map<string, Bars>): Evaluator {
+  const roles: [string | undefined, string][] = [
+    ...spec.universe.map((a): [string, string] => [a.name, 'be in the universe, because it cannot be traded']),
+    [spec.benchmark?.name, 'be the benchmark, because it has no price to hold'],
+    [spec.cash.k === 'ticker' ? spec.cash.ref.name : undefined, 'give the cash rate, because it has no close to read a yield from'],
+  ];
+  for (const [name, role] of roles) {
+    if (name !== undefined && data.get(name)?.unpriced) {
+      throw new Error(`${name} has no prices, only columns. A strategy can read its columns with column(...) of ${name}, but ${name} cannot ${role}.`);
+    }
+  }
   return new Evaluator(data, clocksApart(spec, data));
+}
+
+/** The files whose columns a spec's rules read, as the rules name them, in the order they are first read. */
+export function columnFiles(spec: Spec): string[] {
+  const out = new Set<string>();
+  const visit = (e: Expr, asset: string): void => {
+    if (e.k === 'column') out.add(asset);
+    for (const c of children(e)) visit(c, e.k === 'of' ? e.asset : asset);
+  };
+  for (const a of spec.universe) {
+    const r = spec.rules[a.name];
+    for (const e of [r.buy, r.sell, r.add, spec.rank?.by]) if (e) visit(e, a.name);
+  }
+  return [...out];
+}
+
+/** What the result says when a rule reads a column: how a row is dated, because a wrong date lets a rule see the future. */
+export function columnNotes(spec: Spec): string[] {
+  const files = columnFiles(spec);
+  if (files.length === 0) return [];
+  const names = files.length === 1 ? files[0] : `${files.slice(0, -1).join(', ')} and ${files[files.length - 1]}`;
+  return [
+    `A row of ${names} counts as known at the close of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future.`,
+  ];
 }
 
 /** Every [reader, read] pair of tickers that a spec's rules and ranking score connect with `of`, nested ones included. */
@@ -241,11 +278,14 @@ export class Evaluator {
       case 'bool':
         return each(() => (e.v ? 1 : 0));
       case 'series':
+        if (bars.unpriced) throw new Error(`${asset} has no prices, only columns, so its ${e.name} can't be read. Read a column with column(name) of ${asset}.`);
         return { open: bars.o, high: bars.h, low: bars.l, close: bars.c, volume: bars.v }[e.name];
       case 'ind':
         return this.indicator(e, asset, bars);
       case 'cal':
         return calendar(e.name, bars.t);
+      case 'column':
+        return this.column(asset, e.name, bars);
       case 'pos':
         throw new Error('Position values need a position: use compile()');
       case 'math': {
@@ -290,7 +330,23 @@ export class Evaluator {
     }
   }
 
+  /** A column of a CSV file by name, or an error that says what the file has instead. */
+  private column(asset: string, name: string, bars: Bars): number[] {
+    const found = bars.columns?.find((c) => c.name === name);
+    if (found) return found.v;
+    const unread = bars.unread?.find((u) => u.name === name);
+    if (unread) throw new Error(`The CSV file ${asset} can't give the column ${name}: ${unread.why}.`);
+    const have = bars.columns?.map((c) => c.name) ?? [];
+    throw new Error(
+      `The CSV file ${asset} has no column called ${name}. ${have.length ? `Its columns are ${have.join(', ')}.` : 'It has no columns besides its prices.'} Only a column with numbers in it can be read.`,
+    );
+  }
+
   private indicator(e: Extract<Expr, { k: 'ind' }>, asset: string, bars: Bars): number[] {
+    // `sma(column(x), 5) of file` reads only the column; anything that reads the file's own prices has none to read.
+    if (bars.unpriced && (e.src === null || e.fn === 'correl')) {
+      throw new Error(`${asset} has no prices, only columns, so ${e.fn}() can't be worked out for it. Read a column with column(name) of ${asset}.`);
+    }
     const src = e.src ? this.eval(e.src, asset) : bars.c;
     const [a, b, c] = e.args;
     if (NEEDS_VOLUME.includes(e.fn) && !bars.v.some((x) => x > 0)) {

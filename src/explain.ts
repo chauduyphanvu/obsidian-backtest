@@ -4,7 +4,7 @@
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { DAY, minus, price, stamp } from './dom.ts';
-import { findPos, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
+import { findPos, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import { commissionFee, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import * as ind from './indicators.ts';
@@ -374,7 +374,8 @@ class Explainer {
         if (x.asset === a) return visit(x.a, a, j);
         const k = this.ev.barOf(x.asset, a, j);
         const bars = this.bt.data.get(x.asset)!;
-        const said = k < 0 ? `${x.asset} had no finished bar yet` : `${x.asset}'s bar of ${this.date(bars.t[k])}`;
+        const unit = ownColumns(x.a).length > 0 ? 'row' : 'bar';
+        const said = k < 0 ? `${x.asset} had no finished ${unit} yet` : `${x.asset}'s ${unit} of ${this.date(bars.t[k])}`;
         if (!out.includes(said)) out.push(said);
         if (k >= 0) visit(x.a, x.asset, k);
         return;
