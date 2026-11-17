@@ -247,7 +247,8 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
       if (!open) row('Reason', exitWording(trade.reason));
     }
     tip.hidden = false;
-    // To the right of the crosshair, or to the left when it would run off the chart.
+    // To the right of the crosshair, or to the left when it would run off the chart. Measured from the left edge, where it has the most room.
+    tip.style.left = '0px';
     const w = tip.offsetWidth;
     tip.style.left = `${px + 12 + w <= width ? px + 12 : Math.max(0, px - 12 - w)}px`;
     tip.style.top = `${top + 4}px`;
