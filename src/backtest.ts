@@ -1,6 +1,7 @@
 import type { Spec } from './dsl.ts';
 import { simulate, type RunResult, type Signals, type Trade } from './engine.ts';
 import { Evaluator } from './evaluate.ts';
+import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
 export interface Stats {
@@ -156,12 +157,10 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     data,
     always,
   );
-  // A named benchmark can trade on other days than the strategy: carry its last value.
-  let j = -1;
-  const benchEquity = run.t.map((t) => {
-    while (j + 1 < bench.t.length && bench.t[j + 1] <= t) j++;
-    return j < 0 ? spec.capital : bench.equity[j];
-  });
+  // A named benchmark can trade on other days or bars than the strategy: carry the value of its
+  // latest bar that had ended by the end of each of the strategy's bars.
+  const at = alignByEnd(bench.t, run.t);
+  const benchEquity = run.t.map((_, i) => (at[i] < 0 ? spec.capital : bench.equity[at[i]]));
   const benchExposure = run.t.map(() => 1);
 
   let segments: Segment[] | null = null;

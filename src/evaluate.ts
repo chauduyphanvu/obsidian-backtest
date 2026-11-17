@@ -78,6 +78,7 @@ function calendar(name: CalName, t: number[]): number[] {
 export class Evaluator {
   private data: Map<string, Bars>;
   private memo = new Map<string, number[]>();
+  private alignments = new Map<string, number[]>();
 
   constructor(data: Map<string, Bars>) {
     this.data = data;
@@ -137,6 +138,14 @@ export class Evaluator {
     }
     // The parser keeps position values out of lags, "of" and indicator inputs.
     throw new Error(`Position values can't be used inside ${e.k}`);
+  }
+
+  /** Indices into `from`'s bars for each bar of `to`; see alignByEnd. */
+  private aligned(from: string, to: string): number[] {
+    const key = `${from}\u0000${to}`;
+    let at = this.alignments.get(key);
+    if (!at) this.alignments.set(key, (at = ind.alignByEnd(this.bars(from).t, this.bars(to).t)));
+    return at;
   }
 
   private bars(asset: string): Bars {
@@ -200,14 +209,10 @@ export class Evaluator {
         return ind.lag(this.eval(e.a, asset), e.n);
       case 'of': {
         if (e.asset === asset) return this.eval(e.a, asset);
-        // The other ticker's latest value at or before each of this asset's bars.
-        const other = this.bars(e.asset);
+        // The other ticker's value from its latest bar that had ended when this asset's bar ended.
         const values = this.eval(e.a, e.asset);
-        let j = -1;
-        return each((i) => {
-          while (j + 1 < other.t.length && other.t[j + 1] <= bars.t[i]) j++;
-          return j < 0 ? NaN : values[j];
-        });
+        const at = this.aligned(e.asset, asset);
+        return each((i) => (at[i] < 0 ? NaN : values[at[i]]));
       }
     }
   }

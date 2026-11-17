@@ -159,11 +159,11 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
 
   const rateBars = p.cash.k === 'ticker' ? data.get(p.cash.ref.name) : null;
   if (p.cash.k === 'ticker' && !rateBars) throw new Error(`No data for the cash rate ticker ${p.cash.ref.name}`);
-  let rj = -1;
-  const rateAt = (t: number): number => {
+  // The yield quoted at the close of the timeline's bar k: that of the rate's latest bar ended by then.
+  const rateIdx = rateBars ? ind.alignByEnd(rateBars.t, timeline) : null;
+  const rateAt = (k: number): number => {
     if (!rateBars) return p.cash.k === 'fixed' ? p.cash.rate : 0;
-    while (rj + 1 < rateBars.t.length && rateBars.t[rj + 1] <= t) rj++;
-    return rj < 0 ? 0 : rateBars.c[rj] / 100;
+    return rateIdx![k] < 0 ? 0 : rateBars.c[rateIdx![k]] / 100;
   };
 
   const decisions = !p.rank ? null : p.rebalance === 'never' ? timeline.map(() => 1) : ind.periodEnds(timeline, (x) => periodKey(x, p.rebalance));
@@ -257,7 +257,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     const t = timeline[k];
     if (k > 0) {
       const prev = timeline[k - 1];
-      const r = (rateAt(prev) * (t - prev)) / DAY / 365;
+      const r = (rateAt(k - 1) * (t - prev)) / DAY / 365;
       cashReturn.push(r);
       if (cash > 0) {
         interest += cash * r;

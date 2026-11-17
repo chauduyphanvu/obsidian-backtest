@@ -233,6 +233,25 @@ test('a cash rate ticker pays its close at the previous bar, as a yearly percent
   assert.equal(r.cashRateNote, 'Cash earns the R rate');
 });
 
+test('on an hourly run, a daily benchmark and a daily cash rate count only once their day has ended', () => {
+  const HOUR = 3_600_000;
+  const A = bars(Array.from({ length: 72 }, () => 10), { step: HOUR });
+  // The benchmark earns a day at 36.5% (1001), buys at the open of 2 January at 10 and doubles
+  // that day, then again on the 3rd.
+  const B = bars([10, 20, 40]);
+  const R = bars([36.5, 73, 73]);
+  const r = run('universe: A\ncapital: 1000\nbenchmark: B\ncash rate: R\nbuy when false', { A, B, R });
+  const bench = r.benchmark.equity;
+  // 2 January's close is known when its 23:00 bar ends at midnight, not at 00:00.
+  assert.deepEqual([bench[24], bench[46], bench[47], bench[70], bench[71]], [1000, 1000, 2002, 2002, 4004]);
+  // Cash earns nothing until the 1 January rate is known at the end of that day; it then pays
+  // 36.5% for each hour until the 2 January rate of 73% is known.
+  const hourly = (rate: number) => rate / 365 / 24;
+  assert.equal(r.run.cashReturn[23], 0);
+  assert.ok(near(r.run.cashReturn[24], hourly(0.365)) && near(r.run.cashReturn[47], hourly(0.365)));
+  assert.ok(near(r.run.cashReturn[48], hourly(0.73)));
+});
+
 test('Sharpe and Sortino measure returns above the cash rate', () => {
   const t = [day(0), day(1), day(2)];
   // Returns +10% and -10% against 1% a step from cash: excess +9% and -11%.

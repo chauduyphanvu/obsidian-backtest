@@ -67,14 +67,66 @@ test('lag and arithmetic', () => {
 });
 
 test('"of" reads another ticker as of each bar, never ahead', () => {
-  // B trades every other day.
+  // B's bars are two days apart, so each is a two-day bar that has ended a day after A's bar of the same date.
   const data = new Map([
     ['A', bars([1, 1, 1, 1, 1])],
     ['B', bars([10, 20, 30], { start: T0 + DAY, step: 2 * DAY })],
   ]);
   const { spec } = parseSpec('universe: A\ndata: yahoo\nbuy when close of B >= 20');
   const ev = new Evaluator(data);
-  assert.deepEqual(round(ev.eval(spec!.rules.A.buy, 'A')), [null, 0, 0, 1, 1]);
+  assert.deepEqual(round(ev.eval(spec!.rules.A.buy, 'A')), [null, null, 0, 0, 1]);
+});
+
+const utc = (y: number, m: number, d: number, hour = 0) => Date.UTC(y, m - 1, d, hour);
+const weekdaysFrom = (start: number, n: number) => {
+  const out: number[] = [];
+  for (let t = start; out.length < n; t += DAY) if (![0, 6].includes(new Date(t).getUTCDay())) out.push(t);
+  return out;
+};
+
+test('alignByEnd: series on the same dates line up bar for bar, on any daily calendar', () => {
+  const days = [0, 1, 2, 3].map((i) => T0 + i * DAY);
+  assert.deepEqual(ind.alignByEnd(days, days), [0, 1, 2, 3]);
+  // Thursday 2 January 2020 to Monday 6 January: crypto trades the weekend, stocks do not.
+  const crypto = [2, 3, 4, 5, 6].map((d) => utc(2020, 1, d));
+  const stock = [2, 3, 6].map((d) => utc(2020, 1, d));
+  assert.deepEqual(ind.alignByEnd(stock, crypto), [0, 1, 1, 1, 2]);
+  assert.deepEqual(ind.alignByEnd(crypto, stock), [0, 1, 4]);
+});
+
+test('alignByEnd: a daily series reads a weekly bar only once its week has ended', () => {
+  // Weekly bars dated Monday 6, 13 and 20 January 2020; daily bars on the 15 weekdays from the 6th.
+  const weekly = [6, 13, 20].map((d) => utc(2020, 1, d));
+  const daily = weekdaysFrom(utc(2020, 1, 6), 15);
+  assert.deepEqual(ind.alignByEnd(weekly, daily), [-1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1]);
+});
+
+test('alignByEnd: an hourly series reads a daily bar from the hour that ends with it', () => {
+  const hourly = Array.from({ length: 48 }, (_, i) => utc(2020, 1, 1) + i * 3_600_000);
+  const daily = [utc(2020, 1, 1), utc(2020, 1, 2)];
+  const at = ind.alignByEnd(daily, hourly);
+  // The bar of 1 January ends at midnight, which is when the 23:00 bar ends.
+  assert.deepEqual([at[0], at[22], at[23], at[24], at[46], at[47]], [-1, -1, 0, 0, 0, 1]);
+  // The other way, a daily bar has every hour of its day.
+  assert.deepEqual(ind.alignByEnd(hourly, daily), [23, 47]);
+});
+
+test('alignByEnd: monthly bars end at the next month, and a lone bar never has a known end', () => {
+  const monthly = [utc(2020, 1, 1), utc(2020, 2, 1), utc(2020, 3, 1)];
+  const daily = [utc(2020, 1, 30), utc(2020, 1, 31), utc(2020, 2, 28), utc(2020, 2, 29), utc(2020, 3, 1)];
+  // The shortest gap is February's 29 days; January still ends on 1 February, not on 30 January.
+  assert.deepEqual(ind.alignByEnd(monthly, daily), [-1, 0, 0, 1, 1]);
+  assert.deepEqual(ind.alignByEnd([utc(2020, 1, 1)], daily), [-1, -1, -1, -1, -1]);
+});
+
+test('"of" on a weekly series dated at the start of its week waits for the week to end', () => {
+  // Week of 13 January closes at 120 on Friday the 17th; a daily rule reads it from Monday the 20th.
+  const daily = weekdaysFrom(utc(2020, 1, 6), 15);
+  const W = bars([100, 120, 120], { times: [6, 13, 20].map((d) => utc(2020, 1, d)) });
+  const ev = new Evaluator(new Map([['X', bars(daily.map(() => 100), { times: daily })], ['W', W]]));
+  const { spec } = parseSpec('universe: X\nbuy when close of csv:W.csv > 110');
+  const rule = ev.eval(spec!.rules.X.buy, 'X');
+  assert.equal(daily[rule.indexOf(1)], utc(2020, 1, 20));
 });
 
 const sellRule = (text: string): Expr => {
