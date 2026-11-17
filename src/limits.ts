@@ -2,6 +2,7 @@
 
 import type { Backtest } from './backtest.ts';
 import { walk, type Spec } from './dsl.ts';
+import { isInsideKey } from './engine.ts';
 import { ResultCache } from './result-cache.ts';
 import type { RunOutput } from './runner.ts';
 import type { Bars } from './types.ts';
@@ -60,10 +61,17 @@ export interface RunSize {
   windowWork: number;
 }
 
-/** The size of a run of `spec` on `data`, its prices. */
+/**
+ * The size of a run of `spec` on `data`, its prices. The smaller bars `magnify` looks inside with count as bars, since they
+ * are held and walked like any, but not as tickers; no rule reads them.
+ */
 export function runSize(spec: Spec, data: Map<string, Bars>): RunSize {
   let bars = 0;
-  for (const b of data.values()) bars += b.t.length;
+  let tickers = 0;
+  for (const [name, b] of data) {
+    bars += b.t.length;
+    if (!isInsideKey(name)) tickers++;
+  }
   let ruleWork = 0;
   let windowWork = 0;
   for (const a of spec.universe) {
@@ -81,7 +89,7 @@ export function runSize(spec: Spec, data: Map<string, Bars>): RunSize {
     ruleWork += parts * n;
     windowWork += periods * n;
   }
-  return { bars, tickers: data.size, ruleWork, windowWork };
+  return { bars, tickers, ruleWork, windowWork };
 }
 
 /** `n` in words: digits with commas below a million, "2.1 million" or "3 billion" above, never reading the same as `other`. */

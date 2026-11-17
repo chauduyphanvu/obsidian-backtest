@@ -48,6 +48,11 @@ const VALUE_HINTS: Record<string, Completion[]> = {
     { label: '0.005 per share, min 1', insert: '0.005 per share, min 1', detail: '0.005 a share, at least 1 an order' },
   ],
   entries: [{ label: '3', insert: '3', detail: 'each position in up to 3 entries, each a third; needs an add rule' }],
+  magnify: [
+    { label: '1h', insert: '1h', detail: 'stops and targets followed through 1-hour bars inside each bar' },
+    { label: '5m', insert: '5m', detail: 'stops and targets followed through 5-minute bars inside each bar' },
+    { label: '1d', insert: '1d', detail: 'daily bars inside each weekly bar' },
+  ],
 };
 
 const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];

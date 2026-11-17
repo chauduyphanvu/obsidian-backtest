@@ -123,4 +123,6 @@ rules, calendar values (`month`, `month_start`, ...), yearly rebalancing, rankin
 `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with
 weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and
 weekly or intraday bars. Among the functions: `supertrend_up`, `bars_since`, and `correl` of tickers
-with missing days or on other calendars.
+with missing days or on other calendars. `magnify`, which follows stops and targets through smaller
+bars inside each bar, has no counterpart in Rearview, which reads each bar whole as our engine does
+without it; every case runs without it.

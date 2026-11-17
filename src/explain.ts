@@ -5,7 +5,7 @@
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { DAY, minus, price, stamp } from './dom.ts';
 import { findPos, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
-import { commissionFee, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
+import { commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
@@ -612,14 +612,26 @@ class Explainer {
     const distance = (s: StopLevel, from: string, way: 'under' | 'over') => this.distance(s, way, from);
     const fill = this.entries.length > 1 ? `the ${price(trade.entryPrice)} average entry price of the ${this.entries.length} entries` : `the ${price(trade.entryPrice)} fill`;
     const rows: Row[] = [];
+    // With magnify: the smaller bar the level was reached in, its open, high and low on the bar's scale, and its words.
+    const size = this.bt.spec.magnify;
+    const inside = exit.inside;
+    const seen = inside?.k === 'inside' ? { ...this.smallBar(j, inside.t), at: this.smallTime(inside.t) } : null;
+    const [so, sh, sl] = seen ? [seen.o, seen.h, seen.l] : [o, h, l];
+    const smaller = seen ? `the ${size} bar starting ${seen.at}` : '';
+    /** Why a bar with both levels inside it was read whole, so the stop came first. */
+    const whole = inside?.k === 'whole' ? { none: `There are no ${size} bars for this bar`, missing: `Some of this bar's ${size} bars are missing`, mismatch: `This bar's ${size} bars do not match it` }[inside.why] : null;
     let level: number;
     if (trade.reason === 'take profit') {
       const s = stops.takeProfit!;
       level = s.k === 'pct' ? trade.entryPrice * (1 + s.v) : trade.entryPrice + s.mult * atr(s);
       rows.push(row(`Take profit at ${price(level)}`, distance(s, fill, 'over')));
-      if (o > level) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, above the target, so it sold at the open.`));
+      if (seen && so > level) rows.push(row(`On ${this.date(trade.exitT)}, ${smaller} opened at ${price(so)}, above the target, so it sold at that open.`));
+      else if (seen) rows.push(row(`On ${this.date(trade.exitT)}, in ${smaller}, the price reached ${price(sh)}, through the target, so it sold at the target.`));
+      else if (o > level) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, above the target, so it sold at the open.`));
       else rows.push(row(`On ${this.date(trade.exitT)} the bar reached ${price(h)}, through the target, so it sold at the target.`));
-      if (o > level && why.stopLoss !== null && l <= why.stopLoss) rows.push(row(`The bar later fell through the stop at ${price(why.stopLoss)} too, but the open came first.`));
+      if (seen && why.stopLoss !== null && l <= why.stopLoss) rows.push(row(`The stop at ${price(why.stopLoss)} was inside this bar too. Its ${size} bars show the target was reached first.`));
+      else if (o > level && why.stopLoss !== null && l <= why.stopLoss) rows.push(row(`The bar later fell through the stop at ${price(why.stopLoss)} too, but the open came first.`));
+      else if (whole) rows.push(row(`${whole}, so it was read whole.`));
     } else {
       if (trade.reason === 'trailing stop') {
         const s = stops.trailingStop!;
@@ -627,7 +639,11 @@ class Explainer {
         level = s.k === 'pct' ? high * (1 - s.v) : high - s.mult * atr(s);
         const first = j === barAt(this.bars.t, trade.entryT) + (this.atClose ? 1 : 0);
         const since = this.entries.length > 1 ? 'the first entry' : 'the buy';
-        const highest = first ? `${price(high)}, the ${this.atClose ? 'close' : 'open'} it was bought at` : `${price(high)}, the highest price from ${since} to the bar before`;
+        const highest = seen
+          ? `${price(high)}, the highest price from ${since} to the ${size} bar before`
+          : first
+            ? `${price(high)}, the ${this.atClose ? 'close' : 'open'} it was bought at`
+            : `${price(high)}, the highest price from ${since} to the bar before`;
         rows.push(row(`Trailing stop at ${price(level)}`, distance(s, highest, 'under')));
         if (why.stopLoss !== null) rows.push(row(`The stop loss, at ${price(why.stopLoss)}, was lower.`));
       } else {
@@ -635,17 +651,42 @@ class Explainer {
         level = s.k === 'pct' ? trade.entryPrice * (1 - s.v) : trade.entryPrice - s.mult * atr(s);
         rows.push(row(`Stop loss at ${price(level)}`, distance(s, fill, 'under')));
       }
-      if (o < level) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, below the stop, so it sold at the open.`));
+      if (seen && so < level) rows.push(row(`On ${this.date(trade.exitT)}, ${smaller} opened at ${price(so)}, below the stop, so it sold at that open.`));
+      else if (seen) rows.push(row(`On ${this.date(trade.exitT)}, in ${smaller}, the price fell to ${price(sl)}, through the stop, so it sold at the stop.`));
+      else if (o < level) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, below the stop, so it sold at the open.`));
       else rows.push(row(`On ${this.date(trade.exitT)} the bar fell to ${price(l)}, through the stop, so it sold at the stop.`));
-      if (why.takeProfit !== null && h >= why.takeProfit) rows.push(row(`The take profit at ${price(why.takeProfit)} was inside this bar too. When both are, the stop is taken first.`));
+      if (why.takeProfit !== null && h >= why.takeProfit) {
+        const target = `The take profit at ${price(why.takeProfit)} was inside this bar too.`;
+        if (seen) rows.push(row(`${target} Its ${size} bars show the stop was reached first.`));
+        else if (whole) rows.push(row(`${target} ${whole}, so the stop is taken first, as for any bar read whole.`));
+        else if (size && o < level) rows.push(row(`${target} The bar opened below the stop, so the stop came first.`));
+        else rows.push(row(`${target} When both are, the stop is taken first.`));
+      } else if (whole) rows.push(row(`${whole}, so it was read whole.`));
     }
     this.facts.level = level;
-    const atOpen = trade.reason === 'take profit' ? o > level : o < level;
-    const px = atOpen ? o : level;
+    const atOpen = trade.reason === 'take profit' ? so > level : so < level;
+    const px = atOpen ? so : level;
     this.exitAt(px, true);
-    rows.push(row(`Sold at ${atOpen ? 'the open' : trade.reason === 'take profit' ? 'the target' : 'the stop'}`, this.slipped(px, px * (1 - this.slip), 'less')));
+    rows.push(row(`Sold at ${atOpen ? (seen ? `the open of that ${size} bar` : 'the open') : trade.reason === 'take profit' ? 'the target' : 'the stop'}`, this.slipped(px, px * (1 - this.slip), 'less')));
     if (this.atClose && j === barAt(this.bars.t, trade.entryT) + 1) rows.push(row('Bought at a close, the position was watched by its stops from the next bar on.'));
     return rows;
+  }
+
+  /** With magnify: the smaller bar starting at `t` inside the ticker's bar `j`, on the bar's own scale, as the run walked it. */
+  private smallBar(j: number, t: number): { o: number; h: number; l: number } {
+    const { spec } = this.bt;
+    const asset = this.trade.asset;
+    const source = spec.universe.find((a) => a.name === asset)!.source;
+    const seen = insideBar(this.bars, j, source, this.bt.data.get(insideKey(asset, spec.magnify!))!, spec.interval, spec.magnify!);
+    const k = seen.ok ? seen.path.t.indexOf(t) : -1;
+    if (!seen.ok || k < 0) throw new Error(`The ${spec.magnify} bars of ${asset} no longer hold the one the exit was decided in`);
+    return { o: seen.path.o[k], h: seen.path.h[k], l: seen.path.l[k] };
+  }
+
+  /** A smaller bar's start: Yahoo's are on the exchange's clock (data.ts parseYahooInside), Binance's in UTC. */
+  private smallTime(t: number): string {
+    const source = this.bt.spec.universe.find((a) => a.name === this.trade.asset)!.source;
+    return `${stamp(t, true)} ${source === 'yahoo' ? '(exchange time)' : 'UTC'}`;
   }
 
   private held(): Row[] {
