@@ -103,7 +103,7 @@ function places(x: number): number {
 
 /** Two values side by side, with enough decimals that different numbers never print the same. */
 function pair(a: number, b: number, percent: boolean): [string, string] {
-  const f = (x: number, d: number) => (percent && Number.isFinite(x) ? `${fixed(x * 100, d)}%` : fixed(x, d));
+  const f = (x: number, d: number) => (percent && Number.isFinite(x) ? `${fixed(Number((x * 100).toPrecision(12)), d)}%` : fixed(x, d));
   let d = Math.max(places(percent ? a * 100 : a), places(percent ? b * 100 : b));
   while (d < 10 && a !== b && f(a, d) === f(b, d)) d++;
   return [f(a, d), f(b, d)];
@@ -111,7 +111,7 @@ function pair(a: number, b: number, percent: boolean): [string, string] {
 
 const money = (x: number) => minus(`${x < 0 ? '-' : ''}$${Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 /** A share, such as a weight or a stop distance, without trailing zeros: 50%, 33.3%. */
-const share = (x: number) => `${minus(String(Number((x * 100).toPrecision(10)).toLocaleString('en-US', { maximumFractionDigits: 2 })))}%`;
+const share = (x: number) => `${minus(Number((x * 100).toPrecision(10)).toLocaleString('en-US', { maximumFractionDigits: 2 }))}%`;
 /** A return or a rate, always with two decimals: +6.00%. */
 const percent = (x: number) => `${x > 0 ? '+' : ''}${minus((x * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}%`;
 const shareCount = (x: number) => minus(x.toLocaleString('en-US', { maximumFractionDigits: 4 }));
@@ -152,12 +152,13 @@ class Explainer {
 
   build(): Explanation {
     const { trade } = this;
+    // In this order: each section fills in the facts the next one uses.
     const sections: Section[] = [
       { id: 'bought', title: 'Why it was bought', rows: this.bought() },
       { id: 'size', title: 'How much', rows: this.size() },
       { id: 'sold', title: trade.reason === 'open' ? 'Why it is still held' : 'Why it was sold', rows: this.sold() },
+      { id: 'result', title: 'Result', rows: this.result() },
     ];
-    sections.push({ id: 'result', title: 'Result', rows: this.result() });
     const sold = trade.reason === 'open' ? 'still held' : `sold ${this.date(trade.exitT)} at ${price(trade.exitPrice)}`;
     return { asset: trade.asset, title: `${trade.asset}: bought ${this.date(trade.entryT)} at ${price(trade.entryPrice)}, ${sold}`, sections, facts: this.facts };
   }
@@ -279,7 +280,8 @@ class Explainer {
     const text = (x: Expr) => texts.get(x) || '';
     const at = (x: Expr, j: number) => (j < 0 ? NaN : findPos(x) ? this.ev.compile(x, asset)(j, pos) : this.ev.eval(x, asset)[j]);
     const percentText = (s: string) => s.trim().endsWith('%') || this.bt.spec.params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
-    const literal = (x: Expr) => x.k === 'num' && /^\d*\.?\d+\s*%?$/.test(text(x).trim());
+    // A number written out, such as 30, 5% or -2, needs no value beside it.
+    const literal = (x: Expr) => (x.k === 'num' || (x.k === 'neg' && x.a.k === 'num')) && /^-?\s*\d*\.?\d+\s*%?$/.test(text(x).trim());
     const side = (x: Expr, shown: string) => (literal(x) ? text(x) : `${text(x)} ${shown}`);
 
     const value = (x: Expr): string => {
