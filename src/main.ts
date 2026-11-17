@@ -1,19 +1,18 @@
 import type { EditorView } from '@codemirror/view';
 import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
-import { extractBlocks } from './blocks.ts';
-import { cashIndex, parseCompare, type Curve } from './compare.ts';
+import { compareCurves, parseCompare } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
-import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
-import { HOUR, isIntraday, isoDate } from './format.ts';
+import { equityCsv, snapshotMarkdown, tradesCsv } from './export.ts';
+import { HOUR, isIntraday } from './format.ts';
 import { GalleryModal } from './gallery-modal.ts';
 import { LimitError } from './limits.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { drawHeld } from './live-core.ts';
 import { LiveView, VIEW_TYPE_LIVE, liveEditorExtension, openLivePanel, pokeLiveViews, type LiveHost } from './live-view.ts';
-import { failedStatus, mapLimit, ordersSavePlan, statusFrom, type StrategyStatus } from './orders.ts';
+import { ordersSavePlan, scanOrders, type ScanHost } from './orders.ts';
 import { OrdersBadge } from './orders-badge.ts';
 import { OrdersModal } from './orders-view.ts';
 import { PriceStore } from './price-store.ts';
@@ -30,8 +29,10 @@ import { Results } from './results.ts';
 import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
 import type { RunOutput } from './runner.ts';
 import { SymbolLookup } from './symbols.ts';
+import { createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
 import { blockRuns, shutdownWorkers } from './worker-client.ts';
-import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
+import { BacktestSettingTab } from './settings.ts';
+import { defaultsFrom, normalizeSettings, type Settings } from './settings-core.ts';
 import type { Defaults } from './dsl.ts';
 
 /** Puts text at the cursor; a block starts on its own line. */
@@ -42,10 +43,6 @@ function place(editor: Editor, text: string): void {
 
 /** Blocks whose open or folded state is remembered for the session. */
 const KEPT_BLOCK_STATES = 500;
-/** How long after the last block of a note renders its properties are written, so a note with several blocks is written once. */
-const PROPERTY_DELAY = 1000;
-/** Strategies run side by side when today's orders are worked out. */
-const ORDERS_CONCURRENCY = 3;
 /** After the last change to a setting, how long to wait before blocks on screen are told their defaults changed. */
 const DEFAULTS_CHECK_MS = 400;
 
@@ -89,7 +86,19 @@ export default class BacktestBlocks extends Plugin {
   });
   /** What to run before a rendered block draws again or goes away. */
   private disposers = new WeakMap<MarkdownRenderChild, () => void>();
-  private propertyWrites = new Map<string, { (): void; cancel(): void }>();
+  private properties = new NoteProperties<TFile>({
+    read: (file) => this.app.vault.cachedRead(file),
+    frontmatter: (file) => this.app.metadataCache.getFileCache(file)?.frontmatter,
+    processFrontMatter: (file, edit) => this.app.fileManager.processFrontMatter(file, edit),
+    runSource: (source, opts) => this.results.runSource(source, opts),
+    notice: (text) => void new Notice(text),
+  });
+  /** The scan of the vault for today's orders. */
+  private orders: ScanHost = {
+    clear: () => this.results.clear(),
+    find: () => this.findStrategies(),
+    run: (source, opts) => this.results.runSource(source, opts),
+  };
   /** Whether each block was left open (true) or folded (false), for blocks drawn again within a session. */
   private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
   private ordersBadge: OrdersBadge | null = null;
@@ -161,7 +170,7 @@ export default class BacktestBlocks extends Plugin {
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
         if (!file || file.extension !== 'md') return false;
-        if (!checking) void this.saveProperties(file, true);
+        if (!checking) void this.properties.saveProperties(file, true);
         return true;
       },
     });
@@ -188,7 +197,7 @@ export default class BacktestBlocks extends Plugin {
     this.ordersBadge = new OrdersBadge(
       Platform.isMobile ? null : this.addStatusBarItem(),
       {
-        scan: () => this.scanOrders(false, () => {}),
+        scan: () => scanOrders(this.orders, false, () => {}),
         open: () => this.openOrders(),
         notify: (text) => void new Notice(text),
       },
@@ -204,7 +213,7 @@ export default class BacktestBlocks extends Plugin {
     this.ordersBadge?.stop();
     this.checkDefaults.cancel();
     shutdownWorkers();
-    for (const write of this.propertyWrites.values()) write.cancel();
+    this.properties.cancel();
   }
 
   async saveSettings(): Promise<void> {
@@ -336,7 +345,7 @@ export default class BacktestBlocks extends Plugin {
       this.checkDefaults();
       if (this.settings.writeProperties && !opts.panel) {
         const file = this.app.vault.getAbstractFileByPath(opts.notePath);
-        if (file instanceof TFile) this.scheduleProperties(file);
+        if (file instanceof TFile) this.properties.scheduleProperties(file);
       }
     } catch (e) {
       // A drawing that was replaced or went away while it ran leaves the block to whatever replaced it.
@@ -385,72 +394,10 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** Writes text to a dated file in the results folder and says where it went. */
-  private async saveFile(title: string, ext: string, text: string): Promise<void> {
-    const folder = normalizePath(this.settings.snapshotFolder);
-    const clean = title.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
-    try {
-      if (!(await this.app.vault.adapter.exists(folder))) await this.app.vault.createFolder(folder);
-      const stem = `${folder}/${clean} ${isoDate(Date.now())}`;
-      let path = `${stem}.${ext}`;
-      for (let n = 2; await this.app.vault.adapter.exists(path); n++) path = `${stem} (${n}).${ext}`;
-      await this.app.vault.create(path, text);
-      new Notice(`Saved to ${path}`);
-    } catch (e) {
-      new Notice(`Couldn't save the file: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  /** Writes a note's properties once, a moment after the last of its blocks has rendered. */
-  private scheduleProperties(file: TFile): void {
-    const path = file.path;
-    let write = this.propertyWrites.get(path);
-    if (!write) {
-      write = debounce(() => {
-        this.propertyWrites.delete(path);
-        void this.saveProperties(file, false);
-      }, PROPERTY_DELAY);
-      this.propertyWrites.set(path, write);
-    }
-    write();
-  }
-
-  /**
-   * Stores the main figures of every strategy in a note in that note's properties. Only strategies that have a result are
-   * written; when asked for (`announce`), strategies run first, otherwise nothing runs here.
-   */
-  private async saveProperties(file: TFile, announce: boolean): Promise<void> {
-    const blocks = extractBlocks(await this.app.vault.cachedRead(file));
-    const ids = propertyIds(blocks.map((b) => b.name));
-    const produced: Record<string, string | number> = {};
-    let ran = 0;
-    for (const [i, block] of blocks.entries()) {
-      try {
-        const out = await this.results.runSource(block.source, { cachedOnly: !announce });
-        Object.assign(produced, resultProperties(out.backtest, Date.now(), ids[i]));
-        ran++;
-      } catch {
-        // A block that can't run has nothing to record; its own rendering shows why.
-      }
-    }
-    if (ran === 0) {
-      if (announce) new Notice('This note has no strategy that runs, so there is nothing to save.');
-      return;
-    }
-    const complete = ran === blocks.length;
-    const none = (plan: ReturnType<typeof planProperties>) => Object.keys(plan.set).length === 0 && plan.remove.length === 0;
-    if (none(planProperties(this.app.metadataCache.getFileCache(file)?.frontmatter, produced, complete))) {
-      if (announce) new Notice("This note's properties are already up to date.");
-      return;
-    }
-    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
-      const plan = planProperties(fm, produced, complete);
-      for (const k of plan.remove) delete fm[k];
-      Object.assign(fm, plan.set);
-    });
-    if (announce) {
-      const missed = blocks.length - ran;
-      new Notice(`Saved ${Object.keys(produced).length} figures to this note's properties.${missed > 0 ? ` ${missed} of ${blocks.length} strategies couldn't run, so figures from earlier runs were kept.` : ''}`);
-    }
+  private saveFile(title: string, ext: string, text: string): Promise<void> {
+    const { vault } = this.app;
+    const files = { exists: (path: string) => vault.adapter.exists(path), createFolder: (path: string) => vault.createFolder(path), create: (path: string, text: string) => vault.create(path, text) };
+    return saveDatedFile(files, normalizePath(this.settings.snapshotFolder), title, ext, text, (message) => new Notice(message));
   }
 
   private async renderComparison(source: string, el: HTMLElement, child: MarkdownRenderChild, notePath: string): Promise<void> {
@@ -461,24 +408,11 @@ export default class BacktestBlocks extends Plugin {
     }
     renderCompareMessage(el, `Running ${entries.length} strategies…`);
     try {
-      const curves: Curve[] = [];
-      for (const entry of entries) {
-        const file = this.app.metadataCache.getFirstLinkpathDest(entry.link.replace(/\.md$/i, ''), notePath);
-        if (!file) throw new Error(`Line ${entry.line}: there is no note called "${entry.link}".`);
-        const blocks = extractBlocks(await this.app.vault.cachedRead(file));
-        const block = entry.block === null ? blocks[0] : blocks.find((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
-        if (!block) {
-          throw new Error(entry.block === null ? `Line ${entry.line}: "${file.basename}" has no strategy block.` : `Line ${entry.line}: "${file.basename}" has no strategy named "${entry.block}".`);
-        }
-        let out: RunOutput;
-        try {
-          out = await this.results.runSource(block.source);
-        } catch (e) {
-          throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
-        }
-        const { run } = out.backtest;
-        curves.push({ label: entry.label ?? block.name ?? file.basename, t: run.t, equity: run.equity, cash: cashIndex(run.cashReturn) });
-      }
+      const curves = await compareCurves(entries, {
+        note: (link) => this.app.metadataCache.getFirstLinkpathDest(link, notePath),
+        read: (file) => this.app.vault.cachedRead(file),
+        run: (source) => this.results.runSource(source),
+      });
       el.replaceChildren();
       const weights = entries.every((e) => e.weight !== null) ? entries.map((e) => e.weight!) : null;
       child.register(renderCompare(el, { curves, weights, capital: this.settings.capital }));
@@ -501,32 +435,10 @@ export default class BacktestBlocks extends Plugin {
     });
   }
 
-  /** Every strategy in the vault, run and read as today's orders. `force` refetches every price once. */
-  private async scanOrders(force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]> {
-    const started = Date.now();
-    // Results are dropped so every strategy runs again. A price fetched since the scan began is fresh for the strategies
-    // that come after, so each ticker is downloaded once however many strategies use it.
-    if (force) this.results.clear();
-    const found = await this.findStrategies();
-    let done = 0;
-    onProgress(0, found.length);
-    return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
-      let status: StrategyStatus;
-      try {
-        const freshForMs = force ? Date.now() - started : undefined;
-        status = statusFrom(f.note, f.name, await this.results.runSource(f.source, { freshForMs, background: true }), Date.now());
-      } catch (e) {
-        status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
-      }
-      onProgress(++done, found.length);
-      return status;
-    });
-  }
-
   private openOrders(): void {
     new OrdersModal(this.app, {
       scan: async (force, onProgress) => {
-        const list = await this.scanOrders(force, onProgress);
+        const list = await scanOrders(this.orders, force, onProgress);
         this.ordersBadge?.show(list);
         return list;
       },
@@ -550,13 +462,7 @@ export default class BacktestBlocks extends Plugin {
     new CsvModal(this.app, {
       files: () => vault.getFiles().filter((f) => f.extension.toLowerCase() === 'csv').map((f) => f.path),
       read: (path) => vault.adapter.read(normalizePath(path)),
-      create: async (path, text) => {
-        const dot = path.lastIndexOf('.');
-        let free = path;
-        for (let n = 2; await vault.adapter.exists(free); n++) free = `${path.slice(0, dot)}-${n}${path.slice(dot)}`;
-        await vault.create(free, text);
-        return free;
-      },
+      create: (path, text) => createWithFreeName({ exists: (p) => vault.adapter.exists(p), create: (p, t) => vault.create(p, t) }, path, text),
       insert: (text) => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!view || view.getMode() !== 'source') return false;
