@@ -323,3 +323,14 @@
   gap: 8px;
   margin-top: 12px;
 }
+
+/* Keeps the label readable where it crosses a grid line. */
+.bt-test-label {
+  paint-order: stroke;
+  stroke: var(--background-primary);
+  stroke-width: 3px;
+}
+/* A table wider than a phone scrolls sideways inside its own box. */
+.bt-wide {
+  overflow-x: auto;
+}

@@ -96,7 +96,7 @@ function segments(root: HTMLElement, bt: Backtest): void {
   if (!bt.segments) return;
   const wrap = h(root, 'div', 'bt-split');
   h(wrap, 'div', 'bt-split-title', 'Before and after the test date');
-  const table = h(wrap, 'table', 'bt-table');
+  const table = h(h(wrap, 'div', 'bt-wide'), 'table', 'bt-table');
   const head = h(h(table, 'thead'), 'tr');
   h(head, 'th');
   for (const seg of bt.segments) h(head, 'th', 'bt-num', seg.label);
@@ -203,7 +203,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
 }
 
 function positions(root: HTMLElement, bt: Backtest, intraday: boolean): void {
-  const table = h(root, 'table', 'bt-table');
+  const table = h(h(root, 'div', 'bt-wide'), 'table', 'bt-table');
   const head = h(h(table, 'thead'), 'tr');
   for (const [text, num] of [['Ticker', 0], ['Weight', 1], ['Now', 0], ['Trades', 1], ['Won', 1], ['Average trade', 1]] as const) {
     h(head, 'th', num ? 'bt-num' : undefined, text);
@@ -291,7 +291,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   const split = bt.spec.testFrom;
   if (split !== null && split > t[0] && split < t[n - 1]) {
     s(svg, 'rect', { x: x(split), y: top, width: width - right - x(split), height: ddTop + ddH - top, class: 'bt-test-band' });
-    s(svg, 'text', { x: x(split) + 5, y: ddTop - 9, class: 'bt-axis' }, 'Test period');
+    s(svg, 'text', { x: x(split) + 5, y: top + 13, class: 'bt-axis bt-test-label' }, 'Test period');
   }
 
   // Grid and axis labels.
