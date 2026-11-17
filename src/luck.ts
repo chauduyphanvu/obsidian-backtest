@@ -45,6 +45,18 @@ export interface BootstrapResult {
 }
 
 /**
+ * The reshuffle's piece length: about a month, or the strategy's typical holding when that is
+ * longer, so a typical position's run stays in one piece; at most a tenth of the run, so there are
+ * pieces to reorder.
+ */
+export function blockFor(bt: Backtest): number {
+  const month = monthOfBars(bt.run.t);
+  const holds = bt.run.trades.map((t) => t.bars).sort((a, b) => a - b);
+  const typical = holds.length ? holds[holds.length >> 1] : 0;
+  return Math.max(1, Math.min(Math.max(month, typical), Math.floor((bt.run.t.length - 1) / 10)));
+}
+
+/**
  * Circular block bootstrap (Politis & Romano, 1992). The run's step returns are cut into blocks of
  * `blockBars` consecutive steps that start anywhere and wrap from the end to the start; each path
  * strings random blocks together until it is as long as the run. Blocks keep the short-term
@@ -226,7 +238,7 @@ const REDRAW = [1, 0.3, 0.1, 0.03, 0.01, 0.003];
 const PILOTS = 3;
 
 /** The redraw chance whose random picks trade most nearly as often as the strategy, so costs weigh the same on both. */
-export async function matchTurnover(bt: Backtest, rules: PickRules, seed: number): Promise<number> {
+export async function matchTurnover(bt: Backtest, rules: PickRules, seed: number, wait: () => Promise<void> = pause): Promise<number> {
   const rng = makeRng(seed ^ 0x2545f491);
   const want = bt.run.trades.length;
   let best = REDRAW[0];
@@ -236,7 +248,7 @@ export async function matchTurnover(bt: Backtest, rules: PickRules, seed: number
     for (let k = 0; k < PILOTS; k++) trades += randomPicks(bt, rng, redraw, rules).trades.length;
     const g = Math.abs(Math.log((trades / PILOTS + 1) / (want + 1)));
     if (g < gap) [best, gap] = [redraw, g];
-    await pause();
+    await wait();
   }
   return best;
 }
@@ -264,12 +276,20 @@ export interface RandomEntriesResult {
  * How often random entries do as well as the strategy, through the same engine. Timing mode keeps
  * each ticker's trade count and holding lengths and places them at random, with the same weights,
  * sizing, costs, slippage and cash rate, and stops off (the holding lengths already carry their
- * effect). A ranking strategy gets random picks instead. Default 200 variants.
+ * effect). A ranking strategy gets random picks instead. Default 200 variants. `onProgress` also
+ * gets the result so far.
  */
 export async function randomEntries(
   backtest: Backtest,
-  opts: { runs?: number; seed: number; onProgress?: (done: number, total: number) => void; shouldStop?: () => boolean },
+  opts: {
+    runs?: number;
+    seed: number;
+    onProgress?: (done: number, total: number, sofar: RandomEntriesResult) => void;
+    shouldStop?: () => boolean;
+    pause?: () => Promise<void>;
+  },
 ): Promise<RandomEntriesResult> {
+  const wait = opts.pause ?? pause;
   const bt = backtest;
   const total = opts.runs ?? 200;
   const mode = bt.spec.rank ? 'picks' : 'timing';
@@ -298,7 +318,7 @@ export async function randomEntries(
 
   const rng = makeRng(opts.seed);
   const rules = mode === 'picks' ? pickRules(bt) : null;
-  if (rules) result.redraw = await matchTurnover(bt, rules, opts.seed);
+  if (rules) result.redraw = await matchTurnover(bt, rules, opts.seed, wait);
   for (let k = 0; k < total; k++) {
     if (opts.shouldStop?.()) {
       result.stopped = true;
@@ -314,8 +334,8 @@ export async function randomEntries(
     if (s.cagr >= result.strategy.cagr) result.atLeast.cagr++;
     if (ratio >= result.strategy.ratio) result.atLeast.ratio++;
     result.runs++;
-    opts.onProgress?.(result.runs, total);
-    if (result.runs % BATCH === 0 && result.runs < total) await pause();
+    opts.onProgress?.(result.runs, total, result);
+    if (result.runs % BATCH === 0 && result.runs < total) await wait();
   }
   return result;
 }
@@ -452,9 +472,11 @@ export async function walkForward(
     maxRuns?: number;
     onProgress?: (done: number, total: number) => void;
     shouldStop?: () => boolean;
+    pause?: () => Promise<void>;
   } = {},
 ): Promise<WalkForwardResult | null> {
   const parse = opts.parse ?? ((overrides) => parseSpec(source, { overrides }));
+  const wait = opts.pause ?? pause;
   const metric = opts.metric ?? 'cagr';
   const spec = baseSpec(parse);
   const params = sweepParams(spec);
@@ -487,7 +509,7 @@ export async function walkForward(
       scored.push({ index, train: windows.map((w) => windowScore(run, w.train, metric)), whole: Number.isFinite(whole) ? whole : NaN });
     }
     opts.onProgress?.(++done, estimate);
-    if (done % BATCH === 0) await pause();
+    if (done % BATCH === 0) await wait();
   }
 
   // The first best wins a tie, so the order of the grid decides, not the values in the note.

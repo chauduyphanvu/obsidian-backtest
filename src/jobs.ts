@@ -1,0 +1,148 @@
+// The sweep and the luck checks as jobs: plain data in, progress and plain data out, so the same functions run in a
+// worker (see worker.ts and worker-client.ts) or, when no worker can start, on the main thread.
+
+import { runBacktest, type Backtest } from './backtest.ts';
+import { parseSpec, type Defaults } from './dsl.ts';
+import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
+import { baseSpec, runSweep, sweepParams, sweepSize, type Parse, type SweepPoint, type SweepResult } from './sweep.ts';
+import type { Bars } from './types.ts';
+
+/** A block's text and the parser defaults, so a worker parses it exactly as the note does. */
+export interface Block {
+  source: string;
+  defaults: Partial<Defaults>;
+}
+
+export type Job = { kind: 'sweep' } | { kind: 'reshuffle'; seed: number; runs: number } | { kind: 'random'; seed: number; runs: number } | { kind: 'walk' };
+export type Kind = Job['kind'];
+export type JobOf<K extends Kind> = Extract<Job, { kind: K }>;
+
+/** What each job returns. A walk-forward that is stopped returns null. */
+export interface Results {
+  sweep: SweepResult;
+  reshuffle: BootstrapResult;
+  random: RandomEntriesResult;
+  walk: WalkForwardResult | null;
+}
+
+/** What a job works on: the block's text, its prices, and the block as written, run once on them. */
+export interface Bench {
+  source: string;
+  parse: Parse;
+  data: Map<string, Bars>;
+  backtest: () => Backtest;
+}
+
+/** A bench built from plain data, as a worker has to: the block is parsed and run here, once, when a job first needs it. */
+export function benchFor(block: Block, data: Map<string, Bars>): Bench {
+  const parse: Parse = (overrides) => parseSpec(block.source, { defaults: block.defaults, overrides });
+  let bt: Backtest | undefined;
+  return { source: block.source, parse, data, backtest: () => (bt ??= runBacktest(baseSpec(parse), data)) };
+}
+
+export interface Hooks {
+  /** After each step; `sofar` is the sweep's or random entries' result so far, which grows as the job runs. */
+  onProgress?: (done: number, total: number, sofar?: SweepResult | RandomEntriesResult) => void;
+  shouldStop?: () => boolean;
+  /** Lets other work in between batches. */
+  pause?: () => Promise<void>;
+}
+
+type Runner<K extends Kind> = (job: JobOf<K>, bench: Bench, hooks: Hooks) => Promise<Results[K]>;
+
+const RUNNERS: { [K in Kind]: Runner<K> } = {
+  sweep: (_, b, hooks) => runSweep(b.source, b.data, { parse: b.parse, ...hooks }),
+  reshuffle: async (job, b) => {
+    const bt = b.backtest();
+    return bootstrap(bt.run.t, bt.run.equity, { seed: job.seed, runs: job.runs, blockBars: blockFor(bt) });
+  },
+  random: (job, b, hooks) => randomEntries(b.backtest(), { seed: job.seed, runs: job.runs, ...hooks }),
+  walk: (_, b, hooks) => walkForward(b.source, b.data, { parse: b.parse, ...hooks }),
+};
+
+export function runJob<K extends Kind>(job: JobOf<K>, bench: Bench, hooks: Hooks = {}): Promise<Results[K]> {
+  return (RUNNERS[job.kind] as Runner<K>)(job, bench, hooks);
+}
+
+/** What a worker has sent of a job's result so far: the sweep's finished variants, or random entries' latest result. */
+export interface Sofar {
+  points: SweepPoint[];
+  random: RandomEntriesResult | null;
+}
+
+/**
+ * The result of a job ended from outside (its worker stopped), from what it had sent: the same as the job returns
+ * when it notices a stop itself at that point. Null when there is nothing to show.
+ */
+export function stoppedResult<K extends Kind>(kind: K, bench: Bench, sofar: Sofar): Results[K] | null {
+  if (kind === 'sweep') {
+    const spec = bench.backtest().spec;
+    const result: SweepResult = { params: sweepParams(spec), points: sofar.points, tried: sofar.points.length, total: sweepSize(spec), stopped: true };
+    return result as Results[K];
+  }
+  if (kind === 'random' && sofar.random) return { ...sofar.random, stopped: true } as Results[K];
+  return null;
+}
+
+// ---------------------------------------------------------------- the worker's side of the messages
+
+export type ToWorker =
+  | { type: 'data'; id: number; data: Map<string, Bars> }
+  | { type: 'drop'; id: number }
+  | { type: 'job'; id: number; data: number; block: Block; job: Job };
+
+export interface Progress {
+  type: 'progress';
+  id: number;
+  done: number;
+  total: number;
+  /** Sweep variants finished since the last message. */
+  points?: SweepPoint[];
+  /** Random entries' result so far. */
+  random?: RandomEntriesResult;
+}
+
+export type FromWorker = { type: 'ready' } | Progress | { type: 'done'; id: number; result: Results[Kind] } | { type: 'error'; id: number; message: string };
+
+/** At most one progress message this often, so a fast job does not flood the main thread. */
+const PROGRESS_MS = 50;
+
+/** A worker stops by being ended, so its jobs never need to let anything in. */
+const free = () => Promise.resolve();
+
+/**
+ * Handles the messages a worker receives. Prices arrive once per block (`data`) and stay until dropped; each job
+ * names the prices it reads. Every job runs to the end in one go: the main thread stops one by ending the worker.
+ * Progress goes out at most once every `every` milliseconds.
+ */
+export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: ToWorker) => Promise<void> {
+  const sets = new Map<number, { data: Map<string, Bars>; benches: Map<string, Bench> }>();
+  return async (m) => {
+    if (m.type === 'data') sets.set(m.id, { data: m.data, benches: new Map() });
+    else if (m.type === 'drop') sets.delete(m.id);
+    else {
+      const set = sets.get(m.data)!;
+      const key = JSON.stringify(m.block);
+      let bench = set.benches.get(key);
+      if (!bench) set.benches.set(key, (bench = benchFor(m.block, set.data)));
+      let last = -Infinity;
+      let sent = 0;
+      const onProgress: Hooks['onProgress'] = (done, total, sofar) => {
+        const now = performance.now();
+        if (now - last < every) return;
+        last = now;
+        const msg: Progress = { type: 'progress', id: m.id, done, total };
+        if (sofar && 'points' in sofar) {
+          msg.points = sofar.points.slice(sent);
+          sent = sofar.points.length;
+        } else if (sofar) msg.random = sofar;
+        post(msg);
+      };
+      try {
+        post({ type: 'done', id: m.id, result: await runJob(m.job, bench, { onProgress, pause: free }) });
+      } catch (e) {
+        post({ type: 'error', id: m.id, message: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  };
+}

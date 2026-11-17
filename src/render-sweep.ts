@@ -1,4 +1,5 @@
-// The "Try other parameter values" section: runs every combination of the declared ranges and reads the result honestly.
+// The "Try other parameter values" section: runs every combination of the declared ranges (in a worker, see
+// worker-client.ts), reads the result honestly, and can write a variant's values into the block.
 
 import type { Backtest, Stats } from './backtest.ts';
 import { h, minus, niceStep, pct, s } from './dom.ts';
@@ -7,7 +8,6 @@ import {
   METRICS,
   isDeclared,
   metricOf,
-  runSweep,
   splitSummary,
   summarize,
   sweepLimit,
@@ -20,6 +20,7 @@ import {
   type SweepResult,
   type SweepSummary,
 } from './sweep.ts';
+import { blockJobs, type BlockJobs, type Running } from './worker-client.ts';
 
 export interface SweepInput {
   source: string;
@@ -76,6 +77,9 @@ export function did(m: Metric, v: number): string {
   }
 }
 
+/** The progress label while a job waits its turn behind another block's (or this block's other section's). */
+export const WAITING = 'Waiting for another run to finish…';
+
 /** Appends a progress bar with a label; hidden until shown. */
 export function progressBar(parent: HTMLElement): { set: (done: number, total: number, text: string) => void; show: (on: boolean) => void } {
   const wrap = h(parent, 'span', 'bt-progress');
@@ -131,11 +135,13 @@ export function renderSweep(parent: HTMLElement, input: SweepInput): () => void 
   const params = sweepParams(input.backtest.spec);
   if (params.length === 0) return () => {};
   const life: Life = { gone: false, observers: [] };
+  const jobs = blockJobs(input);
   const details = h(parent, 'details', 'bt-details bt-sweep');
   h(details, 'summary', undefined, 'Try other parameter values');
-  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-sweep-body'), input, params, life), { once: true });
+  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-sweep-body'), input, params, life, jobs), { once: true });
   return () => {
     life.gone = true;
+    jobs.close();
     for (const o of life.observers) o.disconnect();
   };
 }
@@ -146,7 +152,7 @@ function intro(params: SweepParam[], total: number): string {
   return `The ranges in this block give ${plural(total, 'variant')}: ${list}. Each one is a full backtest on the same prices.`;
 }
 
-function build(body: HTMLElement, input: SweepInput, params: SweepParam[], life: Life): void {
+function build(body: HTMLElement, input: SweepInput, params: SweepParam[], life: Life, jobs: BlockJobs): void {
   const total = params.reduce((n, p) => n * p.values.length, 1);
   h(body, 'p', 'bt-sweep-intro', intro(params, total));
   const refusal = sweepLimit(total);
@@ -160,31 +166,36 @@ function build(body: HTMLElement, input: SweepInput, params: SweepParam[], life:
   const stop = h(controls, 'button', 'bt-button', 'Stop');
   stop.hidden = true;
   const results = h(body, 'div', 'bt-sweep-results');
-  let stopping = false;
-  stop.addEventListener('click', () => (stopping = true));
+  let running: Running<SweepResult> | null = null;
+  stop.addEventListener('click', () => running?.stop());
   run.addEventListener('click', async () => {
-    stopping = false;
     run.hidden = true;
     stop.hidden = false;
-    progress.set(0, total, `0 of ${total}`);
+    const first = `0 of ${total}`;
+    progress.set(0, total, first);
     progress.show(true);
     results.replaceChildren();
     try {
-      const result = await runSweep(input.source, input.backtest.data, {
-        parse: input.parse,
-        onProgress: (done, n) => progress.set(done, n, `${done} of ${n}`),
-        shouldStop: () => stopping || life.gone,
-      });
+      running = jobs.run(
+        { kind: 'sweep' },
+        {
+          onProgress: (done, n) => progress.set(done, n, `${done} of ${n}`),
+          onWait: (waiting) => progress.set(0, total, waiting ? WAITING : first),
+        },
+      );
+      const result = await running.done;
       if (life.gone) return;
-      showResults(results, input, result, life);
-      if (result.stopped) {
+      if (result) showResults(results, input, result, life);
+      if (!result || result.stopped) {
         run.textContent = `Run all ${plural(total, 'variant')}`;
         run.hidden = false;
       }
     } catch (e) {
+      if (life.gone) return;
       h(results, 'div', 'bt-warning', e instanceof Error ? e.message : String(e));
       run.hidden = false;
     } finally {
+      running = null;
       stop.hidden = true;
       progress.show(false);
     }
@@ -215,9 +226,11 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
   const splitBox = h(results, 'div');
   const periodRow = h(results, 'div', 'bt-pickers');
   const content = h(results, 'div');
+  const pick = input.apply ? picking(h(results, 'div', 'bt-sweep-picked'), result, input.apply) : null;
 
   const draw = () => {
     for (const o of life.observers.splice(0)) o.disconnect();
+    pick?.marks.clear();
     explain.textContent = `${METRICS[view.metric].label}: ${METRICS[view.metric].explain}.`;
     splitBox.replaceChildren();
     if (segments) splitCallout(splitBox, result, view.metric, testDay!);
@@ -229,10 +242,11 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
       return;
     }
     reading(content, result, summary, input.backtest.benchmark.label, bench);
-    if (params.length === 1) dotLine(content, life, result, summary);
-    else heatmapSection(content, life, result, summary, view, draw);
-    bestValues(content, params, summary, view.period, testDay);
-    if (params.length >= 3) bestTable(content, result, summary);
+    if (params.length === 1) dotLine(content, life, result, summary, pick);
+    else heatmapSection(content, life, result, summary, view, draw, pick);
+    if (pick) content.append(pick.el);
+    bestValues(content, params, summary, view.period, testDay, input.apply);
+    if (params.length >= 3) bestTable(content, result, summary, pick);
   };
 
   select(pickers, 'Measure', (Object.keys(METRICS) as Metric[]).map((m) => [m, METRICS[m].label]), view.metric, (m) => {
@@ -327,42 +341,106 @@ function reading(el: HTMLElement, result: SweepResult, sum: SweepSummary, benchL
   }
 }
 
+/** Whether the best values on a view are offered: not when the view includes the test period. */
+const offersBest = (period: Period, testDay: string | null) => testDay === null || period === 'before';
+
 /**
  * What the line under a sweep's reading says about its best values: which part of the run chose them, and whether to try them.
  * `testDay` is the day `test from` sets, or null when the block has none. Values chosen on any view that includes the test
  * period are not offered, because their later result would not be a fair test.
  */
 export function bestWords(period: Period, testDay: string | null): { label: string; advice: string } {
-  const tryIt = 'To try it, change those lines in the block; the note stays the record of what you chose.';
-  if (testDay === null) return { label: 'Best variant here: ', advice: tryIt };
-  if (period === 'before') return { label: `Best before ${testDay}: `, advice: tryIt };
+  const label = testDay === null ? 'Best variant here: ' : period === 'before' ? `Best before ${testDay}: ` : period === 'after' ? `Best from ${testDay} on: ` : 'Best on the whole run: ';
   return {
-    label: period === 'after' ? `Best from ${testDay} on: ` : 'Best on the whole run: ',
-    advice: 'Values picked on this view have seen the test period, so their later result is not a fair test.',
+    label,
+    advice: offersBest(period, testDay)
+      ? 'To try it, change those lines in the block; the note stays the record of what you chose.'
+      : 'Values picked on this view have seen the test period, so their later result is not a fair test.',
   };
 }
 
-function bestValues(el: HTMLElement, params: SweepParam[], sum: SweepSummary, period: Period, testDay: string | null): void {
+const valueCodes = (el: HTMLElement, params: SweepParam[], values: Record<string, number>) =>
+  params.forEach((p, i) => {
+    if (i > 0) el.append(', ');
+    h(el, 'code', undefined, `${p.name} = ${paramText(p, values[p.name])}`);
+  });
+
+/** A button that writes `values` into the block, and a word when it has. */
+function applyButton(parent: HTMLElement, values: Record<string, number>, apply: (values: Record<string, number>) => void): void {
+  const row = h(parent, 'div', 'bt-sweep-apply');
+  const button = h(row, 'button', 'bt-button', 'Use these values in the block');
+  const said = h(row, 'span', 'bt-sweep-applied');
+  button.addEventListener('click', () => {
+    try {
+      apply(values);
+      said.textContent = 'Done: the block now uses these values.';
+    } catch (e) {
+      said.textContent = e instanceof Error ? e.message : String(e);
+    }
+  });
+}
+
+function bestValues(el: HTMLElement, params: SweepParam[], sum: SweepSummary, period: Period, testDay: string | null, apply: SweepInput['apply']): void {
   const words = bestWords(period, testDay);
   const row = h(el, 'div', 'bt-sweep-best');
   h(row, 'span', undefined, words.label);
-  params.forEach((p, i) => {
-    if (i > 0) row.append(', ');
-    h(row, 'code', undefined, `${p.name} = ${paramText(p, sum.best.values[p.name])}`);
-  });
+  valueCodes(row, params, sum.best.values);
   row.append(`. ${words.advice}`);
+  if (apply && offersBest(period, testDay) && sum.best !== sum.declared) applyButton(row, sum.best.values, apply);
+}
+
+/** A variant the reader picks from a chart or the table, with a button that writes its values into the block. */
+interface Picking {
+  el: HTMLElement;
+  picked: SweepPoint | null;
+  /** Picks a variant and moves the row with the button to just after `near`. */
+  pick(p: SweepPoint, near: Element): void;
+  /** Each chart's way of marking the pick, set again whenever it draws. */
+  marks: Map<string, (p: SweepPoint | null) => void>;
+}
+
+function picking(el: HTMLElement, result: SweepResult, apply: (values: Record<string, number>) => void): Picking {
+  const params = result.params;
+  const where = params.length === 1 ? 'click or tap it on the chart' : params.length === 2 ? 'click or tap its cell' : 'click or tap its cell or its row in the table';
+  const self: Picking = {
+    el,
+    picked: null,
+    pick(p, near) {
+      self.picked = p;
+      near.after(el);
+      show();
+      for (const mark of self.marks.values()) mark(p);
+    },
+    marks: new Map(),
+  };
+  const show = () => {
+    el.replaceChildren();
+    const p = self.picked;
+    if (!p) {
+      h(el, 'span', 'bt-sweep-pick-hint', `To try other values, ${where}.`);
+      return;
+    }
+    el.append('Picked: ');
+    valueCodes(el, params, p.values);
+    el.append('. ');
+    if (isDeclared(result, p)) el.append('These are the values in the note.');
+    else if (p.error) el.append('These values could not run.');
+    else applyButton(el, p.values, apply);
+  };
+  show();
+  return self;
 }
 
 // ---------------------------------------------------------------- one parameter: dots on a line
 
-function dotLine(el: HTMLElement, life: Life, result: SweepResult, sum: SweepSummary): void {
+function dotLine(el: HTMLElement, life: Life, result: SweepResult, sum: SweepSummary, pick: Picking | null): void {
   const chart = h(el, 'div', 'bt-chart bt-sweep-chart');
   const tip = h(chart, 'div', 'bt-tip');
   tip.hidden = true;
-  observe(life, chart, (width) => drawDotLine(chart, tip, width, result, sum));
+  observe(life, chart, (width) => drawDotLine(chart, tip, width, result, sum, pick));
 }
 
-function drawDotLine(chart: HTMLElement, tip: HTMLElement, width: number, result: SweepResult, sum: SweepSummary): void {
+function drawDotLine(chart: HTMLElement, tip: HTMLElement, width: number, result: SweepResult, sum: SweepSummary, pick: Picking | null): void {
   chart.querySelector('svg')?.remove();
   tip.hidden = true;
   const p = result.params[0];
@@ -448,11 +526,34 @@ function drawDotLine(chart: HTMLElement, tip: HTMLElement, width: number, result
   });
 
   const hl = s(svg, 'circle', { r: 5.5, class: 'bt-dot bt-dot-strategy', visibility: 'hidden' });
+  const ring = pick ? s(svg, 'circle', { r: 9, class: 'bt-sweep-picked-ring', visibility: 'hidden' }) : null;
   const hit = s(svg, 'rect', { x: left - 8, y: top, width: plotW + 16, height: plotH, fill: 'transparent' });
-  const show = (clientX: number) => {
+  const nearest = (clientX: number) => {
     const px = clientX - svg.getBoundingClientRect().left;
     let i = 0;
     for (let k = 1; k < xs.length; k++) if (Math.abs(x(xs[k]) - px) < Math.abs(x(xs[i]) - px)) i = k;
+    return i;
+  };
+  if (pick && ring) {
+    const mark = (q: SweepPoint | null) => {
+      const i = q ? q.index[0] : -1;
+      const on = i >= 0 && !Number.isNaN(ys[i]);
+      ring.setAttribute('visibility', on ? 'visible' : 'hidden');
+      if (on) {
+        ring.setAttribute('cx', String(x(xs[i])));
+        ring.setAttribute('cy', String(y(ys[i])));
+      }
+    };
+    pick.marks.set('line', mark);
+    mark(pick.picked);
+    svg.classList.add('bt-sweep-pickable');
+    hit.addEventListener('click', (e) => {
+      const point = byIndex.get(nearest((e as MouseEvent).clientX));
+      if (point) pick.pick(point, chart);
+    });
+  }
+  const show = (clientX: number) => {
+    const i = nearest(clientX);
     const point = byIndex.get(i);
     tip.replaceChildren();
     h(tip, 'div', 'bt-tip-date', `${p.name} ${paramText(p, xs[i])}${i === declaredI ? ' (in the note)' : ''}`);
@@ -493,7 +594,7 @@ function tipRows(tip: HTMLElement, point: SweepPoint, m: Metric): void {
 
 // ---------------------------------------------------------------- two or more: a heatmap
 
-function heatmapSection(el: HTMLElement, life: Life, result: SweepResult, sum: SweepSummary, view: View, redraw: () => void): void {
+function heatmapSection(el: HTMLElement, life: Life, result: SweepResult, sum: SweepSummary, view: View, redraw: () => void, pick: Picking | null): void {
   const params = result.params;
   if (params.length >= 3) {
     const row = h(el, 'div', 'bt-pickers');
@@ -518,7 +619,7 @@ function heatmapSection(el: HTMLElement, life: Life, result: SweepResult, sum: S
   tip.hidden = true;
   scroll.addEventListener('scroll', () => (tip.hidden = true));
   const key = h(el, 'div', 'bt-sweep-key');
-  observe(life, chart, (width) => drawHeatmap(scroll, tip, key, width, result, sum, view, fixed));
+  observe(life, chart, (width) => drawHeatmap(scroll, tip, key, width, result, sum, view, fixed, pick));
 }
 
 /** Formats from most to least precise; the first whose labels fit the cells is used. */
@@ -542,7 +643,7 @@ function tint(v: number, peak: number): string {
   return `color-mix(in srgb, var(${v > 0 ? '--bt-sweep-gain' : '--bt-sweep-loss'}) ${share}%, var(--background-primary))`;
 }
 
-function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, width: number, result: SweepResult, sum: SweepSummary, view: View, fixed: number[]): void {
+function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, width: number, result: SweepResult, sum: SweepSummary, view: View, fixed: number[], pick: Picking | null): void {
   scroll.replaceChildren();
   tip.hidden = true;
   const m = sum.metric;
@@ -616,16 +717,40 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
     tip.hidden = true;
     hl.setAttribute('visibility', 'hidden');
   };
-  const show = (e: Event) => {
+  /** The row and column under the pointer, or null off the grid. */
+  const cellAt = (e: Event): [number, number] | null => {
     const box = svg.getBoundingClientRect();
-    const px = (e as PointerEvent).clientX - box.left;
-    const py = (e as PointerEvent).clientY - box.top;
-    const c = Math.floor((px - labelW) / cellW);
-    const r = Math.floor((py - top) / cellH);
-    if (c < 0 || c >= cols || r < 0 || r >= rowP.values.length) {
+    const c = Math.floor(((e as MouseEvent).clientX - box.left - labelW) / cellW);
+    const r = Math.floor(((e as MouseEvent).clientY - box.top - top) / cellH);
+    return c < 0 || c >= cols || r < 0 || r >= rowP.values.length ? null : [r, c];
+  };
+  if (pick) {
+    const ring = s(svg, 'rect', { width: cellW - 3, height: cellH - 3, rx: 2, class: 'bt-sweep-picked-outline', visibility: 'hidden' });
+    const mark = (q: SweepPoint | null) => {
+      // Shown when the pick lies on the slice of the grid drawn here.
+      const on = q !== null && q.index.every((k, d) => d === view.down || d === view.across || k === fixed[d]);
+      ring.setAttribute('visibility', on ? 'visible' : 'hidden');
+      if (on) {
+        ring.setAttribute('x', String(labelW + q.index[view.across] * cellW + 1.5));
+        ring.setAttribute('y', String(top + q.index[view.down] * cellH + 1.5));
+      }
+    };
+    pick.marks.set('heat', mark);
+    mark(pick.picked);
+    svg.classList.add('bt-sweep-pickable');
+    svg.addEventListener('click', (e) => {
+      const at = cellAt(e);
+      const q = at && cell(at[0], at[1]);
+      if (q) pick.pick(q, key);
+    });
+  }
+  const show = (e: Event) => {
+    const at = cellAt(e);
+    if (!at) {
       hide();
       return;
     }
+    const [r, c] = at;
     hl.setAttribute('x', String(labelW + c * cellW + 0.5));
     hl.setAttribute('y', String(top + r * cellH + 0.5));
     hl.setAttribute('visibility', 'visible');
@@ -666,7 +791,7 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
   h(key, 'div', 'bt-note', `${METRICS[m].label} in each cell${format.unit}: blue for gains, red for losses, deeper for larger.${failed}${svgW > width ? ' Scroll sideways for more.' : ''}`);
 }
 
-function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary): void {
+function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary, pick: Picking | null): void {
   const m = sum.metric;
   h(el, 'div', 'bt-stats-heading', `The ${Math.min(TABLE_ROWS, sum.ranked.length)} best variants`);
   const wrap = h(el, 'div', 'bt-scroll');
@@ -677,12 +802,28 @@ function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary): voi
   h(head, 'th', 'bt-num', METRICS[m].label);
   h(head, 'th', 'bt-num', 'Trades');
   const body = h(table, 'tbody');
+  const rows: [SweepPoint, HTMLTableRowElement][] = [];
   sum.ranked.slice(0, TABLE_ROWS).forEach((q, i) => {
     const row = h(body, 'tr', q === sum.declared ? 'bt-sweep-row-declared' : undefined);
     h(row, 'td', 'bt-num', String(i + 1));
     for (const p of result.params) h(row, 'td', 'bt-num', paramText(p, q.values[p.name]));
     h(row, 'td', 'bt-num', fmtMetric(m, metricOf(q, m, sum.period)));
     h(row, 'td', 'bt-num', String(q.trades));
+    if (!pick) return;
+    rows.push([q, row]);
+    row.classList.add('bt-sweep-pickable');
+    row.tabIndex = 0;
+    row.addEventListener('click', () => pick.pick(q, wrap));
+    row.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      pick.pick(q, wrap);
+    });
   });
+  if (pick) {
+    const mark = (p: SweepPoint | null) => rows.forEach(([q, row]) => row.classList.toggle('bt-sweep-row-picked', q === p));
+    pick.marks.set('table', mark);
+    mark(pick.picked);
+  }
   if (sum.declaredRank !== null) h(el, 'div', 'bt-note', sum.declaredRank <= TABLE_ROWS ? 'The row in bold holds the values in the note.' : `The values in the note rank ${ordinal(sum.declaredRank)}.`);
 }
