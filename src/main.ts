@@ -435,6 +435,8 @@ export default class BacktestBlocks extends Plugin {
       };
       // Where runs happen on the main thread, a drag redoes only a block that runs within a frame.
       const followsDrag = () => !runsInForeground() || lastMs <= LIMITS.dragMs;
+      // Derived slider ranges are trimmed to values the block reads with.
+      const accepts = (values: Record<string, number>) => runner.parse(source, values).spec !== null;
       // The panel keeps its own view of a block, apart from the note's folded or open state.
       const stateKey = opts.panel ? undefined : (opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined));
       const drawn = renderResult(el, {
@@ -445,7 +447,7 @@ export default class BacktestBlocks extends Plugin {
         sections,
         compact: opts.compact ?? this.settings.resultView === 'compact',
         remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
-        params: spec.params.length > 0 ? { rerun, apply: opts.apply, followsDrag } : undefined,
+        params: spec.params.length > 0 ? { rerun, apply: opts.apply, followsDrag, accepts } : undefined,
       });
       this.disposers.set(child, () => {
         drawn();

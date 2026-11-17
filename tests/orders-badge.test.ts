@@ -42,6 +42,18 @@ test('the tooltip lists the orders in words, sells first', () => {
   assert.equal(v.orders, 3);
 });
 
+test('the tooltip says Add for a later entry and Buy for the first', () => {
+  const base = status('Adding', [['buy', 'QQQ'], ['buy', 'SPY'], ['buy', 'GLD', 'last close'], ['buy', 'TLT', 'last close']]);
+  const orders = base.orders.map((o, i) => ({ ...o, step: { k: [1, 2, 2, 1][i], n: 3 } }));
+  assert.deepEqual(ready([{ ...base, orders }]).tooltip.split('\n'), [
+    'Buy QQQ at the next open, Adding',
+    'Add SPY at the next open, Adding',
+    'Added GLD at the last close, Adding',
+    'Bought TLT at the last close, Adding',
+    'Click to open the orders window.',
+  ]);
+});
+
 test('the tooltip gives each order its own timing, and the count is every order the window lists', () => {
   const list = [
     status('Open', [['buy', 'SPY']]),

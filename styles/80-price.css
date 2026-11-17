@@ -102,9 +102,15 @@
   fill: var(--text-muted);
 }
 
+.bt-root .bt-price-tip {
+  /* A position bought in entries has a longer line than a plain buy: it wraps in a narrow chart instead of running off it. */
+  max-width: calc(100% - 4px);
+  box-sizing: border-box;
+  white-space: normal;
+}
 .bt-price-tip-row {
   display: grid;
-  grid-template-columns: auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
   justify-content: space-between;
   gap: 14px;
 }
@@ -112,6 +118,7 @@
   color: var(--text-muted);
 }
 .bt-price-tip-value {
+  overflow-wrap: anywhere;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }

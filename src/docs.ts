@@ -435,7 +435,7 @@ word(
   'for',
   'for TICKER:',
   'rules and stops for one ticker: for TLT:',
-  'Starts rules for one ticker, which must be in the universe. A buy or sell rule, stop loss, trailing stop or take profit written below it replaces the shared one for that ticker only.',
+  'Starts rules for one ticker, which must be in the universe. A buy, sell or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for that ticker only.',
   'for TLT:',
 );
 word('for all', 'for all:', 'back to the rules every ticker shares', 'Goes back to the rules every ticker shares. What you write after it applies to every ticker that has no rule of its own.', 'for all:');
@@ -664,9 +664,10 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
   switch (here) {
     case 'buy':
     case 'sell':
+    case 'add':
       return next && nextWord === 'when' ? target(t.from, next.to, `${here} when`) : null;
     case 'when':
-      return prev && (prevWord === 'buy' || prevWord === 'sell') ? target(prev.from, t.to, `${prevWord} when`) : null;
+      return prev && (prevWord === 'buy' || prevWord === 'sell' || prevWord === 'add') ? target(prev.from, t.to, `${prevWord} when`) : null;
     case 'for':
       return kind === 'for' && next && text(next).toLowerCase() === 'all' ? target(t.from, next.to, 'for all') : target(t.from, t.to, 'for');
     case 'all':

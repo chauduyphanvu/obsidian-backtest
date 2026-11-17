@@ -406,7 +406,7 @@ test('the date to jump to: the first bar on or after it', () => {
 
 test('the near miss: every part of an and chain held but one, and that one is false', () => {
   const row = (buy: DebugRow['buy'], chain: DebugRow['buyChain'], over: Partial<DebugRow> = {}): DebugRow => ({
-    index: 0, bar: 0, t: 0, close: 1, cells: [], buy, buyChain: chain, sell: null, held: false, readHeld: false, shares: NaN, resized: false, rank: null, events: [], what: '', ...over,
+    index: 0, bar: 0, t: 0, close: 1, cells: [], buy, buyChain: chain, sell: null, held: false, readHeld: false, shares: NaN, resized: false, entries: 0, entriesAllowed: 1, rank: null, events: [], what: '', ...over,
   });
   assert.equal(nearMiss(row('no', ['yes', 'yes', 'no'])), true);
   assert.equal(nearMiss(row('no', ['no', 'yes'])), true);
@@ -613,6 +613,17 @@ const CASES: Case[] = [
   { name: 'fill at the close', src: 'universe: A\ncapital: 10000\nfill: close\nstop loss: 4%\nbuy when close > sma(15)\nsell when close < sma(15) or bars held >= 12', tickers: ['A'] },
   { name: 'fill at the close, ranked', src: 'universe: A, B, C\ncapital: 10000\nfill: close\nrebalance: weekly\nhold: top 1 by roc(10)\nbuy when close > sma(20)', tickers: ['A', 'B', 'C'] },
   { name: 'fill at the close with an ATR distance', src: 'universe: A, B\ncapital: 10000\nfill: close\ntrailing stop: 3 atr(10)\nbuy when close > sma(4)\nsell when close < sma(4)', tickers: ['A', 'B'], gap: { B: 6 } },
+  { name: 'three entries with a stop, costs and a commission', src: 'universe: A\ncapital: 10000\ncosts: 5 bps\ncommission: 1\nentries: 3\nstop loss: 6%\nbuy when close > sma(20)\nadd when close > last entry price * 1.02\nsell when close < sma(20) * 0.98', tickers: ['A'] },
+  {
+    name: 'four entries on two calendars with a trailing stop, slippage and a commission per share',
+    src: 'universe: A, B\ncapital: 10000\nslippage: 5 bps\ncommission: 0.01 per share, min 1\nentries: 4\ntrailing stop: 8%\nbuy when close > sma(10)\nadd when close > entry price * 1.03 and bars held >= 2\nsell when close < sma(10) * 0.97',
+    tickers: ['A', 'B'],
+    gap: { B: 7 },
+  },
+  { name: 'entries with an ATR stop and risk sizing', src: 'universe: A\ncapital: 10000\nentries: 3\nstop loss: 2 atr(14)\nrisk per trade: 1% at 2 atr(14)\nbuy when close > sma(5)\nadd when close > last entry price * 1.01 and entries made < 3\nsell when close < sma(5)', tickers: ['A'] },
+  { name: 'entries and weekly rebalancing', src: 'universe: A 60%, B 40%\ncapital: 10000\nrebalance: weekly\nentries: 3\nbuy when close > sma(10)\nadd when close > last entry price * 1.02\nsell when close < sma(10) * 0.98', tickers: ['A', 'B'] },
+  { name: 'entries at the close', src: 'universe: A\ncapital: 10000\nfill: close\nentries: 3\nstop loss: 5%\nbuy when close > sma(10)\nadd when close > last entry price * 1.02\nsell when close < sma(10) * 0.98', tickers: ['A'] },
+  { name: 'entries with a ranking', src: 'universe: A, B, C\ncapital: 10000\nrebalance: monthly\nentries: 2\nhold: top 2 by roc(20)\nbuy when close > sma(30)\nadd when close > last entry price * 1.02\nsell when close < sma(30)', tickers: ['A', 'B', 'C'] },
   { name: 'hourly bars', src: 'universe: A\ndata: binance\ncapital: 10000\ninterval: 1h\nstop loss: 3%\nbuy when close > sma(12)\nsell when close < sma(12)', tickers: ['A'], hourly: true },
 ];
 
@@ -620,6 +631,9 @@ const CASES: Case[] = [
 function heldAt(trades: Trade[], t: number, last: number): boolean {
   return trades.some((tr) => tr.entryT <= t && (tr.reason === 'open' ? t <= last : t < tr.exitT));
 }
+
+/** The entries a trade had made by the end of the bar at time `t`. */
+const entriesAt = (tr: Trade, t: number) => tr.entries!.filter((e) => e.t <= t).length;
 
 function build(c: Case): Backtest {
   const data: Record<string, Bars> = {};
@@ -635,7 +649,7 @@ test('the strategies above between them make every kind of bar the table explain
     for (const t of bt.run.trades) reasons.add(t.reason);
     for (const asset of c.tickers) for (const r of rowsOf(bt, asset)) for (const e of r.events) seen.set(e.k, (seen.get(e.k) ?? 0) + 1);
   }
-  for (const kind of ['buy', 'sell', 'long', 'rearm', 'warmup', 'sell-first', 'pending', 'kept', 'ranked-out']) assert.ok(seen.get(kind), `no bar of kind ${kind}: ${JSON.stringify([...seen])}`);
+  for (const kind of ['buy', 'sell', 'long', 'rearm', 'warmup', 'sell-first', 'pending', 'kept', 'ranked-out', 'add', 'whole']) assert.ok(seen.get(kind), `no bar of kind ${kind}: ${JSON.stringify([...seen])}`);
   assert.deepEqual([...reasons].sort(), ['open', 'signal', 'stop loss', 'take profit', 'trailing stop']);
   assert.equal(seen.get('no-cash'), undefined);
 });
@@ -650,6 +664,7 @@ for (const c of CASES) {
     const last = bt.run.t[bt.run.t.length - 1];
     let warmups = 0;
     let skippedRuns = 0;
+    let addsMade = 0;
 
     for (const asset of c.tickers) {
       const trades = bt.run.trades.filter((t) => t.asset === asset);
@@ -696,7 +711,7 @@ for (const c of CASES) {
         const named = decision.events.find((e) => e.k === 'buy' && e.trade === tr);
         assert.ok(named, `${asset} ${stamp(decision.t, intraday)}: the decision row names its trade`);
         assert.equal(fill.t, tr.entryT);
-        assert.ok(decision.what.includes(`at ${price(tr.entryPrice)}`), decision.what);
+        assert.ok(decision.what.includes(`at ${price(tr.entries?.[0].price ?? tr.entryPrice)}`), decision.what);
         assert.ok(decision.what.includes(atClose && tr.entryT === decision.t ? 'at this close' : stamp(tr.entryT, intraday)), decision.what);
         assert.ok(fill.events.some((e) => e.k === 'buy' && e.trade === tr && e.stage !== 'decided'));
         if (tr.reason !== 'open') {
@@ -735,6 +750,39 @@ for (const c of CASES) {
         }
       }
 
+      // Every entry of every trade is on its bar with its price, and every add the table names is one of them.
+      let adds = 0;
+      for (const tr of trades) {
+        const n = bt.spec.entries ?? 1;
+        assert.equal(tr.entries !== undefined, n > 1, `${asset}: entries are recorded when they are allowed`);
+        tr.entries?.forEach((e, k) => {
+          const fill = at(e.t);
+          assert.equal(fill.entries, entriesAt(tr, e.t), `${asset} ${stamp(e.t, intraday)}: entries made at the end of the bar`);
+          assert.ok(positionWords(fill).includes(`${fill.entries} of ${n} entries`), positionWords(fill));
+          if (k === 0) return;
+          const named = fill.events.find((x) => x.k === 'add' && x.trade === tr && x.entry === k + 1 && x.stage !== 'decided');
+          assert.ok(named, `${asset} ${stamp(e.t, intraday)}: the fill row names entry ${k + 1}`);
+          assert.ok(fill.what.includes(`entry ${k + 1} of ${n}`) && fill.what.includes(price(e.price)), fill.what);
+          const moved = tr.why!.adds![k - 1];
+          assert.ok(fill.what.includes(`Average entry price now ${price(moved.average)}`), fill.what);
+          if (moved.stopLoss !== null) assert.ok(fill.what.includes(`stop loss moved to ${price(moved.stopLoss)}`), fill.what);
+          const decision = at(e.signalT);
+          assert.ok(decision.events.some((x) => x.k === 'add' && x.trade === tr && x.entry === k + 1 && x.stage !== 'filled'), `${asset} ${stamp(e.signalT, intraday)}: the decision row names entry ${k + 1}`);
+          assert.equal(decision.cells.some((c, n) => c.outcome === 'yes' && bt.spec.rules[asset].add && debugColumns(bt, asset)[n].group === 'add' && debugColumns(bt, asset)[n].whole), true, `${asset}: the add rule shows as held at its decision`);
+          adds++;
+        });
+      }
+      let named = 0;
+      for (const r of rows) for (const e of r.events) if (e.k === 'add') {
+        assert.ok(e.trade.entries![e.entry - 1], `${asset} ${stamp(r.t, intraday)}: an add with no entry`);
+        if (e.stage !== 'decided') {
+          assert.equal(e.trade.entries![e.entry - 1].t, r.t);
+          named++;
+        }
+      }
+      assert.equal(named, adds, `${asset}: adds named on their fill bars`);
+      addsMade += adds;
+
       // Runs of bars that waited for an input are the runs the engine counted.
       if (!ranked) {
         let inRun = false;
@@ -755,6 +803,7 @@ for (const c of CASES) {
       // Windows agree with the whole run.
       for (const [from, to] of [[0, 1], [37, 100], [100, 101], [rows.length - 60, rows.length], [150, 400]]) assert.deepEqual(debugRows(bt, asset, from, to), rows.slice(from, to));
     }
+    if (bt.spec.entries) assert.ok(addsMade >= 5, `${c.name}: only ${addsMade} adds to check`);
     if (!ranked) assert.equal(skippedRuns, bt.run.skipped.reduce((n, s) => n + s.count, 0), 'runs of waiting bars against the engine\'s own count');
     assert.ok(warmups >= 0);
   });

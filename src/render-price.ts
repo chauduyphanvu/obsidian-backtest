@@ -4,7 +4,9 @@ import { h, price, s, signedPct, stamp, timeTicks } from './dom.ts';
 import type { Trade } from './engine.ts';
 import {
   MARKER_REACH,
+  boughtWording,
   buyAndHold,
+  buyPoints,
   clipBars,
   clipTrades,
   decimate,
@@ -195,7 +197,7 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     const buys: string[] = [];
     const sells: string[] = [];
     for (const w of held) {
-      if (w.buy) buys.push(markerPath('buy', x(w.trade.entryT), y(w.trade.entryPrice)));
+      for (const p of buyPoints(w)) buys.push(markerPath('buy', x(p.t), y(p.price)));
       if (w.sell) sells.push(markerPath('sell', x(w.trade.exitT), y(w.trade.exitPrice)));
     }
     drawn.buys = buys.length;
@@ -239,13 +241,14 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     if (trade) {
       const open = trade.reason === 'open';
       h(tip, 'div', 'bt-price-tip-sep');
-      row('Bought', `${stamp(trade.entryT, intraday)} at ${price(trade.entryPrice)}`);
+      row('Bought', boughtWording(trade, (time) => stamp(time, intraday), price));
       row('Sold', open ? 'still held' : `${stamp(trade.exitT, intraday)} at ${price(trade.exitPrice)}`);
       row(open ? 'Return so far' : 'Return', signedPct(trade.ret));
       if (!open) row('Reason', exitWording(trade.reason));
     }
     tip.hidden = false;
-    // To the right of the crosshair, or to the left when it would run off the chart.
+    // To the right of the crosshair, or to the left when it would run off the chart. Measured from the left edge, where it has the most room.
+    tip.style.left = '0px';
     const w = tip.offsetWidth;
     tip.style.left = `${px + 12 + w <= width ? px + 12 : Math.max(0, px - 12 - w)}px`;
     tip.style.top = `${top + 4}px`;

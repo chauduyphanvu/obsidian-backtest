@@ -117,17 +117,18 @@ function holding(states: AssetState[]): { now: string; held: string[] } {
 }
 
 /**
- * "Sell TLT, GLD", "Buy SPY at the next close", "Bought SPY at the last close": sells first, as in today's orders.
- * An order for the next open, the usual one, says no time.
+ * "Sell TLT, GLD", "Buy SPY at the next close", "Add QQQ", "Bought SPY at the last close": sells first, as in today's
+ * orders, then buys, then adds to positions held. An order for the next open, the usual one, says no time.
  */
 function nextLines(orders: OrderRow[]): string[] {
+  const isAdd = (o: OrderRow) => o.action === 'buy' && !!o.step && o.step.k > 1;
   return TIMINGS.flatMap((when) =>
-    (['sell', 'buy'] as const).flatMap((action) => {
-      const tickers = orders.filter((o) => o.when === when && o.action === action).map((o) => o.ticker);
-      if (tickers.length === 0) return [];
-      const more = tickers.length - MORE_AFTER;
-      const named = `${tickers.slice(0, MORE_AFTER).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
-      return [`${actionWord({ action, when })} ${named}${when === 'next open' ? '' : ` ${timingPhrase(when)}`}`];
+    (['sell', 'buy', 'add'] as const).flatMap((kind) => {
+      const group = orders.filter((o) => o.when === when && (kind === 'add' ? isAdd(o) : o.action === kind && !isAdd(o)));
+      if (group.length === 0) return [];
+      const more = group.length - MORE_AFTER;
+      const named = `${group.slice(0, MORE_AFTER).map((o) => o.ticker).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+      return [`${actionWord(group[0])} ${named}${when === 'next open' ? '' : ` ${timingPhrase(when)}`}`];
     }),
   );
 }

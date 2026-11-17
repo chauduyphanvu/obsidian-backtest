@@ -17,7 +17,7 @@ const csvField = (v: string | number): string => {
   const x = String(v);
   return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
 };
-const csvLine = (fields: (string | number)[]): string => fields.map(csvField).join(',') + '\n';
+export const csvLine = (fields: (string | number)[]): string => fields.map(csvField).join(',') + '\n';
 /** Fixed decimals, without a "-0.00" for a loss too small to show. */
 const fixed = (x: number, digits: number): string => {
   const v = x.toFixed(digits);
@@ -118,6 +118,7 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
           ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
           ['Trades', tradesText(tradeStats), '–'],
           ['Share won', pct(tradeStats.winRate, 0), '–'],
+          ...(run.commission === undefined ? [] : [['Costs paid', `${money(run.costs)}, of which ${money(run.commission)} commission`, '–']]),
         ],
         'lrr',
       ),
