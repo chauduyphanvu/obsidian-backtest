@@ -110,14 +110,10 @@ export function analyzeBlock(lines: string[], defaults: Partial<Defaults> = {}):
 /** The part of the lookup these functions read: what it already knows, never a request. */
 export type KnownTickers = Pick<SymbolLookup, 'peek' | 'peekSearch'>;
 
-/**
- * A note for each ticker in the block that its source is known not to have. `skip` leaves out the ones
- * for which it returns true, such as one being typed. Tickers not yet checked, and ones the lookup was
- * unsure about, give nothing.
- */
-export function unknownTickers(lines: string[], defaults: Partial<Defaults>, lookup: KnownTickers, skip: (ref: TickerRef) => boolean = () => false): BlockDiagnostic[] {
-  return blockTickers(lines, defaults)
-    .filter((ref) => !skip(ref) && lookup.peek(ref.ticker, ref.source) === 'unknown')
+/** A note for each of these tickers that the lookup knows its source does not have. Ones not yet asked about, and ones it was unsure about, give nothing. */
+export function unknownTickers(refs: TickerRef[], lookup: KnownTickers): BlockDiagnostic[] {
+  return refs
+    .filter((ref) => lookup.peek(ref.ticker, ref.source) === 'unknown')
     .map((ref) => ({ line: ref.line, from: ref.from, to: ref.to, severity: 'warning' as const, message: unknownTickerMessage(ref.ticker, ref.source), ticker: ref }));
 }
 

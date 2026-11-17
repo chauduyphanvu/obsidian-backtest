@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { blockTickers } from '../src/symbols.ts';
 import { analyzeBlock, blockDiagnostics, closesFence, fenceOf, findBlocks, fixForDiagnostic, placeDiagnostic, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
 
 /** Where a diagnostic points: line, columns, severity and the text under it. */
@@ -314,7 +315,8 @@ test('a problem keeps the parser’s own diagnostic, so a fix can be worked out 
 test('unknownTickers: a note for each ticker the lookup knows its source does not have', () => {
   const lines = ['universe: SPYY, TLT, binance:BTCUSDTT, csv:Data/x.csv', 'benchmark: QQQ', 'buy when close of ^VXI > 1'];
   const lookup = known({ 'yahoo|SPYY': 'unknown', 'yahoo|TLT': 'known', 'binance|BTCUSDTT': 'unknown', 'yahoo|^VXI': 'unknown' });
-  const notes = unknownTickers(lines, {}, lookup);
+  const refs = blockTickers(lines);
+  const notes = unknownTickers(refs, lookup);
   assert.deepEqual(
     notes.map((d) => [d.line, lines[d.line].slice(d.from, d.to), d.severity, d.message]),
     [
@@ -323,18 +325,18 @@ test('unknownTickers: a note for each ticker the lookup knows its source does no
       [2, '^VXI', 'warning', 'Yahoo has no ticker called ^VXI.'],
     ],
   );
-  // Not yet asked about (QQQ) and not known (unsure) give nothing, and a ticker being typed can be left out.
-  assert.deepEqual(unknownTickers(lines, {}, lookup, (r) => r.ticker === 'SPYY').map((d) => d.ticker!.ticker), ['BTCUSDTT', '^VXI']);
-  assert.deepEqual(unknownTickers(lines, {}, known({})), []);
+  // Not yet asked about (QQQ) and not known (unsure) give nothing, and the caller can leave one out, such as a ticker being typed.
+  assert.deepEqual(unknownTickers(refs.filter((r) => r.ticker !== 'SPYY'), lookup).map((d) => d.ticker!.ticker), ['BTCUSDTT', '^VXI']);
+  assert.deepEqual(unknownTickers(refs, known({})), []);
   // Where plain tickers come from decides which source is asked.
-  const binance = unknownTickers(['data: binance', 'universe: ABCUSDT'], {}, known({ 'binance|ABCUSDT': 'unknown' }));
+  const binance = unknownTickers(blockTickers(['data: binance', 'universe: ABCUSDT']), known({ 'binance|ABCUSDT': 'unknown' }));
   assert.equal(binance[0].message, 'Binance has no market called ABCUSDT.');
 });
 
 test('fixForDiagnostic: an unknown ticker is changed to a known one, the block’s own first', () => {
   const lines = ['universe: SPYY, TLT', 'buy when close of TLTT > 1'];
   const lookup = known({ 'yahoo|SPYY': 'unknown', 'yahoo|TLT': 'known', 'yahoo|TLTT': 'unknown', 'yahoo|SPY': 'known' }, { SPYY: ['SPY', 'SPYY.DE'], TLTT: ['TLT'] });
-  const [first, second] = unknownTickers(lines, {}, lookup);
+  const [first, second] = unknownTickers(blockTickers(lines), lookup);
   const a = fixForDiagnostic(lines, first, {}, lookup)!;
   assert.deepEqual([a.line, a.from, a.to, a.insert, a.label], [1, 10, 14, 'SPY', 'Change to SPY']);
   const b = fixForDiagnostic(lines, second, {}, lookup)!;

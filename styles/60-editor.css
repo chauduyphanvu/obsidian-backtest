@@ -50,6 +50,7 @@
 }
 
 .bt-diag-tip {
+  box-sizing: border-box;
   overflow-wrap: anywhere;
 }
 .bt-fix {

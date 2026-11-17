@@ -134,6 +134,20 @@ test('check: an exact symbol, in any case, is known; one that is not listed is u
   assert.equal(await lookup.check('BRK.B', 'yahoo'), 'unknown');
 });
 
+test('check: an answer that filled its page without the ticker proves nothing', async () => {
+  const n = net();
+  const many = Array.from({ length: 8 }, (_, i) => quote(`ZZ${i}.L`, `Fund ${i}`, undefined, 'London', 'ETF', 'ETF'));
+  n.body.set('q=ZZ', yahoo(...many));
+  const lookup = new SymbolLookup(n.deps);
+  assert.equal(await lookup.check('ZZ', 'yahoo'), 'unsure');
+  assert.equal(lookup.peek('ZZ', 'yahoo'), null);
+  assert.equal(await lookup.check('ZZ', 'yahoo'), 'unsure');
+  assert.equal(n.urls.length, 1, 'the answer is kept, so it is not asked again');
+  // The same page with the ticker on it is a yes.
+  n.body.set('q=ZY', yahoo(quote('ZY', 'Zy', undefined, 'NYSE', 'EQUITY', 'Equity'), ...many.slice(1)));
+  assert.equal(await lookup.check('ZY', 'yahoo'), 'known');
+});
+
 test('a ticker with ^ = . or - in it is neither mangled nor marked unknown', async () => {
   const n = net();
   const lookup = new SymbolLookup(n.deps);

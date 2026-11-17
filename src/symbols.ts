@@ -44,6 +44,12 @@ interface Quote {
   detail: string;
 }
 
+/** What one Yahoo search answered. `full` is set when it filled its page, so the ticker could be further down. */
+interface Found {
+  quotes: Quote[];
+  full: boolean;
+}
+
 /** A map that keeps the most recently used entries. */
 class Recent<V> {
   private map = new Map<string, V>();
@@ -72,7 +78,7 @@ interface BinanceList {
   at: number;
 }
 
-function parseYahooSearch(text: string): Quote[] {
+function parseYahooSearch(text: string): Found {
   const body = JSON.parse(text);
   if (!Array.isArray(body?.quotes)) throw new Error('Yahoo sent something other than search results');
   const out: Quote[] = [];
@@ -82,7 +88,7 @@ function parseYahooSearch(text: string): Quote[] {
     const detail = [q.exchDisp ?? q.exchange, q.typeDisp ?? q.quoteType].filter((x) => typeof x === 'string' && x).join(' · ');
     out.push({ symbol: q.symbol, name: String(q.longname ?? q.shortname ?? ''), detail });
   }
-  return out;
+  return { quotes: out, full: body.quotes.length >= SEARCH_LIMIT };
 }
 
 function parseBinancePrices(text: string): string[] {
@@ -117,7 +123,7 @@ function binanceMatches(symbols: string[], query: string, limit: number): Symbol
  */
 export class SymbolLookup {
   private deps: LookupDeps;
-  private searches = new Recent<Quote[]>(SEARCHES_KEPT);
+  private searches = new Recent<Found>(SEARCHES_KEPT);
   private verdicts = new Recent<'known' | 'unknown'>(VERDICTS_KEPT);
   private inflight = new Map<string, Promise<unknown>>();
   private failedAt = new Map<string, number>();
@@ -137,7 +143,7 @@ export class SymbolLookup {
     if (!SENDABLE.test(q)) return [];
     try {
       if (source === 'binance') return binanceMatches((await this.binanceList()).symbols, q, SEARCH_LIMIT);
-      return this.hitsOf(await this.yahoo(q));
+      return this.hitsOf((await this.yahoo(q)).quotes);
     } catch {
       return [];
     }
@@ -150,8 +156,16 @@ export class SymbolLookup {
     const kept = source === 'yahoo' ? this.peek(t, source) : null;
     if (kept) return kept;
     try {
-      const verdict: 'known' | 'unknown' =
-        source === 'binance' ? ((await this.binanceList()).set.has(t) ? 'known' : 'unknown') : (await this.yahoo(t)).some((q) => q.symbol.toUpperCase() === t) ? 'known' : 'unknown';
+      let verdict: 'known' | 'unknown';
+      if (source === 'binance') {
+        verdict = (await this.binanceList()).set.has(t) ? 'known' : 'unknown';
+      } else {
+        const found = await this.yahoo(t);
+        if (found.quotes.some((q) => q.symbol.toUpperCase() === t)) verdict = 'known';
+        // A full page without the ticker proves nothing: it could be on the next one.
+        else if (found.full) return 'unsure';
+        else verdict = 'unknown';
+      }
       this.verdicts.set(`${source}|${t}`, verdict);
       return verdict;
     } catch {
@@ -171,8 +185,8 @@ export class SymbolLookup {
     const q = query.trim();
     if (!SENDABLE.test(q)) return [];
     if (source === 'binance') return this.binance ? binanceMatches(this.binance.symbols, q, SEARCH_LIMIT) : null;
-    const quotes = this.searches.get(q.toUpperCase());
-    return quotes ? this.hitsOf(quotes) : null;
+    const found = this.searches.get(q.toUpperCase());
+    return found ? this.hitsOf(found.quotes) : null;
   }
 
   /**
@@ -217,7 +231,7 @@ export class SymbolLookup {
     return quotes.slice(0, SEARCH_LIMIT).map((q) => ({ ticker: q.symbol, name: q.name, detail: q.detail, source: 'yahoo' as const }));
   }
 
-  private yahoo(query: string): Promise<Quote[]> {
+  private yahoo(query: string): Promise<Found> {
     const key = query.toUpperCase();
     const kept = this.searches.get(key);
     if (kept) return Promise.resolve(kept);
@@ -226,9 +240,9 @@ export class SymbolLookup {
       for (const host of ['query2', 'query1']) {
         try {
           const text = await this.request('yahoo', `https://${host}.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=${SEARCH_LIMIT}&newsCount=0`);
-          const quotes = parseYahooSearch(text);
-          this.searches.set(key, quotes);
-          return quotes;
+          const found = parseYahooSearch(text);
+          this.searches.set(key, found);
+          return found;
         } catch (e) {
           failure = e;
         }

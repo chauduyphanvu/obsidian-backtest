@@ -8,7 +8,7 @@ import type { Defaults } from './dsl.ts';
 import type { Fix } from './fixes.ts';
 import { lineKinds, type TokenKind } from './highlight.ts';
 import { ResultCache } from './result-cache.ts';
-import { blockSource, blockTickers, type SymbolLookup } from './symbols.ts';
+import { blockSource, blockTickers, type SymbolLookup, type TickerRef } from './symbols.ts';
 
 const KINDS: Record<TokenKind, true> = { key: true, keyword: true, function: true, series: true, number: true, ticker: true, value: true, operator: true, comment: true, param: true };
 const TOKEN_MARKS = Object.fromEntries(Object.keys(KINDS).map((k) => [k, Decoration.mark({ class: `bt-tok bt-tok-${k}` })])) as Record<TokenKind, Decoration>;
@@ -20,6 +20,8 @@ interface Shown {
   lines: string[];
   analysis: BlockAnalysis;
   defaults: Partial<Defaults>;
+  /** The tickers the block names, read when first needed. */
+  refs?: TickerRef[];
 }
 
 /** A problem placed in the note, for the tooltip and the fix. */
@@ -168,11 +170,14 @@ class StrategyView {
       const lastShown = doc.lineAt(view.viewport.to).number - 1;
       for (const block of this.shown) {
         const absolute = (line: number) => doc.line(block.first + line + 1).from;
-        const typing = (r: { line: number; from: number; to: number }) => head >= absolute(r.line) + r.from && head <= absolute(r.line) + r.to;
-        const onScreen = (r: { line: number }) => block.first + r.line >= firstShown && block.first + r.line <= lastShown;
-        for (const d of unknownTickers(block.lines, block.defaults, lookup, (r) => typing(r) || !onScreen(r))) this.place(absolute(d.line), d, block, marks, hits);
-        for (const r of blockTickers(block.lines, block.defaults)) {
-          if (onScreen(r) && !typing(r) && lookup.peek(r.ticker, r.source) === null && !wanted.some((w) => w.ticker === r.ticker && w.source === r.source)) wanted.push(r);
+        const refs = (block.refs ??= blockTickers(block.lines, block.defaults)).filter((r) => {
+          const line = block.first + r.line;
+          const typing = head >= absolute(r.line) + r.from && head <= absolute(r.line) + r.to;
+          return line >= firstShown && line <= lastShown && !typing;
+        });
+        for (const d of unknownTickers(refs, lookup)) this.place(absolute(d.line), d, block, marks, hits);
+        for (const r of refs) {
+          if (lookup.peek(r.ticker, r.source) === null && !wanted.some((w) => w.ticker === r.ticker && w.source === r.source)) wanted.push(r);
         }
       }
     }
@@ -246,6 +251,8 @@ function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf:
     create() {
       const doc = view.dom.ownerDocument;
       const dom = element(doc, 'div', 'bt-diag-tip');
+      // Narrow panes are common, and the tooltip should not be wider than the editor it is in.
+      dom.style.maxWidth = `${Math.max(160, Math.min(420, view.dom.clientWidth - 16))}px`;
       for (const h of hits) {
         const row = element(doc, 'div', `bt-diag-tip-row bt-diag-tip-${h.severity}`);
         row.append(element(doc, 'span', 'bt-diag-tip-kind', PREFIX[h.severity]), h.message);
@@ -265,7 +272,20 @@ function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf:
         if (help.doc.example) box.append(element(doc, 'div', 'bt-help-example', help.doc.example));
         dom.append(box);
       }
-      return { dom };
+      return {
+        dom,
+        // CodeMirror keeps a tooltip inside the window; a narrow pane is kept inside as well.
+        positioned() {
+          const frame = dom.parentElement;
+          if (!frame) return;
+          frame.style.transform = '';
+          const editor = view.dom.getBoundingClientRect();
+          const box = frame.getBoundingClientRect();
+          let shift = Math.min(0, editor.right - box.right);
+          if (box.left + shift < editor.left) shift = editor.left - box.left;
+          if (shift) frame.style.transform = `translateX(${shift}px)`;
+        },
+      };
     },
   };
 }
