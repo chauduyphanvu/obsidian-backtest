@@ -1,0 +1,24 @@
+/* The count of today's orders in the status bar. */
+
+.bt-badge.bt-badge-hidden {
+  display: none;
+}
+.bt-badge:focus-visible {
+  outline: 2px solid var(--background-modifier-border-focus);
+}
+
+/* A dot after the text: some strategy could not be checked or has old prices. The tooltip says which. */
+.bt-badge-warning::after,
+.bt-badge-error::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--text-warning);
+}
+.bt-badge-error::after {
+  background: var(--text-error);
+}

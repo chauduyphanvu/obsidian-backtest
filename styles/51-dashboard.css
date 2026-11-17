@@ -1,0 +1,144 @@
+/* The `backtests` block: every strategy in one table. */
+
+.bt-dash-wide {
+  container-type: inline-size;
+  margin-top: 8px;
+}
+.bt-root table.bt-dash-table {
+  --bt-dash-first: 11em;
+  margin: 0;
+}
+@container (max-width: 480px) {
+  .bt-root table.bt-dash-table {
+    --bt-dash-first: 9em;
+  }
+}
+.bt-root .bt-dash-table th,
+.bt-root .bt-dash-table td {
+  padding: 4px 6px;
+  vertical-align: top;
+}
+.bt-root .bt-dash-table th {
+  vertical-align: bottom;
+}
+
+/* The strategy's name stays in view while the rest of a wide table scrolls under it. */
+.bt-root .bt-dash-table .bt-dash-first {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  width: var(--bt-dash-first);
+  min-width: var(--bt-dash-first);
+  max-width: var(--bt-dash-first);
+  background: var(--background-primary);
+}
+
+.bt-dash .bt-dash-sort,
+.bt-dash .bt-dash-link {
+  height: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.bt-dash .bt-dash-sort {
+  color: var(--text-muted);
+}
+.bt-dash .bt-dash-sort:hover {
+  background: none;
+  box-shadow: none;
+}
+.bt-dash .bt-dash-sort:hover,
+.bt-dash th[aria-sort='ascending'] .bt-dash-sort,
+.bt-dash th[aria-sort='descending'] .bt-dash-sort {
+  color: var(--text-normal);
+}
+.bt-dash th[aria-sort='ascending'] .bt-dash-sort::after {
+  content: ' \2191';
+}
+.bt-dash th[aria-sort='descending'] .bt-dash-sort::after {
+  content: ' \2193';
+}
+
+.bt-dash .bt-dash-link {
+  display: block;
+  width: 100%;
+  color: var(--text-normal);
+}
+.bt-dash .bt-dash-link:hover {
+  background: none;
+  box-shadow: none;
+}
+.bt-dash .bt-dash-sort:focus-visible,
+.bt-dash .bt-dash-link:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+.bt-dash-name {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-accent);
+}
+.bt-dash-link:hover .bt-dash-name {
+  color: var(--text-accent-hover);
+  text-decoration: underline;
+}
+.bt-dash-notename,
+.bt-dash-sub {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-dash-notename {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bt-dash-sub {
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bt-dash-table td.bt-num,
+.bt-dash-now,
+.bt-dash-next,
+.bt-dash-through {
+  white-space: nowrap;
+}
+.bt-dash-table td.bt-num .bt-dash-sub {
+  margin-left: auto;
+}
+.bt-dash-none {
+  color: var(--text-muted);
+}
+
+/* A strategy that is still running or could not run takes the rest of its row; the text stays in view beside the name. */
+.bt-dash-msgtext {
+  position: sticky;
+  left: var(--bt-dash-first);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100cqw - var(--bt-dash-first) - 20px);
+  white-space: normal;
+}
+.bt-dash-running .bt-dash-msgtext {
+  color: var(--text-muted);
+}
+.bt-dash-failed .bt-dash-msgtext {
+  padding-left: 8px;
+  border-left: 3px solid var(--bt-critical);
+}
+
+.bt-dash-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 10px;
+  color: var(--text-muted);
+}
