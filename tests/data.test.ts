@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { loadBars, parseBinance, parseCsv, parseYahoo, type DataDeps } from '../src/data.ts';
 import { DAY } from './helpers.ts';
@@ -49,6 +50,18 @@ test("yahoo keeps today's daily bar once the regular session has closed", () => 
   assert.deepEqual(days(session(thursday(14), thursday(21)), close), [2, 3, 4]);
   // Weekly bars are unchanged: this week's bar is still open.
   assert.deepEqual(days(session(open, close), close + 60_000, true), []);
+});
+
+test('yahoo bars stamped at the exchange midnight keep their day across a clock change', () => {
+  // Recorded responses (November 2026, when New York and London were on winter time). Yahoo stamps a weekly bar at
+  // midnight New York time and a currency pair's daily bar at midnight London time, so in summer the stamp is the
+  // evening before in UTC; meta.gmtoffset is only today's offset.
+  const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+  const dates = (json: string, weekly = false) => parseYahoo(json, Date.UTC(2026, 10, 17), weekly).t.map((t) => new Date(t).toISOString().slice(0, 10));
+  // Weekly SPY: every bar on a Monday, before and after the switches of 9 March and 2 November 2025.
+  assert.deepEqual(dates(fixture('yahoo-spy-1wk.json'), true), ['2025-02-24', '2025-03-03', '2025-03-10', '2025-03-17', '2025-10-27', '2025-11-03', '2025-11-10']);
+  // EUR/USD: London went to summer time on 30 March 2025; Monday 31 March is stamped 23:00 UTC on the 30th.
+  assert.deepEqual(dates(fixture('yahoo-eurusd-1d.json')), ['2025-03-26', '2025-03-27', '2025-03-28', '2025-03-31', '2025-04-01', '2025-04-02', '2025-04-03', '2025-07-02', '2025-07-03']);
 });
 
 test('yahoo errors surface', () => {
@@ -392,4 +405,17 @@ test('csv: errors name the column that is the problem', () => {
   assert.throws(() => parseCsv('Date,Open,High,Low,Close\nlast tuesday,1,2,1,2'), /"Date" column/);
   assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,1,2,1,n/a'), /"Close" column/);
   assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,0,0,0,0'), /price at or below zero/);
+});
+
+test('a CSV file that cannot be read is named in the message', async () => {
+  const deps: DataDeps = {
+    fetchText: () => Promise.reject(new Error('no network')),
+    readVaultFile: async (path) => ({ 'Data/empty.csv': 'date,open,high,low,close\n', 'Data/words.csv': 'date,open,high,low,close\nsoon,1,1,1,1\nlater,2,2,2,2\n' })[path] ?? null,
+    cacheRead: async () => null,
+    cacheWrite: async () => {},
+    now: () => 0,
+  };
+  const ref = (id: string) => ({ name: id.slice(5, -4), source: 'csv' as const, id });
+  await assert.rejects(loadBars(ref('Data/empty.csv'), '1d', 0, deps), /^Error: The CSV file Data\/empty\.csv has no rows$/);
+  await assert.rejects(loadBars(ref('Data/words.csv'), '1d', 0, deps), /^Error: The CSV file Data\/words\.csv has no usable rows/);
 });

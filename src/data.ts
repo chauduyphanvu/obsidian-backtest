@@ -55,6 +55,28 @@ function push(bars: Bars, t: number, o: number, h: number, l: number, c: number,
 }
 
 /**
+ * Midnight UTC of the exchange's calendar day that the moment `ms` falls on. Yahoo's `gmtoffset` is the offset in force
+ * today only: in the other half of the year it puts a bar stamped at the exchange's midnight (a weekly bar, a currency
+ * pair's daily bar) on the day before, so the time zone's own rules give each moment its offset. Without a zone the
+ * runtime knows, today's offset is used.
+ */
+function exchangeDay(timeZone: unknown, fallbackOffsetMs: number): (ms: number) => number {
+  if (typeof timeZone === 'string' && timeZone) {
+    try {
+      const format = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric' });
+      return (ms) => {
+        const parts = format.formatToParts(ms);
+        const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+        return Date.UTC(part('year'), part('month') - 1, part('day'));
+      };
+    } catch {
+      // An unknown zone name throws here; today's offset stands in.
+    }
+  }
+  return (ms) => Math.floor((ms + fallbackOffsetMs) / DAY) * DAY;
+}
+
+/**
  * Yahoo chart JSON to bars adjusted for splits and dividends, without a bar that is still trading.
  * Today's daily bar counts once the regular session it belongs to has closed.
  */
@@ -65,8 +87,7 @@ export function parseYahoo(json: string, now: number, weekly = false): Bars {
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
   const adj: (number | null)[] = result.indicators?.adjclose?.[0]?.adjclose ?? [];
-  const offset = (result.meta?.gmtoffset ?? 0) * 1000;
-  const localDay = (ms: number) => Math.floor((ms + offset) / DAY) * DAY;
+  const localDay = exchangeDay(result.meta?.exchangeTimezoneName, (result.meta?.gmtoffset ?? 0) * 1000);
   const today = localDay(now);
   const span = weekly ? 7 * DAY : DAY;
   const sessionEnd: unknown = result.meta?.currentTradingPeriod?.regular?.end;
@@ -474,7 +495,14 @@ export async function loadBars(
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
     if (text === null) throw new Error(`No file at ${ref.id}`);
-    return loaded('csv', parseCsv(text), deps.now());
+    let bars: Bars;
+    try {
+      bars = parseCsv(text);
+    } catch (e) {
+      // A block can read several files, so the message says which one.
+      throw e instanceof Error ? new Error(e.message.replace(/^The CSV\b/, `The CSV file ${ref.id}`)) : e;
+    }
+    return loaded('csv', bars, deps.now());
   }
 
   const key = opts?.key ?? cacheKey(ref, interval);
