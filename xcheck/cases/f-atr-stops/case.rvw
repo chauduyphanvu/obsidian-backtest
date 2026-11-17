@@ -1,0 +1,9 @@
+language 1
+strategy "f: ATR stops" {
+  universe   symbols("GAPY")
+  enter long when crosses_above(ema(close, 10), ema(close, 30)) and not crosses_below(ema(close, 10), ema(close, 30))
+  exit when  crosses_below(ema(close, 10), ema(close, 30))
+  stop       2 x atr(14)
+  trail      3 x atr(14)
+  size       100% of equity, max 1 positions
+}

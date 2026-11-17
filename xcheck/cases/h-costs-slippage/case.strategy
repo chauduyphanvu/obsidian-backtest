@@ -1,0 +1,6 @@
+universe: TRND
+capital: 100000
+costs: 10 bps
+slippage: 5 bps
+buy when close > sma(30)
+sell when close < sma(30)

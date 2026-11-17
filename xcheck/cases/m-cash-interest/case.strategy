@@ -1,0 +1,6 @@
+universe: TRND
+capital: 100000
+costs: 6 bps
+cash rate: 3.65%
+buy when sma(10) crosses above sma(40)
+sell when sma(10) crosses below sma(40)

@@ -1,0 +1,4 @@
+universe: LATE
+capital: 100000
+buy when close > sma(30)
+sell when close < sma(30)

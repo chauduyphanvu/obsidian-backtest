@@ -1,0 +1,4 @@
+universe: TRND, MREV, CHOP, LATE
+capital: 100000
+rebalance: monthly
+hold: top 2 by roc(63)

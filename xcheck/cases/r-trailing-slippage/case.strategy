@@ -1,0 +1,6 @@
+universe: VOLA
+capital: 100000
+slippage: 10 bps
+buy when close > sma(20)
+sell when close < sma(20)
+trailing stop: 6%

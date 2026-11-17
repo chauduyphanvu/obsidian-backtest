@@ -1,0 +1,4 @@
+universe: TRND 50%, HOLE 50%
+capital: 100000
+buy when close > sma(30)
+sell when close < sma(30)

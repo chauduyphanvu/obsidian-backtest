@@ -1,0 +1,8 @@
+language 1
+strategy "c: RSI(2) pullback" {
+  universe   symbols("MREV")
+  rsi2       rsi(close, 2)
+  enter long when rsi2 < 10 and close > sma(close, 200) and not (close > sma(close, 5))
+  exit when  close > sma(close, 5)
+  size       100% of equity, max 1 positions
+}

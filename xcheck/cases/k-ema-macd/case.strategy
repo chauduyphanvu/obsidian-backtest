@@ -1,0 +1,5 @@
+universe: CHOP
+capital: 100000
+to: 2022-06-30
+buy when macd(12, 26) crosses above macd_signal(12, 26, 9) and close > ema(50)
+sell when macd(12, 26) crosses below macd_signal(12, 26, 9)

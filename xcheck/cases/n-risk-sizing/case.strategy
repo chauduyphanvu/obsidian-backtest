@@ -1,0 +1,7 @@
+universe: TRND
+capital: 100000
+from: 2014-06-02
+risk per trade: 1% at 2 atr(14)
+stop loss: 2 atr(14)
+buy when close > highest(close, 20)[1]
+sell when close < sma(20)

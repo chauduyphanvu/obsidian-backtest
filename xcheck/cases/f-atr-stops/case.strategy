@@ -1,0 +1,7 @@
+universe: GAPY
+capital: 100000
+from: 2014-06-02
+buy when ema(10) crosses above ema(30)
+sell when ema(10) crosses below ema(30)
+stop loss: 2 atr(14)
+trailing stop: 3 atr(14)

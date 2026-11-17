@@ -1,0 +1,9 @@
+universe: GAPY
+capital: 100000
+from: 2013-04-01
+costs: 10 bps
+slippage: 10 bps
+buy when close crosses above sma(20)
+sell when close crosses below sma(50)
+stop loss: 5%
+take profit: 8%

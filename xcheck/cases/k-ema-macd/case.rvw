@@ -1,0 +1,9 @@
+language 1
+strategy "k: EMA and MACD" {
+  universe   symbols("CHOP")
+  ml         macd_line(close, 12, 26, 9)
+  ms         macd_signal(close, 12, 26, 9)
+  enter long when crosses_above(ml, ms) and close > ema(close, 50) and not crosses_below(ml, ms)
+  exit when  crosses_below(ml, ms)
+  size       100% of equity, max 1 positions
+}

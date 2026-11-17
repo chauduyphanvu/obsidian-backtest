@@ -1,0 +1,4 @@
+universe: TRND
+capital: 100000
+buy when sma(20) crosses above sma(50)
+sell when sma(20) crosses below sma(50)

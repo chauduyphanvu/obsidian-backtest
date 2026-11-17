@@ -1,0 +1,9 @@
+language 1
+strategy "a: SMA cross" {
+  universe   symbols("TRND")
+  fast       sma(close, 20)
+  slow       sma(close, 50)
+  enter long when crosses_above(fast, slow) and not crosses_below(fast, slow)
+  exit when  crosses_below(fast, slow)
+  size       100% of equity, max 1 positions
+}

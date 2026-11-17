@@ -304,14 +304,14 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       if (entry && a.shares > 0) openPosition(a, t, a.bars.o[a.i]);
     }
 
-    // Inside the bar: a gap through the stop fills at the open; when stop and target both lie
-    // inside the bar, the stop is taken first.
+    // Inside the bar: the open comes first, so a gap through the stop or the target fills there;
+    // when stop and target both lie inside the bar, the stop is taken first.
     for (const a of live) {
       if (a.shares === 0) continue;
       const { o, h, l } = { o: a.bars.o[a.i], h: a.bars.h[a.i], l: a.bars.l[a.i] };
       const trail = !a.trail ? -Infinity : 'mul' in a.trail ? a.highWater * a.trail.mul : a.highWater - a.trail.dist;
       const stop = Math.max(a.hard, trail);
-      if (l <= stop) {
+      if (l <= stop && o < a.target) {
         close(a, t, Math.min(o, stop), trail > a.hard ? 'trailing stop' : 'stop loss');
         a.armed = false;
       } else if (h >= a.target) {

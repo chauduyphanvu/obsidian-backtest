@@ -1,0 +1,9 @@
+language 1
+strategy "g: time exit" {
+  universe   symbols("MREV")
+  rsi2       rsi(close, 2)
+  enter long when rsi2 < 15 and not (rsi2 > 85)
+  // Rearview counts the entry bar as held at its close; we count it as 0.
+  exit when  rsi2 > 85 or bars_held >= 5
+  size       100% of equity, max 1 positions
+}

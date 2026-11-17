@@ -1,0 +1,8 @@
+language 1
+strategy "w: fixed weights, weekly rebalance" {
+  universe   symbols("WK1", "WK2")
+  enter long when close > 0
+  rank by    series("w")
+  size       weight series("w"), max 2 positions
+  rebalance  weekly
+}

@@ -1,0 +1,7 @@
+language 1
+strategy "o: late listing" {
+  universe   symbols("LATE")
+  enter long when close > sma(close, 30) and not (close < sma(close, 30))
+  exit when  close < sma(close, 30)
+  size       100% of equity, max 1 positions
+}
