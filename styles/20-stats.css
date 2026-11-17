@@ -1,0 +1,90 @@
+/* More statistics: comparison table, yearly returns chart, monthly returns table. */
+
+.bt-root {
+  --bt-stats-gain: #2a78d6;
+  --bt-stats-loss: #e34948;
+}
+.theme-dark .bt-root {
+  --bt-stats-gain: #3987e5;
+  --bt-stats-loss: #e66767;
+}
+
+.bt-stats-body {
+  margin-top: 4px;
+}
+.bt-stats-heading {
+  margin: 18px 0 6px;
+  font-weight: var(--font-semibold);
+}
+.bt-stats-note {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.bt-stats-th {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.bt-swatch.bt-stats-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.bt-stats-bar-strategy {
+  fill: var(--bt-strategy);
+}
+.bt-stats-bar-benchmark {
+  fill: var(--bt-benchmark);
+}
+.bt-stats-partial {
+  opacity: 0.55;
+}
+.bt-stats-hl {
+  fill: var(--background-modifier-hover);
+  pointer-events: none;
+}
+.bt-stats-tip .bt-tip-row {
+  grid-template-columns: 14px auto auto;
+}
+
+.bt-root .bt-stats-scroll {
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.bt-root table.bt-stats-months {
+  min-width: 620px;
+  margin-top: 0;
+  border-collapse: separate;
+  border-spacing: 2px;
+}
+.bt-root .bt-stats-months th,
+.bt-root .bt-stats-months td {
+  padding: 3px 4px;
+  white-space: nowrap;
+  border-bottom: none;
+}
+.bt-root .bt-stats-months th:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--background-primary);
+  padding-left: 0;
+}
+.bt-root .bt-stats-months td {
+  border-radius: var(--radius-s);
+}
+.bt-root .bt-stats-months .bt-stats-up {
+  background: color-mix(in srgb, var(--bt-stats-gain) var(--bt-stats-tint), transparent);
+}
+.bt-root .bt-stats-months .bt-stats-down {
+  background: color-mix(in srgb, var(--bt-stats-loss) var(--bt-stats-tint), transparent);
+}
+.bt-root .bt-stats-months .bt-stats-year {
+  font-weight: var(--font-semibold);
+}
+.bt-root .bt-stats-months .bt-stats-partial-year {
+  color: var(--text-muted);
+  font-weight: var(--font-normal);
+}
