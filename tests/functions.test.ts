@@ -12,7 +12,7 @@ import { tokenize } from '../src/highlight.ts';
 import * as ind from '../src/indicators.ts';
 import { lookbackBars } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
-import { bars, DAY, T0 } from './helpers.ts';
+import { bars, DAY, near, T0 } from './helpers.ts';
 
 const NEW = [
   'stoch_k', 'stoch_d', 'adx', 'plus_di', 'minus_di', 'cci', 'williams_r', 'mfi', 'obv', 'vwap', 'keltner_upper', 'keltner_lower',
@@ -289,8 +289,9 @@ test('correl lines the other ticker up with this one\'s bars exactly as of does'
     const { spec, ev } = run(`universe: STK\n${fill}buy when correl(close of binance:CRY, 8) > -2`);
     const e = spec.rules.STK.buy as Extract<Expr, { k: 'cmp' }>;
     const read = ev.eval({ k: 'of', a: { k: 'series', name: 'close' }, asset: 'CRY' }, 'STK');
-    // The plain close of CRY as the rule reads it, bar for bar: the correlation is of that array and STK's closes.
-    assert.deepEqual(ev.eval(e.a, 'STK'), ind.correl(stock.c, read, 8));
+    // The plain close of CRY as the rule reads it, bar for bar: the correlation is of that array and STK's closes, which
+    // with fill: close are taken a bar early too, as the coin is.
+    assert.deepEqual(ev.eval(e.a, 'STK'), ind.correl(fill ? ind.lag(stock.c, 1) : stock.c, read, 8));
     // Bar 10 of the stock is Wednesday 15 January; the coin's bar it reads is that day's, or with fill: close the day before's.
     const k = ev.barOf('CRY', 'STK', 10);
     assert.equal(coin.t[k], stock.t[10] - (fill ? DAY : 0), fill || 'next open');
@@ -299,6 +300,35 @@ test('correl lines the other ticker up with this one\'s bars exactly as of does'
   const [open, close] = [run('universe: STK\nbuy when correl(close of binance:CRY, 8) > -2'), run('universe: STK\nfill: close\nbuy when correl(close of binance:CRY, 8) > -2')];
   const get = (r: ReturnType<typeof run>) => r.ev.eval((r.spec.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a, 'STK');
   assert.notDeepEqual(get(open), get(close));
+});
+
+test('correl pairs the two changes of the same days, with either fill: an identical series correlates at 1', () => {
+  // The same prices from a CSV file keep other hours than the stock only because the source differs.
+  const stock = level(weekdays(Date.UTC(2020, 0, 1), 300), (i) => 100 * Math.exp(0.02 * Math.sin(i * 1.7) + 0.01 * Math.cos(i * 0.31)));
+  const twin = { ...stock, t: [...stock.t] };
+  for (const fill of ['', 'fill: close\n']) {
+    const { spec } = parseSpec(`universe: STK\n${fill}buy when correl(close of csv:Data/twin.csv, 30) > 0.9`);
+    const ev = specEvaluator(spec!, new Map([['STK', stock], ['twin', twin]]));
+    const v = ev.eval((spec!.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a, 'STK').filter((x) => !Number.isNaN(x));
+    assert.ok(v.length > 200 && v.every((x) => near(x, 1, 1e-9)), `${fill || 'next open'}: ${Math.min(...v)}`);
+  }
+});
+
+test('correl worked by hand: the changes of days 2 to 4 at the close of day 4, or of days 1 to 3 with fill: close', () => {
+  // A's changes on days 1 to 4 are 1%, 2%, -1% and 3%; B's are 2%, 1%, -2% and 1%.
+  const days = everyDay(Date.UTC(2020, 0, 1), 5);
+  const path = (changes: number[], start: number) => changes.reduce((xs, r) => [...xs, xs[xs.length - 1] * (1 + r)], [start]);
+  const A = bars(path([0.01, 0.02, -0.01, 0.03], 100), { times: days });
+  const B = bars(path([0.02, 0.01, -0.02, 0.01], 50), { times: days });
+  const last = (fill: string) => {
+    const { spec } = parseSpec(`universe: binance:A\n${fill}buy when correl(close of csv:Data/B.csv, 3) > 0`);
+    const ev = specEvaluator(spec!, new Map([['A', A], ['B', B]]));
+    return ev.eval((spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a, 'A')[4];
+  };
+  // Days 2 to 4: A's deviations from their mean are 2, -7 and 5 three-hundredths, B's 1, -2 and 1 hundredths.
+  assert.ok(near(last(''), 21 / Math.sqrt(78 * 6), 1e-12), String(last('')));
+  // With fill: close B is read a day early, so the pairs are days 1 to 3: deviations 1, 4, -5 and 5, 2, -7 three-hundredths.
+  assert.ok(near(last('fill: close\n'), 48 / Math.sqrt(42 * 78), 1e-12), String(last('fill: close\n')));
 });
 
 test('correl on a day the other ticker had no new bar sees a change of 0, and an explanation says which bar was read', () => {
@@ -339,6 +369,8 @@ test('lookbackBars covers each function: its window, and the settling of the one
   assert.equal(lookback('percent_rank(300) > 0'), 301);
   assert.equal(lookback('slope(300) > 0'), 300);
   assert.equal(lookback('correl(close of SPY, 300) > 0'), 301);
+  // With fill: close this ticker's closes may be taken a bar early, to pair with another clock's.
+  assert.equal(lookback('correl(close of SPY, 300) > 0', 'fill: close\n'), 302);
   assert.equal(lookback('obv() > 0'), 250);
   // Recursive: Wilder's and the exponential averages count five times their period, adx twice that (it smooths a smoothed value).
   assert.equal(lookback('plus_di(60) > 0'), 301);

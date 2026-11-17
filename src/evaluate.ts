@@ -327,6 +327,12 @@ export class Evaluator {
     return at;
   }
 
+  /** Whether `e`, worked out for `asset`, reads another series one bar early (clocksApart). */
+  private readsEarly(e: Expr, asset: string): boolean {
+    if (e.k === 'of') return e.asset !== asset && !!this.apart?.(e.asset, asset);
+    return children(e).some((c) => this.readsEarly(c, asset));
+  }
+
   private bars(asset: string): Bars {
     const b = this.data.get(asset);
     if (!b) throw new Error(`No data for ${asset}`);
@@ -461,9 +467,11 @@ export class Evaluator {
         return ind.percentRank(src, a);
       case 'slope':
         return ind.slope(src, a);
-      // The other series was read through `of`, so it is already lined up with this ticker's bars.
+      // The other series was read through `of`, so it is already lined up with this ticker's bars. Read a bar early
+      // (clocksApart), its change at a bar is the one up to the start of that bar, so this ticker's closes are taken a bar
+      // early too: both changes then cover the same time, and are known at a fill at that bar's close.
       case 'correl':
-        return ind.correl(bars.c, src, a);
+        return ind.correl(this.readsEarly(e.src!, asset) ? ind.lag(bars.c, 1) : bars.c, src, a);
       case 'bars_since':
         return ind.barsSince(src);
       case 'stoch_k':

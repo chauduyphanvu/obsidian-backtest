@@ -19,9 +19,12 @@ const MAX_PERIOD = 10_000;
 /** The value a period or lag is looked back with: the largest its parameter can take up to `max`, when it is one. */
 type Widest = (value: number, param: string | null | undefined, max?: number) => number;
 
-/** Bars of history an expression reads before its current bar: nested windows add, and so do lags. */
-function exprLookback(e: Expr, w: Widest): number {
-  const back = (x: Expr) => exprLookback(x, w);
+/**
+ * Bars of history an expression reads before its current bar: nested windows add, and so do lags. With `fill: close`,
+ * correl may take this ticker's closes a bar early (evaluate.ts), which needs one bar more.
+ */
+function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
+  const back = (x: Expr) => exprLookback(x, w, closeFill);
   switch (e.k) {
     case 'num':
     case 'bool':
@@ -61,8 +64,9 @@ function exprLookback(e: Expr, w: Widest): number {
         case 'obv':
           return 1;
         case 'percent_rank':
-        case 'correl':
           return src + a + 1;
+        case 'correl':
+          return src + a + 1 + (closeFill ? 1 : 0);
         case 'hma':
           return src + a + Math.floor(Math.sqrt(a));
         case 'keltner_upper':
@@ -105,7 +109,7 @@ export function lookbackBars(spec: Spec): number {
   let bars = MIN_LOOKBACK;
   const exprs = Object.values(spec.rules).flatMap((r) => [r.buy, ...(r.sell ? [r.sell] : []), ...(r.add ? [r.add] : [])]);
   if (spec.rank) exprs.push(spec.rank.by);
-  for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest));
+  for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest, spec.fill === 'close'));
   for (const st of Object.values(spec.stops)) {
     for (const level of [st.stopLoss, st.trailingStop, st.takeProfit]) if (level?.k === 'atr') bars = Math.max(bars, 1 + SETTLE * widest(level.n, level.nParam, MAX_PERIOD));
   }
