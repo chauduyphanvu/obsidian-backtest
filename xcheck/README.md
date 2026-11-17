@@ -4,15 +4,16 @@ Runs our engine (`src/`) and Rearview, a separate backtester, on the same synthe
 same strategies, and compares everything they produce. Not part of `npm test`.
 
 ```sh
-node xcheck/run.ts            # every indicator and case
+RVW=path/to/rvw node xcheck/run.ts   # every indicator and case
+node xcheck/run.ts                   # the same, with rvw on PATH
 node xcheck/run.ts e-stop-target-gaps q-stops-slippage -v   # some cases; -v lists explained trades and totals
 ```
 
-It needs Rearview's command-line tool at `/Users/vu/Workspace/mac-backtester/target/release/rvw`, or
-wherever `RVW` points; without it the script says so and exits 0. It exits 1 on any difference it
-can't explain. Everything it writes goes to `.scratch/xcheck/`: the import folder and Rearview's
-store (rebuilt when the data changes), each case's Rearview run under `runs/<case>/`, and
-`report.json`.
+It needs Rearview's command-line tool, `rvw`: the script uses the path in the `RVW` environment
+variable when it is set, and otherwise looks for `rvw` on `PATH`. Without it the script says so and
+exits 0. It exits 1 on any difference it can't explain. Everything it writes goes to
+`.scratch/xcheck/`: the import folder and Rearview's store (rebuilt when the data changes), each
+case's Rearview run under `runs/<case>/`, and `report.json`.
 
 ## The data
 
