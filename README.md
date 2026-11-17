@@ -23,7 +23,7 @@ This README is the full guide to the plugin. Every `strategy` block and `compare
 - It is a backtest on adjusted historical prices. It shows what the rules would have done on past data. It does not predict anything.
 - It is not financial advice.
 
-It also does not model taxes, market impact or partial fills. A fill is at the next open (or at a stop or target level), made worse by the slippage you set, whatever the size of the trade.
+It also does not model taxes, market impact or partial fills. A fill is at the next open (or with `fill: close` at the close the rule was read at, or at a stop or target level), made worse by the slippage you set, whatever the size of the trade.
 
 ## Install
 
@@ -82,6 +82,7 @@ Dates are always written `2015-01-31`. A percentage is written with a percent si
 | `hold` | `hold: top 3 by roc(126)` | Hold only the best-ranked tickers. | none |
 | `weighting` | `weighting: inverse volatility(60)` | Calmer tickers get more weight. | the weights as written |
 | `risk per trade` | `risk per trade: 1% at 2 atr(14)` | Size each buy by what it risks. | the weight |
+| `fill` | `fill: close` | When an order fills: `next open`, or `close` for the same close the rule was read at. | `next open` |
 
 More on the values:
 
@@ -94,7 +95,8 @@ More on the values:
 - `hold: top 3 by roc(126)` means: hold the 3 tickers with the highest score. The universe must have at least that many tickers. The score is a number written like a value in a rule, so `roc(126)`, `close / sma(200)` or `-stdev(20)` all work. The ranking rules are under "How the simulation works".
 - `weighting: inverse volatility(60)` measures volatility over the last 60 one-bar returns. The period must be at least 2.
 - `risk per trade: 1% at 2 atr(14)` sizes each buy so that a fall of 2 average true ranges loses 1% of equity. It cannot be used with `weighting`, or with a `rebalance` other than `never`.
-- `size`, `capital`, `costs`, `slippage`, `from`, `to`, `test from`, `rebalance`, `data` and `interval` take written values only. Parameters can stand in for numbers in rules, stops, `hold`, `weighting` and `risk per trade` (see "Parameters and ranges").
+- `fill: close` fills each order at the close it was decided at, as a market-on-close order would, instead of at the next open. It applies to everything that otherwise fills at the next open: buys and sells from the rules, ranking decisions, rebalancing, and buying again after a stop. Stops and targets still fill inside a bar, and watch a position from the bar after the one it was bought at. The result notes that it assumes you can trade at the same close the rule read. The rules are under "How the simulation works".
+- `size`, `capital`, `costs`, `slippage`, `from`, `to`, `test from`, `rebalance`, `data`, `interval` and `fill` take written values only. Parameters can stand in for numbers in rules, stops, `hold`, `weighting` and `risk per trade` (see "Parameters and ranges").
 
 ### Tickers and sources
 
@@ -122,7 +124,7 @@ buy when <condition>
 sell when <condition>
 ```
 
-A buy rule opens a position in a ticker you do not hold when the condition is true at a close. A sell rule closes the position when it is true at a close. Both fill at that ticker's next open. You can write one buy rule and one sell rule for each scope (see the next part). Without a sell rule a position is held until a stop closes it or the run ends.
+A buy rule opens a position in a ticker you do not hold when the condition is true at a close. A sell rule closes the position when it is true at a close. Both fill at that ticker's next open, or with `fill: close` at that same close. You can write one buy rule and one sell rule for each scope (see the next part). Without a sell rule a position is held until a stop closes it or the run ends.
 
 A rule can continue on the following lines. Indent them and start each with `and` or `or`:
 
@@ -439,8 +441,8 @@ These are the engine's rules. Each is exact.
 
 **Timing**
 
-1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker.
-2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders".
+1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker. With `fill: close` it fills at that same close instead, and so does everything else that would fill at the next open: ranking decisions, rebalancing and buying again after a stop (rules 17, 18, 23, 26, 27 and 31 say how).
+2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders". With `fill: close` it has filled at that last close, so nothing is left pending, except an order from a ranking decision made at a time a ticker had no bar, which fills at that ticker's next close.
 3. The run starts on `from`, or on the first day every ticker in the universe has prices if that is later. Tickers read only with `of`, and the benchmark, do not delay the start. The result warns when the run starts more than 7 days after `from`. It ends on `to`, or on the last bar.
 4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr` and `macd` count five times their period, because they depend on where they started. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
 5. The run has one step for each time at which any ticker in the universe has a bar. A ticker with no bar that day keeps its last close for valuing the position.
@@ -449,10 +451,10 @@ These are the engine's rules. Each is exact.
 **Sizing and cash**
 
 7. Equity is cash plus every position at its latest close. Money is in cash until a rule buys. Positions can hold fractions of a share.
-8. A buy of a ticker with weight w spends w times equity, valued at the open of the fill, but never more than the cash available. The rest stays in cash.
+8. A buy of a ticker with weight w spends w times equity, valued at the open of the fill (at its close with `fill: close`), but never more than the cash available. The rest stays in cash.
 9. A position is sized once, when it is bought. It then drifts with the price until it is sold or a rebalance resizes it.
-10. With `weighting: inverse volatility(n)`, the tickers being held or bought share out the sum of their configured weights in proportion to 1 divided by their volatility, the standard deviation of the last n one-bar returns up to the last close before the fill. A ticker whose volatility is 0 keeps its configured weight.
-11. With `risk per trade: r at m atr(n)`, the buy is for r times equity, divided by m times the ATR, shares. The ATR is its value at the close before the fill. The value of the buy is capped at the ticker's weight, and the size is fixed at entry. The distance used for sizing is separate from any `stop loss` line.
+10. With `weighting: inverse volatility(n)`, the tickers being held or bought share out the sum of their configured weights in proportion to 1 divided by their volatility, the standard deviation of the last n one-bar returns up to the last close before the fill (up to the fill's own close with `fill: close`). A ticker whose volatility is 0 keeps its configured weight.
+11. With `risk per trade: r at m atr(n)`, the buy is for r times equity, divided by m times the ATR, shares. The ATR is its value at the close before the fill (at the fill's own close with `fill: close`). The value of the buy is capped at the ticker's weight, and the size is fixed at entry. The distance used for sizing is separate from any `stop loss` line.
 
 **Warm-up**
 
@@ -467,20 +469,20 @@ These are the engine's rules. Each is exact.
 
 **Rebalancing**
 
-17. With a `rebalance` other than `never`, each held ticker goes back to its target weight at the open of its own first bar in each new period, so a ticker that does not trade on the period's first day is rebalanced at its first bar after it. The weight is measured against equity at that open. Sells are made before buys. A rebalance resizes held positions only; it never opens one. Weeks start on Monday; months, quarters and years follow the calendar in UTC.
-18. When a ticker's top-up finds too little cash, for example because another ticker is trimmed only at its own first bar a day later, the rest stays wanted. It is bought at that ticker's later bars in the same period as cash comes in, and lapses when the period ends. A position sold or stopped in the meantime is owed nothing. A top-up only spends cash there is, so nothing is borrowed.
+17. With a `rebalance` other than `never`, each held ticker goes back to its target weight at the open of its own first bar in each new period, so a ticker that does not trade on the period's first day is rebalanced at its first bar after it. The weight is measured against equity at that open. Sells are made before buys. A rebalance resizes held positions only; it never opens one. Weeks start on Monday; months, quarters and years follow the calendar in UTC. With `fill: close` each held ticker goes back to its target weight at the close of its own last bar in each period instead, measured against equity at that close: the same close at which a ranking decides.
+18. When a ticker's top-up finds too little cash, for example because another ticker is trimmed only at its own first bar a day later, the rest stays wanted. It is bought at that ticker's later bars in the same period as cash comes in, and lapses when the period ends. With `fill: close` a top-up decided at a period's last close stays wanted at the ticker's closes in the next period, and lapses at its next rebalance. A position sold or stopped in the meantime is owed nothing. A top-up only spends cash there is, so nothing is borrowed.
 19. Rebalancing trades are slipped and charged like any other. They change a position without closing it, so they are not listed as trades.
 20. With inverse-volatility weighting, the weights are worked out again at each rebalance.
 
 **Stops, targets and gaps**
 
 21. Stops and targets are set when the position opens, from the fill price, slippage included. A stop loss is the fill price times (1 - x), or the fill price minus x ATR. A take profit is the fill price times (1 + x), or the fill price plus x ATR.
-22. An ATR distance uses the ATR at the close before the fill and keeps it for the life of the position. That ATR is always known, because a buy waits for it (rule 12).
-23. The trailing level is the highest high since entry times (1 - x), or minus x ATR. It moves only at the end of a bar: a bar's high counts from the next bar on. On the entry bar it trails the open.
+22. An ATR distance uses the ATR at the close before the fill (at the fill's own close with `fill: close`) and keeps it for the life of the position. That ATR is always known, because a buy waits for it (rule 12).
+23. The trailing level is the highest high since entry times (1 - x), or minus x ATR. It moves only at the end of a bar: a bar's high counts from the next bar on. On the entry bar it trails the open. With `fill: close` it starts from the close the position was bought at.
 24. After the bar's open orders, each position is checked against the bar. If the low reaches the stop (the higher of the stop loss and the trailing level), it exits at the stop, or at the open if the bar opened below it. If the high reaches the take profit, it exits at the target, or at the open if the bar opened above it.
 25. If both levels lie inside the bar, the stop is taken first. If the bar opens at or above the target, the target fills at the open, even if the bar later falls through the stop.
-26. A position can be stopped out on the bar it is bought.
-27. Within a bar, the order is: pending sells fill at the open; then the rebalance (with any top-up still owed) and pending buys, sells first; then stops and targets; then, at the close, the rules are read for the next open.
+26. A position can be stopped out on the bar it is bought. With `fill: close` it cannot: it was bought at that bar's close, after the bar's range, so its stops and target watch it from its next bar on.
+27. Within a bar, the order is: pending sells fill at the open; then the rebalance (with any top-up still owed) and pending buys, sells first; then stops and targets; then, at the close, the rules are read for the next open. With `fill: close`: stops and targets; then, at the close, the rules are read and what they decide fills at once, sells first, then the rebalance (with any top-up still owed) and the buys; then the positions are valued at that close.
 28. A sell rule and the stops both apply, whichever comes first. A buy is skipped when the sell rule is also true at the same close.
 
 **Re-arming**
@@ -490,7 +492,7 @@ These are the engine's rules. Each is exact.
 **Ranking (`hold`)**
 
 30. With `hold: top N by score`, a decision is made at each close when `rebalance` is `never`, and otherwise at the last bar of each period. The tickers that can be chosen are those whose buy rule is true (every ticker if there is no buy rule), whose sell rule is not true, and whose score is known.
-31. The N highest scores are chosen. Ties go to the ticker listed first. Held tickers not chosen are sold at their next open. Chosen tickers not held are bought once every sell of that decision has filled, at their own next open from then on: the same open as the last sell when both trade then. A buy that has not filled stays wanted until it fills or the next decision replaces it, and a decision that keeps a ticker cancels a sell of it that has not filled. When cash is short, the best score is bought first.
+31. The N highest scores are chosen. Ties go to the ticker listed first. Held tickers not chosen are sold at their next open. Chosen tickers not held are bought once every sell of that decision has filled, at their own next open from then on: the same open as the last sell when both trade then. With `fill: close` the sells and buys fill at the decision's close; a ticker with no bar at that time trades at its next close, and the buys wait for its sell. A buy that has not filled stays wanted until it fills or the next decision replaces it, and a decision that keeps a ticker cancels a sell of it that has not filled. When cash is short, the best score is bought first.
 32. Between decisions, a sell rule or a stop can still exit a position. The freed slot waits for the next decision. Each ticker held gets `size` divided by N.
 
 **Unknown values**
@@ -501,7 +503,7 @@ These are the engine's rules. Each is exact.
 
 **Benchmark, statistics and the split**
 
-36. The benchmark holds the same weights as the strategy (or the one ticker you name) from the first open the strategy could have bought at, with the same costs, slippage, rebalancing and cash rate, and no rules or stops. A `hold` strategy is compared with holding every ticker in equal parts of the same total size.
+36. The benchmark holds the same weights as the strategy (or the one ticker you name) from the first open the strategy could have bought at (the first close with `fill: close`), with the same costs, slippage, fills, rebalancing and cash rate, and no rules or stops. A `hold` strategy is compared with holding every ticker in equal parts of the same total size.
 37. A benchmark whose prices start after the run does is measured from its own first bar. Before then it has no value, its line starts there, and its figures, and those of each `test from` part, cover only its own dates. The result notes it when the benchmark starts more than 7 days after the run.
 38. Return per year is the compound growth rate over the time the run covers, in years of 365.25 days. Worst drawdown is the lowest value of equity divided by its highest previous value, minus 1, at the closes.
 39. Sharpe ratio: for each step, take the return of equity minus what cash earned over the same step. Divide the mean of those by their standard deviation (dividing by the count, not by the count minus 1), and multiply by the square root of the steps in a year, where steps a year is the number of steps divided by the years covered. It is not scaled with 252. The benchmark's Sharpe ratio is worked out the same way.

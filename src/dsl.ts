@@ -7,31 +7,47 @@ export type CalName = 'month' | 'day' | 'weekday' | 'year' | 'month_start' | 'mo
 /** Values that belong to the open position, so only sell rules can read them. */
 export type PosName = 'bars_held' | 'entry_price';
 
+// `params` on `ind`, `param` on `lag` and `nParam` below name the parameter a period or a lag came
+// from, when one did, so the history loaded can cover every value of its range (see lookbackBars).
 export type Expr =
   | { k: 'num'; v: number }
   | { k: 'bool'; v: boolean }
   | { k: 'series'; name: SeriesName }
-  | { k: 'ind'; fn: string; src: Expr | null; args: number[] }
+  | { k: 'ind'; fn: string; src: Expr | null; args: number[]; params?: (string | null)[] }
   | { k: 'math'; fn: 'min' | 'max' | 'abs'; args: Expr[] }
   | { k: 'bin'; op: '+' | '-' | '*' | '/'; a: Expr; b: Expr }
   | { k: 'neg'; a: Expr }
   | { k: 'cmp'; op: CmpOp; a: Expr; b: Expr }
   | { k: 'logic'; op: 'and' | 'or'; a: Expr; b: Expr }
   | { k: 'not'; a: Expr }
-  | { k: 'lag'; a: Expr; n: number }
+  | { k: 'lag'; a: Expr; n: number; param?: string }
   | { k: 'of'; a: Expr; asset: string }
   | { k: 'cal'; name: CalName }
   | { k: 'pos'; name: PosName };
 
 export type Rebalance = 'never' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+/** When an order read at a bar's close fills: at the ticker's next open, or at that same close. */
+export type Fill = 'next open' | 'close';
+export const FILL: Fill[] = ['next open', 'close'];
 
 export interface Rules {
   buy: Expr;
   sell: Expr | null;
 }
 
+/**
+ * A rule or score as the user wrote it: the whole text, with continuation lines joined by a space;
+ * the text of each node of its expression in `walk` order ('' for a part the parser filled in, such
+ * as the close an sma reads); and the parameters it reads, by their declared names.
+ */
+export interface Written {
+  text: string;
+  parts: string[];
+  params: string[];
+}
+
 /** A stop distance: a fraction of the price, or a multiple of the average true range. */
-export type StopLevel = { k: 'pct'; v: number } | { k: 'atr'; mult: number; n: number };
+export type StopLevel = { k: 'pct'; v: number } | { k: 'atr'; mult: number; n: number; nParam?: string };
 
 export interface Stops {
   stopLoss: StopLevel | null;
@@ -42,7 +58,7 @@ export interface Stops {
 /** What uninvested cash earns: a fixed yearly rate, or a ticker whose close is a yearly yield in percent. */
 export type CashRate = { k: 'fixed'; rate: number } | { k: 'ticker'; ref: AssetRef };
 
-export type Sizing = { k: 'fixed' } | { k: 'invvol'; n: number } | { k: 'risk'; risk: number; mult: number; n: number };
+export type Sizing = { k: 'fixed' } | { k: 'invvol'; n: number; nParam?: string } | { k: 'risk'; risk: number; mult: number; n: number; nParam?: string };
 
 export interface Param {
   name: string;
@@ -78,6 +94,10 @@ export interface Spec {
   params: Param[];
   /** Rules per universe asset name, with the shared rules already filled in. */
   rules: Record<string, Rules>;
+  /** Absent means next open. */
+  fill?: Fill;
+  /** The rules and the ranking score as written, per universe asset name; null where the parser supplied the rule. */
+  written?: { rules: Record<string, { buy: Written | null; sell: Written | null }>; rank: Written | null };
 }
 
 export interface Defaults {
@@ -140,7 +160,7 @@ export const REBALANCE: Rebalance[] = ['never', 'weekly', 'monthly', 'quarterly'
 
 export const SETTINGS = [
   'name', 'universe', 'symbol', 'from', 'to', 'data', 'interval', 'capital', 'costs', 'size', 'rebalance', 'benchmark',
-  'stop loss', 'trailing stop', 'take profit', 'slippage', 'cash rate', 'test from', 'hold', 'weighting', 'risk per trade',
+  'stop loss', 'trailing stop', 'take profit', 'slippage', 'cash rate', 'test from', 'hold', 'weighting', 'risk per trade', 'fill',
 ];
 /** The settings a `for TICKER:` section can hold. */
 export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
@@ -279,6 +299,33 @@ export function findPos(e: Expr): PosName | null {
   }
 }
 
+/** The expressions directly inside `e`, in the order they are written. */
+export function children(e: Expr): Expr[] {
+  switch (e.k) {
+    case 'ind':
+      return e.src ? [e.src] : [];
+    case 'math':
+      return e.args;
+    case 'bin':
+    case 'cmp':
+    case 'logic':
+      return [e.a, e.b];
+    case 'neg':
+    case 'not':
+    case 'lag':
+    case 'of':
+      return [e.a];
+    default:
+      return [];
+  }
+}
+
+/** Calls `fn` on `e` and then on everything inside it, depth first, in the order written: the order of `Written.parts`. */
+export function walk(e: Expr, fn: (e: Expr) => void): void {
+  fn(e);
+  for (const c of children(e)) walk(c, fn);
+}
+
 /** A price series as it is, maybe lagged: null for the rule's own ticker, the name for `of`; undefined otherwise. */
 function barePrice(e: Expr): string | null | undefined {
   if (e.k === 'series') return e.name === 'volume' ? undefined : null;
@@ -309,6 +356,8 @@ interface ExprContext {
   sell: boolean;
   /** A price compared with a fixed number; `asset` is the `of` ticker, or null for the rule's own. */
   priceVsNumber(at: At, asset: string | null): void;
+  /** The block's text from the start of token `a` to the end of token `b`, lines joined by a space. */
+  text(a: Tok, b: Tok): string;
 }
 
 class ExprParser {
@@ -319,10 +368,31 @@ class ExprParser {
   private nesting = 0;
   /** Depth of each expression built so far; leaves are 1. */
   private depths = new WeakMap<Expr, number>();
+  /** The first and last token of each expression, its brackets included. */
+  private spans = new Map<Expr, [number, number]>();
+  /** Numbers that are a parameter's value, with its name. */
+  private paramOf = new Map<Expr, string>();
+  /** Parameters read, by their declared names. */
+  private used = new Set<string>();
 
   constructor(toks: Tok[], ctx: ExprContext) {
     this.toks = toks;
     this.ctx = ctx;
+  }
+
+  /** The parsed expression as written; call after parseCondition or parseNumber. */
+  written(root: Expr): Written {
+    const parts: string[] = [];
+    walk(root, (e) => {
+      const s = this.spans.get(e);
+      parts.push(s ? this.ctx.text(this.toks[s[0]], this.toks[s[1]]) : '');
+    });
+    return { text: this.ctx.text(this.toks[0], this.toks[this.toks.length - 2]), parts, params: [...this.used] };
+  }
+
+  private mark<T extends Expr>(e: T, start: number): T {
+    this.spans.set(e, [start, this.i - 1]);
+    return e;
   }
 
   parseCondition(): Expr {
@@ -392,31 +462,34 @@ class ExprParser {
 
   private or(): Expr {
     return this.deeper(() => {
+      const start = this.i;
       let a = this.and();
       while (this.isId('or')) {
         const t = this.next();
         const b = this.and();
-        a = this.node({ k: 'logic', op: 'or', a: this.needBool(a, t, 'or'), b: this.needBool(b, t, 'or') }, t, a, b);
+        a = this.mark(this.node({ k: 'logic', op: 'or', a: this.needBool(a, t, 'or'), b: this.needBool(b, t, 'or') }, t, a, b), start);
       }
       return a;
     });
   }
 
   private and(): Expr {
+    const start = this.i;
     let a = this.not();
     while (this.isId('and')) {
       const t = this.next();
       const b = this.not();
-      a = this.node({ k: 'logic', op: 'and', a: this.needBool(a, t, 'and'), b: this.needBool(b, t, 'and') }, t, a, b);
+      a = this.mark(this.node({ k: 'logic', op: 'and', a: this.needBool(a, t, 'and'), b: this.needBool(b, t, 'and') }, t, a, b), start);
     }
     return a;
   }
 
   private not(): Expr {
     if (this.isId('not')) {
+      const start = this.i;
       const t = this.next();
       const a = this.deeper(() => this.not());
-      return this.node({ k: 'not', a: this.needBool(a, t, 'not') }, t, a);
+      return this.mark(this.node({ k: 'not', a: this.needBool(a, t, 'not') }, t, a), start);
     }
     return this.cmp();
   }
@@ -457,7 +530,7 @@ class ExprParser {
     const op = this.cmpOp();
     if (!op) return a;
     const b = this.sum();
-    const e: Expr = this.node({ k: 'cmp', op, a: this.needNum(a, t, 'A comparison'), b: this.needNum(b, t, 'A comparison') }, t, a, b);
+    const e: Expr = this.mark(this.node({ k: 'cmp', op, a: this.needNum(a, t, 'A comparison'), b: this.needNum(b, t, 'A comparison') }, t, a, b), start);
     const pa = barePrice(a);
     const pb = barePrice(b);
     const price = pa !== undefined && isFixed(b) ? pa : pb !== undefined && isFixed(a) ? pb : undefined;
@@ -466,52 +539,58 @@ class ExprParser {
   }
 
   private sum(): Expr {
+    const start = this.i;
     let a = this.prod();
     while (this.isOp('+') || this.isOp('-')) {
       const t = this.next();
       const b = this.prod();
-      a = this.node({ k: 'bin', op: t.s as '+' | '-', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) }, t, a, b);
+      a = this.mark(this.node({ k: 'bin', op: t.s as '+' | '-', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) }, t, a, b), start);
     }
     return a;
   }
 
   private prod(): Expr {
+    const start = this.i;
     let a = this.unary();
     while (this.isOp('*') || this.isOp('/')) {
       const t = this.next();
       const b = this.unary();
-      a = this.node({ k: 'bin', op: t.s as '*' | '/', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) }, t, a, b);
+      a = this.mark(this.node({ k: 'bin', op: t.s as '*' | '/', a: this.needNum(a, t, `"${t.s}"`), b: this.needNum(b, t, `"${t.s}"`) }, t, a, b), start);
     }
     return a;
   }
 
   private unary(): Expr {
     if (this.isOp('-')) {
+      const start = this.i;
       const t = this.next();
       const a = this.deeper(() => this.unary());
-      return this.node({ k: 'neg', a: this.needNum(a, t, '"-"') }, t, a);
+      return this.mark(this.node({ k: 'neg', a: this.needNum(a, t, '"-"') }, t, a), start);
     }
     return this.postfix();
   }
 
   private postfix(): Expr {
+    const start = this.i;
     let e = this.primary();
     for (;;) {
       if (this.isOp('[')) {
         const open = this.next();
         const n = this.next();
-        const v = n.t === 'num' ? n.v : n.t === 'id' ? this.ctx.params.get(n.s)?.value : undefined;
+        const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
+        const v = n.t === 'num' ? n.v : p?.value;
         if (v === undefined || !Number.isInteger(v) || v < 0) throw new SpecError(at(n), 'Bars ago must be a whole number, as in close[1]');
         this.expect(']');
         const pos = findPos(e);
         if (pos) throw new SpecError(span(open, this.toks[this.i - 1]), `"${POSITION[pos]}" can't be read for an earlier bar with [n]`);
-        e = this.node({ k: 'lag', a: e, n: v }, open, e);
+        if (p) this.used.add(p.name);
+        e = this.mark(this.node(p ? { k: 'lag', a: e, n: v, param: p.name } : { k: 'lag', a: e, n: v }, open, e), start);
       } else if (this.isOp('of')) {
         const of = this.next();
         const sym = this.next();
         const pos = findPos(e);
         if (pos) throw new SpecError(span(of, sym), `"${POSITION[pos]}" belongs to the open position, so it can't be read with "of"`);
-        e = this.node({ k: 'of', a: e, asset: this.ctx.resolveAsset(sym) }, of, e);
+        e = this.mark(this.node({ k: 'of', a: e, asset: this.ctx.resolveAsset(sym) }, of, e), start);
       } else {
         return e;
       }
@@ -519,13 +598,18 @@ class ExprParser {
   }
 
   private primary(): Expr {
+    const start = this.i;
     const t = this.next();
-    if (t.t === 'num') return { k: 'num', v: t.v };
     if (t.t === 'op' && t.s === '(') {
       const e = this.or();
       this.expect(')');
-      return e;
+      return this.mark(e, start);
     }
+    return this.mark(this.leaf(t), start);
+  }
+
+  private leaf(t: Tok): Expr {
+    if (t.t === 'num') return { k: 'num', v: t.v };
     if (t.t === 'id') {
       if (t.s === 'true' || t.s === 'always') return { k: 'bool', v: true };
       if (t.s === 'false' || t.s === 'never') return { k: 'bool', v: false };
@@ -536,7 +620,12 @@ class ExprParser {
       const pos = this.position(t);
       if (pos) return pos;
       const p = this.ctx.params.get(t.s);
-      if (p) return { k: 'num', v: p.value };
+      if (p) {
+        this.used.add(p.name);
+        const e: Expr = { k: 'num', v: p.value };
+        this.paramOf.set(e, p.name);
+        return e;
+      }
       const known = [
         `Series: ${SERIES.join(', ')}`,
         `Functions: ${Object.keys(INDICATORS).join(', ')}, min, max, abs`,
@@ -622,7 +711,9 @@ class ExprParser {
       }
       return n;
     });
-    return this.node({ k: 'ind', fn: t.s, src, args: nums }, t, ...(src ? [src] : []));
+    const params = def.params.map((_, i) => (rest[i] ? (this.paramOf.get(rest[i].e) ?? null) : null));
+    const e: Expr = params.some((p) => p !== null) ? { k: 'ind', fn: t.s, src, args: nums, params } : { k: 'ind', fn: t.s, src, args: nums };
+    return this.node(e, t, ...(src ? [src] : []));
   }
 }
 
@@ -766,9 +857,12 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     }
   };
 
+  /** Each line without its comment, for quoting rules as written. */
+  const plainLines: string[] = [];
   source.split('\n').forEach((rawLine, idx) => {
     const line = idx + 1;
     const stripped = rawLine.replace(/(^|\s)(#|\/\/).*$/, '');
+    plainLines.push(stripped);
     const text = stripped.trim();
     const lead = stripped.length - stripped.trimStart().length;
     if (!text) {
@@ -862,6 +956,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     if (!Number.isInteger(n) || n < min || n > 10000) throw new SpecError(where, `${what}: ${n} is not a valid period`);
     return n;
   };
+  /** `{ nParam }` when a period is written as a parameter's name, to spread into the setting's value. */
+  const periodParam = (text: string): { nParam: string } | object => {
+    const p = params.get(text.toLowerCase());
+    return p ? { nParam: p.name } : {};
+  };
   const stopLevel = (what: string, max: number) => (text: string, where: At): StopLevel => {
     const m = text.match(ATR_DISTANCE);
     if (!m) {
@@ -871,7 +970,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     }
     const mult = plain(m[1], where, `The ${what} distance`, '2 atr(14)');
     if (!(mult > 0)) throw new SpecError(where, `The ${what} distance must be above 0`);
-    return { k: 'atr', mult, n: period(m[2]?.trim() ?? '', where, 'atr()', 1) };
+    const n = m[2]?.trim() ?? '';
+    return { k: 'atr', mult, n: period(n, where, 'atr()', 1), ...periodParam(n) };
   };
 
   const defaultSource = get('data', oneOf(['yahoo', 'binance'] as const, 'data'), defaults.dataSource as Source);
@@ -946,11 +1046,19 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const findAsset = (name: string) => universe.find((a) => a.name.toLowerCase() === name.toLowerCase());
 
   const priceChecks: { at: At; asset: string | null; scope: string | null }[] = [];
+  const text = (a: Tok, b: Tok): string => {
+    if (a.line === b.line) return plainLines[a.line - 1].slice(a.from, b.to);
+    const parts = [plainLines[a.line - 1].slice(a.from)];
+    for (let l = a.line + 1; l < b.line; l++) parts.push(plainLines[l - 1]);
+    parts.push(plainLines[b.line - 1].slice(0, b.to));
+    return parts.map((s) => s.trim()).join(' ');
+  };
   const context = (sell: boolean, ruleScope: string | null): ExprContext => ({
     resolveAsset,
     params,
     sell,
     priceVsNumber: (where, asset) => priceChecks.push({ at: where, asset, scope: ruleScope }),
+    text,
   });
   const endTok = (toks: Tok[], fallback: At): Tok => {
     const last = toks[toks.length - 1];
@@ -959,6 +1067,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
 
   const shared: { buy?: Expr; sell?: Expr } = {};
   const own = new Map<string, { buy?: Expr; sell?: Expr }>();
+  const writtenOf = new Map<Expr, Written>();
   for (const r of rawRules) {
     guard(() => {
       let target = shared;
@@ -975,27 +1084,36 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       }
       if (target[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule${r.scope ? ` for ${r.scope}` : ''}. Join conditions with "and" or "or"`);
       r.toks.push(endTok(r.toks, r.head));
-      target[r.side] = new ExprParser(r.toks, context(r.side === 'sell', ruleScope)).parseCondition();
+      const parser = new ExprParser(r.toks, context(r.side === 'sell', ruleScope));
+      const e = parser.parseCondition();
+      target[r.side] = e;
+      writtenOf.set(e, parser.written(e));
     });
   }
 
   let rank: Spec['rank'] = null;
+  let rankWritten: Written | null = null;
   if (rankTop !== null && rankBy !== null) {
     const by: { text: string; from: number; line: number } = rankBy;
     guard(() => {
       const toks: Tok[] = [];
       lex(by.text, by.line, by.from, toks);
       toks.push(endTok(toks, hold!.valueAt));
-      rank = { top: rankTop!, by: new ExprParser(toks, context(false, null)).parseNumber('The ranking') };
+      const parser = new ExprParser(toks, context(false, null));
+      rank = { top: rankTop!, by: parser.parseNumber('The ranking') };
+      rankWritten = parser.written(rank.by);
     });
   }
 
   const rules: Record<string, Rules> = {};
+  const writtenRules: Record<string, { buy: Written | null; sell: Written | null }> = {};
   for (const a of universe) {
     const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true } as Expr) : undefined);
     const sell = own.get(a.name)?.sell ?? shared.sell ?? null;
-    if (buy) rules[a.name] = { buy, sell };
-    else if (errors.length === 0) errors.push({ line: 1, message: `There is no buy rule${universe.length > 1 ? ` for ${a.name}` : ''}. Add one, such as "buy when close > sma(200)"` });
+    if (buy) {
+      rules[a.name] = { buy, sell };
+      writtenRules[a.name] = { buy: writtenOf.get(buy) ?? null, sell: sell ? (writtenOf.get(sell) ?? null) : null };
+    } else if (errors.length === 0) errors.push({ line: 1, message: `There is no buy rule${universe.length > 1 ? ` for ${a.name}` : ''}. Add one, such as "buy when close > sma(200)"` });
   }
 
   const interval = get('interval', (v) => v.toLowerCase(), '1d');
@@ -1084,7 +1202,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     (v, w): Sizing => {
       const m = v.match(/^inverse\s+volatility\s*\(([^)]*)\)$/i);
       if (!m || !m[1].trim()) throw new SpecError(w, 'Write it as inverse volatility(60): the number of bars to measure volatility over');
-      return { k: 'invvol', n: period(m[1].trim(), w, 'inverse volatility()', 2) };
+      return { k: 'invvol', n: period(m[1].trim(), w, 'inverse volatility()', 2), ...periodParam(m[1].trim()) };
     },
     null as Sizing | null,
   );
@@ -1096,7 +1214,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const share = percentage(m[1], w, 'risk per trade', 1);
       const mult = plain(m[2], w, 'The risk distance', '1% at 2 atr(14)');
       if (!(mult > 0)) throw new SpecError(w, 'The risk distance must be above 0');
-      return { k: 'risk', risk: share, mult, n: period(m[3]?.trim() ?? '', w, 'atr()', 1) };
+      const n = m[3]?.trim() ?? '';
+      return { k: 'risk', risk: share, mult, n: period(n, w, 'atr()', 1), ...periodParam(n) };
     },
     null as Sizing | null,
   );
@@ -1136,6 +1255,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     sizing: risk ?? weighting ?? { k: 'fixed' },
     params: [...params.values()],
     rules,
+    fill: get('fill', (v, w) => oneOf(FILL, 'fill')(v.replace(/\s+/g, ' '), w), 'next open' as Fill),
+    written: { rules: writtenRules, rank: rankWritten },
   };
 
   errors.sort((a, b) => a.line - b.line);
