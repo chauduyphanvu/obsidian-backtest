@@ -1,18 +1,22 @@
-import { MarkdownRenderChild, MarkdownView, Notice, Plugin, TFile, normalizePath, requestUrl, type MarkdownPostProcessorContext } from 'obsidian';
+import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type MarkdownPostProcessorContext } from 'obsidian';
 import { runBacktest } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
 import { cashIndex, parseCompare, type Curve } from './compare.ts';
+import { DASHBOARD_TEMPLATE } from './dashboard.ts';
 import type { DataDeps } from './data.ts';
 import { DAY, isoDate } from './dom.ts';
 import { StrategySuggest, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
+import { LiveView, VIEW_TYPE_LIVE, liveEditorExtension, openLivePanel, pokeLiveViews, type LiveHost } from './live-view.ts';
 import type { Spec } from './dsl.ts';
 import { failedStatus, mapLimit, ordersSavePlan, statusFrom, type StrategyStatus } from './orders.ts';
+import { OrdersBadge } from './orders-badge.ts';
 import { OrdersModal } from './orders-view.ts';
 import { renderActions } from './render-actions.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
+import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
 import { renderPriceCharts } from './render-price.ts';
 import { renderLuck } from './render-luck.ts';
 import { blockStateKey, renderErrors, renderFailure, renderLoading, renderResult, type Section } from './render.ts';
@@ -57,6 +61,8 @@ interface StrategyOptions {
   stateKey?: string;
   /** Start folded or open, instead of following the setting. */
   compact?: boolean;
+  /** Drawn in the preview panel: a failed run rejects instead of drawing its own message, and the note's properties are left alone. */
+  panel?: boolean;
 }
 
 export default class BacktestBlocks extends Plugin {
@@ -69,6 +75,7 @@ export default class BacktestBlocks extends Plugin {
   private propertyWrites = new Map<string, { (): void; cancel(): void }>();
   /** Whether each block was left open (true) or folded (false), for blocks drawn again within a session. */
   private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
+  private ordersBadge: OrdersBadge | null = null;
 
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
@@ -86,6 +93,14 @@ export default class BacktestBlocks extends Plugin {
       ctx.addChild(child);
       void this.renderComparison(source, el, child, ctx.sourcePath);
     });
+
+    this.registerMarkdownCodeBlockProcessor('backtests', (source, el, ctx) => {
+      const child = new MarkdownRenderChild(el);
+      ctx.addChild(child);
+      child.register(renderDashboard(el, source, this.dashboardHost()));
+    });
+    this.registerView(VIEW_TYPE_LIVE, (leaf) => new LiveView(leaf, this.liveHost()));
+    this.registerEditorExtension(liveEditorExtension(pokeLiveViews));
 
     this.registerEditorExtension(strategyEditor(() => defaultsFrom(this.settings)));
     this.registerEditorSuggest(new StrategySuggest(this.app));
@@ -120,9 +135,30 @@ export default class BacktestBlocks extends Plugin {
       name: 'Clear saved prices',
       callback: () => void this.clearPrices(),
     });
+    this.addCommand({ id: 'open-live', name: 'Open strategy preview', callback: () => void openLivePanel(this.app) });
+    this.addCommand({
+      id: 'insert-dashboard',
+      name: 'Insert strategy dashboard',
+      editorCallback: (editor) => editor.replaceSelection(DASHBOARD_TEMPLATE),
+    });
+
+    this.ordersBadge = new OrdersBadge(
+      Platform.isMobile ? null : this.addStatusBarItem(),
+      {
+        scan: () => this.scanOrders(false, () => {}),
+        open: () => this.openOrders(),
+        notify: (text) => void new Notice(text),
+      },
+      { refreshHours: () => this.settings.cacheHours },
+    );
+    this.addRibbonIcon('list-checks', "Show today's orders", () => this.openOrders());
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.ordersOnStartup) this.ordersBadge?.start();
+    });
   }
 
   onunload(): void {
+    this.ordersBadge?.stop();
     for (const write of this.propertyWrites.values()) write.cancel();
   }
 
@@ -310,13 +346,57 @@ export default class BacktestBlocks extends Plugin {
           params: spec.params.length > 0 ? { rerun, apply: opts.apply } : undefined,
         }),
       );
-      if (this.settings.writeProperties) {
+      if (this.settings.writeProperties && !opts.panel) {
         const file = this.app.vault.getAbstractFileByPath(opts.notePath);
         if (file instanceof TFile) this.scheduleProperties(file);
       }
     } catch (e) {
+      if (opts.panel) throw e;
       renderFailure(el, e instanceof Error ? e.message : String(e), source, retry(false));
     }
+  }
+
+  private liveHost(): LiveHost {
+    return {
+      show: async (source, el, { notePath, apply }) => {
+        const child = new MarkdownRenderChild(el);
+        await this.renderStrategy(source, el, child, { notePath, apply, compact: false, panel: true });
+        return () => this.dispose(child);
+      },
+      pricesReady: (source) => this.pricesReady(source),
+      errors: (source) => this.runner().parse(source).errors,
+      rewrite: setParamValues,
+    };
+  }
+
+  /** True when running the block needs no download: it parses, and every ticker's saved prices are fresh. */
+  private async pricesReady(source: string): Promise<boolean> {
+    const { spec } = this.runner().parse(source);
+    if (!spec) return false;
+    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
+    try {
+      const { prices } = await new Runner(offline, defaultsFrom(this.settings), { freshForMs: this.settings.cacheHours * HOUR }).loadPrices(spec);
+      return prices.every((p) => !p.stale);
+    } catch {
+      return false;
+    }
+  }
+
+  /** The host of a `backtests` block. `find` marks the start of a round: prices fetched since then are fresh for the strategies after it. */
+  private dashboardHost(): DashboardHost {
+    let started = Date.now();
+    return {
+      find: () => {
+        started = Date.now();
+        return this.findStrategies();
+      },
+      run: (source, force) => {
+        if (force) this.results.clear();
+        return this.runSource(source, force ? { runner: this.runner(Date.now() - started) } : {});
+      },
+      openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
+      now: () => Date.now(),
+    };
   }
 
   /** Writes text to a dated file in the results folder and says where it went. */
@@ -436,29 +516,35 @@ export default class BacktestBlocks extends Plugin {
     return found;
   }
 
+  /** Every strategy in the vault, run and read as the next open's orders. `force` refetches every price once. */
+  private async scanOrders(force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]> {
+    const started = Date.now();
+    // Results are dropped so every strategy runs again. A price fetched since the scan began is fresh for the strategies
+    // that come after, so each ticker is downloaded once however many strategies use it.
+    if (force) this.results.clear();
+    const found = await this.findStrategies();
+    let done = 0;
+    onProgress(0, found.length);
+    return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
+      let status: StrategyStatus;
+      try {
+        const runner = force ? this.runner(Date.now() - started) : undefined;
+        status = statusFrom(f.note, f.name, await this.runSource(f.source, { runner }), Date.now());
+      } catch (e) {
+        status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
+      }
+      onProgress(++done, found.length);
+      return status;
+    });
+  }
+
   private openOrders(): void {
-    const scan = async (force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]> => {
-      const started = Date.now();
-      // Results are dropped so every strategy runs again. A price fetched since the scan began is fresh for the strategies
-      // that come after, so each ticker is downloaded once however many strategies use it.
-      if (force) this.results.clear();
-      const found = await this.findStrategies();
-      let done = 0;
-      onProgress(0, found.length);
-      return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
-        let status: StrategyStatus;
-        try {
-          const runner = force ? this.runner(Date.now() - started) : undefined;
-          status = statusFrom(f.note, f.name, await this.runSource(f.source, { runner }), Date.now());
-        } catch (e) {
-          status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
-        }
-        onProgress(++done, found.length);
-        return status;
-      });
-    };
     new OrdersModal(this.app, {
-      scan,
+      scan: async (force, onProgress) => {
+        const list = await this.scanOrders(force, onProgress);
+        this.ordersBadge?.show(list);
+        return list;
+      },
       now: () => Date.now(),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       save: async (markdown) => {
