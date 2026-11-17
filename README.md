@@ -992,7 +992,7 @@ Layout of `src/`:
 - `data.ts`, `runner.ts`, `result-cache.ts`: prices and their cache, running a block, and keeping results in memory.
 - `compare.ts`, `dashboard.ts`, `orders.ts`, `orders-badge.ts`, `export.ts`, `rewrite.ts`: the compare block, the `backtests` block (its parser, sorting and running), orders, the status bar count of orders, the files, notes and properties a result can become, and writing parameter values into a block's text.
 - `sweep.ts`, `luck.ts`, `rng.ts`: parameter sweeps and the luck checks (reshuffled history, random entries, walk-forward), and the seeded random numbers they use.
-- `jobs.ts`, `worker.ts`, `worker-client.ts`: the sweeps and luck checks as jobs, the background worker that runs them, and the plugin's side of it, which starts the worker, sends it prices and stops it.
+- `jobs.ts`, `worker.ts`, `worker-client.ts`, `limits.ts`: backtests, sweeps and luck checks as jobs, the background workers that run them, the plugin's side of them, which starts the workers, sends them prices and stops them, and the limits on how large one backtest may be and how long it may run.
 - `llm.ts`, `llm-modal.ts`: drafting.
 - `gallery.ts`, `gallery-modal.ts`, `csv-import.ts`, `csv-modal.ts`: the starter strategies and the CSV helper, each with its logic and its window.
 - `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.

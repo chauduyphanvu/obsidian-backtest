@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec, type Defaults } from '../src/dsl.ts';
-import { benchFor, runJob, serve, stoppedResult, type Bench, type FromWorker, type Job, type Progress, type ToWorker } from '../src/jobs.ts';
+import { explainTrade } from '../src/explain.ts';
+import { benchFor, runBlock, runJob, serve, stoppedResult, withInputs, type Bench, type FromWorker, type Job, type Progress, type Ran, type ToWorker } from '../src/jobs.ts';
 import { blockFor, bootstrap, randomEntries, walkForward } from '../src/luck.ts';
 import { makeRng } from '../src/rng.ts';
 import { runSweep, type Parse } from '../src/sweep.ts';
@@ -174,4 +175,146 @@ test('runJob on the main thread is the same as the functions it calls, and stops
   let done = 0;
   const stopped = await runJob({ kind: 'sweep' }, bench, { onProgress: (d) => (done = d), shouldStop: () => done >= 2 });
   assert.deepEqual([stopped.tried, stopped.stopped], [2, true]);
+});
+
+// ---------------------------------------------------------------- single runs
+
+/** Strategies that between them touch every part of a result: stops, ranking, close fills, a later benchmark, the split, sizing, intraday bars, no trades. */
+const VARIED: { name: string; source: string; data: () => Map<string, Bars> }[] = [
+  { name: 'timing with a stop parameter', source: TIMING, data: () => prices(['A', 'B'], 900, 11) },
+  { name: 'ranking', source: RANKING, data: () => prices(['A', 'B', 'C', 'D'], 900, 12) },
+  {
+    name: 'close fills, a split, ATR stops and a benchmark that starts later',
+    source: 'universe: A\nbenchmark: E\nfill: close\ntest from: 2021-06-01\ntrailing stop: 3 atr(14)\ntake profit: 4 atr(10)\nbuy when close crosses above sma(20)\nsell when bars held >= 10',
+    data: () => {
+      const d = prices(['A', 'E'], 900, 13);
+      const e = d.get('E')!;
+      d.set('E', { t: e.t.slice(200), o: e.o.slice(200), h: e.h.slice(200), l: e.l.slice(200), c: e.c.slice(200), v: e.v.slice(200) });
+      return d;
+    },
+  },
+  {
+    name: 'per-ticker rules, reading another ticker, risk sizing and interest',
+    source:
+      'universe: A 40%, B 40%\ncash rate: 3%\nrisk per trade: 1% at 2 atr(14)\nbuy when close > sma(30) and close of B > sma(30) of B\nsell when close < entry price * 0.95\nfor B:\nbuy when rsi(14) < 40\nsell when rsi(14) > 60',
+    data: () => prices(['A', 'B'], 900, 14),
+  },
+  {
+    name: 'inverse volatility, quarterly rebalancing and a cash-rate ticker',
+    source: 'universe: A 30%, B 30%, C 30%\nweighting: inverse volatility(20)\nrebalance: quarterly\ncash rate: ^IRX\nbuy when close > ema(40)\nsell when close < ema(40)',
+    data: () => {
+      const d = prices(['A', 'B', 'C'], 900, 15);
+      d.set('^IRX', bars(Array.from({ length: 900 }, (_, i) => 3 + Math.sin(i / 50))));
+      return d;
+    },
+  },
+  {
+    name: 'hourly bars',
+    source: 'universe: binance:A\ninterval: 1h\nstop loss: 2%\nbuy when close > sma(24) and weekday <= 5\nsell when close < sma(24)',
+    data: () => {
+      const d = prices(['A'], 2000, 16);
+      const a = d.get('A')!;
+      d.set('A', { ...a, t: a.t.map((_, i) => Date.UTC(2023, 0, 2) + i * 3_600_000) });
+      return d;
+    },
+  },
+  { name: 'a buy rule that never fires', source: 'universe: A\nbuy when close > 1000000', data: () => prices(['A'], 400, 17) },
+];
+
+/** Fails on any function, class instance (other than Map) or symbol anywhere in a result: nothing postMessage could lose. */
+function assertCloneable(v: unknown, path = 'result'): void {
+  assert.notEqual(typeof v, 'function', `${path} is a function`);
+  assert.notEqual(typeof v, 'symbol', `${path} is a symbol`);
+  if (v === null || typeof v !== 'object') return;
+  if (v instanceof Map) {
+    for (const [k, x] of v) assertCloneable(x, `${path}.get(${String(k)})`);
+    return;
+  }
+  const proto = Object.getPrototypeOf(v);
+  assert.ok(proto === Object.prototype || proto === Array.prototype, `${path} is a ${proto?.constructor?.name}`);
+  for (const [k, x] of Object.entries(v)) assertCloneable(x, `${path}.${k}`);
+}
+
+/** JSON with Maps written out, so two results with the same keys in the same order give the same text. */
+const text = (v: unknown) => JSON.stringify(v, (_, x) => (x instanceof Map ? [...x] : typeof x === 'number' && !Number.isFinite(x) ? String(x) : x));
+
+test('a single run in the worker, put back together with its strategy and prices, is exactly what runBacktest gives here', async () => {
+  for (const { name, source, data: make } of VARIED) {
+    const data = make();
+    const parsed = parseSpec(source, { defaults: DEFAULTS });
+    assert.deepEqual(parsed.errors, [], name);
+    const spec = parsed.spec!;
+    const expected = runBacktest(spec, data);
+    for (const overrides of [{}, ...(spec.params.length ? [{ [spec.params[0].name]: spec.params[0].range?.lo ?? spec.params[0].value }] : [])]) {
+      const direct = Object.keys(overrides).length ? runBacktest(parseSpec(source, { defaults: DEFAULTS, overrides }).spec!, data) : expected;
+      const out: FromWorker[] = [];
+      const handle = serve((m) => out.push(structuredClone(m)), 0);
+      await handle(structuredClone({ type: 'data', id: 1, data } satisfies ToWorker));
+      await handle(structuredClone({ type: 'run', id: 3, data: 1, block: { source, defaults: DEFAULTS, overrides } } satisfies ToWorker));
+      assert.equal(out.length, 1, name);
+      assert.equal(out[0].type, 'ran', `${name}: ${JSON.stringify(out[0])}`);
+      const ran = (out[0] as { result: Ran }).result;
+      assertCloneable(ran);
+      assert.ok(!('spec' in ran) && !('data' in ran), `${name}: the strategy and prices are not sent back`);
+      const back = withInputs(ran, direct.spec, data);
+      assert.deepStrictEqual(back, direct, name);
+      assert.equal(text(back), text(direct), `${name}: same keys in the same order`);
+      assert.equal(back.data, data);
+      // What the main thread does with a result: explain each trade from the same prices.
+      for (const trade of back.run.trades.slice(0, 20)) assert.deepStrictEqual(explainTrade(back, trade), explainTrade(direct, direct.run.trades[back.run.trades.indexOf(trade)]), `${name}: explanation`);
+    }
+  }
+});
+
+/** Paths of own fields whose value is undefined. */
+function undefinedFields(v: unknown, path = 'result', out: string[] = []): string[] {
+  if (v === null || typeof v !== 'object') return out;
+  for (const [k, x] of Object.entries(v)) {
+    if (x === undefined) out.push(`${path}.${k}`);
+    undefinedFields(x, `${path}.${k}`, out);
+  }
+  return out;
+}
+
+test('the copy keeps NaN and objects shared between trades; optional fields are left out rather than undefined, and a copy would keep them either way', () => {
+  let nan = false;
+  let shared = false;
+  const decisions = (ran: Ran) => ran.run.trades.flatMap((t) => (t.why?.rank ? [t.why.rank.decision] : []));
+  for (const { name, source, data: make } of VARIED) {
+    const ran = runBlock({ source, defaults: DEFAULTS, overrides: {} }, make());
+    const copy = structuredClone(ran);
+    assert.deepStrictEqual(copy, ran, name);
+    assert.deepEqual(undefinedFields(ran), [], name);
+    nan ||= ran.benchmark.equity.some(Number.isNaN);
+    // A ranking decision is one object shared by the trades it made, in the copy as in the original.
+    const before = new Set(decisions(ran)).size;
+    assert.equal(new Set(decisions(copy)).size, before, name);
+    shared ||= before < decisions(ran).length;
+  }
+  assert.ok(nan, 'some result holds NaN');
+  assert.ok(shared, 'some result shares a ranking decision between trades');
+  assert.deepStrictEqual(structuredClone({ a: undefined, b: -0, c: NaN }), { a: undefined, b: -0, c: NaN });
+});
+
+test('a single run that fails in the worker sends the same message the main thread would throw', async () => {
+  const data = prices(['A'], 200, 1);
+  const out: FromWorker[] = [];
+  const handle = serve((m) => out.push(m), 0);
+  await handle({ type: 'data', id: 1, data });
+  await handle({ type: 'run', id: 2, data: 1, block: { source: 'universe: A, B\nbuy when close > sma(5)', defaults: DEFAULTS, overrides: {} } });
+  const { spec } = parseSpec('universe: A, B\nbuy when close > sma(5)', { defaults: DEFAULTS });
+  assert.throws(() => runBacktest(spec!, data), (e: Error) => {
+    assert.deepEqual(out, [{ type: 'error', id: 2, message: e.message }]);
+    return true;
+  });
+});
+
+test('a single run is not kept in the worker, and the luck checks there still find the prices', async () => {
+  const data = prices(['A', 'B'], 400, 1);
+  const out: FromWorker[] = [];
+  const handle = serve((m) => out.push(m), 0);
+  await handle({ type: 'data', id: 1, data });
+  for (let fast = 5; fast <= 15; fast += 5) await handle({ type: 'run', id: fast, data: 1, block: { source: TIMING, defaults: DEFAULTS, overrides: { fast } } });
+  await handle({ type: 'job', id: 20, data: 1, block: { source: TIMING, defaults: DEFAULTS, overrides: {} }, job: { kind: 'reshuffle', seed: 1, runs: 10 } });
+  assert.deepEqual(out.map((m) => m.type), ['ran', 'ran', 'ran', 'done']);
 });

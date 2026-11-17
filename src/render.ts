@@ -3,6 +3,7 @@ import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
 import { colourSource, DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { hintFor } from './fixes.ts';
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
+import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, timingPhrase } from './orders.ts';
 import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderDeepStats } from './render-stats.ts';
@@ -43,6 +44,16 @@ export function renderFailure(el: HTMLElement, message: string, src: string, onR
   h(root, 'div', 'bt-error-title', "The backtest couldn't run");
   h(root, 'div', 'bt-note', message);
   h(root, 'button', 'bt-button', 'Try again').addEventListener('click', onRetry);
+  source(root, src);
+}
+
+/** A run refused for its size or stopped for its time (limits.ts): which limit, and a button to run it without one when that is allowed. */
+export function renderLimit(el: HTMLElement, error: LimitError, src: string, onAnyway: () => void): void {
+  el.replaceChildren();
+  const root = h(el, 'div', 'bt-root');
+  h(root, 'div', 'bt-error-title', error.kind === 'size' ? 'This backtest is too large to run' : 'This backtest took too long');
+  h(root, 'div', 'bt-note', error.message);
+  if (error.anyway) h(root, 'button', 'bt-button', anywayLabel(error)).addEventListener('click', onAnyway);
   source(root, src);
 }
 

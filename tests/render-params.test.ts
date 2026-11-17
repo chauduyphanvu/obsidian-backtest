@@ -133,12 +133,58 @@ function requesting() {
 }
 
 test('a drag asks with settled false and a release with settled true, and each gets its own copy of the values', async () => {
-  const { asked, requester } = requesting();
+  const { asked, requester, flush } = requesting();
   const values = { n: 250 };
   requester.request(values, false);
   values.n = 300;
   requester.request(values, true);
+  // The release waits for the run that is out.
+  assert.deepEqual(asked.map((a) => [a.values.n, a.settled]), [[250, false]]);
+  asked[0].answer({ out: tag('a') });
+  await flush();
   assert.deepEqual(asked.map((a) => [a.values.n, a.settled]), [[250, false], [300, true]]);
+});
+
+test('one run is out at a time: requests made meanwhile are replaced by the latest, which is asked for when the run comes back', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 1 }, false);
+  for (let n = 2; n <= 9; n++) requester.request({ n }, false);
+  assert.equal(asked.length, 1);
+  asked[0].answer({ out: tag('first') });
+  await flush();
+  assert.deepEqual(asked.map((a) => a.values.n), [1, 9]);
+  asked[1].answer({ out: tag('latest') });
+  await flush();
+  assert.equal(asked.length, 2);
+  // The first answer came after the drag had moved on: it is shown while the drag goes on, then the latest.
+  assert.deepEqual(log, ['shown first {"n":1} false', 'shown latest {"n":9} false']);
+});
+
+test('a drag answer that comes after the release is not shown: only the release is', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 1 }, false);
+  requester.request({ n: 2 }, false);
+  requester.request({ n: 2 }, true);
+  asked[0].answer({ out: tag('drag') });
+  await flush();
+  assert.deepEqual(asked.map((a) => [a.values.n, a.settled]), [[1, false], [2, true]]);
+  asked[1].answer({ out: tag('release') });
+  await flush();
+  assert.deepEqual(log, ['shown release {"n":2} true']);
+});
+
+test('an overtaken drag run that fails or needs more history says nothing', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 1 }, false);
+  requester.request({ n: 2 }, false);
+  asked[0].answer({ error: new Error('older failed') });
+  await flush();
+  requester.request({ n: 3 }, false);
+  asked[1].answer({ out: null });
+  await flush();
+  asked[2].answer({ out: tag('c') });
+  await flush();
+  assert.deepEqual(log, ['shown c {"n":3} false']);
 });
 
 test('an answer is shown with the values it was asked for', async () => {
@@ -184,9 +230,9 @@ test('only the latest request is used: an older answer that arrives later is dro
   const { asked, log, requester, flush } = requesting();
   requester.request({ n: 300 }, true);
   requester.request({ n: 350 }, true);
-  asked[1].answer({ out: tag('latest') });
-  await flush();
   asked[0].answer({ out: tag('older') });
+  await flush();
+  asked[1].answer({ out: tag('latest') });
   await flush();
   assert.deepEqual(log, ['shown latest {"n":350} true']);
 
@@ -194,6 +240,7 @@ test('only the latest request is used: an older answer that arrives later is dro
   second.requester.request({ n: 300 }, true);
   second.requester.request({ n: 350 }, true);
   second.asked[0].answer({ error: new Error('older failed') });
+  await second.flush();
   second.asked[1].answer({ out: tag('latest') });
   await second.flush();
   assert.deepEqual(second.log, ['shown latest {"n":350} true']);
@@ -239,6 +286,7 @@ test('a failing hook never leaves an unhandled rejection', async () => {
   requester.request({ n: 1 }, true);
   requester.request({ n: 2 }, true);
   asked[0].answer({ error: new Error('stale') });
+  await flush();
   asked[1].answer({ error: new Error('latest') });
   await flush();
   await flush();

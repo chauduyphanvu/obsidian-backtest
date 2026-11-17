@@ -1,9 +1,12 @@
-// The main thread's side of the worker that runs sweeps and luck checks: one shared worker taking jobs in turn, each
-// block's prices sent to it once, and the same jobs run on the main thread instead when no worker can start.
+// The main thread's side of the background workers. There are two, each taking its jobs in turn: one for single
+// backtests (a block, a slider, a scan), so these never wait behind a sweep, and one for sweeps and luck checks. Each
+// block's prices are sent to a worker once and dropped when no block uses them, every job has a time budget, and the
+// same jobs run on the main thread instead when no worker can start.
 
 import type { Backtest } from './backtest.ts';
 import type { Defaults } from './dsl.ts';
-import { benchWith, jobOverrides, runJob, stoppedResult, type Bench, type FromWorker, type Job, type JobOf, type Kind, type Results, type Sofar, type ToWorker } from './jobs.ts';
+import { benchWith, jobOverrides, runBlock, runJob, stoppedResult, type Bench, type Block, type FromWorker, type Job, type JobOf, type Kind, type Ran, type Results, type Sofar, type ToWorker } from './jobs.ts';
+import { LIMITS, LimitError, sizeRefusal, timeMessage, type RunSize } from './limits.ts';
 import { pause, type Parse } from './sweep.ts';
 import type { Bars } from './types.ts';
 
@@ -53,257 +56,477 @@ export interface BlockJobs {
   close(): void;
 }
 
+/** One backtest of a block's text on prices loaded here. */
+export interface RunRequest {
+  /** The text, the parser defaults and the parameter values to run it with. */
+  block: Block;
+  prices: Map<string, Bars>;
+  /** For the size limits (limits.ts runSize). */
+  size: RunSize;
+  /** Work nobody is looking at yet, such as a scan of the vault: it waits for the runs of blocks on screen. */
+  background?: boolean;
+  /** No size limits, and `LIMITS.anywayMs` to run instead of `LIMITS.runMs`. */
+  anyway?: boolean;
+}
+
+/** A single run's result, without the strategy and prices (jobs.ts withInputs puts them back). */
+export interface RunResult {
+  backtest: Ran;
+  /** How long the backtest took on the main thread, when it ran there; null when it ran in a worker. */
+  hereMs: number | null;
+}
+
+/** One block's single runs. `close` stops them and lets the workers drop the prices once nobody else uses them. */
+export interface BlockRuns {
+  /**
+   * The result, or null when the runs were closed first. Rejects with a LimitError when the run is too large or takes too
+   * long, and otherwise with the run's own error.
+   */
+  run(req: RunRequest): Promise<RunResult | null>;
+  close(): void;
+}
+
 export interface JobClient {
   forBlock(input: JobInput): BlockJobs;
+  runs(): BlockRuns;
+  /** True once no worker could start, so everything runs on the main thread. */
+  foreground(): boolean;
   shutdown(): void;
 }
 
-interface Task {
+interface Lane {
+  worker: WorkerPort | null;
+  ready: boolean;
+  startTimer?: ReturnType<typeof setTimeout>;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  /** The blocks whose prices this lane's worker holds. */
+  sent: Set<number>;
+  queue: Task[];
+  current: Task | null;
+}
+
+interface Common {
   id: number;
-  /** The block's prices, by the id they have in the worker. */
+  lane: Lane;
+  /** The block's prices, and the id they have in the workers. */
+  prices: Map<string, Bars>;
   data: number;
+  /** Lower goes first; equal ones go in the order asked. */
+  priority: number;
+  /** Running on the main thread rather than in a worker. */
+  here: boolean;
+  stopped: boolean;
+  settled: boolean;
+  /** How long its worker may go without a word before the task is ended. */
+  budgetMs: number;
+  watchdog?: ReturnType<typeof setTimeout>;
+  /** The open tasks of whoever asked, this one among them until it settles. */
+  mine: Set<Task>;
+}
+
+interface JobTask extends Common {
+  type: 'job';
   input: JobInput;
   job: Job;
   opts: RunOptions;
   sofar: Sofar;
-  /** Running on the main thread rather than in the worker. */
-  here: boolean;
   waited: boolean;
-  stopped: boolean;
-  settled: boolean;
-  resolve: (r: Results[Kind] | null) => void;
-  reject: (e: Error) => void;
-  /** The section's open tasks, this one among them until it settles. */
-  mine: Set<Task>;
   /** The section's benches on the main thread, by the values they run with. */
   benches: Map<string, Bench>;
+  resolve: (r: Results[Kind] | null) => void;
+  reject: (e: Error) => void;
 }
 
+interface RunTask extends Common {
+  type: 'run';
+  block: Block;
+  size: RunSize;
+  anyway: boolean;
+  resolve: (r: RunResult | null) => void;
+  reject: (e: Error) => void;
+}
+
+type Task = JobTask | RunTask;
+
+const BACKGROUND = 1;
+
 /**
- * Jobs run one at a time in a single worker, in the order asked. Several sections can ask at once; the later ones
- * wait. Stopping a running job ends the worker at once, so stopping never waits for a long step to finish.
+ * Jobs run one at a time in each of two workers. Single runs go to one, by priority and then in the order asked; sweeps
+ * and luck checks go to the other, in the order asked. Stopping a running job ends its worker at once, so stopping never
+ * waits for a long step to finish, and so does a job that goes past its time budget; the jobs still queued then go to a
+ * fresh worker, which is sent their prices again.
  */
 export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number; startMs?: number }): JobClient {
   const idleMs = opts.idleMs ?? IDLE_MS;
   const startMs = opts.startMs ?? START_MS;
-  let worker: WorkerPort | null = null;
-  let ready = false;
+  const lane = (): Lane => ({ worker: null, ready: false, sent: new Set(), queue: [], current: null });
+  const short = lane();
+  const long = lane();
   /** Set for good once a worker fails to start: every job then runs here. */
   let noWorker = false;
-  let startTimer: ReturnType<typeof setTimeout> | undefined;
-  let idleTimer: ReturnType<typeof setTimeout> | undefined;
-  /** The blocks whose prices the current worker holds. */
-  const sent = new Set<number>();
   const ids = new WeakMap<Map<string, Bars>, number>();
-  /** Sections using each block's prices. */
+  /** Sections and blocks using each block's prices. */
   const users = new Map<number, number>();
-  const queue: Task[] = [];
-  let current: Task | null = null;
   let lastData = 0;
   let lastTask = 0;
 
-  /** The values a task runs with: the same here and in the worker. */
-  const overridesOf = (task: Task) => jobOverrides(task.job.kind, task.input.backtest.spec);
-  const benchOf = (task: Task): Bench => {
+  const idOf = (prices: Map<string, Bars>): number => {
+    let id = ids.get(prices);
+    if (id === undefined) ids.set(prices, (id = ++lastData));
+    return id;
+  };
+  const use = (id: number) => users.set(id, (users.get(id) ?? 0) + 1);
+  const release = (id: number) => {
+    const left = users.get(id)! - 1;
+    if (left > 0) {
+      users.set(id, left);
+      return;
+    }
+    users.delete(id);
+    for (const l of [short, long]) if (l.sent.delete(id)) l.worker?.post({ type: 'drop', id });
+  };
+
+  /** The values a section's job runs with: the same here and in the worker. */
+  const overridesOf = (task: JobTask) => jobOverrides(task.job.kind, task.input.backtest.spec);
+  const benchOf = (task: JobTask): Bench => {
     const overrides = overridesOf(task);
     const key = JSON.stringify(overrides);
     let bench = task.benches.get(key);
     if (!bench) task.benches.set(key, (bench = benchWith(task.input.source, task.input.parse, task.input.backtest.data, overrides)));
     return bench;
   };
+  const stoppedOf = (task: Task) => (task.type === 'job' ? stoppedResult(task.job.kind, benchOf(task), task.sofar) : null);
 
-  function settle(task: Task, result: Results[Kind] | null, error?: Error): void {
+  function settle(task: Task, result: unknown, error?: Error): void {
     if (task.settled) return;
     task.settled = true;
+    clearTimeout(task.watchdog);
     task.mine.delete(task);
     if (error) task.reject(error);
-    else task.resolve(result);
+    else (task.resolve as (r: unknown) => void)(result);
   }
 
-  function kill(): void {
-    clearTimeout(startTimer);
-    clearTimeout(idleTimer);
-    worker?.terminate();
-    worker = null;
-    ready = false;
-    sent.clear();
+  function kill(l: Lane): void {
+    clearTimeout(l.startTimer);
+    clearTimeout(l.idleTimer);
+    l.worker?.terminate();
+    l.worker = null;
+    l.ready = false;
+    l.sent.clear();
   }
 
-  function next(): void {
-    current = null;
-    pump();
+  function next(l: Lane): void {
+    l.current = null;
+    pump(l);
   }
 
-  function pump(): void {
-    if (current) return;
-    clearTimeout(idleTimer);
-    const task = queue.shift();
-    if (!task) {
-      if (worker) idleTimer = setTimeout(kill, idleMs);
-      return;
+  function enqueue(task: Task): void {
+    const { queue } = task.lane;
+    const at = queue.findIndex((q) => q.priority > task.priority);
+    if (at < 0) queue.push(task);
+    else queue.splice(at, 0, task);
+  }
+
+  /** Settles a single run that is too large for where it would run; true when it did. */
+  function refused(task: Task, where: 'worker' | 'here'): boolean {
+    if (task.type !== 'run' || task.anyway) return false;
+    const why = sizeRefusal(task.size, where);
+    if (why === null) return false;
+    settle(task, null, new LimitError('size', why, true));
+    return true;
+  }
+
+  function pump(l: Lane): void {
+    while (!l.current) {
+      clearTimeout(l.idleTimer);
+      const task = l.queue.shift();
+      if (!task) {
+        if (l.worker) l.idleTimer = setTimeout(() => kill(l), idleMs);
+        return;
+      }
+      let there = (task.type === 'run' || task.input.defaults !== undefined) && !noWorker;
+      if (refused(task, there ? 'worker' : 'here')) continue;
+      if (there && !start(l)) {
+        there = false;
+        if (refused(task, 'here')) continue;
+      }
+      l.current = task;
+      if (task.type === 'job' && task.waited) task.opts.onWait?.(false);
+      if (there) runThere(task);
+      else runHere(task);
     }
-    current = task;
-    if (task.waited) task.opts.onWait?.(false);
-    if (task.input.defaults !== undefined && start()) runThere(task);
-    else runHere(task);
   }
 
-  /** Makes sure a worker is there, unless none can start. */
-  function start(): boolean {
-    if (worker) return true;
+  /** Makes sure the lane has a worker, unless none can start. */
+  function start(l: Lane): boolean {
+    if (l.worker) return true;
     if (noWorker) return false;
     try {
       const me: WorkerPort = opts.makeWorker({
         message: (m) => {
-          if (worker === me) onMessage(m);
+          if (l.worker === me) onMessage(l, m);
         },
         error: (message) => {
-          if (worker === me) onError(message);
+          if (l.worker === me) onError(l, message);
         },
       });
-      worker = me;
+      l.worker = me;
     } catch {
       noWorker = true;
       return false;
     }
-    ready = false;
-    startTimer = setTimeout(() => onError('The worker did not start'), startMs);
+    l.ready = false;
+    l.startTimer = setTimeout(() => onError(l, 'The worker did not start'), startMs);
     return true;
   }
 
+  /** (Re)starts the task's clock: it is ended when its worker says nothing for its budget. */
+  function arm(task: Task): void {
+    clearTimeout(task.watchdog);
+    task.watchdog = setTimeout(() => expire(task), task.budgetMs);
+  }
+
+  function expire(task: Task): void {
+    const l = task.lane;
+    if (l.current !== task || task.settled) return;
+    kill(l);
+    const message = timeMessage(task.budgetMs, task.type === 'run' ? task.size : null);
+    settle(task, null, new LimitError('time', message, task.type === 'run' && !task.anyway));
+    next(l);
+  }
+
   function runThere(task: Task): void {
-    const w = worker!;
-    if (!sent.has(task.data)) {
-      w.post({ type: 'data', id: task.data, data: task.input.backtest.data });
-      sent.add(task.data);
+    const l = task.lane;
+    const w = l.worker!;
+    if (!l.sent.has(task.data)) {
+      w.post({ type: 'data', id: task.data, data: task.prices });
+      l.sent.add(task.data);
     }
-    w.post({ type: 'job', id: task.id, data: task.data, block: { source: task.input.source, defaults: task.input.defaults!, overrides: overridesOf(task) }, job: task.job });
+    if (task.type === 'run') w.post({ type: 'run', id: task.id, data: task.data, block: task.block });
+    else w.post({ type: 'job', id: task.id, data: task.data, block: { source: task.input.source, defaults: task.input.defaults!, overrides: overridesOf(task) }, job: task.job });
+    arm(task);
   }
 
   function runHere(task: Task): void {
     task.here = true;
-    const bench = benchOf(task);
-    // A turn later, so the section paints its progress bar first and `run` never calls back before it returns.
-    pause()
-      .then(() =>
+    // Nothing can stop it here, so no clock either: the size limits keep it short.
+    clearTimeout(task.watchdog);
+    const l = task.lane;
+    let work: () => Promise<unknown>;
+    if (task.type === 'run') {
+      work = async () => {
+        if (task.stopped) return null;
+        const started = performance.now();
+        const backtest = runBlock(task.block, task.prices);
+        return { backtest, hereMs: performance.now() - started } satisfies RunResult;
+      };
+    }
+    else {
+      const bench = benchOf(task);
+      work = () =>
         task.stopped
-          ? stoppedResult(task.job.kind, bench, task.sofar)
+          ? Promise.resolve(stoppedResult(task.job.kind, bench, task.sofar))
           : runJob(task.job, bench, {
               onProgress: (done, total) => {
                 if (!task.stopped) task.opts.onProgress?.(done, total);
               },
               shouldStop: () => task.stopped,
-            }),
-      )
+            });
+    }
+    // A turn later, so the caller paints first and `run` never calls back before it returns.
+    pause()
+      .then(work)
       .then(
         (r) => settle(task, r),
         (e) => settle(task, null, e instanceof Error ? e : new Error(String(e))),
       )
       .then(() => {
-        if (current === task) next();
+        if (l.current === task) next(l);
       });
   }
 
-  function onMessage(m: FromWorker): void {
+  function onMessage(l: Lane, m: FromWorker): void {
     if (m.type === 'ready') {
-      ready = true;
-      clearTimeout(startTimer);
+      l.ready = true;
+      clearTimeout(l.startTimer);
       return;
     }
-    const task = current;
+    const task = l.current;
     if (!task || task.here || m.id !== task.id) return;
     if (m.type === 'progress') {
+      if (task.type !== 'job') return;
+      arm(task);
       for (const p of m.points ?? []) task.sofar.points.push(p);
       if (m.random) task.sofar.random = m.random;
       task.opts.onProgress?.(m.done, m.total);
       return;
     }
-    if (m.type === 'done') settle(task, m.result);
-    else settle(task, null, new Error(m.message));
-    next();
+    if (m.type === 'error') settle(task, null, new Error(m.message));
+    else if (m.type === 'ran') settle(task, { backtest: m.result, hereMs: null } satisfies RunResult);
+    else settle(task, m.result);
+    next(l);
   }
 
-  function onError(message: string): void {
-    const task = current && !current.here ? current : null;
-    const started = ready;
-    kill();
+  function onError(l: Lane, message: string): void {
+    const task = l.current && !l.current.here ? l.current : null;
+    const started = l.ready;
+    kill(l);
     if (!started) {
       // A content-security policy or an old web view: a worker won't start next time either.
       noWorker = true;
       if (task) {
-        task.sofar = { points: [], random: null };
-        runHere(task);
+        if (task.type === 'job') task.sofar = { points: [], random: null };
+        if (refused(task, 'here')) next(l);
+        else runHere(task);
       }
       return;
     }
     if (task) {
       settle(task, null, new Error(`The run stopped unexpectedly: ${message}`));
-      next();
+      next(l);
     }
   }
 
   function stop(task: Task): void {
     if (task.settled || task.stopped) return;
     task.stopped = true;
-    const at = queue.indexOf(task);
+    const l = task.lane;
+    const at = l.queue.indexOf(task);
     if (at >= 0) {
-      queue.splice(at, 1);
-      settle(task, stoppedResult(task.job.kind, benchOf(task), task.sofar));
-    } else if (task === current && !task.here) {
-      kill();
-      settle(task, stoppedResult(task.job.kind, benchOf(task), task.sofar));
-      next();
+      l.queue.splice(at, 1);
+      settle(task, stoppedOf(task));
+    } else if (task === l.current && !task.here) {
+      kill(l);
+      settle(task, stoppedOf(task));
+      next(l);
     }
-    // On the main thread the job sees the stop at its next step and returns what it finished.
+    // On the main thread a job sees the stop at its next step and returns what it finished; a single run is not started.
+  }
+
+  /** Stops tasks, the waiting ones first, so that stopping a running one does not start one of the others. */
+  function stopAll(tasks: Iterable<Task>): void {
+    const list = [...tasks];
+    for (const task of list) if (task.lane.current !== task) stop(task);
+    for (const task of list) stop(task);
+  }
+
+  /** A promise and the functions that settle it. */
+  function deferred<R>() {
+    let resolve!: (r: R | null) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<R | null>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
   }
 
   function forBlock(input: JobInput): BlockJobs {
-    const data = input.backtest.data;
-    let id = ids.get(data);
-    if (id === undefined) ids.set(data, (id = ++lastData));
-    const dataId = id;
-    users.set(dataId, (users.get(dataId) ?? 0) + 1);
+    const prices = input.backtest.data;
+    const data = idOf(prices);
+    use(data);
     const mine = new Set<Task>();
     const benches = new Map<string, Bench>();
     let closed = false;
     return {
       run<K extends Kind>(job: JobOf<K>, o: RunOptions = {}): Running<Results[K]> {
-        let resolve!: Task['resolve'];
-        let reject!: Task['reject'];
-        const done = new Promise<Results[Kind] | null>((res, rej) => {
-          resolve = res;
-          reject = rej;
-        });
-        const task: Task = { id: ++lastTask, data: dataId, input, job, opts: o, sofar: { points: [], random: null }, here: false, waited: false, stopped: false, settled: false, resolve, reject, mine, benches };
+        const { promise, resolve, reject } = deferred<Results[Kind]>();
+        const task: JobTask = {
+          type: 'job',
+          id: ++lastTask,
+          lane: long,
+          prices,
+          data,
+          priority: 0,
+          here: false,
+          stopped: false,
+          settled: false,
+          budgetMs: LIMITS.stepMs,
+          mine,
+          input,
+          job,
+          opts: o,
+          sofar: { points: [], random: null },
+          waited: false,
+          benches,
+          resolve,
+          reject,
+        };
         mine.add(task);
-        queue.push(task);
-        if (current) {
+        enqueue(task);
+        if (long.current) {
           task.waited = true;
           o.onWait?.(true);
         }
-        pump();
-        return { done: done as Promise<Results[K] | null>, stop: () => stop(task) };
+        pump(long);
+        return { done: promise as Promise<Results[K] | null>, stop: () => stop(task) };
       },
       close() {
         if (closed) return;
         closed = true;
-        for (const task of [...mine]) stop(task);
-        const left = users.get(dataId)! - 1;
-        if (left > 0) {
-          users.set(dataId, left);
-          return;
+        stopAll(mine);
+        release(data);
+      },
+    };
+  }
+
+  function runs(): BlockRuns {
+    const mine = new Set<Task>();
+    /** The prices this block's runs last used, held in the workers until it runs on others or closes. */
+    let held: number | null = null;
+    let closed = false;
+    return {
+      run(req) {
+        if (closed) return Promise.resolve(null);
+        const data = idOf(req.prices);
+        if (held !== data) {
+          use(data);
+          if (held !== null) release(held);
+          held = data;
         }
-        users.delete(dataId);
-        if (sent.delete(dataId)) worker?.post({ type: 'drop', id: dataId });
+        const { promise, resolve, reject } = deferred<RunResult>();
+        const task: RunTask = {
+          type: 'run',
+          id: ++lastTask,
+          lane: short,
+          prices: req.prices,
+          data,
+          priority: req.background ? BACKGROUND : 0,
+          here: false,
+          stopped: false,
+          settled: false,
+          budgetMs: req.anyway ? LIMITS.anywayMs : LIMITS.runMs,
+          mine,
+          block: req.block,
+          size: req.size,
+          anyway: req.anyway ?? false,
+          resolve,
+          reject,
+        };
+        mine.add(task);
+        enqueue(task);
+        pump(short);
+        return promise;
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        stopAll(mine);
+        if (held !== null) release(held);
+        held = null;
       },
     };
   }
 
   return {
     forBlock,
+    runs,
+    foreground: () => noWorker,
     shutdown() {
-      for (const task of [...queue, ...(current ? [current] : [])]) stop(task);
-      kill();
+      for (const l of [short, long]) {
+        stopAll([...l.queue, ...(l.current ? [l.current] : [])]);
+        kill(l);
+      }
     },
   };
 }
@@ -334,13 +557,24 @@ const blobWorker: MakeWorker = (on) => {
 };
 
 let shared: JobClient | null = null;
+const client = () => (shared ??= createJobClient({ makeWorker: blobWorker }));
 
 /** The jobs of one section of a result block. The worker starts with the first job. */
 export function blockJobs(input: JobInput): BlockJobs {
-  return (shared ??= createJobClient({ makeWorker: blobWorker })).forBlock(input);
+  return client().forBlock(input);
 }
 
-/** Ends the worker and every job, for the plugin's `onunload`. */
+/** The single runs of one block, or of one scan. The worker starts with the first run. */
+export function blockRuns(): BlockRuns {
+  return client().runs();
+}
+
+/** True once no worker could start, so runs happen on the main thread and cannot be stopped. */
+export function runsInForeground(): boolean {
+  return shared?.foreground() ?? false;
+}
+
+/** Ends the workers and every job, for the plugin's `onunload`. */
 export function shutdownWorkers(): void {
   shared?.shutdown();
   shared = null;
