@@ -12,7 +12,7 @@ const STARTER_AVERAGE = 100;
 /** A gap this long, or five times the usual step, is worth a note. */
 const BIG_GAP = 10 * DAY;
 
-export type CsvRole = 'date' | 'open' | 'high' | 'low' | 'close' | 'volume';
+type CsvRole = 'date' | 'open' | 'high' | 'low' | 'close' | 'volume';
 export type DateOrder = 'day-first' | 'month-first';
 
 /** Which column plays each part, as an index into the header (null: none). */
