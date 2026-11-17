@@ -4,12 +4,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec, type Defaults } from '../src/dsl.ts';
 import { runJob, serve, type Bench, type FromWorker, type ToWorker } from '../src/jobs.ts';
-import type { BootstrapResult } from '../src/luck.ts';
+import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from '../src/luck.ts';
 import { makeRng } from '../src/rng.ts';
-import { runSweep, type Parse } from '../src/sweep.ts';
+import { runSweep, type Parse, type SweepResult } from '../src/sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { createJobClient, type JobInput, type MakeWorker } from '../src/worker-client.ts';
-import { bars } from './helpers.ts';
+import { bars, near } from './helpers.ts';
 
 const DEFAULTS: Partial<Defaults> = { capital: 25_000, costBps: 5 };
 const SRC = 'universe: A 50%, B 50%\nfast = 10 in 5..25 step 5\nslow = 40 in 30..50 step 10\nbuy when sma(fast) > sma(slow)\nsell when sma(fast) < sma(slow)';
@@ -32,6 +32,11 @@ function track(t: TestContext, opts: Parameters<typeof createJobClient>[0]) {
   t.after(() => client.shutdown());
   return client;
 }
+
+/** A worker that cannot start: every job runs on the main thread. */
+const noWorker: MakeWorker = () => {
+  throw new Error('Workers are not allowed here');
+};
 
 const benchOf = (i: JobInput): Bench => ({ source: i.source, parse: i.parse, data: i.backtest.data, backtest: () => i.backtest });
 
@@ -257,4 +262,51 @@ test('messages from an ended worker are ignored', async (t) => {
   sent[0]({ type: 'done', id: 2, result: { runs: -1 } as unknown as BootstrapResult });
   second.stop();
   assert.equal(await second.done, null);
+});
+
+test('with a slider moved, the luck checks test the run on screen and the sweep ranks the block as written, alike in the worker and here', async (t) => {
+  // fast's slider walks 7, 12, 17, 22: 17 is off the sweep's grid. slow has no range; its slider still moves it.
+  const source = 'universe: A 50%, B 50%\nfast = 12 in 5..25 step 5\nslow = 40\nbuy when sma(fast) > sma(slow)\nsell when sma(fast) < sma(slow)';
+  const base = input(source, 3);
+  const data = base.backtest.data;
+  const values = { fast: 17, slow: 45 };
+  // What main.ts hands the sections after the slider moves: the block's text and parser, and the run drawn with its values.
+  const shown = runBacktest(base.parse(values).spec!, data);
+  assert.notDeepEqual(shown.stats, base.backtest.stats);
+  const slid: JobInput = { ...base, backtest: shown };
+  const jobs = [{ kind: 'sweep' }, { kind: 'reshuffle', seed: 1, runs: 200 }, { kind: 'random', seed: 1, runs: 40 }, { kind: 'walk' }] as const;
+  const results: Record<string, unknown[]> = {};
+  for (const [label, make] of [['worker', inProcess().make], ['here', noWorker]] as const) {
+    const client = track(t, { makeWorker: make });
+    const section = client.forBlock(slid);
+    results[label] = [];
+    for (const job of jobs) results[label].push(await section.run(job).done);
+    section.close();
+  }
+  assert.deepStrictEqual(results.worker, results.here);
+  const [sweep, reshuffle, random, walk] = results.here as [SweepResult, BootstrapResult, RandomEntriesResult, WalkForwardResult];
+  assert.deepStrictEqual(sweep, await runSweep(source, data, { parse: base.parse }));
+  assert.deepStrictEqual(reshuffle, bootstrap(shown.run.t, shown.run.equity, { seed: 1, runs: 200, blockBars: blockFor(shown) }));
+  assert.deepStrictEqual(random, await randomEntries(shown, { seed: 1, runs: 40 }));
+  assert.deepStrictEqual(walk, await walkForward(source, data, { parse: (o) => base.parse({ ...values, ...o }) }));
+  // Walk-forward compares against the run on screen: its value 17 is tried, and the line follows the slider's run.
+  assert.ok(walk.params[0].values.includes(17));
+  const w = walk.windows[0];
+  const at = (x: number) => shown.run.t.indexOf(x);
+  assert.ok(near(w.declaredReturn, shown.run.equity[at(w.testTo)] / shown.run.equity[at(w.testFrom) - 1] - 1, 1e-12));
+});
+
+test('one worker keeps a block\'s prices once and a separate run for each set of values, never reusing the wrong one', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  const declared = input();
+  const shown = runBacktest(declared.parse({ fast: 25 }).spec!, declared.backtest.data);
+  const a = client.forBlock(declared);
+  const b = client.forBlock({ ...declared, backtest: shown });
+  const job = { kind: 'reshuffle', seed: 2, runs: 50 } as const;
+  for (let round = 0; round < 2; round++) {
+    assert.deepStrictEqual(await b.run(job).done, bootstrap(shown.run.t, shown.run.equity, { seed: 2, runs: 50, blockBars: blockFor(shown) }));
+    assert.deepStrictEqual(await a.run(job).done, bootstrap(declared.backtest.run.t, declared.backtest.run.equity, { seed: 2, runs: 50, blockBars: blockFor(declared.backtest) }));
+  }
+  assert.deepEqual(w.log.filter((m) => m.startsWith('data')), ['data 1']);
 });

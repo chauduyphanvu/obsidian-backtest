@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { BootstrapResult } from '../src/luck.ts';
-import { reshuffleVerdict } from '../src/render-luck.ts';
+import { parseSpec } from '../src/dsl.ts';
+import { reshuffleVerdict, valuesUsed } from '../src/render-luck.ts';
 import { bestWords } from '../src/render-sweep.ts';
 
 const TRY_IT = 'To try it, change those lines in the block; the note stays the record of what you chose.';
@@ -53,4 +54,12 @@ test('a drawdown milder or deeper than the reshuffles is called out', () => {
   assert.ok(reshuffleVerdict(boot({ actual: { cagr: 0.08, maxDrawdown: -0.15 } })).includes('milder than in most of them'));
   assert.ok(reshuffleVerdict(boot({ actual: { cagr: 0.08, maxDrawdown: -0.4 } })).includes('deeper than in almost all of them'));
   assert.ok(!/milder|deeper/.test(reshuffleVerdict(boot())));
+});
+
+test('the luck checks say which values they used when a slider drew the run with others than the block\'s', () => {
+  const block = 'universe: SPY\nfast = 10 in 5..25 step 5\nstop = 8% in 6%..10% step 2%\nslow = 40\nstop loss: stop\nbuy when sma(fast) > sma(slow)';
+  const params = (overrides: Record<string, number>) => parseSpec(block, { overrides }).spec!.params;
+  assert.equal(valuesUsed(params({})), null);
+  assert.equal(valuesUsed(params({ fast: 10 })), null);
+  assert.equal(valuesUsed(params({ fast: 25, stop: 0.06 })), 'These checks test the run shown, with fast 25, stop 6%. The block says fast 10, stop 8%.');
 });

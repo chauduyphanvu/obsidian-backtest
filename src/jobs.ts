@@ -2,15 +2,17 @@
 // worker (see worker.ts and worker-client.ts) or, when no worker can start, on the main thread.
 
 import { runBacktest, type Backtest } from './backtest.ts';
-import { parseSpec, type Defaults } from './dsl.ts';
+import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { baseSpec, runSweep, sweepParams, sweepSize, type Parse, type SweepPoint, type SweepResult } from './sweep.ts';
 import type { Bars } from './types.ts';
 
-/** A block's text and the parser defaults, so a worker parses it exactly as the note does. */
+/** A block's text, the parser defaults and the values a job puts on top, so a worker parses it exactly as the note does. */
 export interface Block {
   source: string;
   defaults: Partial<Defaults>;
+  /** Parameter values that replace the block's own for this job (see jobOverrides); empty for the block as written. */
+  overrides: Record<string, number>;
 }
 
 export type Job = { kind: 'sweep' } | { kind: 'reshuffle'; seed: number; runs: number } | { kind: 'random'; seed: number; runs: number } | { kind: 'walk' };
@@ -33,11 +35,30 @@ export interface Bench {
   backtest: () => Backtest;
 }
 
-/** A bench built from plain data, as a worker has to: the block is parsed and run here, once, when a job first needs it. */
-export function benchFor(block: Block, data: Map<string, Bars>): Bench {
-  const parse: Parse = (overrides) => parseSpec(block.source, { defaults: block.defaults, overrides });
+/**
+ * The parameter values a job runs with in place of the block's, from the run on screen, which a slider may have drawn with
+ * other values. The sweep ranks the values written in the block, so it runs the block as written. The luck checks test
+ * the run on screen, so they run with its values: the reshuffle, random entries and walk-forward all start from the run
+ * that was drawn.
+ */
+export function jobOverrides(kind: Kind, shown: Spec): Record<string, number> {
+  if (kind === 'sweep') return {};
+  return Object.fromEntries(shown.params.filter((p) => p.value !== p.declared).map((p) => [p.name, p.value]));
+}
+
+/**
+ * The bench a job works on, the same wherever it runs: the block read with `parse`, `overrides` on top, run once on `data`
+ * when a job first needs it.
+ */
+export function benchWith(source: string, parse: Parse, data: Map<string, Bars>, overrides: Record<string, number>): Bench {
+  const withValues: Parse = (values) => parse({ ...overrides, ...values });
   let bt: Backtest | undefined;
-  return { source: block.source, parse, data, backtest: () => (bt ??= runBacktest(baseSpec(parse), data)) };
+  return { source, parse: withValues, data, backtest: () => (bt ??= runBacktest(baseSpec(withValues), data)) };
+}
+
+/** A bench built from plain data, as a worker has to. */
+export function benchFor(block: Block, data: Map<string, Bars>): Bench {
+  return benchWith(block.source, (overrides) => parseSpec(block.source, { defaults: block.defaults, overrides }), data, block.overrides);
 }
 
 export interface Hooks {
@@ -106,6 +127,8 @@ export type FromWorker = { type: 'ready' } | Progress | { type: 'done'; id: numb
 
 /** At most one progress message this often, so a fast job does not flood the main thread. */
 const PROGRESS_MS = 50;
+/** Benches kept per block's prices. Each slider position a luck check runs at makes one, so the oldest go. */
+const BENCHES = 4;
 
 /** A worker stops by being ended, so its jobs never need to let anything in. */
 const free = () => Promise.resolve();
@@ -124,7 +147,10 @@ export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: T
       const set = sets.get(m.data)!;
       const key = JSON.stringify(m.block);
       let bench = set.benches.get(key);
-      if (!bench) set.benches.set(key, (bench = benchFor(m.block, set.data)));
+      if (!bench) {
+        set.benches.set(key, (bench = benchFor(m.block, set.data)));
+        if (set.benches.size > BENCHES) set.benches.delete(set.benches.keys().next().value!);
+      }
       let last = -Infinity;
       let sent = 0;
       const onProgress: Hooks['onProgress'] = (done, total, sofar) => {

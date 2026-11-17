@@ -36,7 +36,7 @@ async function viaWorker(source: string, data: Map<string, Bars>, job: Job): Pro
   const handle = serve((m) => out.push(structuredClone(m)), 0);
   const send = (m: ToWorker) => handle(structuredClone(m));
   await send({ type: 'data', id: 1, data });
-  await send({ type: 'job', id: 7, data: 1, block: { source, defaults: DEFAULTS }, job });
+  await send({ type: 'job', id: 7, data: 1, block: { source, defaults: DEFAULTS, overrides: {} }, job });
   return out;
 }
 
@@ -104,7 +104,7 @@ test('the worker sends progress no more often than asked, with the sweep variant
   const out: FromWorker[] = [];
   const handle = serve((m) => out.push(structuredClone(m)), 60_000);
   await handle({ type: 'data', id: 1, data });
-  await handle({ type: 'job', id: 1, data: 1, block: { source: TIMING, defaults: DEFAULTS }, job: { kind: 'sweep' } });
+  await handle({ type: 'job', id: 1, data: 1, block: { source: TIMING, defaults: DEFAULTS, overrides: {} }, job: { kind: 'sweep' } });
   // Only the first step's progress goes out within a minute; the finished result follows.
   assert.deepEqual(
     out.map((m) => [m.type, (m as Progress).points?.length]),
@@ -119,7 +119,7 @@ test('the worker keeps a block\'s prices for its later jobs', async () => {
   const data = prices(['A', 'B'], 400, 1);
   const out: FromWorker[] = [];
   const handle = serve((m) => out.push(m), 0);
-  const job = (id: number, job: Job): ToWorker => ({ type: 'job', id, data: 1, block: { source: TIMING, defaults: DEFAULTS }, job });
+  const job = (id: number, job: Job): ToWorker => ({ type: 'job', id, data: 1, block: { source: TIMING, defaults: DEFAULTS, overrides: {} }, job });
   await handle({ type: 'data', id: 1, data });
   await handle(job(1, { kind: 'reshuffle', seed: 1, runs: 10 }));
   await handle(job(2, { kind: 'random', seed: 1, runs: 5 }));
@@ -160,7 +160,7 @@ test('random entries ended from outside keep the tries they had sent: the same a
 
 test('a bench built from the text runs the block as written once, the same as the note does', () => {
   const data = prices(['A', 'B'], 300, 1);
-  const bench = benchFor({ source: TIMING, defaults: DEFAULTS }, data);
+  const bench = benchFor({ source: TIMING, defaults: DEFAULTS, overrides: {} }, data);
   assert.equal(bench.backtest(), bench.backtest());
   assert.deepStrictEqual(bench.backtest().stats, today(TIMING, data).bt.stats);
   assert.equal(bench.backtest().spec.capital, 25_000);

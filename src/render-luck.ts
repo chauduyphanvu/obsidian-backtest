@@ -1,9 +1,11 @@
 // The "Was it luck?" section: reshuffled history, random entries and walk-forward, each with a plain verdict first.
 
 import type { Backtest } from './backtest.ts';
+import type { Param } from './dsl.ts';
 import { h, isoDate, money, moneyTicks, niceStep, pct, s, timeTicks } from './dom.ts';
 import type { JobOf, Kind, Results } from './jobs.ts';
 import { monthOfBars, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
+import { formatParam } from './render-params.ts';
 import { observe, placeTip, plural, progressBar, valuesText, did, WAITING, type Life, type SweepInput } from './render-sweep.ts';
 import { METRICS, sweepParams } from './sweep.ts';
 import { blockJobs, type BlockJobs } from './worker-client.ts';
@@ -30,6 +32,27 @@ export function renderLuck(parent: HTMLElement, input: SweepInput): () => void {
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const clean = (x: number) => Number(x.toPrecision(12));
+
+/** How the values a slider set are named in the walk-forward, where they stand in for the note's. */
+interface Ours {
+  noun: string;
+  label: string;
+  column: string;
+}
+const NOTE: Ours = { noun: 'the values in the note', label: 'Values in the note', column: 'In the note' };
+const SHOWN: Ours = { noun: 'the values shown', label: 'Values shown', column: 'Shown' };
+
+/**
+ * The line saying which values the checks used, when the run on screen was drawn with other values than the block's (a
+ * slider moved): the checks test that run (jobs.ts jobOverrides). Null when it is the block as written.
+ */
+export function valuesUsed(params: Param[]): string | null {
+  const moved = params.filter((p) => clean(p.value) !== clean(p.declared));
+  if (moved.length === 0) return null;
+  const list = (value: (p: Param) => number) => moved.map((p) => `${p.name} ${formatParam(p, value(p))}`).join(', ');
+  return `These checks test the run shown, with ${list((p) => p.value)}. The block says ${list((p) => p.declared)}.`;
+}
 
 function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTMLElement, Life>, jobs: BlockJobs): void {
   const bt = input.backtest;
@@ -42,6 +65,9 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
       ? 'Three checks that try to make a lucky result look lucky. They run extra backtests on the prices already loaded.'
       : 'Two checks that try to make a lucky result look lucky. They run extra backtests on the prices already loaded. A third, walk-forward, needs a parameter with a range, such as fast = 50 in 20..100 step 10.',
   );
+  const used = valuesUsed(bt.spec.params);
+  const ours = used ? SHOWN : NOTE;
+  if (used) h(body, 'p', 'bt-note', used);
   const controls = h(body, 'div', 'bt-run-row');
   const run = h(controls, 'button', 'bt-button mod-cta', 'Run checks');
   const progress = progressBar(controls);
@@ -121,14 +147,14 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
         try {
           const w = await step({ kind: 'walk' }, 'Walk-forward…', (d, n) => `Walk-forward: ${d} of ${n} backtests`);
           if (life.gone) return;
-          if (w) walkBlock(walk, lifeOf(walk), w);
+          if (w) walkBlock(walk, lifeOf(walk), w, ours);
           else {
-            walkBlock(walk, lifeOf(walk), 'Stopped before the end. Run the checks again to finish it.');
+            walkBlock(walk, lifeOf(walk), 'Stopped before the end. Run the checks again to finish it.', ours);
             finished = false;
           }
         } catch (e) {
           if (life.gone) return;
-          walkBlock(walk, lifeOf(walk), message(e));
+          walkBlock(walk, lifeOf(walk), message(e), ours);
         }
       }
       if (life.gone) return;
@@ -401,7 +427,7 @@ function stretch(from: number, to: number): string {
   return `${a} to ${b}`;
 }
 
-function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string): void {
+function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string, ours: Ours): void {
   const sec = check(el, 'Walk-forward');
   if (typeof w === 'string') {
     h(sec, 'p', 'bt-luck-verdict', w);
@@ -414,7 +440,7 @@ function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string): 
   const n = w.windows.length;
   const lines = [
     `Picking the values with the best ${label} over each past ${span(w.trainMonths)} and using them for the next ${test} ${did('cagr', w.stats.cagr)} from ${first} to ${last}, with a worst drawdown of ${pct(w.stats.maxDrawdown)}.`,
-    `Over the same dates the values in the note ${did('cagr', w.declared.stats.cagr)}, and the best values picked with hindsight (${valuesText(w.params, w.hindsight.values)}) ${did('cagr', w.hindsight.stats.cagr)}.`,
+    `Over the same dates ${ours.noun} ${did('cagr', w.declared.stats.cagr)}, and the best values picked with hindsight (${valuesText(w.params, w.hindsight.values)}) ${did('cagr', w.hindsight.stats.cagr)}.`,
     w.changes === 0
       ? 'The same values were picked every time.'
       : `The pick changed ${plural(w.changes, 'time')} over ${plural(n, `test ${test}`, `test ${test === 'half-year' ? 'half-years' : `${test}s`}`)}${w.changes >= n / 2 ? ': the best values move around, a sign that much of what makes them best is noise' : ''}.`,
@@ -424,19 +450,19 @@ function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string): 
   h(sec, 'p', 'bt-luck-verdict', lines.join(' '));
   legend(sec, [
     ['bt-luck-swatch-walk', 'Walk-forward'],
-    ['bt-swatch-strategy', 'Values in the note'],
+    ['bt-swatch-strategy', ours.label],
     ['bt-luck-swatch-hindsight', 'Best with hindsight'],
   ]);
   const chart = h(sec, 'div', 'bt-chart');
   const tip = h(chart, 'div', 'bt-tip');
   tip.hidden = true;
-  observe(life, chart, (width) => drawWalk(chart, tip, width, w));
+  observe(life, chart, (width) => drawWalk(chart, tip, width, w, ours));
 
   const more = h(sec, 'details', 'bt-details');
   h(more, 'summary', undefined, `Values picked for each test ${test}`);
   const table = h(h(more, 'div', 'bt-scroll'), 'table', 'bt-table');
   const head = h(h(table, 'thead'), 'tr');
-  for (const [text, num] of [['Tested', 0], ['Values picked', 0], ['Return', 1], ['In the note', 1]] as const) h(head, 'th', num ? 'bt-num' : undefined, text);
+  for (const [text, num] of [['Tested', 0], ['Values picked', 0], ['Return', 1], [ours.column, 1]] as const) h(head, 'th', num ? 'bt-num' : undefined, text);
   const body = h(table, 'tbody');
   for (const x of w.windows) {
     const row = h(body, 'tr');
@@ -453,14 +479,14 @@ function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string): 
   );
 }
 
-function drawWalk(chart: HTMLElement, tip: HTMLElement, width: number, w: WalkForwardResult): void {
+function drawWalk(chart: HTMLElement, tip: HTMLElement, width: number, w: WalkForwardResult, ours: Ours): void {
   chart.querySelector('svg')?.remove();
   tip.hidden = true;
   const t = w.t;
   const n = t.length;
   const series = [
     { label: 'Best with hindsight', values: w.hindsight.equity, cls: 'bt-luck-line-hindsight', dot: 'bt-luck-dot-hindsight', swatch: 'bt-luck-swatch-hindsight' },
-    { label: 'Values in the note', values: w.declared.equity, cls: 'bt-line-strategy', dot: 'bt-dot-strategy', swatch: 'bt-swatch-strategy' },
+    { label: ours.label, values: w.declared.equity, cls: 'bt-line-strategy', dot: 'bt-dot-strategy', swatch: 'bt-swatch-strategy' },
     { label: 'Walk-forward', values: w.equity, cls: 'bt-luck-line-walk', dot: 'bt-luck-dot-walk', swatch: 'bt-luck-swatch-walk' },
   ];
   const left = 52;
@@ -478,7 +504,7 @@ function drawWalk(chart: HTMLElement, tip: HTMLElement, width: number, w: WalkFo
   const [l0, l1] = [Math.log(lo) - pad, Math.log(hi) + pad];
   const y = (v: number) => top + (1 - (Math.log(Math.max(v, 1e-9)) - l0) / (l1 - l0)) * plotH;
 
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': 'Walk-forward value over time, against the values in the note and the best values picked with hindsight' });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `Walk-forward value over time, against ${ours.noun} and the best values picked with hindsight` });
   // On a log scale even steps crowd at the top: keep a tick only when it clears the last one kept.
   let lastY = Infinity;
   for (const v of moneyTicks(Math.exp(l0), Math.exp(l1))) {
