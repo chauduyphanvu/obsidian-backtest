@@ -1,0 +1,1 @@
+{"what": "TRND 50%, MREV 30%, CHOP 15%, monthly rebalance, 10 bps costs and 0.3 a trade in commission (the smallest rebalancing trade is 3.43, so none is left undone)", "equity": "direct", "rebalanceShift": "month"}

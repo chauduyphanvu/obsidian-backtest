@@ -43,6 +43,11 @@ const VALUE_HINTS: Record<string, Completion[]> = {
   hold: [{ label: 'top 3 by roc(126)', insert: 'top 3 by roc(126)', detail: 'the 3 tickers with the highest score' }],
   weighting: [{ label: 'inverse volatility(60)', insert: 'inverse volatility(60)', detail: 'weights by 1 / volatility of the last 60 returns' }],
   'risk per trade': [{ label: '1% at 2 atr(14)', insert: '1% at 2 atr(14)', detail: 'lose 1% of equity if the price falls 2 average true ranges' }],
+  commission: [
+    { label: '1', insert: '1', detail: 'a fixed 1 for each order' },
+    { label: '0.005 per share, min 1', insert: '0.005 per share, min 1', detail: '0.005 a share, at least 1 an order' },
+  ],
+  entries: [{ label: '3', insert: '3', detail: 'each position in up to 3 entries, each a third; needs an add rule' }],
 };
 
 const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
@@ -139,13 +144,14 @@ export function complete(block: string[], above: string[], before: string): Comp
     const starts: Completion[] = [
       entry('buy when', 'buy when '),
       entry('sell when', 'sell when '),
+      entry('add when', 'add when '),
       ...(inRule ? WORDS.slice(0, 2).map((w) => ({ ...w, detail: `continue the rule: ${w.detail}` })) : []),
       ...settings.map((s) => entry(s, `${s}: `, section === null ? shortOf(s) : `${shortOf(s)}, for ${section} only`)),
       entry('for', 'for '),
     ];
     return match(starts);
   }
-  if (/^\s*(buy|sell)\s+$/i.test(head)) return match([{ label: 'when', insert: 'when ', detail: '' }], true);
+  if (/^\s*(buy|sell|add)\s+$/i.test(head)) return match([{ label: 'when', insert: 'when ', detail: '' }], true);
   if (/^\s*for\s+$/i.test(head)) return match([...names(':', 'rules for this ticker only'), entry('all', 'all:', shortOf('for all'))], true);
 
   const key = settingKey(head);
@@ -163,7 +169,7 @@ export function complete(block: string[], above: string[], before: string): Comp
 
   const kind = lineKind(before, inRule);
   if (kind !== 'rule' && kind !== 'continuation') return null;
-  return expression(kind === 'rule' ? /^\s*sell/i.test(before) : sell);
+  return expression(kind === 'rule' ? /^\s*(sell|add)/i.test(before) : sell);
 }
 
 /** Where the cursor is when a ticker is being written on a `universe`, `symbol`, `benchmark` or `cash rate` line. */

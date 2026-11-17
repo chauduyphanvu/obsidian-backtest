@@ -1,6 +1,6 @@
 import { DAY, stamp } from './dom.ts';
 import type { Spec } from './dsl.ts';
-import { simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
+import { SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
 import { clocksApart, ofReads, specEvaluator } from './evaluate.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
@@ -240,6 +240,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
       buy: evaluator.eval(r.buy, a.name),
       sell: r.sell ? evaluator.compile(r.sell, a.name) : null,
       score: spec.rank ? evaluator.eval(spec.rank.by, a.name) : null,
+      add: r.add ? evaluator.compile(r.add, a.name) : null,
     });
   }
   const run = simulate({ ...spec, assets: spec.universe }, data, signals);
@@ -268,6 +269,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
       sizing: { k: 'fixed' },
       rank: null,
       fill: spec.fill,
+      commission: spec.commission,
     },
     data,
     always,
@@ -290,6 +292,12 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
 
   const intraday = run.t.some((t) => t % DAY !== 0);
   const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped)];
+  if (run.smallTrades) {
+    const n = run.smallTrades;
+    notes.push(
+      `${n} ${n === 1 ? 'add or rebalancing trade was' : 'adds and rebalancing trades were'} not made because the commission would have been ${SMALL_TRADE * 100}% of ${n === 1 ? 'its' : 'their'} value or more.`,
+    );
+  }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
     notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);

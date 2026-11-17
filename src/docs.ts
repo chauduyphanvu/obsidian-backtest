@@ -156,6 +156,20 @@ setting(
   'When a rule fills. With next open, the default, a rule read at a bar’s close fills at the next open; with close it fills at that same close.',
   'fill: close',
 );
+setting(
+  'commission',
+  'commission: 1 | 0.005 per share, min 1, max 1%',
+  'charge per order: 1, or 0.005 per share, min 1, max 1%',
+  'A charge on every order in the account’s money, added to costs: a fixed amount per order, or an amount per share with an optional minimum and a cap as a share of the order’s value. Without it the plugin setting applies, which is none at first.',
+  'commission: 0.005 per share, min 1',
+);
+setting(
+  'entries',
+  'entries: 3',
+  'build each position in up to 3 entries, each a third',
+  'Builds each position in up to that many entries, each a step of its whole size: the buy rule makes the first and the add rule each later one. It needs an add rule, and the entries together never go above the ticker’s weight.',
+  'entries: 3\nadd when close > last entry price * 1.03',
+);
 
 /** Names of a function's arguments, in the order INDICATORS lists their defaults. */
 const ARGUMENTS: Record<string, string[]> = {
@@ -236,13 +250,13 @@ calendar('year', 'year', 'the year, as 2024', 'The year, such as 2024.', 'buy wh
 calendar('month_start', 'month_start', 'first bar of a month', 'A condition: the first bar of a month.', 'buy when month_start');
 calendar('month_end', 'month_end', 'last bar of a month', 'A condition: the last bar of a month.', 'buy when month_end');
 
-const BELONGS = 'Only sell rules can read it, and not inside a function, with [n] or with of.';
+const BELONGS = 'Only sell and add rules can read it, and not inside a function, with [n] or with of.';
 add(
   'position',
   POSITION.bars_held,
   'bars held',
   'completed bars since the buy filled, 0 on that bar',
-  `The number of completed bars since the buy filled; it is 0 on the bar of the fill. ${BELONGS}`,
+  `The number of completed bars since the buy filled, or with several entries the first; it is 0 on the bar of the fill. ${BELONGS}`,
   'sell when bars held >= 20',
 );
 add(
@@ -250,8 +264,24 @@ add(
   POSITION.entry_price,
   'entry price',
   'the price the position was bought at',
-  `The price the position was bought at, slippage included. ${BELONGS}`,
+  `The price the position was bought at, slippage included, or with several entries their average price. ${BELONGS}`,
   'sell when close < entry price * 0.9',
+);
+add(
+  'position',
+  POSITION.last_entry_price,
+  'last entry price',
+  'the price of the latest entry',
+  `The price the latest entry of the position filled at, slippage included; with one entry it is the entry price. ${BELONGS}`,
+  'sell when close < last entry price * 0.95',
+);
+add(
+  'position',
+  POSITION.entries_made,
+  'entries made',
+  'how many entries the position has',
+  `How many entries the open position has made: 1 after the buy, then one more for each add. ${BELONGS}`,
+  'sell when entries made == 1 and bars held >= 10',
 );
 
 word(
@@ -267,6 +297,13 @@ word(
   'condition that closes it',
   'Closes the position when the condition is true at a close. Without a sell rule a position is held until a stop closes it or the run ends.',
   'sell when close < sma(200)',
+);
+word(
+  'add when',
+  'add when condition',
+  'condition that adds the next entry',
+  'Adds the next entry to a position held when the condition is true at a close, until the entries setting’s count is made. It needs an entries line, and it is skipped at a close where the sell rule holds.',
+  'entries: 3\nadd when close > last entry price * 1.03',
 );
 word(
   'for',
@@ -421,6 +458,8 @@ function parameterDoc(name: string, written: string): Doc {
 const WORD_ALIASES: Record<string, string> = {
   bars_held: POSITION.bars_held,
   entry_price: POSITION.entry_price,
+  last_entry_price: POSITION.last_entry_price,
+  entries_made: POSITION.entries_made,
   always: 'true',
   never: 'false',
 };

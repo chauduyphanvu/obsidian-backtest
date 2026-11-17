@@ -52,10 +52,16 @@ export function ofReads(spec: Spec): [string, string][] {
   return [...out.values()];
 }
 
-/** The open position a sell rule reads: where it was bought, as an index into the asset's bars, and at what fill price. */
+/**
+ * The open position a sell or add rule reads: where its first entry filled, as an index into the asset's bars; the
+ * average fill price of its entries; the fill price of its latest entry; and how many entries it has.
+ */
 export interface PosState {
   entryIdx: number;
   entryPrice: number;
+  /** Absent for a position bought in one entry, whose last entry is its only one. */
+  lastPrice?: number;
+  entries?: number;
 }
 
 /** A rule evaluated one bar at a time: 1, 0 or NaN at bar `i`, given the open position (null when flat). */
@@ -159,6 +165,8 @@ export class Evaluator {
     switch (e.k) {
       case 'pos':
         if (e.name === 'bars_held') return (i, p) => (p ? i - p.entryIdx : NaN);
+        if (e.name === 'last_entry_price') return (_, p) => (p ? (p.lastPrice ?? p.entryPrice) : NaN);
+        if (e.name === 'entries_made') return (_, p) => (p ? (p.entries ?? 1) : NaN);
         return (_, p) => (p ? p.entryPrice : NaN);
       case 'math': {
         const a = this.compile(e.args[0], asset);

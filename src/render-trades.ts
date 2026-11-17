@@ -2,6 +2,7 @@ import type { Backtest } from './backtest.ts';
 import { h, minus, money, pct, price, signedPct, stamp } from './dom.ts';
 import type { Trade } from './engine.ts';
 import { explainTrade, type Explanation, type Outcome } from './explain.ts';
+import { boughtText } from './export.ts';
 import { positionOrder } from './orders.ts';
 
 const MAX_TRADE_ROWS = 500;
@@ -21,7 +22,9 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     const row = h(body, 'tr');
     h(row, 'td', undefined, st.name);
     h(row, 'td', 'bt-num', pct(st.weight, 0));
-    const now = st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash';
+    const steps = bt.spec.entries ?? 1;
+    const built = st.long && steps > 1 ? `, ${st.entries} of ${steps} entries` : '';
+    const now = st.long ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash';
     const order = positionOrder(st, bt.spec.fill);
     h(row, 'td', undefined, order ? `${now}, ${order}` : now);
     h(row, 'td', 'bt-num', String(closed.length));
@@ -51,7 +54,7 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
         const row = h(body, 'tr');
         explainButton(h(row, 'td', 'bt-why-cell'), row, bt, t);
         h(row, 'td', undefined, t.asset);
-        h(row, 'td', undefined, stamp(t.entryT, intraday));
+        h(row, 'td', undefined, boughtText(t, intraday));
         h(row, 'td', 'bt-num', price(t.entryPrice));
         h(row, 'td', undefined, t.reason === 'open' ? '–' : stamp(t.exitT, intraday));
         h(row, 'td', 'bt-num', price(t.exitPrice));

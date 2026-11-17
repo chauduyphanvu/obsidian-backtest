@@ -18,9 +18,10 @@ export const pendingTiming = (fill?: Fill): OrderTiming => (fill === 'close' ? '
 
 export const timingPhrase = (when: OrderTiming): string => `at the ${when}`;
 
-/** "Buy" and "Sell"; "Bought" and "Sold" for an order the backtest has already made. */
-export function actionWord(o: Pick<OrderRow, 'action' | 'when'>): string {
+/** "Buy" and "Sell", "Add" for a later entry; "Bought", "Sold" and "Added" for an order the backtest has already made. */
+export function actionWord(o: Pick<OrderRow, 'action' | 'when'> & Pick<Partial<OrderRow>, 'step'>): string {
   const done = o.when === 'last close';
+  if (o.action === 'buy' && o.step && o.step.k > 1) return done ? 'Added' : 'Add';
   return o.action === 'buy' ? (done ? 'Bought' : 'Buy') : done ? 'Sold' : 'Sell';
 }
 
@@ -31,10 +32,10 @@ export const CLOSE_FILL_NOTE =
 /** Said under the orders its backtest has already made. */
 export const LAST_CLOSE_NOTE = 'The backtest made these at the last close. To match it, they had to be placed before that close.';
 
-/** How a position's order reads in the positions table: "buys at the next close", "bought at the last close"; empty for none. */
+/** How a position's order reads in the positions table: "buys at the next close", "adds at the next open", "bought at the last close"; empty for none. */
 export function positionOrder(st: AssetState, fill?: Fill): string {
-  if (st.pending) return `${st.pending === 'buy' ? 'buys' : 'sells'} ${timingPhrase(pendingTiming(fill))}`;
-  return st.filled ? `${st.filled.side === 'buy' ? 'bought' : 'sold'} at the last close` : '';
+  if (st.pending) return `${{ buy: 'buys', sell: 'sells', add: 'adds' }[st.pending]} ${timingPhrase(pendingTiming(fill))}`;
+  return st.filled ? `${{ buy: 'bought', sell: 'sold', add: 'added' }[st.filled.side]} at the last close` : '';
 }
 
 export interface OrderRow {
@@ -48,6 +49,8 @@ export interface OrderRow {
   lastClose: number;
   /** For a sell: when the position was opened. */
   since: number | null;
+  /** For a buy of a strategy with `entries` above 1: which entry it is, of how many. */
+  step?: { k: number; n: number };
 }
 
 export interface HoldingRow {
@@ -132,18 +135,22 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
   const equity = run.equity[run.equity.length - 1];
   const orders: OrderRow[] = [];
   const holdings: HoldingRow[] = [];
+  const n = out.spec.entries ?? 1;
+  /** A buy's entry: the next one for an order waiting, the latest for one made at the last close. */
+  const step = (k: number) => (n > 1 ? { step: { k, n } } : {});
   for (const st of run.states) {
     const before = orders.length;
-    if (st.pending === 'buy') {
-      orders.push({ ticker: st.name, action: 'buy', when: pending, weight: st.targetWeight, value: st.targetWeight * equity, lastClose: st.lastClose, since: null });
+    const made = st.entries ?? 0;
+    if (st.pending === 'buy' || st.pending === 'add') {
+      orders.push({ ticker: st.name, action: 'buy', when: pending, weight: st.targetWeight, value: st.targetWeight * equity, lastClose: st.lastClose, since: null, ...step(made + 1) });
     } else if (st.pending === 'sell') {
       orders.push({ ticker: st.name, action: 'sell', when: pending, weight: 0, value: st.value, lastClose: st.lastClose, since: st.since });
     }
     if (st.filled) {
-      // A whole position bought or sold at the last close, valued there.
+      // A whole position bought or sold at the last close, or an entry added to one, valued there.
       const value = st.filled.shares * st.lastClose;
-      if (st.filled.side === 'buy') {
-        orders.push({ ticker: st.name, action: 'buy', when: 'last close', weight: equity > 0 ? value / equity : 0, value, lastClose: st.lastClose, since: null });
+      if (st.filled.side !== 'sell') {
+        orders.push({ ticker: st.name, action: 'buy', when: 'last close', weight: equity > 0 ? value / equity : 0, value, lastClose: st.lastClose, since: null, ...step(made) });
       } else {
         const closed = run.trades.filter((t) => t.asset === st.name && t.reason !== 'open').pop();
         orders.push({ ticker: st.name, action: 'sell', when: 'last close', weight: 0, value, lastClose: st.lastClose, since: closed?.entryT ?? null });
@@ -244,10 +251,12 @@ export function share(weight: number): string {
   return `${Number((weight * 100).toFixed(1))}%`;
 }
 
-/** The size of an order as a share of the strategy's own money, then in dollars at the backtest's equity. */
+/** The size of an order as a share of the strategy's own money, then in dollars at the backtest's equity; for an entry of several, which one. */
 export function orderSize(o: OrderRow): string {
   const dollars = `about ${money(o.value)}`;
-  return o.action === 'buy' ? `${share(o.weight)} of the strategy, ${dollars}` : `Whole position, ${dollars}`;
+  if (o.action === 'sell') return `Whole position, ${dollars}`;
+  const size = `${share(o.weight)} of the strategy, ${dollars}`;
+  return o.step ? `Step ${o.step.k} of ${o.step.n}: ${size}` : size;
 }
 
 /** What is wrong with a strategy's result, one message each: a failed run, stale prices, price warnings. */

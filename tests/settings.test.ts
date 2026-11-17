@@ -9,6 +9,7 @@ test('the defaults are the documented ones', () => {
     capital: 10000,
     costs: '0 bps',
     slippage: '0 bps',
+    commission: '0',
     cashRate: '0%',
     dataSource: 'yahoo',
     cacheHours: 6,
@@ -23,7 +24,7 @@ test('the defaults are the documented ones', () => {
     llmModel: '',
     llmSecret: '',
   });
-  for (const key of ['costs', 'slippage', 'cashRate'] as const) assert.equal(validateSetting(key, DEFAULT_SETTINGS[key]), null);
+  for (const key of ['costs', 'slippage', 'commission', 'cashRate'] as const) assert.equal(validateSetting(key, DEFAULT_SETTINGS[key]), null);
 });
 
 test('normalizeSettings: nothing saved gives the defaults, as a new object', () => {

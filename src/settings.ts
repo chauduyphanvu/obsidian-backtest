@@ -34,6 +34,14 @@ export class BacktestSettingTab extends PluginSettingTab {
     this.field('Costs per trade', 'Used when a strategy has no costs line, such as 5 bps.', settings.costs, '0 bps', (v) => validateSetting('costs', v), (v) => (settings.costs = v.trim()));
     this.field('Slippage per fill', 'How much worse each fill is than the price, such as 5 bps.', settings.slippage, '0 bps', (v) => validateSetting('slippage', v), (v) => (settings.slippage = v.trim()));
     this.field(
+      'Commission per order',
+      'Used when a strategy has no commission line, on top of the costs: 1 for a fixed amount per order, or 0.005 per share, min 1. 0 for none.',
+      settings.commission,
+      '0',
+      (v) => validateSetting('commission', v),
+      (v) => (settings.commission = v.trim()),
+    );
+    this.field(
       'Interest on cash',
       'A rate such as 4%, or a ticker whose price is a yield, such as ^IRX. Strategies can override it with a cash rate line.',
       settings.cashRate,

@@ -472,3 +472,53 @@ test('a mixed-calendar ranking with close fills: every trade\'s words give the d
   // Some buys and sells fill a close or more after the bar the ranking read; their words must say so.
   assert.ok(later >= 5, `only ${later} later fills`);
 });
+
+const STEP_STRATEGIES = [
+  'universe: A\ncosts: 5 bps\nslippage: 3 bps\ncommission: 1\nentries: 3\nstop loss: 4%\ntake profit: 9%\nbuy when sma(5) crosses above sma(20)\nadd when close > last entry price * 1.01\nsell when sma(5) crosses below sma(20)',
+  'universe: A, B\ncommission: 0.01 per share, min 1, max 1%\nentries: 2\ntrailing stop: 2 atr(10)\nbuy when close > sma(10)\nadd when bars held >= 3 and close > entry price\nsell when close < sma(10) or bars held >= 15',
+  'universe: A 40%, B 30%, C 20%\nrebalance: monthly\ncosts: 5 bps\ncommission: 2\nentries: 3\nbuy when close > ema(20)\nadd when close > ema(10)\nsell when close < ema(20) * 0.97',
+  'universe: A, B, C, D\nhold: top 2 by roc(15)\nrebalance: weekly\nentries: 2\nadd when close > entry price * 1.02\nstop loss: 2 atr(14)\nbuy when close > sma(30)\nsell when close < sma(30)',
+  'universe: C\nrisk per trade: 1% at 2 atr(14)\nentries: 4\nstop loss: 2 atr(14)\nbuy when close > highest(20)[1]\nadd when close > highest(10)[1]\nsell when close < lowest(10)[1]',
+  'universe: A, C\nweighting: inverse volatility(20)\nrebalance: monthly\nentries: 2\nadd when close < entry price * 0.98\nbuy when close > sma(25)\nsell when close < sma(25)',
+  'universe: A, B\nentries: 3\ncommission: 0.5\nadd when entries made < 3 and close < last entry price\nbuy when roc(5) > 2%\nsell when close > entry price * 1.05 or bars held >= 10\ntake profit: 6%',
+];
+
+test('every explanation of a position built in entries, with a commission or not, agrees with its trade, entry by entry', () => {
+  const data = { A: walk(500, 7, 0.0008, true), B: walk(500, 11, 0.0003, true), C: walk(700, 23, 0.0005, false), D: walk(480, 31, 0.0002, true, Date.UTC(2019, 0, 20)) };
+  let checked = 0;
+  let several = 0;
+  for (const src of STEP_STRATEGIES) {
+    for (const fill of ['', 'fill: close\n']) {
+      const bt = run(fill + src, data);
+      for (const t of bt.run.trades) {
+        const ex = explainTrade(bt, t);
+        const why = t.why!;
+        const where = `${fill + src}\n${ex.title}`;
+        const f = ex.facts;
+        assert.equal(f.buyT, why.buyT);
+        assert.ok(f.buyRule === 'yes' || (f.buyRule === null && bt.spec.rank !== null), `buy rule: ${where}`);
+        assert.ok(near(f.entryPrice, t.entryPrice, 1e-12 * t.entryPrice), `entry ${f.entryPrice} vs ${t.entryPrice}: ${where}`);
+        assert.ok(near(f.shares, why.shares, 1e-9 * why.shares), `shares: ${where}`);
+        assert.equal(f.entries!.length, t.entries!.length, where);
+        t.entries!.forEach((e, k) => {
+          const g = f.entries![k];
+          assert.deepEqual([g.t, g.signalT], [e.t, e.signalT], `entry ${k}: ${where}`);
+          assert.ok(k === 0 ? g.rule === f.buyRule : g.rule === 'yes', `entry ${k} rule ${g.rule}: ${where}`);
+          assert.ok(near(g.price, e.price, 1e-12 * e.price) && near(g.shares, e.shares, 1e-9 * e.shares), `entry ${k} fill: ${where}`);
+        });
+        assert.equal(ex.sections.filter((s) => s.id === 'add').length, t.entries!.length - 1);
+        assert.equal(f.reason, t.reason);
+        if (why.exit?.k === 'rule') assert.equal(f.sellRule, 'yes', `sell rule at its bar: ${where}`);
+        if (why.exit?.k === 'level') assert.ok(near(f.level!, why.exit.level, 1e-9 * why.exit.level), `level ${f.level} vs ${why.exit.level}: ${where}`);
+        if (t.reason === 'stop loss') assert.ok(near(f.level!, why.stopLoss!, 1e-9 * f.level!), `stop loss level: ${where}`);
+        if (t.reason === 'take profit') assert.ok(near(f.level!, why.takeProfit!, 1e-9 * f.level!), `target level: ${where}`);
+        assert.ok(near(f.exitPrice, t.exitPrice, 1e-12 * t.exitPrice), `exit ${f.exitPrice} vs ${t.exitPrice}: ${where}`);
+        assert.ok(near(f.ret, t.ret, 1e-12), `return ${f.ret} vs ${t.ret}: ${where}`);
+        checkDates(bt, t, ex);
+        checked++;
+        if (t.entries!.length > 1) several++;
+      }
+    }
+  }
+  assert.ok(checked > 500 && several > 250, `${checked} trades checked, ${several} with several entries`);
+});

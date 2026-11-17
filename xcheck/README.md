@@ -45,13 +45,20 @@ compared exactly. `series/w.csv` gives Rearview the per-ticker weights of the re
 - **Each case** in `cases/<name>/`: `case.strategy` (ours), `case.rvw` (Rearview's) and
   `case.json` (what it tests, how to compare, which documented differences it may show). Rearview
   runs in a cash account with 6 share decimals, fills at the next open, commission and slippage
-  as ours, the cash rate times 360/365 (it counts a 360-day year) and our first and last day.
+  as ours (our `costs` as its percentage commission, our `commission` as its amount per trade, or
+  per share with its minimum), the cash rate times 360/365 (it counts a 360-day year) and our
+  first and last day.
   The `y` cases fill at the close instead: our `fill: close` against Rearview's `fill same_close`
   (a plain rule with costs and slippage, stops and targets on gaps, a trailing stop, a monthly
   rebalance and a ranking). There the orders filled at the last close are compared too: our
   `filled` state against Rearview's signal fills that day.
   - Trades are matched by ticker and entry day: entry and exit prices to Rearview's rounding
     (1.5e-6), exit day, reason and bars held exactly; P&L to 1e-8 of capital where sizing agrees.
+  - The `z` cases cover `commission` (`z1` to `z3`) and positions built in `entries` (`z4` to
+    `z7`): our `entries: n` and `add when` against Rearview's `add when`, `max adds n - 1`,
+    `size` of 1/n of equity and `max position 100%`. There a trade's entry price is the average of
+    its buys in both engines, and each entry's day and price is compared with Rearview's buys from
+    the trade's first day to its exit.
   - Equity: levels up to the first trade that isn't in both runs, to 1e-6, and daily returns on
     every day no such trade was open, to 1e-7. `direct` compares with Rearview's daily equity;
     `replay` with Rearview's own fills replayed with our sizing, for one ticker that gaps, where
@@ -84,11 +91,15 @@ run held at the same time as an explained one (`knock`).
 | Interest | act/365 | act/360 | rate × 360/365 |
 | Sharpe | above the cash rate, √(steps a year), population deviation | no cash rate, √252, sample deviation | rescaled, without a cash rate |
 | Stops after a top-up | stay at the first fill | move to the average cost | not combined (stops in rotation aren't checked) |
+| Stops after an add | move to the average entry price | move to the average cost | the same: `z5` and `z7` compare them |
+| Small trades | an add or rebalancing trade whose commission is 10% of its value or more is not made | made | `z3` charges 0.3 a trade, under 10% of its smallest rebalancing trade (3.43) |
 
 ## Not covered
 
 Rearview has nothing to compare these with, or compares them only through a rule that differs:
-inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell
+a commission's maximum (`max 1%`), adds or rebalancing trades left undone for their commission,
+entries combined with rebalancing, a ranking, risk per trade, inverse volatility, ATR stops or
+slippage, inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell
 rules, calendar values (`month`, `month_start`, ...), yearly rebalancing, ranking with
 `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with
 weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and

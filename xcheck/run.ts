@@ -198,6 +198,8 @@ interface T {
   reason: ExitReason;
   pnl: number;
   bars: number;
+  /** With `entries` above 1: each entry's fill day and price. */
+  entries?: { day: string; px: number }[];
 }
 
 const REASONS: Record<string, ExitReason> = {
@@ -247,6 +249,9 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   const runDir = join(OUT, 'runs', name);
   rmSync(runDir, { recursive: true, force: true });
   mkdirSync(runDir, { recursive: true });
+  // Rearview's commission is per trade, plus per share, plus a percentage (our costs), at least a minimum; it has no maximum.
+  const charge = spec.commission;
+  if (charge?.k === 'share' && charge.max !== null) throw new Error(`${name}: Rearview has no maximum commission`);
   const config = {
     run: {
       start: dates[0],
@@ -254,7 +259,12 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       initial_cash: Math.round(spec.capital * 1e6),
       account: { type: 'cash' },
       quantity: { share_decimals: 6 },
-      commission: { per_share: 0, per_trade: 0, pct: Math.round(spec.costBps * 100), min: 0 },
+      commission: {
+        per_share: charge?.k === 'share' ? Math.round(charge.fee * 1e6) : 0,
+        per_trade: charge?.k === 'order' ? Math.round(charge.fee * 1e6) : 0,
+        pct: Math.round(spec.costBps * 100),
+        min: charge?.k === 'share' ? Math.round(charge.min * 1e6) : 0,
+      },
       slippage: Math.round(spec.slippageBps * 100),
       cash_rate: Math.round(cashRate),
       ...cfg.run,
@@ -280,6 +290,7 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     (atClose ? periodStart(f.date, 0) && f.date !== dates[0] : periodStart(f.date, 1) && ctx.days[dayIdx.get(f.date)! - 1] !== dates[0]);
   const fillDay = (f: RvFill) => (shifted(f) ? ctx.days[dayIdx.get(f.date)! - 1] : f.date);
 
+  const steps = (spec.entries ?? 1) > 1;
   const mine: T[] = ours.run.trades.map((t) => ({
     asset: t.asset,
     entry: iso(t.entryT),
@@ -289,24 +300,28 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     reason: t.reason,
     pnl: t.pnl,
     bars: t.bars,
+    ...(t.entries ? { entries: t.entries.map((e) => ({ day: iso(e.t), px: e.price })) } : {}),
   }));
   const fillOf = (id: number, date: string, side: string, last: boolean) => {
     const fs = rv.fills.filter((f) => f.id === id && f.date === date && f.side === side);
     return fs.length === 0 ? null : last ? fs[fs.length - 1] : fs[0];
   };
   const theirs: T[] = rv.trades.map((t) => {
-    // A trade's entry_px averages its buys (rebalancing top-ups too); ours is the first fill.
+    // A trade's entry_px averages its buys (rebalancing top-ups too); ours is the first fill, or with entries the
+    // average of the entries, and then each of Rearview's buys from the entry to the exit is an entry.
     const entry = fillOf(t.id, t.entryDate, 'BUY', false)!;
     const exit = t.exitDate === null ? null : fillOf(t.id, t.exitDate, 'SELL', true)!;
+    const buys = rv.fills.filter((f) => f.id === t.id && f.side === 'BUY' && f.date >= t.entryDate && (t.exitDate === null || f.date <= t.exitDate));
     return {
       asset: ctx.ids.get(t.id)!,
       entry: fillDay(entry),
-      entryPx: entry.price,
+      entryPx: steps ? t.entryPx : entry.price,
       exit: exit === null ? null : fillDay(exit),
       exitPx: exit === null ? null : exit.price,
       reason: REASONS[t.reason] ?? (`? ${t.reason}` as ExitReason),
       pnl: t.pnl,
       bars: t.barsHeld,
+      ...(steps ? { entries: buys.map((f) => ({ day: fillDay(f), px: f.price })) } : {}),
     };
   });
 
@@ -348,6 +363,11 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       if (Math.abs(o.exitPx - want) > PRICE_TOL + 1e-9 * want) problems.push(`exit ${o.exitPx} vs ${want}`);
     }
     if (o.exit !== null && !cfg.rebalanceShift && o.bars !== r.bars) problems.push(`bars ${o.bars} vs ${r.bars}`);
+    if (o.entries && r.entries) {
+      const days = (t: T) => t.entries!.map((e) => e.day).join(' ');
+      if (days(o) !== days(r)) problems.push(`entries ${days(o)} vs ${days(r)}`);
+      else o.entries.forEach((e, k) => Math.abs(e.px - r.entries![k].px) > PRICE_TOL && problems.push(`entry ${k + 1} ${e.px} vs ${r.entries![k].px}`));
+    }
     return problems;
   };
   const trailPct = spec.stops[spec.universe[0].name]?.trailingStop;
@@ -563,7 +583,8 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     const pending = new Map(rv.orders.filter((o) => o.status === 'PENDING' && o.kind === 'MARKET_OPEN').map((o) => [ctx.ids.get(o.id)!, o.side === 'BUY' ? 'buy' : 'sell']));
     for (const st of ours.run.states) {
       const theirsPending = pending.get(st.name) ?? null;
-      if (st.pending !== theirsPending) {
+      // An add is a buy order to Rearview.
+      if ((st.pending === 'add' ? 'buy' : st.pending) !== theirsPending) {
         totals.push(`${st.name} pending ${st.pending} vs ${theirsPending}`);
         totalsOk = false;
       }

@@ -95,6 +95,8 @@ Dates are always written `2015-01-31`. A percentage is written with a percent si
 | `weighting` | `weighting: inverse volatility(60)` | Calmer tickers get more weight. | the weights as written |
 | `risk per trade` | `risk per trade: 1% at 2 atr(14)` | Size each buy by what it risks. | the weight |
 | `fill` | `fill: close` | When an order fills: `next open`, or `close` for the same close the rule was read at. | `next open` |
+| `commission` | `commission: 0.005 per share, min 1` | A charge on every order, on top of `costs`: a fixed amount per order, or an amount per share with an optional minimum and maximum. | the plugin setting (none) |
+| `entries` | `entries: 3` | Build each position in up to this many entries, each a part of the whole. Needs an `add when` rule. | 1 |
 
 More on the values:
 
@@ -108,7 +110,9 @@ More on the values:
 - `weighting: inverse volatility(60)` measures volatility over the last 60 one-bar returns. The period must be at least 2.
 - `risk per trade: 1% at 2 atr(14)` sizes each buy so that a fall of 2 average true ranges loses 1% of equity. It cannot be used with `weighting`, or with a `rebalance` other than `never`.
 - `fill: close` fills each order at the close it was decided at, as a market-on-close order would, instead of at the next open. It applies to everything that otherwise fills at the next open: buys and sells from the rules, ranking decisions, rebalancing, and buying again after a stop. Stops and targets still fill inside a bar, and watch a position from the bar after the one it was bought at. The result notes that it assumes you can trade at the same close the rule read, and, when a rule or a ranking reads other tickers, which ones it read a bar early and which closes it took as known at the fill. The rules are under "How the simulation works", rule 6 for other tickers.
-- `size`, `capital`, `costs`, `slippage`, `from`, `to`, `test from`, `rebalance`, `data`, `interval` and `fill` take written values only. Parameters can stand in for numbers in rules, stops, `hold`, `weighting` and `risk per trade` (see "Parameters and ranges").
+- `commission: 1` charges 1 for each order, in the same money as `capital` (`$1` works too). `commission: 0.005 per share` charges 0.005 for each share, a fraction of a share counting as that fraction. After `per share` you can add `min 1`, so an order pays at least 1, and `max 1%`, so it pays at most 1% of its value; the maximum wins over the minimum, as at brokers that charge this way. `min` and `max` go only with `per share`, the maximum must be above 0% and under 10%, and `commission: 0` means none. `costs` and `commission` add together when both are set: `costs` is a share of each fill's value, `commission` an amount for each order. How it is charged is under "How the simulation works", rules 46 to 50.
+- `entries: 3` builds each position in up to 3 entries, and needs an `add when` rule (see "Building a position in entries"). It takes a whole number from 1 to 10.
+- `size`, `capital`, `costs`, `slippage`, `commission`, `from`, `to`, `test from`, `rebalance`, `data`, `interval` and `fill` take written values only. Parameters can stand in for numbers in rules, stops, `hold`, `weighting`, `risk per trade` and `entries` (see "Parameters and ranges").
 
 ### Tickers and sources
 
@@ -136,7 +140,7 @@ buy when <condition>
 sell when <condition>
 ```
 
-A buy rule opens a position in a ticker you do not hold when the condition is true at a close. A sell rule closes the position when it is true at a close. Both fill at that ticker's next open, or with `fill: close` at that same close. You can write one buy rule and one sell rule for each scope (see the next part). Without a sell rule a position is held until a stop closes it or the run ends.
+A buy rule opens a position in a ticker you do not hold when the condition is true at a close. A sell rule closes the position when it is true at a close. Both fill at that ticker's next open, or with `fill: close` at that same close. You can write one buy rule and one sell rule for each scope (see the next part), and with `entries` one `add when` rule (see "Building a position in entries"). Without a sell rule a position is held until a stop closes it or the run ends.
 
 A rule can continue on the following lines. Indent them and start each with `and` or `or`:
 
@@ -155,7 +159,7 @@ A rule ends at the first blank line, or at a line that is a setting, a parameter
 A line such as `for TLT:` starts a section for one ticker. `for all:` goes back to the rules every ticker shares.
 
 - Rules written before any `for` line, or after `for all:`, are shared. They apply to every ticker that has no rule of its own for that side.
-- A `buy when` or `sell when` inside `for TLT:` replaces the shared rule of the same side, for TLT only.
+- A `buy when`, `sell when` or `add when` inside `for TLT:` replaces the shared rule of the same kind, for TLT only.
 - Inside a `for` section you can also write `stop loss`, `trailing stop` and `take profit`. Each one replaces the shared setting of the same kind for that ticker. The kinds you leave out stay as they are in the shared settings.
 - Any other setting inside a `for` section is an error, because it applies to the whole strategy. Put it above the first `for` line or after `for all:`.
 - The ticker must be in the universe. For a CSV ticker, use the file name.
@@ -248,18 +252,42 @@ For example, `buy when month_end` or `sell when month == 5 and day > 20`.
 
 ### Position values
 
-These belong to the open position, so only sell rules can read them.
+These belong to the open position, so only sell rules and add rules can read them.
 
-- `bars held` (also written `bars_held`) is the number of completed bars since the buy filled. It is 0 on the bar of the fill.
-- `entry price` (also written `entry_price`) is the price the position was bought at, slippage included.
+- `bars held` (also written `bars_held`) is the number of completed bars since the buy filled. It is 0 on the bar of the fill. With several entries it counts from the first.
+- `entry price` (also written `entry_price`) is the price the position was bought at, slippage included. With several entries it is their average price, weighted by the shares each bought.
+- `last entry price` (also written `last_entry_price`) is the price of the latest entry, slippage included. With one entry it is the entry price.
+- `entries made` (also written `entries_made`) is how many entries the position has: 1 after the buy, and one more for each add.
 
-They cannot be used in a buy rule or a `hold` score, inside a function (`sma(bars held, 2)`), with `[n]`, or with `of`. Write them with a space or an underscore, but not as the single words `bars` or `entry`.
+They cannot be used in a buy rule or a `hold` score, inside a function (`sma(bars held, 2)`), with `[n]`, or with `of`. Write them with spaces or underscores, but not as the single words `bars`, `entry` or `entries`.
 
 ```strategy
 universe: SPY
 buy when close > sma(200)
 sell when bars held >= 20 or close < entry price * 0.9
 ```
+
+### Building a position in entries
+
+`entries: 3` builds each position in up to three entries instead of one. The buy rule (or a ranking with `hold`) makes the first entry, a third of the ticker's weight. An `add when` rule, read at each close while the position is held, makes each later one, until there are three. Each entry is a third of the whole position, so the three together come to the ticker's weight, and an entry is cut when the position would otherwise be worth more than its weight.
+
+```strategy
+universe: SPY
+entries: 3
+buy when close > sma(200)
+add when close > last entry price * 1.03
+sell when close < sma(200)
+```
+
+- The add rule is written like a sell rule and can read the position values, such as `last entry price` and `entries made`. It continues on the next lines with `and` or `or`, and a `for TICKER:` section can have its own.
+- `entries` above 1 needs an add rule for every ticker, and an add rule needs an `entries` line. To add only on some tickers' conditions, give the others `add when false`; they then hold one entry's part of their weight.
+- At most one entry is added at each close. An add is not made at a close where the sell rule holds.
+- The sell rule, a stop or a target sells the whole position. There are no partial sales.
+- The stop loss and take profit are measured from the average entry price, so they move with each entry. The trailing stop trails from the first entry.
+- A rebalance keeps a position at its entries' part of the weight: two entries of three are rebalanced to two thirds of it. It never makes an entry.
+- The trade list shows a position once, from its first entry to its sale, at its average price.
+
+The exact rules are 51 to 57 under "How the simulation works".
 
 ### Parameters and ranges
 
@@ -269,7 +297,7 @@ A parameter is a named number on its own line:
 fast = 50
 ```
 
-Use the name wherever a plain number goes: in rules (`sma(fast)`, `close[lag]`, `rsi(n) < limit`), in `stop loss`, `trailing stop` and `take profit`, in `risk per trade`, in `weighting`, and in `hold` (`hold: top n by roc(20)`).
+Use the name wherever a plain number goes: in rules (`sma(fast)`, `close[lag]`, `rsi(n) < limit`), in `stop loss`, `trailing stop` and `take profit`, in `risk per trade`, in `weighting`, in `hold` (`hold: top n by roc(20)`), and in `entries`.
 
 Add a range to say which values are worth trying:
 
@@ -281,8 +309,8 @@ stop = 8% in 4%..12% step 2%
 - The value after `=` is the one the block uses. It must lie inside the range.
 - `step` is optional. It defaults to 1, or to 1% for a percentage.
 - A range can hold at most 200 values.
-- Write `%` on every number of a percentage parameter. In a stop distance's share (`stop loss: stop`) and in `risk per trade`, use a percentage parameter. In a period, a `top` count or an ATR multiple, use a plain one. Inside a rule either works as a number: `limit = 3%` is 0.03.
-- A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below is of buy sell when for all in step at top by true false always never min max abs bars entry bars_held entry_price`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
+- Write `%` on every number of a percentage parameter. In a stop distance's share (`stop loss: stop`) and in `risk per trade`, use a percentage parameter. In a period, a `top` count, an ATR multiple or `entries`, use a plain one. Inside a rule either works as a number: `limit = 3%` is 0.03.
+- A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below is of buy sell when for all in step at top by true false always never min max abs bars entry bars_held entry_price last_entry_price entries_made`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
 - Declare a name once. Names do not care about capital letters. A parameter can sit anywhere in the block.
 
 A range changes nothing by itself: the block runs with the value written. Every declared parameter gets a slider in the result (see "The Parameters bar" under "Reading a result"), and a range also enables "Try other parameter values".
@@ -441,6 +469,35 @@ buy when close > highest(48)[1]
 sell when close < lowest(24)[1]
 ```
 
+**A broker's commission.** The same trend rule on SPY, at a broker that charges half a cent a share, at least 1 an order and at most 1% of the order. Every buy and sell pays it, on top of the slippage. The note under the chart says how much the costs came to and how much of that was commission.
+
+```strategy
+name: Trend with a commission per share
+universe: SPY
+from: 2010-01-01
+capital: 25k
+commission: 0.005 per share, min 1, max 1%
+slippage: 2 bps
+
+buy when close > sma(200)
+sell when close < sma(200)
+```
+
+**Adding to a winner in three entries.** The buy rule opens a third of the position. Each close at least 3% above the latest entry's price adds another third, until the whole weight is held. The 8% stop is measured from the average price of the entries, so it moves up with each add. The sell rule and the stop sell the whole position.
+
+```strategy
+name: QQQ trend, built in three entries
+universe: QQQ
+from: 2010-01-01
+costs: 5 bps
+entries: 3
+stop loss: 8%
+
+buy when close > sma(100)
+add when close > last entry price * 1.03
+sell when close < sma(100)
+```
+
 **A CSV file.** The file is in the vault at `Data/gold.csv`, with a header row:
 
 ```csv
@@ -484,7 +541,7 @@ These are the engine's rules. Each is exact.
 
 **Timing**
 
-1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker. With `fill: close` it fills at that same close instead, and so does everything else that would fill at the next open: ranking decisions, rebalancing and buying again after a stop (rules 17, 18, 23, 26, 27 and 31 say how).
+1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker. With `fill: close` it fills at that same close instead, and so does everything else that would fill at the next open: ranking decisions, adds, rebalancing and buying again after a stop (rules 17, 18, 23, 26, 27, 31 and 51 say how).
 2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders". With `fill: close` it has filled at that last close, so nothing is left pending, except an order from a ranking decision made at a time a ticker had no bar, which fills at that ticker's next close.
 3. The run starts on `from`, or on the first day every ticker in the universe has prices if that is later. Tickers read only with `of`, and the benchmark, do not delay the start. The result warns when the run starts more than 7 days after `from`. It ends on `to`, or on the last bar.
 4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr` and `macd` count five times their period, because they depend on where they started. A period or lag given by a parameter with a range counts at the largest value of its range, so the sliders, "Try other parameter values" and "Was it luck?" can try any value in it on the prices already loaded. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
@@ -494,8 +551,8 @@ These are the engine's rules. Each is exact.
 **Sizing and cash**
 
 7. Equity is cash plus every position at its latest close. Money is in cash until a rule buys. Positions can hold fractions of a share.
-8. A buy of a ticker with weight w spends w times equity, valued at the open of the fill (at its close with `fill: close`), but never more than the cash available. The rest stays in cash.
-9. A position is sized once, when it is bought. It then drifts with the price until it is sold or a rebalance resizes it.
+8. A buy of a ticker with weight w spends w times equity, valued at the open of the fill (at its close with `fill: close`), but never more than the cash available, with its costs and commission paid on top (rules 14 and 47). The rest stays in cash. With `entries`, each entry spends a part of it (rule 52).
+9. A position is sized once, when it is bought, and with `entries` each entry when it is bought. It then drifts with the price until it is sold or a rebalance resizes it.
 10. With `weighting: inverse volatility(n)`, the tickers being held or bought share out the sum of their configured weights in proportion to 1 divided by their volatility, the standard deviation of the last n one-bar returns up to the last close before the fill (up to the fill's own close with `fill: close`). A ticker whose volatility is 0 keeps its configured weight.
 11. With `risk per trade: r at m atr(n)`, the buy is for r times equity, divided by m times the ATR, shares. The ATR is its value at the close before the fill (at the fill's own close with `fill: close`). The value of the buy is capped at the ticker's weight, and the size is fixed at entry. The distance used for sizing is separate from any `stop loss` line.
 
@@ -506,27 +563,27 @@ These are the engine's rules. Each is exact.
 
 **Costs, slippage and interest**
 
-14. `costs` is a percentage of the value of every fill: buys, sells, stops, targets and rebalancing trades. On a buy it is paid on top of the price; on a sell it comes out of the proceeds.
+14. `costs` is a percentage of the value of every fill: buys, sells, stops, targets and rebalancing trades. On a buy it is paid on top of the price; on a sell it comes out of the proceeds. A `commission` is charged as well (rules 46 to 50).
 15. `slippage` makes each fill worse by that fraction: a buy fills at the price times (1 + slippage), a sell, including a stop or a target, at the price times (1 - slippage). Costs are charged on the slipped value.
 16. Between two bars, cash earns the rate times the calendar days between them divided by 365, using the rate known at the earlier bar. With a ticker, the rate is the close of its latest bar that had ended by the end of the earlier bar (rule 6), read as a yearly percentage: a close of 4.2 is 4.2%. Before that ticker's first such bar cash earns nothing. Only cash earns interest.
 
 **Rebalancing**
 
-17. With a `rebalance` other than `never`, each held ticker goes back to its target weight at the open of its own first bar in each new period, so a ticker that does not trade on the period's first day is rebalanced at its first bar after it. The weight is measured against equity at that open. Sells are made before buys. A rebalance resizes held positions only; it never opens one. Weeks start on Monday; months, quarters and years follow the calendar in UTC. With `fill: close` each held ticker goes back to its target weight at the close of its own last bar in each period instead, measured against equity at that close: the same close at which a ranking decides.
-18. When a ticker's top-up finds too little cash, for example because another ticker is trimmed only at its own first bar a day later, the rest stays wanted. It is bought at that ticker's later bars in the same period as cash comes in, and lapses when the period ends. With `fill: close` a top-up decided at a period's last close stays wanted at the ticker's closes in the next period, and lapses at its next rebalance. A position sold or stopped in the meantime is owed nothing. A top-up only spends cash there is, so nothing is borrowed.
+17. With a `rebalance` other than `never`, each held ticker goes back to its target weight at the open of its own first bar in each new period, so a ticker that does not trade on the period's first day is rebalanced at its first bar after it. The weight is measured against equity at that open. Sells are made before buys. A rebalance resizes held positions only; it never opens one. Weeks start on Monday; months, quarters and years follow the calendar in UTC. With `fill: close` each held ticker goes back to its target weight at the close of its own last bar in each period instead, measured against equity at that close: the same close at which a ranking decides. A position built in entries goes back to its entries' part of its target weight (rule 53), and with a `commission` a trim or top-up too small for it is not made (rule 49).
+18. When a ticker's top-up finds too little cash, for example because another ticker is trimmed only at its own first bar a day later, the rest stays wanted. It is bought at that ticker's later bars in the same period as cash comes in, and lapses when the period ends. With `fill: close` a top-up decided at a period's last close stays wanted at the ticker's closes in the next period, and lapses at its next rebalance. A position sold or stopped in the meantime is owed nothing, and so is a top-up left undone because it was too small for its commission (rule 49). A top-up only spends cash there is, so nothing is borrowed.
 19. Rebalancing trades are slipped and charged like any other. They change a position without closing it, so they are not listed as trades.
 20. With inverse-volatility weighting, the weights are worked out again at each rebalance.
 
 **Stops, targets and gaps**
 
-21. Stops and targets are set when the position opens, from the fill price, slippage included. A stop loss is the fill price times (1 - x), or the fill price minus x ATR. A take profit is the fill price times (1 + x), or the fill price plus x ATR.
-22. An ATR distance uses the ATR at the close before the fill (at the fill's own close with `fill: close`) and keeps it for the life of the position. That ATR is always known, because a buy waits for it (rule 12).
-23. The trailing level is the highest high since entry times (1 - x), or minus x ATR. It moves only at the end of a bar: a bar's high counts from the next bar on. On the entry bar it trails the open. With `fill: close` it starts from the close the position was bought at.
+21. Stops and targets are set when the position opens, from the fill price, slippage included. A stop loss is the fill price times (1 - x), or the fill price minus x ATR. A take profit is the fill price times (1 + x), or the fill price plus x ATR. Each later entry of a position built in entries sets them again from the average entry price (rule 55).
+22. An ATR distance uses the ATR at the close before the fill (at the fill's own close with `fill: close`) and keeps it for the life of the position, later entries included. That ATR is always known, because a buy waits for it (rule 12).
+23. The trailing level is the highest high since entry times (1 - x), or minus x ATR. It moves only at the end of a bar: a bar's high counts from the next bar on. On the entry bar it trails the open. With `fill: close` it starts from the close the position was bought at. With several entries it trails from the first: an add does not move it.
 24. After the bar's open orders, each position is checked against the bar. If the low reaches the stop (the higher of the stop loss and the trailing level), it exits at the stop, or at the open if the bar opened below it. If the high reaches the take profit, it exits at the target, or at the open if the bar opened above it.
 25. If both levels lie inside the bar, the stop is taken first. If the bar opens at or above the target, the target fills at the open, even if the bar later falls through the stop.
 26. A position can be stopped out on the bar it is bought. With `fill: close` it cannot: it was bought at that bar's close, after the bar's range, so its stops and target watch it from its next bar on.
-27. Within a bar, the order is: pending sells fill at the open; then the rebalance (with any top-up still owed) and pending buys, sells first; then stops and targets; then, at the close, the rules are read for the next open. With `fill: close`: stops and targets; then, at the close, the rules are read and what they decide fills at once, sells first, then the rebalance (with any top-up still owed) and the buys; then the positions are valued at that close.
-28. A sell rule and the stops both apply, whichever comes first. A buy is skipped when the sell rule is also true at the same close.
+27. Within a bar, the order is: pending sells fill at the open; then the rebalance (with any top-up still owed) and pending buys and adds, sells first; then stops and targets; then, at the close, the rules are read for the next open. With `fill: close`: stops and targets; then, at the close, the rules are read and what they decide fills at once, sells first, then the rebalance (with any top-up still owed) and the buys and adds; then the positions are valued at that close.
+28. A sell rule and the stops both apply, whichever comes first. A buy is skipped when the sell rule is also true at the same close, and so is an add.
 
 **Re-arming**
 
@@ -546,34 +603,52 @@ These are the engine's rules. Each is exact.
 
 **Benchmark, statistics and the split**
 
-36. The benchmark holds the same weights as the strategy (or the one ticker you name) from the first open the strategy could have bought at (the first close with `fill: close`), with the same costs, slippage, fills, rebalancing and cash rate, and no rules or stops. A `hold` strategy is compared with holding every ticker in equal parts of the same total size.
+36. The benchmark holds the same weights as the strategy (or the one ticker you name) from the first open the strategy could have bought at (the first close with `fill: close`), with the same costs, commission, slippage, fills, rebalancing and cash rate, and no rules, stops or entries in steps. A `hold` strategy is compared with holding every ticker in equal parts of the same total size.
 37. A benchmark whose prices start after the run does is measured from its own first bar. Before then it has no value, its line starts there, and its figures, and those of each `test from` part, cover only its own dates. The result notes it when the benchmark starts more than 7 days after the run.
 38. Return per year is the compound growth rate over the time the run covers, in years of 365.25 days. Worst drawdown is the lowest value of equity divided by its highest previous value, minus 1, at the closes.
 39. Sharpe ratio: for each step, take the return of equity minus what cash earned over the same step. Divide the mean of those by their standard deviation (dividing by the count, not by the count minus 1), and multiply by the square root of the steps in a year, where steps a year is the number of steps divided by the years covered. It is not scaled with 252. The benchmark's Sharpe ratio is worked out the same way.
 40. The Sortino ratio takes the same returns above cash and divides their mean by their downside deviation: the square root of the mean, over every step, of the squared returns below 0 (a step at or above 0 counts as 0). It is scaled the same way, and is the same figure in the parameter sweep and under "More statistics".
 41. A Sharpe or Sortino ratio is 0 when the deviation it divides by is below 1e-12 a step. That is rounding noise, not risk: a run that only earns a fixed cash rate would otherwise show a ratio made of noise, such as -3.42.
 42. The volatility shown under "Time invested" is the standard deviation of the one-step returns times the same square root. "Time invested" is the average share of equity held in positions at the closes.
-43. The trade count and the share won count closed trades only. A trade is won when its return after costs is above 0. A position still open at the end is not sold in the run: equity values it at the last close, and it is listed as "still held". Its return counts the exit cost as if it were sold at that close, without slippage.
-44. A trade's return is its sell price times (1 - costs) over its buy price times (1 + costs), minus 1, with slippage in both prices. Its profit is cash in and out of that ticker, rebalancing trades included.
+43. The trade count and the share won count closed trades only. A trade is won when its return after costs is above 0. A position still open at the end is not sold in the run: equity values it at the last close, and it is listed as "still held". Its return counts the exit cost, and the commission, as if it were sold at that close, without slippage. A position built in several entries is one trade.
+44. A trade's return is its sell price times (1 - costs) over its buy price times (1 + costs), minus 1, with slippage in both prices. With several entries the buy price is their average, weighted by the shares each bought. With a `commission`, the sell price first loses the exit's commission divided by the shares sold, and the buy price gains the entries' commission divided by the shares they bought. Its profit is cash in and out of that ticker, rebalancing trades and commission included.
 45. `test from` splits one run in two, at that date. It is not a second run: nothing is reset or re-fitted, and a position open at the date carries over. Each part is measured from the last close before it, so the second part includes the move into its first day and the two parts' growth multiplies to the whole run's. A trade belongs to the part in which it was bought.
+
+**Commission**
+
+46. `commission` is charged on every order, as well as `costs`: each fill of a buy, a sell, a stop or target exit, a rebalancing trim or top-up, a ranking trade and an entry. `commission: 1` charges 1 an order, in the money `capital` is in. `commission: 0.005 per share` charges 0.005 times the shares, a fraction of a share counting as that fraction. `min 1` raises a per-share charge to at least 1 an order, and `max 1%` then caps it at 1% of the order's value, so an order too small for the minimum pays the cap instead.
+47. On a buy the commission is paid on top, like `costs`: the buy is cut so that its value, costs and commission together fit in the cash there is. When the cash cannot pay the commission, nothing is bought. What the buy wanted, its weight or its risk, is unchanged; only the cut to the cash is larger.
+48. On a sale the commission comes out of the proceeds, and then out of cash. It never takes cash below 0: a position worth less than its commission is sold for what it brings in and the cash there is.
+49. An add (rule 51), a rebalancing trim or a top-up is not made when its commission would be 10% of its value or more, the ceiling the language puts on `costs`. These trades only adjust a position, and with a fixed charge the smallest of them can cost more than they move, such as topping up the few cents of interest that cash earned. A buy that opens a position and a sale that closes one are always made. The result notes how many trades were left undone.
+50. The benchmark pays the same commission (rule 36). The costs paid, under the chart, include the commission and say how much of them it was.
+
+**Building a position in entries**
+
+51. With `entries: n`, a position is built in up to n entries. The buy rule or a ranking makes the first; the `add when` rule makes each later one. The add rule is read at each close of a ticker held with fewer than n entries, after the sell rule, and its order fills like a buy: at the ticker's next open, or with `fill: close` at that same close. It makes at most one entry a close, and none at a close where the sell rule holds. With `entries` above 1, a ticker with no add rule is an error, and so is an add rule without an `entries` line.
+52. Each entry spends 1/n of what one buy of the whole position would spend at that fill (rules 8, 10 and 11): the weight, or its inverse-volatility share, times equity, or the risk-per-trade amount capped at the weight. An add is cut so the position is worth at most that whole amount after it, and like every buy it is cut to the cash there is. So the entries never take a ticker above its weight, nor the strategy above 100% invested. An add with nothing left to buy is not made and does not count.
+53. A rebalance takes a position with k of its n entries to k/n of its target weight; it never makes an entry. When a rebalance and an add fall on the same fill, the add is sized against what the rebalance took the position to. With `hold`, the ranking makes the first entry and the add rule the others, at any close: a decision that keeps a ticker does not add to it, and one that drops it sells it whole. When cash is short, adds are paid for along with the buys: in ranking order with `hold`, and in the order of the universe without it.
+54. In sell and add rules, `bars held` counts from the first entry's fill, `entry price` is the average fill price of the entries weighted by their shares, `last entry price` is the fill price of the latest entry, and `entries made` is the number of entries. Rebalancing changes none of them.
+55. Each entry sets the stop loss and take profit again from the new average entry price: the average times (1 - x) or (1 + x), or minus or plus the ATR distance set at the first entry (rule 22). The trailing stop keeps trailing from the first entry (rule 23). The new shares are watched by the stops from the bar they were bought at, or with `fill: close` from the next bar, as a buy is (rule 26).
+56. The sell rule, a stop, a target and a ranking sell the whole position. There are no partial sales.
+57. A position is one trade from its first entry to its sale: its entry price is the average of its entries, its bars held count from the first, and the trade count and share won count it once. An add left waiting at the last bar is reported like a buy, and "Today's orders" lists it as "Add SPY", with "Step 2 of 3".
 
 ## Reading a result
 
 From the top:
 
-1. **Title and summary.** The `name` (or "Backtest"), on a button that folds the result to one line (see "Folding a result"). Then a line of what was run: tickers and weights, sizing, rebalancing, bar size, costs, slippage, stops, and parameter values. Percentages are written as the block writes them (`12%`, not `12.0%`), and a parameter that is a stop is shown once, as the stop.
+1. **Title and summary.** The `name` (or "Backtest"), on a button that folds the result to one line (see "Folding a result"). Then a line of what was run: tickers and weights, sizing, the number of entries, rebalancing, bar size, costs, commission, slippage, stops, and parameter values. Percentages are written as the block writes them (`12%`, not `12.0%`), and a parameter that is a stop is shown once, as the stop.
 2. **Refresh prices.** A button that fetches the prices again and runs the block again.
 3. **The strategy as written**, coloured.
 4. **Parameters.** Only when the strategy declares parameters: a bar with a slider for each one (see "The Parameters bar").
-5. **Notes.** Prices that could not be refreshed (see "Prices and privacy"); notes from the run itself: buy signals held back while a sizing or stop input warmed up, a buy rule or `hold` score still unknown at the start of the run, a benchmark whose prices start later, and, with `fill: close`, that the run assumes you can trade at the close the rule read, and which other tickers it read a bar early or took as known at the fill; the parser's notes with their line number; and a warning when the run starts more than 7 days after `from`.
+5. **Notes.** Prices that could not be refreshed (see "Prices and privacy"); notes from the run itself: buy signals held back while a sizing or stop input warmed up, a buy rule or `hold` score still unknown at the start of the run, adds and rebalancing trades left undone because their commission would have been too large a part of them, a benchmark whose prices start later, and, with `fill: close`, that the run assumes you can trade at the close the rule read, and which other tickers it read a bar early or took as known at the fill; the parser's notes with their line number; and a warning when the run starts more than 7 days after `from`.
 6. **Six figures.** Return per year, total return, worst drawdown and Sharpe ratio, each with the benchmark's value underneath. Then "Time invested", with volatility a year underneath. Then "Trades": the count of closed trades, how many were won and the average return. It says "none closed yet" when only open positions exist, and "the buy rule never fired" when there were none.
 7. **The chart.** The strategy and the benchmark on a log scale, with the final value of each in the key above it. Underneath, the drawdown from the previous high. Hover or tap to see the date, both values, both drawdowns and the share invested. A benchmark whose prices start later is drawn from its first value, and shows "–" before it. With `test from`, the test period is shaded.
-8. **A short note.** The dates, the starting money, "A rule seen at a close fills at the next open." (with `fill: close`: "A rule seen at a close fills at that close."), costs paid, and interest earned on cash. Then "Prices through" a date, from Yahoo, Binance or your CSV files.
+8. **A short note.** The dates, the starting money, "A rule seen at a close fills at the next open." (with `fill: close`: "A rule seen at a close fills at that close."), costs paid with the commission in them ("Costs paid: $812.40, of which $96.00 commission."), and interest earned on cash. Then "Prices through" a date, from Yahoo, Binance or your CSV files.
 9. **Before and after the test date**, only with `test from`. A table of return per year (strategy and benchmark), worst drawdown, Sharpe ratio and trades, for each part.
-10. **Positions.** One row for each ticker: its weight, whether you are long since a date or in cash, whether an order is waiting (for the next open, or with `fill: close` for the next close) or was made at the last close, the closed trades, the share won and the average trade.
-11. **Trades.** A list you open, newest first: a button, ticker, bought, price, sold, price, return after costs, profit and how it ended: "sell rule", "stop loss", "trailing stop", "take profit" or "still held". It shows the latest 500 trades. Intraday times are in UTC. The button at the start of each row, "Explain this trade", says why the trade happened (see "Explaining a trade").
+10. **Positions.** One row for each ticker: its weight, whether you are long since a date or in cash (with `entries`, how many entries the position has, such as "2 of 3 entries"), whether an order is waiting (for the next open, or with `fill: close` for the next close) or was made at the last close, the closed trades, the share won and the average trade.
+11. **Trades.** A list you open, newest first: a button, ticker, bought, price, sold, price, return after costs, profit and how it ended: "sell rule", "stop loss", "trailing stop", "take profit" or "still held". It shows the latest 500 trades. Intraday times are in UTC. A position bought in several entries is one row: its bought date is the first entry's, followed by the number of entries ("2024-03-01, 3 entries"), and its price is their average. The button at the start of each row, "Explain this trade", says why the trade happened (see "Explaining a trade").
 12. **More statistics.** A table for the strategy and the benchmark: Sortino ratio, return per year divided by worst drawdown, best and worst year, the share of months with a gain, the longest time below a previous high, and best and worst month. Then a chart of the return in each calendar year, and a table of the strategy's return by month. Years the data only partly covers are faded. The Sortino ratio here takes off what cash earned, like the Sharpe ratio, and is the same figure as in the parameter sweep (rule 40 under "How the simulation works"). A benchmark whose prices start later is measured from its first value.
-13. **Prices and trades.** The price of one ticker with the periods you held it shaded, and a marker for each buy and sell. With more than one ticker there is one button for each, or a list when there are more than 12. Above it: the number of trades, the share of the time held, and what holding it throughout returned. When there are too many trades to mark at the chart's width, only the shaded bands are drawn.
+13. **Prices and trades.** The price of one ticker with the periods you held it shaded, and a marker for each buy and sell. A position bought in several entries has one buy marker, on its first entry's day at the average price of its entries. With more than one ticker there is one button for each, or a list when there are more than 12. Above it: the number of trades, the share of the time held, and what holding it throughout returned. When there are too many trades to mark at the chart's width, only the shaded bands are drawn.
 14. **Try other parameter values.** Shown when a parameter is declared with a range, such as `fast = 50 in 20..100 step 10`. A button runs every combination of the ranges, up to 2,000 combinations. Then it shows a chart for one ranged parameter, or a heatmap for two. They show where the values written in the note rank among all the variants, the median variant, and whether the best variant's neighbours do similarly well. With `test from` set, the view starts on the period before the date, the best variant is chosen on that period, and its result after the date is shown. The line under the reading says which period chose the best values ("Best before 2015-01-01: fast = 40, slow = 250"). If you switch the view to the whole run or to the period after the date, that line no longer suggests values, because values picked there have seen the test period and their later result would not be a fair test. To put a variant's values into the block, click or tap its point on the chart, its cell in the heatmap, or its row in the table of best variants, then press "Use these values in the block". The best variant has the same button, except on a view that includes the test period. It writes the numbers the way "Write these values to the block" does (see "The Parameters bar"). The button is off while it writes, and the line next to it says "Done: the block now uses these values." only once the write has happened. If the note has changed since the result was drawn, nothing is written and the line says so. Nothing is written to the note unless you press the button.
 15. **Was it luck?** A button that runs three checks. *Reshuffled history* resamples the run's returns in blocks, to give a range for return per year and for worst drawdown. It shows how much the path and the drawdown depended on the order of the returns; it says nothing about whether the average return will persist, because every version is made from the run's own returns. *Random entries* makes the same number and length of trades at random times, to see how often random timing does as well. *Walk-forward* runs only when a parameter has a range: it picks the best values on a training window, applies them to the next unseen window, and repeats. Each window is measured from the last close before it, so the test windows' growth multiplies to the line's. When a slider under "Parameters" has moved, the checks test the run shown, with the slider's values, and a line above them says so ("These checks test the run shown, with fast 25. The block says fast 10."); walk-forward then draws "Values shown" instead of "Values in the note". "Try other parameter values" always ranks the values written in the block.
 16. **Save buttons.** "Save trades as CSV", "Save value history as CSV" and "Keep this result as a note" (see "Saving results").
@@ -603,9 +678,11 @@ A strategy that declares parameters gets a "Parameters" bar under its text, with
 The button "Explain this trade", a small arrow at the start of each row of the trade list, opens a box under the row. Click it again to close the box. The box has four parts. Its numbers are worked out again from the same prices when you open it.
 
 - **Why it was bought.** The close the buy rule was read at. The rule as you wrote it, with the value of each part there and whether it held (✓ yes, ✗ no, ? unknown). For `crosses above` and `crosses below`, the bar before. For `of`, which bar of the other ticker was read. With `fill: close`, when the fill came at a later close than the one the rule or the ranking read. The parameter values. With `hold`, the ticker's place in the ranking, and the whole ranking when there are 12 tickers or fewer. Then anything that made the buy wait: an input still warming up, a stop or target exit after which the rule had to stop holding first, or the sells of the same ranking.
-- **How much.** The portfolio's value at the fill; the weight, or the risk per trade with its ATR, or the volatility for `weighting: inverse volatility`; any cut for lack of cash; the money and the shares; and the fill price at the open (with `fill: close`, the close) with the slippage.
+- **How much.** The portfolio's value at the fill; the weight, or the risk per trade with its ATR, or the volatility for `weighting: inverse volatility`; any cut for lack of cash; the money, the costs and the commission, and the shares; and the fill price at the open (with `fill: close`, the close) with the slippage.
 - **Why it was sold**, or **Why it is still held**. The sell rule with its values, or the stop or target: where it was, how it was set, the ATR or highest price behind it, and whether the bar opened beyond it or crossed it during the bar. With `hold`, the ranking it dropped out of. For a position still held: the sell rule at the last close, and whether a sell is waiting.
-- **Result.** Return and profit after costs, the bars held, the costs paid, and how often rebalancing topped the position up or trimmed it.
+- **Result.** Return and profit after costs, the bars held, the number of entries and their average price when there were several, the costs paid with the commission in them, and how often rebalancing topped the position up or trimmed it.
+
+With `entries`, "How much" is about the first entry, and each later entry gets a part of its own before the sale: the add rule at the close it was read at, with its values; the whole position, the step of it the entry was, and any cut to keep the position within its weight or to the cash there was; the money and the fill; and the new average entry price, with where the stop loss and take profit moved. A stop that sold the position says it was measured from the average entry price.
 
 ## Comparing and combining strategies
 
@@ -669,7 +746,7 @@ Rows appear as each strategy finishes, three at a time; until then a row says "R
 
 The command "Show today's orders", or the ribbon icon of the same name, opens a window. It runs every `strategy` block in every note of the vault that has the word "strategy" in it, and lists the orders each one has and when each applies. Blocks are found as described under "Comparing and combining strategies": ones in callouts count, examples inside a longer fence do not.
 
-- **To do at the next open.** One row for each order of a strategy that fills at the next open: Buy or Sell, the ticker, the size, the strategy (click it to open its note), the last close, and which bar it is based on, such as "Based on the close of 2026-11-13". For strategies with bars shorter than a day the row shows the time too, in UTC, such as "Based on the 5m bar starting 2026-11-13 14:05 UTC". Sells are listed first. A buy's size is its target share of the strategy and about how many dollars that is at the backtest's current value, which grows or shrinks from the block's `capital`. A sell is the whole position. Scale the percentage to your own money. The dollar figures are about the backtest, not about your account.
+- **To do at the next open.** One row for each order of a strategy that fills at the next open: Buy or Sell, the ticker, the size, the strategy (click it to open its note), the last close, and which bar it is based on, such as "Based on the close of 2026-11-13". For strategies with bars shorter than a day the row shows the time too, in UTC, such as "Based on the 5m bar starting 2026-11-13 14:05 UTC". Sells are listed first. A buy's size is its target share of the strategy and about how many dollars that is at the backtest's current value, which grows or shrinks from the block's `capital`. A sell is the whole position. With `entries`, a buy says which entry it is ("Step 1 of 3") and is sized as that entry, and an add is listed as "Add" ("Add SPY"), with "Step 2 of 3" and that entry's size. Scale the percentage to your own money. The dollar figures are about the backtest, not about your account.
 - **To do at the next close.** Orders of a strategy with `fill: close` that could not fill at the close they were decided at. This happens when a ranking decision is made at a time a ticker has no bar: its order waits for that ticker's next close. The rows look like the ones above.
 - **Traded at the last close.** What a strategy with `fill: close` did at the close that has just passed. Its backtest has already bought or sold, so the row says Bought or Sold. To match it, the order had to be placed before that close. A buy shows its share of the strategy, a sell the whole position and the day it was opened.
 - **Holding.** Strategies that hold something or have no order, and what they hold. A position that has an order row, including one bought at the last close, is not listed again here.
@@ -699,7 +776,7 @@ A few seconds after Obsidian starts, the plugin runs every strategy in the vault
 
 Three buttons under a result write files to the "Folder for saved results" (default `Backtests`), created if needed. A file is named `<name> trades|value|result <date>`, where `<name>` is the block's `name` (or "Backtest") with characters that Obsidian cannot use in a file name replaced by spaces, and `<date>` is the day it was saved, in UTC. If the file exists, ` (2)`, ` (3)` and so on are added. A notice shows the path.
 
-- **Save trades as CSV** has the columns `ticker`, `bought`, `buy_price`, `sold`, `sell_price`, `return_pct`, `profit`, `bars` and `exit`. Open positions have no `sold` or `sell_price`. `exit` is `signal`, `stop loss`, `trailing stop`, `take profit` or `open`.
+- **Save trades as CSV** has the columns `ticker`, `bought`, `buy_price`, `sold`, `sell_price`, `return_pct`, `profit`, `bars` and `exit`. Open positions have no `sold` or `sell_price`. `exit` is `signal`, `stop loss`, `trailing stop`, `take profit` or `open`. A strategy with `entries` above 1 has four more columns at the end: `entries`, the number of entries, and `entry_dates`, `entry_prices` and `entry_shares`, each entry's value separated by semicolons; `bought` is then the first entry and `buy_price` the average.
 - **Save value history as CSV** has the columns `date`, `strategy`, the benchmark's label (such as `SPY buy & hold`) and `drawdown_pct`, one row for each step of the run. The benchmark's field is empty before its first price.
 - **Keep this result as a note** writes a note with the tag `backtest/snapshot` and a `created` date. It holds the strategy as plain text in a `text` block, so it does not run again, with the parameter values that were on screen, then the figures, the split before and after the test date if there is one, the positions now, and the latest 30 trades.
 
@@ -784,6 +861,7 @@ Settings are under Community plugins, then Backtest Blocks.
 | Starting money | Used when a strategy has no `capital` line. | 10000 |
 | Costs per trade | Used when a strategy has no `costs` line, such as `5 bps`. | `0 bps` |
 | Slippage per fill | How much worse each fill is than the price, such as `5 bps`. | `0 bps` |
+| Commission per order | Used when a strategy has no `commission` line, such as `1` or `0.005 per share, min 1`. It is charged on top of the costs. | `0` (none) |
 | Interest on cash | A rate such as `4%`, or a ticker whose price is a yield, such as `^IRX`. A `cash rate` line overrides it. | `0%` |
 | Where plain tickers come from | Yahoo or Binance, for tickers written without a prefix such as `binance:`. | Yahoo |
 | Keep saved prices for | Hours before saved prices are fetched again, from 1 to 168. | 6 |
@@ -799,7 +877,7 @@ Settings are under Community plugins, then Backtest Blocks.
 | Model | Anthropic: empty for `claude-opus-5-5`. OpenAI-compatible: required, the name of the model on your server. | empty |
 | API key | A secret in Obsidian's secret storage. Only its name is saved in the settings. Required for Anthropic; empty is fine for a server that needs no key. | none |
 
-The costs, slippage and cash rate settings are checked the way the language would read them, and a value that cannot be read is not saved.
+The costs, slippage, commission and cash rate settings are checked the way the language would read them, and a value that cannot be read is not saved.
 
 ## Commands
 
@@ -874,14 +952,14 @@ Nothing else leaves your vault. There is no telemetry, no analytics, no update c
 
 **What has been checked**
 
-- Unit tests cover the language, the indicators, the engine's rules (fills, costs, slippage, stops, gaps, rebalancing, ranking, sizing, warm-up, interest, reading other tickers by bar end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders and the status bar count, the `backtests` block, the explanation of each trade, rewriting parameter values in a note, the background jobs with a fake worker, the starter strategies and the CSV helper, hover help, fixes and the ticker lookup with a fake network, exports, settings and drafting with a fake model.
-- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 29 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. Five of the 29 cases fill at the close, against Rearview's `fill same_close`. The check found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar (and, with `fill: close`, where it starts), slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
+- Unit tests cover the language, the indicators, the engine's rules (fills, costs, commission, slippage, stops, gaps, rebalancing, ranking, sizing, positions built in entries, warm-up, interest, reading other tickers by bar end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders and the status bar count, the `backtests` block, the explanation of each trade, rewriting parameter values in a note, the background jobs with a fake worker, the starter strategies and the CSV helper, hover help, fixes and the ticker lookup with a fake network, exports, settings and drafting with a fake model.
+- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 36 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. Five of the 36 cases fill at the close, against Rearview's `fill same_close`, three charge a `commission` (a fixed one, one per share with a minimum, and one on rebalancing trades), and four build positions in `entries` (with a stop and target, a trailing stop, and filled at the close), where each entry's day and price is compared. The check found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar (and, with `fill: close`, where it starts), slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, the Sharpe ratio, and adds and rebalancing trades too small for their commission (rule 49), which Rearview makes. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
 - An independent review of the engine and the statistics, which confirmed each finding with a script. It found defects that are now fixed, each with a test: on mixed calendars (stocks with crypto) a ticker could miss its rebalance and a ranking buy could leave its slot in cash; a ticker with longer bars, a daily benchmark or a daily yield on shorter bars could be read before its bar had ended; entries were sized or left without their ATR stop while those inputs warmed up; and results could depend on which prices happened to be saved. It also corrected statistics (a benchmark whose prices start later, Sharpe and Sortino made of rounding noise, the `test from` split, two different Sortino ratios), and runs of more than about 125,000 bars no longer fail. A review finds what it looks for; this one does not show that no other defects remain.
 - A trial in a running desktop Obsidian 1.15, with live prices, of the parts that depend on Obsidian itself. These worked: the Parameters bar and its sliders; writing values into the block from the bar and from a sweep, in reading view and in live preview, including right after typing in the note; "Explain this trade"; the sweep in the background worker; the strategy preview panel as the cursor, the text and the problems change; "Fix the problem at the cursor" and the underlines; the `backtests` block; the starter strategies window; the CSV helper's file list and its reading of a file; folded results with the Compact setting; and the count in the status bar.
 
 **What has not been checked against anything**
 
-The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars. The cross-check of `fill: close` uses daily bars only.
+The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: a commission's `max`, trades left undone for their commission, entries combined with rebalancing, a ranking, risk per trade, inverse volatility, ATR stops or slippage, inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars. The cross-check of `fill: close` uses daily bars only.
 
 Also not checked:
 
@@ -909,7 +987,7 @@ node xcheck/run.ts # optional cross-check; needs the second backtester's command
 
 Obsidian loads one script for a plugin, so the background worker is built into `main.js`: `npm run build` bundles `src/worker.ts` first (`esbuild.config.mjs`) and embeds its text in the main bundle, which starts it from that text.
 
-The cross-check runs 29 cases and 24 indicator expressions. It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
+The cross-check runs 36 cases and 24 indicator expressions. It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
 
 Pushing a tag equal to the `version` in `manifest.json` runs `.github/workflows/release.yml`. It runs the tests, builds, and creates a draft GitHub release with `main.js`, `manifest.json` and `styles.css` attached. `versions.json` maps each plugin version to the minimum Obsidian version.
 
