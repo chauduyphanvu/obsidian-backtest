@@ -304,9 +304,32 @@ test('ATR stops use the ATR at the signal bar and keep it for the position', () 
   // The trailing level is the highest completed high (101 after bar 2) minus 2.
   const trail = run('universe: A\ntrailing stop: 1 atr(2)\nbuy when atr(2) > 0', { A: atrBars({ o: 100, h: 100.5, l: 98.5, c: 99 }) });
   assert.deepEqual(trail.run.trades.map((t) => [t.exitPrice, t.reason]), [[99, 'trailing stop']]);
-  // Bought on bar 1 after a signal at bar 0, where ATR(2) is unknown: no stop at all.
-  const none = run('universe: A\nstop loss: 2 atr(2)\nbuy when true', { A: atrBars({ o: 100, h: 101, l: 50, c: 97 }) });
-  assert.deepEqual(none.run.trades.map((t) => t.reason), ['open']);
+});
+
+test('an entry whose ATR stop distance is still unknown at the signal waits for a later signal', () => {
+  // The signal at bar 0, where ATR(2) is unknown, is not acted on; the one at bar 1 fills at bar 2
+  // with its stop at 100 - 2 * 2 = 96, which bar 3's low of 50 takes.
+  const r = run('universe: A\nstop loss: 2 atr(2)\nbuy when true', { A: atrBars({ o: 100, h: 101, l: 50, c: 97 }) });
+  assert.deepEqual(r.run.trades.map((t) => [t.entryT, t.exitPrice, t.reason]), [[day(2), 96, 'stop loss']]);
+  assert.deepEqual(r.run.skipped, [{ asset: 'A', input: 'stop loss', n: 2, count: 1 }]);
+  assert.ok(r.notes.includes('1 buy signal for A was not acted on while the 2-bar ATR for the stop loss was still unknown.'));
+  // In rank mode the chosen ticker is skipped until the next decision, here the next bar.
+  const ranked = run('universe: A\nhold: top 1 by close\ntake profit: 2 atr(2)', { A: atrBars({ o: 100, h: 101, l: 99, c: 100 }) });
+  assert.deepEqual(ranked.run.trades.map((t) => t.entryT), [day(2)]);
+  assert.deepEqual(ranked.run.skipped, [{ asset: 'A', input: 'take profit', n: 2, count: 1 }]);
+});
+
+test('a buy rule still warming up at the start of the run gets a note with the day it became known', () => {
+  const A = bars(Array.from({ length: 20 }, () => 10));
+  assert.deepEqual(run('universe: A\nbuy when close > sma(10)', { A }).notes, [
+    'The buy rule for A was unknown until 2020-01-10 while its indicators warmed up, so A could not be bought before then.',
+  ]);
+  assert.deepEqual(run('universe: A\nbuy when close > sma(50)', { A }).notes, [
+    'The buy rule for A was unknown for the whole run: its indicators need more bars than the prices have.',
+  ]);
+  // A few bars, or a "from" after the warm-up, are not worth a note.
+  assert.deepEqual(run('universe: A\nbuy when close > sma(5)', { A }).notes, []);
+  assert.deepEqual(run('universe: A\nfrom: 2020-01-12\nbuy when close > sma(10)', { A }).notes, []);
 });
 
 test('a stop set in a for section applies to that ticker only', () => {

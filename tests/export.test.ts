@@ -85,6 +85,7 @@ function result(opts: { states?: AssetState[]; trades?: Trade[]; segments?: Segm
       costs: 0,
       interest: 0,
       cashReturn: [0, 0, 0],
+      skipped: [],
     },
     stats: stats(),
     tradeStats: tradeStats(),

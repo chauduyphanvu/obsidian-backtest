@@ -1,6 +1,6 @@
 import { DAY, stamp } from './dom.ts';
 import type { Spec } from './dsl.ts';
-import { simulate, type RunResult, type Signals, type Trade } from './engine.ts';
+import { simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
 import { Evaluator } from './evaluate.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
@@ -115,6 +115,69 @@ export function computeTradeStats(trades: Trade[]): TradeStats {
   };
 }
 
+/** A rule unknown for more bars than this at the start of the run gets a note. */
+const FEW_BARS = 5;
+
+/** Notes on rules still warming up at the run's first bar, one per rule and date. */
+function warmupNotes(spec: Spec, data: Map<string, Bars>, signals: Map<string, Signals>, run: RunResult, intraday: boolean): string[] {
+  const last = run.t[run.t.length - 1];
+  const byWhen = new Map<string, { what: string; known: number | null; names: string[] }>();
+  for (const a of spec.universe) {
+    const { t } = data.get(a.name)!;
+    const sig = signals.get(a.name)!;
+    const unknown = (i: number) => (Number.isNaN(sig.buy[i]) ? 'buy rule' : sig.score && !Number.isFinite(sig.score[i]) ? 'ranking score' : null);
+    let first = 0;
+    while (first < t.length && t[first] < run.t[0]) first++;
+    const what = unknown(first);
+    if (!what) continue;
+    let i = first;
+    while (i < t.length && t[i] <= last && unknown(i)) i++;
+    if (i - first <= FEW_BARS) continue;
+    const known = i < t.length && t[i] <= last ? t[i] : null;
+    const key = `${what} ${known}`;
+    if (!byWhen.has(key)) byWhen.set(key, { what, known, names: [] });
+    byWhen.get(key)!.names.push(a.name);
+  }
+  return [...byWhen.values()].map(({ what, known, names }) => {
+    const subject = names.length === 1 ? `The ${what} for ${names[0]} was` : `The ${what}s for ${list(names)} were`;
+    return known === null
+      ? `${subject} unknown for the whole run: ${names.length === 1 ? 'its' : 'their'} indicators need more bars than the prices have.`
+      : `${subject} unknown until ${stamp(known, intraday)} while ${names.length === 1 ? 'its' : 'their'} indicators warmed up, so ${list(names)} could not be bought before then.`;
+  });
+}
+
+const INPUT: Record<Skipped['input'], (n: number) => string> = {
+  'risk per trade': (n) => `the ${n}-bar ATR for risk per trade`,
+  'inverse volatility': (n) => `the ${n}-bar volatility for inverse volatility weighting`,
+  'stop loss': (n) => `the ${n}-bar ATR for the stop loss`,
+  'trailing stop': (n) => `the ${n}-bar ATR for the trailing stop`,
+  'take profit': (n) => `the ${n}-bar ATR for the take profit`,
+};
+
+/** One note per input that held entries back, naming the tickers and how many. */
+function skippedNotes(skipped: Skipped[]): string[] {
+  const groups = new Map<string, Skipped[]>();
+  for (const s of skipped) {
+    const key = `${s.input} ${s.n}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(s);
+  }
+  return [...groups.values()].map((rows) => {
+    const total = rows.reduce((sum, r) => sum + r.count, 0);
+    const signals = `${total} buy signal${total === 1 ? '' : 's'}`;
+    const verb = total === 1 ? 'was' : 'were';
+    const input = INPUT[rows[0].input](rows[0].n);
+    return rows.length === 1
+      ? `${signals} for ${rows[0].asset} ${verb} not acted on while ${input} was still unknown.`
+      : `${signals} ${verb} not acted on while ${input} was still unknown: ${rows.map((r) => `${r.asset} ${r.count}`).join(', ')}.`;
+  });
+}
+
+/** "A", "A and B", "A, B and C". */
+function list(names: string[]): string {
+  return names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
 function cashRateNote(spec: Spec): string {
   if (spec.cash.k === 'ticker') return `Cash earns the ${spec.cash.ref.name} rate`;
   return spec.cash.rate === 0 ? 'Cash earns nothing' : `Cash earns ${Number((spec.cash.rate * 100).toFixed(2))}% a year`;
@@ -174,8 +237,8 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     return computeStats(cut(run.t), cut(eq), capital ?? eq[s], cut(ex), cut(run.cashReturn));
   };
 
-  const notes: string[] = [];
   const intraday = run.t.some((t) => t % DAY !== 0);
+  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped)];
   if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
     notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
   }

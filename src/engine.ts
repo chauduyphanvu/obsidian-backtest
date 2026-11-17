@@ -63,6 +63,18 @@ export interface Signals {
   score: number[] | null;
 }
 
+/** An input a buy needs that can still be warming up: the sizing's, or a stop's or target's distance. */
+export type WarmupInput = 'risk per trade' | 'inverse volatility' | 'stop loss' | 'trailing stop' | 'take profit';
+
+/** Buy signals not acted on because `input`, measured over `n` bars, was not known yet at the signal. */
+export interface Skipped {
+  asset: string;
+  input: WarmupInput;
+  n: number;
+  /** Runs of consecutive signals (or ranking decisions) held back, each counted once. */
+  count: number;
+}
+
 export interface RunResult {
   t: number[];
   equity: number[];
@@ -75,6 +87,8 @@ export interface RunResult {
   interest: number;
   /** The cash rate's return over each step, aligned with `t` (0 on the first bar). */
   cashReturn: number[];
+  /** Entries not taken while an input warmed up, in the order first seen. */
+  skipped: Skipped[];
 }
 
 const DAY = 86_400_000;
@@ -131,6 +145,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       pending: null as 'buy' | 'sell' | null,
       // Place in the latest ranking decision (0 is the best score), for funding buys in that order.
       rankPos: Infinity,
+      // The last signal or decision for this asset was held back while an input warmed up.
+      heldBack: false,
     };
   });
   type A = (typeof assets)[number];
@@ -213,23 +229,44 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   };
   const openPosition = (a: A, t: number, open: number) => {
     const fill = open * (1 + slip);
-    // Distances in ATR use its value at the close before the fill, and keep it for the position's life.
+    // Distances in ATR use its value at the close before the fill (known: see missingInput), and keep it for the position's life.
     const dist = (s: StopLevel) => (s.k === 'atr' ? s.mult * atrAt(a, s.n, a.i - 1) : NaN);
-    const known = (x: number, dflt: number) => (Number.isNaN(x) ? dflt : x);
     const { stopLoss, trailingStop, takeProfit } = a.stops;
     a.entryT = t;
     a.entryIdx = a.i;
     a.entryPrice = fill;
     a.highWater = open;
-    a.hard = !stopLoss ? -Infinity : known(stopLoss.k === 'pct' ? fill * (1 - stopLoss.v) : fill - dist(stopLoss), -Infinity);
-    a.target = !takeProfit ? Infinity : known(takeProfit.k === 'pct' ? fill * (1 + takeProfit.v) : fill + dist(takeProfit), Infinity);
-    a.trail = !trailingStop ? null : trailingStop.k === 'pct' ? { mul: 1 - trailingStop.v } : Number.isNaN(dist(trailingStop)) ? null : { dist: dist(trailingStop) };
+    a.hard = !stopLoss ? -Infinity : stopLoss.k === 'pct' ? fill * (1 - stopLoss.v) : fill - dist(stopLoss);
+    a.target = !takeProfit ? Infinity : takeProfit.k === 'pct' ? fill * (1 + takeProfit.v) : fill + dist(takeProfit);
+    a.trail = !trailingStop ? null : trailingStop.k === 'pct' ? { mul: 1 - trailingStop.v } : { dist: dist(trailingStop) };
+  };
+
+  /** The first input a buy signalled at bar `idx` needs that is still unknown there, with its period; null when all are known. */
+  const missingInput = (a: A, idx: number): { input: WarmupInput; n: number } | null => {
+    if (p.sizing.k === 'risk' && Number.isNaN(atrAt(a, p.sizing.n, idx))) return { input: 'risk per trade', n: p.sizing.n };
+    if (p.sizing.k === 'invvol' && Number.isNaN(volAt(a, p.sizing.n, idx))) return { input: 'inverse volatility', n: p.sizing.n };
+    for (const [input, level] of [['stop loss', a.stops.stopLoss], ['trailing stop', a.stops.trailingStop], ['take profit', a.stops.takeProfit]] as const) {
+      if (level?.k === 'atr' && Number.isNaN(atrAt(a, level.n, idx))) return { input, n: level.n };
+    }
+    return null;
+  };
+  const skipped: Skipped[] = [];
+  /** Whether a buy signalled at the asset's current bar can go ahead; counts it as skipped when it can't. */
+  const ready = (a: A): boolean => {
+    const missing = missingInput(a, a.i);
+    if (missing && !a.heldBack) {
+      const row = skipped.find((x) => x.asset === a.name && x.input === missing.input && x.n === missing.n);
+      if (row) row.count++;
+      else skipped.push({ asset: a.name, ...missing, count: 1 });
+    }
+    a.heldBack = missing !== null;
+    return !a.heldBack;
   };
 
   /**
    * Target weights for the assets held or being bought. Inverse volatility shares out those
-   * assets' configured weights by 1 / volatility, measured up to `idx(a)`; an asset with unknown
-   * volatility keeps its configured weight.
+   * assets' configured weights by 1 / volatility, measured up to `idx(a)`; an asset whose volatility
+   * is 0 (or, for a buy not yet signalled, unknown) keeps its configured weight.
    */
   const targetWeights = (entering: Set<A>, idx: (a: A) => number): Map<A, number> => {
     const out = new Map(assets.map((a) => [a, a.weight]));
@@ -341,13 +378,18 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
 
     const position = (a: A): PosState | null => (a.shares > 0 ? { entryIdx: a.entryIdx, entryPrice: a.entryPrice } : null);
     const sells = (a: A) => a.sig.sell !== null && a.sig.sell(a.i, position(a)) === 1;
+    // A buy whose sizing or stop input is still warming up waits for a later signal.
     for (const a of live) {
       if (a.shares > 0) {
         if (sells(a)) a.pending = 'sell';
       } else if (!p.rank) {
         const wantsBuy = a.sig.buy[a.i] === 1;
         if (!wantsBuy) a.armed = true;
-        if (wantsBuy && !sells(a) && a.armed) a.pending = 'buy';
+        if (wantsBuy && !sells(a) && a.armed) {
+          if (ready(a)) a.pending = 'buy';
+        } else {
+          a.heldBack = false;
+        }
       }
     }
 
@@ -365,13 +407,14 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       waiting = new Set();
       for (const a of assets) {
         if (chosen.has(a)) {
-          a.pending = a.shares === 0 ? 'buy' : null;
+          a.pending = a.shares === 0 && ready(a) ? 'buy' : null;
         } else if (a.shares > 0) {
           a.pending = 'sell';
           if (fills(a)) waiting.add(a);
         } else {
           a.pending = null;
         }
+        if (!chosen.has(a) || a.shares > 0) a.heldBack = false;
       }
     }
   }
@@ -401,5 +444,6 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     costs,
     interest,
     cashReturn,
+    skipped,
   };
 }

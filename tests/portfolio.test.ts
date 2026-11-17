@@ -135,9 +135,24 @@ test('risk per trade buys the shares that lose the risk at the stop distance, up
   // 10% would be 25 shares, 2500 of value: capped at the 100% weight, 10 shares.
   r = run('universe: A\ncapital: 1000\nrisk per trade: 10% at 2 atr(2)\nbuy when atr(2) > 0', { A });
   assert.ok(near(r.run.states[0].shares, 10));
-  // A signal on bar 0, where ATR(2) is unknown, falls back to the weight.
+  // A signal on bar 0, where ATR(2) is unknown, is not acted on: the buy waits for bar 1's signal.
   r = run('universe: A\ncapital: 1000\nrisk per trade: 1% at 2 atr(2)\nbuy when true', { A });
-  assert.ok(near(r.run.states[0].shares, 10));
+  assert.ok(near(r.run.states[0].shares, 2.5));
+  assert.equal(r.run.trades[0].entryT, day(2));
+  assert.deepEqual(r.notes, ['1 buy signal for A was not acted on while the 2-bar ATR for risk per trade was still unknown.']);
+});
+
+test('inverse volatility does not buy until each ticker\'s volatility is known', () => {
+  // Volatility(2) needs two returns, so it is known from bar 2: the buys fill at bar 3's open
+  // (A 99, B 99.96) at 1/6 and 5/6, as when the run starts at bar 2.
+  const A = bars([100, 110, 99, 99, 99]);
+  const B = bars([100, 102, 99.96, 99.96, 99.96]);
+  const r = run('universe: A, B\ncapital: 1000\nweighting: inverse volatility(2)\nbuy when true', { A, B });
+  assert.deepEqual(r.run.trades.map((t) => [t.asset, t.entryT]), [['A', day(3)], ['B', day(3)]]);
+  const [a, b] = r.run.states;
+  assert.ok(near(a.shares, 1000 / 6 / 99) && near(b.shares, 5000 / 6 / 99.96));
+  // Bars 0 and 1 were one run of held-back signals for each ticker.
+  assert.deepEqual(r.notes, ['2 buy signals were not acted on while the 2-bar volatility for inverse volatility weighting was still unknown: A 1, B 1.']);
 });
 
 test('test from splits the one run into two parts, each measured from its own start', () => {
