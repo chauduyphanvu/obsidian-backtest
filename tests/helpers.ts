@@ -3,11 +3,11 @@ import type { Bars } from '../src/types.ts';
 export const DAY = 86_400_000;
 export const T0 = Date.UTC(2020, 0, 1);
 
-/** Daily bars from closes; open equals the previous close unless given. */
-export function bars(closes: number[], opts: { opens?: number[]; highs?: number[]; lows?: number[]; start?: number; step?: number } = {}): Bars {
+/** Daily bars from closes, or bars at the given `times`; open equals the previous close unless given. */
+export function bars(closes: number[], opts: { opens?: number[]; highs?: number[]; lows?: number[]; start?: number; step?: number; times?: number[] } = {}): Bars {
   const o = opts.opens ?? closes.map((c, i) => (i === 0 ? c : closes[i - 1]));
   return {
-    t: closes.map((_, i) => (opts.start ?? T0) + i * (opts.step ?? DAY)),
+    t: opts.times ?? closes.map((_, i) => (opts.start ?? T0) + i * (opts.step ?? DAY)),
     o,
     h: opts.highs ?? closes.map((c, i) => Math.max(c, o[i])),
     l: opts.lows ?? closes.map((c, i) => Math.min(c, o[i])),

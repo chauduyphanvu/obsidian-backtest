@@ -1,5 +1,5 @@
 import type { Backtest } from './backtest.ts';
-import type { Diagnostic, Spec } from './dsl.ts';
+import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
 import type { Trade } from './engine.ts';
 import { DAY, MONTHS, h, isoDate, minus, money, niceStep, pct, price, s, signedPct, stamp } from './dom.ts';
 import { tokenizeBlock } from './highlight.ts';
@@ -57,9 +57,11 @@ function summary(spec: Spec): string {
   if (spec.rebalance !== 'never') parts.push(`rebalanced ${spec.rebalance}`);
   if (spec.interval !== '1d') parts.push(`${spec.interval} bars`);
   parts.push(spec.costBps ? `${spec.costBps} bps costs` : 'no costs');
-  if (spec.stopLoss !== null) parts.push(`${pct(spec.stopLoss, 0)} stop`);
-  if (spec.trailingStop !== null) parts.push(`${pct(spec.trailingStop, 0)} trailing stop`);
-  if (spec.takeProfit !== null) parts.push(`${pct(spec.takeProfit, 0)} target`);
+  const stops = spec.stops[spec.universe[0].name];
+  const level = (l: StopLevel) => (l.k === 'pct' ? pct(l.v, 0) : `${l.mult} ATR`);
+  if (stops.stopLoss) parts.push(`${level(stops.stopLoss)} stop`);
+  if (stops.trailingStop) parts.push(`${level(stops.trailingStop)} trailing stop`);
+  if (stops.takeProfit) parts.push(`${level(stops.takeProfit)} target`);
   return parts.join(', ');
 }
 

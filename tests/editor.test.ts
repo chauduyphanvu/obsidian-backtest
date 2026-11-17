@@ -50,7 +50,7 @@ test('tickers the block names', () => {
 test('line starts offer settings and rule openers', () => {
   assert.deepEqual(labels([], 'st'), ['stop loss']);
   assert.deepEqual(labels([], 'b'), ['buy when', 'benchmark']);
-  assert.deepEqual(labels([], 's'), ['sell when', 'symbol', 'size', 'stop loss']);
+  assert.deepEqual(labels([], 's'), ['sell when', 'symbol', 'size', 'stop loss', 'slippage']);
   assert.equal(labels([], ''), null);
   const r = complete(BLOCK, [], '  tr')!;
   assert.deepEqual([r.from, r.items[0].insert], [2, 'trailing stop: ']);
