@@ -106,9 +106,9 @@ function yearsChart(body: HTMLElement, benchmarkLabel: string, mine: PeriodRetur
   tip.hidden = true;
   let drawn = 0;
   const observer = new ResizeObserver((entries) => {
-    // Drawing changes the container's height, which notifies again at the same width.
+    // Drawing changes the container's height, which would notify this observer again within the same frame.
     const width = Math.floor(entries[0].contentRect.width);
-    if (width > 0 && width !== drawn) drawYears(chart, tip, (drawn = width), benchmarkLabel, mine, bench);
+    if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawYears(chart, tip, (drawn = width), benchmarkLabel, mine, bench));
   });
   observer.observe(chart);
   if (mine.some((p) => p.partial)) h(body, 'div', 'bt-note', 'Faded bars are years the data only partly covers.');

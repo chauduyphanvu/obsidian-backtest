@@ -628,7 +628,7 @@ export default class BacktestBlocks extends Plugin {
         ),
       insert: (block) => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (view) view.editor.replaceSelection(block);
+        if (view) place(view.editor, block);
         else new Notice('Open a note in editing mode first, then insert the draft.');
       },
     }).open();

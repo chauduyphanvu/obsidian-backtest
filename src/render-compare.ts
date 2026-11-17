@@ -90,7 +90,7 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
   const observer = new ResizeObserver((entries) => {
     // Drawing changes the container's height, which notifies again at the same width.
     const width = Math.floor(entries[0].contentRect.width);
-    if (width > 0 && width !== drawn) drawChart(chart, tip, (drawn = width), t, [...lines, ...(combined ? [combined] : [])], input.capital, intraday);
+    if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawChart(chart, tip, (drawn = width), t, [...lines, ...(combined ? [combined] : [])], input.capital, intraday));
   });
   observer.observe(chart);
 

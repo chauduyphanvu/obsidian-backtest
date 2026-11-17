@@ -134,8 +134,11 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
     // Drawing changes the container's height, which notifies again at the same width.
     const w = Math.floor(entries[0].contentRect.width);
     if (w > 0 && w !== width) {
-      width = w;
-      redraw();
+      // Drawing changes the container's height, which would notify this observer again within the same frame.
+      window.requestAnimationFrame(() => {
+        width = w;
+        redraw();
+      });
     }
   });
   observer.observe(chart);
