@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec, type Param } from '../src/dsl.ts';
-import { createRequester, differenceText, formatParam, sliderScale, sliderValues, type RequesterHandlers } from '../src/render-params.ts';
+import { acceptedScale, createRequester, differenceText, formatParam, sliderScale, sliderValues, type RequesterHandlers } from '../src/render-params.ts';
 import type { RunOutput } from '../src/runner.ts';
 
 /** The parameter a line declares, as the parser reads it. */
@@ -85,6 +85,89 @@ test('every value a derived slider offers is one the parser accepts as a stop di
       }
     }
   }
+});
+
+/** Whether a block reads with `n` at a value: the probe the bar is given. */
+const reads = (rule: string, setting = '') => (x: number) => parseSpec(`universe: SPY\nn = 1\n${setting}buy when ${rule}`, { overrides: { n: x } }).spec !== null;
+const scaled = (line: string, rule: string, setting = '') => {
+  const { spec, errors } = parseSpec(`universe: SPY\n${line}\n${setting}buy when ${rule}`);
+  assert.deepEqual(errors, [], `${line} in ${rule}`);
+  return { p: spec!.params[0], accepts: reads(rule, setting) };
+};
+
+test('a slider that starts below what a function accepts is cut back to what the block reads', () => {
+  // These five need a period of at least 2; the others accept 1.
+  for (const fn of ['cci', 'hma', 'zscore', 'slope']) {
+    const { p, accepts } = scaled('n = 2', `${fn}(n) > 0`);
+    assert.deepEqual(sliderScale(p), { lo: 1, hi: 6, step: 1 }, `${fn} before`);
+    assert.deepEqual(acceptedScale(p, accepts), { lo: 2, hi: 6, step: 1 }, `${fn} after`);
+  }
+  const corr = scaled('n = 2', 'correl(close of SPY, n) > 0');
+  assert.deepEqual(acceptedScale(corr.p, corr.accepts), { lo: 2, hi: 6, step: 1 });
+  // A function that takes 1 keeps its whole range.
+  const sma = scaled('n = 2', 'close > sma(n)');
+  assert.deepEqual(acceptedScale(sma.p, sma.accepts), sliderScale(sma.p));
+});
+
+test('the entries setting as a parameter is never offered 0 or 11', () => {
+  const add = 'entries: n\nadd when close > last entry price * 1.03\n';
+  for (const [v, want] of [[1, [1, 5]], [2, [1, 6]], [3, [2, 7]], [5, [3, 10]], [8, [4, 10]], [10, [5, 10]]] as const) {
+    const p = parseSpec(`universe: SPY\nn = ${v}\n${add}buy when close > sma(20)\nsell when close < sma(20)`).spec!.params[0];
+    const probe = (x: number) => parseSpec(`universe: SPY\nn = 1\n${add}buy when close > sma(20)\nsell when close < sma(20)`, { overrides: { n: x } }).spec !== null;
+    const { lo, hi } = acceptedScale(p, probe);
+    assert.deepEqual([lo, hi], want, `n = ${v}`);
+  }
+});
+
+test('a cut end stops at the last value the block reads, and an end that is read is left alone with only one question asked of it', () => {
+  for (const v of [2, 3, 4, 5, 10]) {
+    const { p, accepts } = scaled(`n = ${v}`, 'zscore(n) > 0');
+    const { lo, hi, step } = acceptedScale(p, accepts);
+    const whole = sliderScale(p);
+    assert.ok(accepts(lo) && accepts(hi), `n = ${v}`);
+    // One step beyond a cut end the block does not read, or the end was not cut.
+    if (lo > whole.lo) assert.equal(accepts(lo - step), false);
+    if (hi < whole.hi) assert.equal(accepts(hi + step), false);
+  }
+  let asked = 0;
+  const sma = scaled('n = 50', 'close > sma(n)');
+  acceptedScale(sma.p, (x) => (asked++, sma.accepts(x)));
+  assert.equal(asked, 2);
+});
+
+test('a slider is offered only values the block reads, whatever function the parameter is the period of', () => {
+  const rules = [
+    'cci(n) > 0',
+    'hma(n) > close',
+    'zscore(n) > 1',
+    'slope(n) > 0',
+    'correl(close of SPY, n) > 0',
+    'close > sma(n) and rsi(n) < 50 and atr(n) > 0',
+    'supertrend_up(n, 3)',
+    'stoch_k(n, 3) < 20',
+    'bars_since(close > sma(n)) < 5',
+    'close > keltner_upper(20, 2, n)',
+    'percent_rank(n) > 50',
+    'median(n) > close',
+    'close > highest(n)',
+    'macd(12, n) > 0',
+  ];
+  for (const rule of rules) {
+    for (const v of [1, 2, 3, 5, 14, 20, 200, 10000]) {
+      const read = reads(rule);
+      if (!read(v)) continue;
+      const p = parseSpec(`universe: SPY\nn = ${v}\nbuy when ${rule}`).spec!.params[0];
+      const { lo, hi, step } = acceptedScale(p, read);
+      const offered = Array.from({ length: Math.floor((hi - lo) / step + 1e-9) + 1 }, (_, k) => lo + k * step);
+      assert.ok(offered.includes(v) && offered.every(read), `${rule} with n = ${v}: ${lo}..${hi}`);
+    }
+  }
+});
+
+test('a declared range is the block\'s own and is left as written, even where the block does not read a value', () => {
+  const { p, accepts } = scaled('n = 3 in 1..8', 'zscore(n) > 0');
+  assert.equal(accepts(1), false);
+  assert.deepEqual(acceptedScale(p, accepts), { lo: 1, hi: 8, step: 1 });
 });
 
 test('a value is written in the language\'s own form, with no floating-point tail', () => {

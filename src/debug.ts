@@ -484,6 +484,60 @@ function ctxOf(bt: Backtest): Ctx {
   return cx;
 }
 
+/** Lets go of what the table worked out over the whole run for this result: one array of the run's length for each part of the rules. */
+export function forgetDebug(bt: Backtest): void {
+  contexts.delete(bt);
+}
+
+/** How far a job done in steps has got. */
+export interface Progress {
+  done: number;
+  total: number;
+}
+
+/** Every expression the rows of `asset` evaluate over the whole series, an expression after the ones inside it, with the ticker it is read on. */
+function wholeSeriesParts(cx: Ctx, asset: string): [Expr, string][] {
+  const out: [Expr, string][] = [];
+  const visit = (e: Expr, name: string): void => {
+    for (const c of children(e)) visit(c, e.k === 'of' ? e.asset : name);
+    // A part that reads the position is worked out a bar at a time; the parts inside it are what is worked out once.
+    if (!findPos(e)) out.push([e, name]);
+  };
+  const { spec } = cx.bt;
+  for (const name of spec.rank ? spec.universe.map((a) => a.name) : [asset]) {
+    for (const e of [spec.rules[name].buy, spec.rules[name].sell, spec.rules[name].add, spec.rank?.by]) if (e) visit(e, name);
+  }
+  return out;
+}
+
+/**
+ * Works out, one part of the rules at a time, the values over the whole run that the rows of `asset` read, so that a
+ * caller can let other work in between (see inSlices). Rows built afterwards find them worked out. The cost is the same
+ * as building the rows without it: about 15 ns for each part on each bar, which a long run makes noticeable.
+ */
+export function* prepareRows(bt: Backtest, asset: string): Generator<Progress, void> {
+  const cx = ctxOf(bt);
+  const ix = cx.asset(asset);
+  const parts = wholeSeriesParts(cx, asset);
+  const inputs: (() => void)[] = [];
+  const { sizing, stops } = bt.spec;
+  if (cx.everHeldBack(asset)) {
+    if (sizing.k === 'risk') inputs.push(() => cx.atr(ix, sizing.n));
+    if (sizing.k === 'invvol') inputs.push(() => cx.vol(ix, sizing.n));
+    for (const level of [stops[asset]?.stopLoss, stops[asset]?.trailingStop, stops[asset]?.takeProfit]) if (level?.k === 'atr') inputs.push(() => cx.atr(ix, level.n));
+  }
+  const total = parts.length + inputs.length;
+  let done = 0;
+  for (const [e, name] of parts) {
+    cx.ev.eval(e, name);
+    yield { done: ++done, total };
+  }
+  for (const work of inputs) {
+    work();
+    yield { done: ++done, total };
+  }
+}
+
 /** The last trade that started at or before time `t`. Trades of one ticker never overlap and are in order. */
 function startedBy(ix: AssetIx, t: number): Trade | null {
   let a = 0;
@@ -973,15 +1027,61 @@ function csvFields(col: DebugColumn, cell: DebugCell): string[] {
   }
 }
 
-/** Every bar of the ticker in the run, with the columns of the table: values as plain numbers, outcomes as yes, no or unknown. */
-export function debugCsv(bt: Backtest, asset: string): string {
+/** Bars of the file made between one step and the next. */
+const CSV_BARS = 500;
+
+/**
+ * Makes the file in steps of a few hundred bars, so a caller can let other work in between (see inSlices), and returns
+ * it at the end: every bar of the ticker in the run, with the columns of the table, values as plain numbers and outcomes
+ * as yes, no or unknown.
+ */
+export function* csvSteps(bt: Backtest, asset: string): Generator<Progress, string> {
   const cx = ctxOf(bt);
   const cols = debugColumns(bt, asset);
-  const rows = debugRows(bt, asset, 0, cx.asset(asset).count);
+  const count = cx.asset(asset).count;
   const entries = (bt.spec.entries ?? 1) > 1;
-  let out = csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', ...(entries ? ['entries'] : []), 'what happened']);
-  for (const r of rows) {
-    out += csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
+  const parts = [csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', ...(entries ? ['entries'] : []), 'what happened'])];
+  for (let from = 0; from < count; from += CSV_BARS) {
+    let text = '';
+    for (const r of debugRows(bt, asset, from, from + CSV_BARS)) {
+      text += csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
+    }
+    parts.push(text);
+    yield { done: Math.min(count, from + CSV_BARS), total: count };
   }
-  return out;
+  return parts.join('');
+}
+
+/** The whole file at once. */
+export function debugCsv(bt: Backtest, asset: string): string {
+  const steps = csvSteps(bt, asset);
+  for (;;) {
+    const next = steps.next();
+    if (next.done) return next.value;
+  }
+}
+
+/**
+ * Runs a job done in steps a few steps at a time, each stretch taking about `budgetMs`, and lets other work in between,
+ * so the window never freezes for long. A job that finishes within the first stretch is done at once, with no wait.
+ * `onSlice` hears how far it has got after each stretch. Gives null when `stop` says so between stretches.
+ */
+export async function inSlices<T>(
+  steps: Generator<Progress, T>,
+  opts: { budgetMs?: number; wait?: () => Promise<void>; now?: () => number; onSlice?: (p: Progress) => void; stop?: () => boolean } = {},
+): Promise<T | null> {
+  const { budgetMs = 12, wait = () => new Promise<void>((resolve) => setTimeout(resolve, 0)), now = () => performance.now() } = opts;
+  for (;;) {
+    const start = now();
+    let last: Progress | null = null;
+    for (;;) {
+      const next = steps.next();
+      if (next.done) return next.value;
+      last = next.value;
+      if (now() - start >= budgetMs) break;
+    }
+    opts.onSlice?.(last);
+    await wait();
+    if (opts.stop?.()) return null;
+  }
 }

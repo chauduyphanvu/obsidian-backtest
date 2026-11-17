@@ -22,6 +22,11 @@ export interface ParamsHook {
   apply?: (values: Record<string, number>) => Promise<void>;
   /** False when a run would hold up the window if it were done on every frame of a drag: the block then runs only when the slider is let go. */
   followsDrag?: () => boolean;
+  /**
+   * Whether the block reads, without running it, with these values. Asked while the bar is built, to keep a slider that has
+   * no range of its own to values the language accepts. Without it such a slider offers every value from about half to double.
+   */
+  accepts?: (values: Record<string, number>) => boolean;
 }
 
 const clean = (x: number) => Number(x.toPrecision(12));
@@ -90,6 +95,22 @@ export function sliderScale(p: Param): SliderScale {
   if (!p.range) return around(v, p.percent);
   const { lo, hi, step } = { lo: shown(p, p.range.lo), hi: shown(p, p.range.hi), step: shown(p, p.range.step) };
   return { lo: clean(v - Math.floor((v - lo) / step + 1e-9) * step), hi, step };
+}
+
+/**
+ * `sliderScale`, with a range worked out from the value cut back to the values the block accepts: `accepts` says whether it
+ * still reads with the parameter at a value (in the language's units), and an end it refuses moves in a step at a time
+ * until it does. A declared range is the block's own, so it is left as written. The value the block declares is never cut.
+ */
+export function acceptedScale(p: Param, accepts: (value: number) => boolean): SliderScale {
+  const scale = sliderScale(p);
+  if (p.range) return scale;
+  const v = shown(p, p.declared);
+  const near = (x: number) => Math.abs(x - v) < scale.step / 2;
+  let { lo, hi } = scale;
+  while (!near(hi) && !accepts(stored(p, hi))) hi = clean(hi - scale.step);
+  while (!near(lo) && !accepts(stored(p, lo))) lo = clean(lo + scale.step);
+  return { ...scale, lo, hi };
 }
 
 /** The values on a slider, in order, as the language holds them (fractions for percentages). */
@@ -203,12 +224,14 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
   bar.setAttribute('aria-label', 'Parameters');
   h(bar, 'div', 'bt-params-title', 'Parameters');
 
-  const wanted: Record<string, number> = Object.fromEntries(params.map((p) => [p.name, p.declared]));
+  const declared: Record<string, number> = Object.fromEntries(params.map((p) => [p.name, p.declared]));
+  const wanted = { ...declared };
+  const accepts = hook.accepts;
   let onScreen: Record<string, number> = { ...wanted };
 
   const rows = params.map((p) => {
     const id = `bt-param-${++nextId}`;
-    const scale = sliderScale(p);
+    const scale = accepts ? acceptedScale(p, (x) => accepts({ ...declared, [p.name]: x })) : sliderScale(p);
     const row = h(bar, 'div', 'bt-param');
     h(row, 'label', 'bt-param-name', p.name).htmlFor = id;
     const slider = h(row, 'input', 'bt-param-slider');

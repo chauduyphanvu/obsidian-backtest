@@ -7,11 +7,14 @@ import {
   barOnOrAfter,
   cellText,
   debugColumns,
-  debugCsv,
+  csvSteps,
   debugRange,
   debugRows,
+  forgetDebug,
+  inSlices,
   interesting,
   positionWords,
+  prepareRows,
   tradeStops,
   type DebugColumn,
   type DebugRow,
@@ -39,6 +42,7 @@ export function renderDebug(parent: HTMLElement, input: DebugInput): () => void 
   details.addEventListener('toggle', () => build(h(details, 'div', 'bt-debug-body'), input, view), { once: true });
   return () => {
     view.open = false;
+    forgetDebug(input.backtest);
   };
 }
 
@@ -58,6 +62,8 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
   const controls = h(body, 'div', 'bt-debug-controls');
   const saveError = h(body, 'div', 'bt-warning');
   saveError.hidden = true;
+  const saving = h(body, 'div', 'bt-note');
+  saving.hidden = true;
   const status = h(body, 'div', 'bt-note bt-debug-status');
   const box = h(body, 'div', 'bt-wide bt-debug-scroll');
   box.setAttribute('role', 'region');
@@ -102,17 +108,52 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
     draw();
   });
   const save = button(options, 'Save as CSV', async () => {
+    const name = asset;
     save.disabled = true;
     saveError.hidden = true;
     try {
-      await input.save(`${bt.spec.name ?? 'Backtest'} rule values ${asset}`, debugCsv(bt, asset));
+      // The file is made a few hundred bars at a time, so a long run does not freeze the window.
+      if (!(await ensure(name))) return;
+      const csv = await inSlices(csvSteps(bt, name), {
+        onSlice: (p) => {
+          saving.textContent = `Making the file: ${p.done.toLocaleString('en-US')} of ${p.total.toLocaleString('en-US')} bars.`;
+          saving.hidden = false;
+        },
+        stop: () => !life.open,
+      });
+      saving.hidden = true;
+      if (csv !== null) await input.save(`${bt.spec.name ?? 'Backtest'} rule values ${name}`, csv);
     } catch (e) {
       saveError.textContent = `The file couldn't be saved: ${e instanceof Error ? e.message : String(e)}`;
       saveError.hidden = false;
     } finally {
+      saving.hidden = true;
       save.disabled = false;
     }
   });
+
+  /**
+   * Works out what the rows of a ticker read over the whole run, a part of the rules at a time with the window free in
+   * between: a long run takes a moment, and the table is drawn when it is done. False when the section was closed first.
+   */
+  const worked = new Map<string, Promise<boolean>>();
+  const ready = new Set<string>();
+  function ensure(name: string): Promise<boolean> {
+    let done = worked.get(name);
+    if (!done) {
+      done = inSlices(prepareRows(bt, name), {
+        onSlice: (p) => {
+          if (asset === name) status.textContent = `Working out the rule values: ${p.done} of ${p.total} parts.`;
+        },
+        stop: () => !life.open,
+      }).then((result) => {
+        if (result !== null) ready.add(name);
+        return result !== null;
+      });
+      worked.set(name, done);
+    }
+    return done;
+  }
   function move(to: number): void {
     start = to;
     focus = null;
@@ -137,11 +178,16 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
     columns = debugColumns(bt, asset);
     count = debugRange(bt, asset).count;
     drawLegend();
-    draw();
+    box.replaceChildren();
+    status.textContent = 'Working out the rule values.';
+    void ensure(name).then((ok) => {
+      if (ok && asset === name) draw();
+    });
   }
 
   function draw(): void {
-    if (!life.open) return;
+    // Until its values are worked out, a ticker's rows would be worked out all at once here.
+    if (!life.open || !ready.has(asset)) return;
     const range = debugRange(bt, asset);
     start = Math.max(0, Math.min(Math.floor(start), count - WINDOW));
     const end = Math.min(count, start + WINDOW);
