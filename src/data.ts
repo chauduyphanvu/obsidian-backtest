@@ -2,6 +2,9 @@ import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
 const DAY = 86_400_000;
 const FRESH_FOR = 6 * 3_600_000;
+/** Yahoo hosts in the order they are tried, with the wait before each retry. */
+const YAHOO_HOSTS = ['query1', 'query2', 'query1'];
+const YAHOO_WAITS = [500, 1500];
 
 export interface DataDeps {
   /** GET a URL and return its body; rejects on a network error or a non-2xx status. */
@@ -11,13 +14,25 @@ export interface DataDeps {
   cacheRead(key: string): Promise<string | null>;
   cacheWrite(key: string, text: string): Promise<void>;
   now(): number;
+  /** Waits between retries; without it retries go out straight away. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface Loaded {
   bars: Bars;
   /** Set when the network failed and older cached bars were used instead. */
   warning: string | null;
+  source: 'yahoo' | 'stooq' | 'binance' | 'csv';
+  /** Time of the last bar. */
+  through: number;
+  /** When these bars were fetched (csv: now). */
+  fetched: number;
+  /** True when a refresh failed and an older saved copy is being used. */
+  stale: boolean;
 }
+
+/** A failure that no other host, source or saved copy can fix, such as a ticker that does not exist. */
+class NoPrices extends Error {}
 
 interface Cached {
   fetched: number;
@@ -73,93 +88,215 @@ export function parseBinance(json: string, now: number): Bars {
   return bars;
 }
 
-function parseTime(text: string): number {
-  const s = text.trim().replace(/^"|"$/g, '');
+/** 31/01/2024, 01/31/2024 or 31.01.2024, optionally followed by a time. */
+const SLASHED = /^(\d{1,2})([/.])(\d{1,2})\2(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+
+function parseTime(s: string, dayFirst: boolean): number {
   if (/^\d{9,}$/.test(s)) return s.length > 11 ? Number(s) : Number(s) * 1000;
+  const m = SLASHED.exec(s);
+  if (m) {
+    const [day, month] = m[2] === '.' || dayFirst ? [Number(m[1]), Number(m[3])] : [Number(m[3]), Number(m[1])];
+    const t = Date.UTC(Number(m[4]), month - 1, day, Number(m[5] ?? 0), Number(m[6] ?? 0), Number(m[7] ?? 0));
+    const d = new Date(t);
+    return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? t : NaN;
+  }
   // A bare date is that UTC day; a date with a time and no zone is read as UTC too.
   const iso = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00Z' : /[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(' ', 'T') + 'Z';
   return Date.parse(iso);
 }
 
-/** CSV with a header row naming a date or time column and open, high, low, close (volume optional). */
+/** Slashed dates are month first unless some first number is above 12 and no second number is. */
+function slashedDatesAreDayFirst(values: string[]): boolean {
+  let first = false;
+  let second = false;
+  for (const v of values) {
+    const m = SLASHED.exec(v);
+    if (m?.[2] !== '/') continue;
+    if (Number(m[1]) > 12) first = true;
+    if (Number(m[3]) > 12) second = true;
+  }
+  return first && !second;
+}
+
+/** Splits one CSV line, honouring double quotes (with "" for a quote inside one). */
+function splitLine(line: string, sep: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch !== '"') cur += ch;
+      else if (line[i + 1] === '"') cur += line[i++];
+      else quoted = false;
+    } else if (ch === '"') quoted = true;
+    else if (ch === sep) {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out.map((f) => f.trim());
+}
+
+/** The header line decides the separator: whichever of comma, semicolon and tab splits it most. */
+function detectSeparator(header: string): string {
+  let best = ',';
+  let most = 0;
+  for (const sep of [',', ';', '\t']) {
+    const n = splitLine(header, sep).length - 1;
+    if (n > most) [best, most] = [sep, n];
+  }
+  return best;
+}
+
+const num = (s: string | undefined): number => (s === undefined || s === '' ? NaN : Number(s));
+
+/**
+ * CSV with a header row naming a date or time column and open, high, low, close (volume optional).
+ * Separators can be commas, semicolons or tabs; dates can be ISO, MM/DD/YYYY, DD/MM/YYYY (when some day is above 12) or DD.MM.YYYY.
+ */
 export function parseCsv(text: string): Bars {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) throw new Error('The CSV has no rows');
-  const header = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, '').toLowerCase());
-  const col = (...names: string[]) => header.findIndex((h) => names.includes(h));
+  const sep = detectSeparator(lines[0]);
+  const names = splitLine(lines[0], sep);
+  const header = names.map((h) => h.toLowerCase());
+  const col = (...wanted: string[]) => header.findIndex((h) => wanted.includes(h));
   const ti = col('date', 'time', 'timestamp', 'datetime');
   const [oi, hi, li, ci, vi] = [col('open'), col('high'), col('low'), col('close'), col('volume')];
   const ai = col('adj close', 'adj_close', 'adjclose');
-  if ([ti, oi, hi, li, ci].some((i) => i < 0)) throw new Error('The CSV needs a header row with date, open, high, low and close columns');
-  const rows = lines.slice(1).map((line) => {
-    const f = line.split(',');
-    const c = Number(f[ci]);
-    const adj = ai >= 0 && Number(f[ai]) > 0 ? Number(f[ai]) / c : 1;
-    return { t: parseTime(f[ti]), o: Number(f[oi]) * adj, h: Number(f[hi]) * adj, l: Number(f[li]) * adj, c: c * adj, v: vi >= 0 ? Number(f[vi]) : 0 };
+  const missing = [ti < 0 && 'date', oi < 0 && 'open', hi < 0 && 'high', li < 0 && 'low', ci < 0 && 'close'].filter(Boolean);
+  if (missing.length) throw new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
+
+  const fields = lines.slice(1).map((line) => splitLine(line, sep));
+  const dayFirst = slashedDatesAreDayFirst(fields.map((f) => f[ti] ?? ''));
+  const rows = fields.map((f) => {
+    const c = num(f[ci]);
+    const adj = ai >= 0 && num(f[ai]) > 0 ? num(f[ai]) / c : 1;
+    return { t: parseTime(f[ti] ?? '', dayFirst), o: num(f[oi]) * adj, h: num(f[hi]) * adj, l: num(f[li]) * adj, c: c * adj, v: vi >= 0 ? num(f[vi]) : 0 };
   });
   rows.sort((a, b) => a.t - b.t);
   const bars = emptyBars();
   for (const r of rows) if (Number.isFinite(r.t)) push(bars, r.t, r.o, r.h, r.l, r.c, r.v);
-  if (bars.t.length === 0) throw new Error('The CSV has no usable rows. Dates should look like 2024-01-31');
-  return bars;
+  if (bars.t.length > 0) return bars;
+
+  const dated = rows.filter((r) => Number.isFinite(r.t));
+  if (dated.length === 0) throw new Error(`The CSV has no usable rows: no date in the "${names[ti]}" column could be read. Dates should look like 2024-01-31`);
+  for (const [name, key] of [[names[oi], 'o'], [names[hi], 'h'], [names[li], 'l'], [names[ci], 'c']] as const) {
+    if (dated.every((r) => !Number.isFinite(r[key]))) throw new Error(`The CSV has no usable rows: no number in the "${name}" column could be read`);
+  }
+  throw new Error('The CSV has no usable rows: every row has a price at or below zero, or a high or low that does not contain the open and close');
 }
 
-async function fetchYahoo(id: string, interval: string, deps: DataDeps): Promise<Bars> {
-  const url =
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(id)}` +
+async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Promise<Bars> {
+  const path =
+    `/v8/finance/chart/${encodeURIComponent(ref.id)}` +
     `?period1=0&period2=${Math.floor(deps.now() / 1000)}&interval=${interval === '1w' ? '1wk' : '1d'}&events=div%2Csplit&includeAdjustedClose=true`;
-  return parseYahoo(await deps.fetchText(url), deps.now(), interval === '1w');
+  let failure: unknown;
+  for (let attempt = 0; attempt < YAHOO_HOSTS.length; attempt++) {
+    if (attempt > 0) await deps.sleep?.(YAHOO_WAITS[attempt - 1]);
+    let text: string;
+    try {
+      text = await deps.fetchText(`https://${YAHOO_HOSTS[attempt]}.finance.yahoo.com${path}`);
+    } catch (e) {
+      failure = e;
+      continue;
+    }
+    // A throttled or broken answer is plain text or HTML; Yahoo's own explanations are JSON, and trying again won't change them.
+    if (!text.trimStart().startsWith('{')) {
+      failure = new Error('Yahoo sent something other than price data');
+      continue;
+    }
+    try {
+      return parseYahoo(text, deps.now(), interval === '1w');
+    } catch (e) {
+      if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Check the ticker.`);
+      throw e;
+    }
+  }
+  throw failure;
 }
 
-async function fetchBinance(id: string, interval: string, since: number, have: Bars | null, deps: DataDeps): Promise<Bars> {
+async function fetchBinance(ref: AssetRef, interval: string, since: number, have: Bars | null, deps: DataDeps): Promise<Bars> {
   const bars = have ?? emptyBars();
   let start = bars.t.length ? bars.t[bars.t.length - 1] + 1 : since;
   for (let pages = 0; ; pages++) {
     if (pages === 300) throw new Error('too much history for this interval; set a later "from" date');
     // data-api.binance.vision serves public market data where api.binance.com is region-blocked.
-    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(id)}&interval=${interval}&startTime=${start}&limit=1000`;
+    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(ref.id)}&interval=${interval}&startTime=${start}&limit=1000`;
     const text = await deps.fetchText(url);
-    const page = parseBinance(text, deps.now());
+    let page: Bars;
+    try {
+      page = parseBinance(text, deps.now());
+    } catch (e) {
+      if (/"code"\s*:\s*-1121\b/.test(text)) throw new NoPrices(`Binance has no market called ${ref.name}. Check the symbol, such as BTCUSDT.`);
+      throw e;
+    }
     for (let i = 0; i < page.t.length; i++) push(bars, page.t[i], page.o[i], page.h[i], page.l[i], page.c[i], page.v[i]);
     if ((JSON.parse(text) as unknown[]).length < 1000 || page.t.length === 0) return bars;
     start = page.t[page.t.length - 1] + 1;
   }
 }
 
+function loaded(source: Loaded['source'], bars: Bars, fetched: number, warning: string | null = null, stale = false): Loaded {
+  return { bars, warning, source, through: bars.t[bars.t.length - 1], fetched, stale };
+}
+
+/** Fetches, saves and returns fresh bars; on failure falls back to the saved copy when there is one. */
+async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null): Promise<Loaded> {
+  try {
+    const bars = ref.source === 'yahoo' ? await fetchYahoo(ref, interval, deps) : await fetchBinance(ref, interval, since, cached?.bars ?? null, deps);
+    if (bars.t.length === 0) throw new Error('no bars returned');
+    const fetched = deps.now();
+    await deps.cacheWrite(key, JSON.stringify({ fetched, since: cached?.since ?? since, bars } satisfies Cached));
+    return loaded(ref.source, bars, fetched);
+  } catch (e) {
+    if (e instanceof NoPrices) throw e;
+    const why = e instanceof Error ? e.message : String(e);
+    if (cached) {
+      const day = new Date(cached.fetched).toISOString().slice(0, 10);
+      return loaded(ref.source, cached.bars, cached.fetched, `Couldn't refresh ${ref.name} (${why}); using prices saved on ${day}.`, true);
+    }
+    throw new Error(`Couldn't load ${ref.name} from ${ref.source}: ${why}`);
+  }
+}
+
+const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
+
 /**
- * Bars for one asset, from the cache while it is fresh. `since` is the earliest time the run
- * needs, lookback included; sources that serve whole histories ignore it.
+ * Bars for one asset, from the cache while it is fresh (6 hours unless `opts.freshForMs` says otherwise).
+ * `since` is the earliest time the run needs, lookback included; sources that serve whole histories ignore it.
+ * Calls that need the same download while one is running share it.
  */
-export async function loadBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false): Promise<Loaded> {
+export async function loadBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number }): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
     if (text === null) throw new Error(`No file at ${ref.id}`);
-    return { bars: parseCsv(text), warning: null };
+    return loaded('csv', parseCsv(text), deps.now());
   }
 
   const key = `${ref.source}-${ref.id}-${interval}`.replace(/[^A-Za-z0-9._-]/g, '_');
   const raw = await deps.cacheRead(key);
-  let cached: Cached | null = null;
+  let saved: Cached | null = null;
   try {
-    cached = raw ? (JSON.parse(raw) as Cached) : null;
+    saved = raw ? (JSON.parse(raw) as Cached) : null;
   } catch {
-    cached = null;
+    saved = null;
   }
   // A cache that starts after `since` was built for a shorter run and can't serve this one.
-  const covers = cached !== null && cached.bars.t.length > 0 && (ref.source === 'yahoo' || cached.since <= since);
-  if (cached && covers && !force && deps.now() - cached.fetched < FRESH_FOR) return { bars: cached.bars, warning: null };
+  const cached = saved !== null && saved.bars.t.length > 0 && (ref.source === 'yahoo' || saved.since <= since) ? saved : null;
+  if (cached && !force && deps.now() - cached.fetched < (opts?.freshForMs ?? FRESH_FOR)) return loaded(ref.source, cached.bars, cached.fetched);
 
-  try {
-    const bars = ref.source === 'yahoo' ? await fetchYahoo(ref.id, interval, deps) : await fetchBinance(ref.id, interval, since, covers ? cached!.bars : null, deps);
-    if (bars.t.length === 0) throw new Error('no bars returned');
-    await deps.cacheWrite(key, JSON.stringify({ fetched: deps.now(), since: covers ? cached!.since : since, bars } satisfies Cached));
-    return { bars, warning: null };
-  } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
-    if (cached && covers) {
-      const day = new Date(cached.fetched).toISOString().slice(0, 10);
-      return { bars: cached.bars, warning: `Couldn't refresh ${ref.name} (${why}); using prices saved on ${day}.` };
-    }
-    throw new Error(`Couldn't load ${ref.name} from ${ref.source}: ${why}`);
+  let byKey = running.get(deps);
+  if (!byKey) running.set(deps, (byKey = new Map()));
+  // Binance downloads differ by start time, so only calls with the same start share one.
+  const slot = ref.source === 'binance' ? `${key}@${since}` : key;
+  let download = byKey.get(slot);
+  if (!download) {
+    const map = byKey;
+    download = refresh(ref, interval, since, deps, key, cached).finally(() => map.delete(slot));
+    byKey.set(slot, download);
   }
+  return download;
 }
