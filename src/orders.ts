@@ -38,12 +38,17 @@ export interface StrategyStatus {
   equity: number;
   warnings: string[];
   error: string | null;
-  /** Prices are probably out of date: more than `staleDays` calendar days old for daily bars, more than 3 bars old for shorter ones. */
+  /**
+   * Prices are probably out of date: more than `staleDays` calendar days old for daily bars, more than
+   * 3 bars old for shorter ones, and more than 2 bars old for bars of a week or longer.
+   */
   stale: boolean;
 }
 
 const STALE_DAYS = 4;
 const STALE_BARS = 3;
+/** A weekly bar is complete a week after its date, and the next one a week later: two bars old is normal. */
+const STALE_LONG_BARS = 2;
 const STEP_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w: 7 * DAY };
 
 /** The length of a bar such as "5m" or "1d"; a day for anything unrecognised. */
@@ -107,7 +112,11 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
     equity,
     warnings: out.warnings,
     error: null,
-    stale: isIntraday(interval) ? now - asOf > STALE_BARS * barMs(interval) : localDay(now) - Math.floor(asOf / DAY) > staleDays,
+    stale: isIntraday(interval)
+      ? now - asOf > STALE_BARS * barMs(interval)
+      : barMs(interval) >= 7 * DAY
+        ? now - asOf > STALE_LONG_BARS * barMs(interval)
+        : localDay(now) - Math.floor(asOf / DAY) > staleDays,
   };
 }
 

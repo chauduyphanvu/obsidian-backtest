@@ -252,6 +252,18 @@ test('the Markdown heading is the reader\'s date, and a name cannot break the li
 
 // --- Intraday strategies -------------------------------------------------------------------------------------------
 
+test('weekly prices are stale when the last bar is more than 2 bars old', () => {
+  // Weekly bars dated Monday 23 December 2019 to Monday 6 January 2020; the last covers that week.
+  const monday = Date.UTC(2019, 11, 23);
+  const out = run('universe: A\ninterval: 1w\nbuy when close > 11', { A: bars([10, 10, 12], { start: monday, step: 7 * DAY }) });
+  const last = Date.UTC(2020, 0, 6);
+  const stale = (now: number) => statusFrom('n.md', 'S', out, now).stale;
+  // Its bar is complete a week later, and the next one a week after that: up to two weeks is normal.
+  assert.equal(stale(last + 5 * DAY), false);
+  assert.equal(stale(last + 14 * DAY), false);
+  assert.equal(stale(last + 14 * DAY + 1), true);
+});
+
 const HOUR = 3_600_000;
 const HOURLY_START = Date.UTC(2026, 10, 13, 10, 0);
 const hourly = (n: number, src = 'universe: binance:A\ninterval: 1h\ncapital: 1000\nbuy when close > 11') => {
