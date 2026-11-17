@@ -442,14 +442,21 @@ const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
  * `since` is the earliest time the run needs, lookback included; sources that serve whole histories ignore it.
  * Calls that need the same download while one is running share it.
  */
-export async function loadBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number; keepFrom?: number }): Promise<Loaded> {
+export async function loadBars(
+  ref: AssetRef,
+  interval: string,
+  since: number,
+  deps: DataDeps,
+  force = false,
+  opts?: { freshForMs?: number; keepFrom?: number; key?: string },
+): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
     if (text === null) throw new Error(`No file at ${ref.id}`);
     return loaded('csv', parseCsv(text), deps.now());
   }
 
-  const key = `${ref.source}-${ref.id}-${interval}`.replace(/[^A-Za-z0-9._-]/g, '_');
+  const key = opts?.key ?? cacheKey(ref, interval);
   const raw = await deps.cacheRead(key);
   let saved: Cached | null = null;
   try {
@@ -473,6 +480,9 @@ export async function loadBars(ref: AssetRef, interval: string, since: number, d
   }
   return download;
 }
+
+/** The name a source's bars of one ticker and interval are saved under. */
+const cacheKey = (ref: AssetRef, interval: string): string => `${ref.source}-${ref.id}-${interval}`.replace(/[^A-Za-z0-9._-]/g, '_');
 
 /** The bars at or after `since`. */
 export function barsFrom(bars: Bars, since: number): Bars {
@@ -502,9 +512,15 @@ export function insideReach(source: AssetRef['source'], interval: string, now: n
 
 /**
  * The smaller bars `magnify` looks inside `ref`'s bars with, from `since`: loaded and saved like a ticker's own bars, under
- * their own interval, with Binance's kept to INSIDE_BARS (insideReach) as later refreshes add to them.
+ * their own interval, with Binance's kept to INSIDE_BARS (insideReach) as later refreshes add to them. Binance's are saved
+ * apart from a block's own bars of that interval, which cutting them would make too short for that block, and a file a
+ * block saved would be too long to cut here. Yahoo's are never cut, so its daily bars inside weekly ones share the daily
+ * file. A file of Binance's smaller bars saved under the shared name before they had their own is left to blocks of that
+ * interval, as any saved file is.
  */
 export function loadInsideBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number }): Promise<Loaded> {
-  const keepFrom = ref.source === 'binance' ? insideReach('binance', interval, deps.now()) : undefined;
-  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom });
+  const binance = ref.source === 'binance';
+  const keepFrom = binance ? insideReach('binance', interval, deps.now()) : undefined;
+  const key = binance ? `${cacheKey(ref, interval)}-inside` : undefined;
+  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom, key });
 }

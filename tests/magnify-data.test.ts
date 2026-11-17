@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { runBacktest } from '../src/backtest.ts';
 import { INSIDE_BARS, insideReach, loadBars, loadInsideBars, parseYahooInside, type DataDeps } from '../src/data.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { insideKey } from '../src/engine.ts';
+import { insideKey, isInsideKey } from '../src/engine.ts';
 import { runSize } from '../src/limits.ts';
 import { Runner } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
@@ -87,7 +88,7 @@ test('the runner loads the hours of each Yahoo and Binance ticker in the univers
   assert.deepEqual(errors, []);
   const { data, prices, warnings } = await new Runner(d).loadPrices(spec!);
   assert.deepEqual(warnings, []);
-  assert.deepEqual([...data.keys()].sort(), ['BTCUSDT', 'BTCUSDT 1h', 'IWM', 'QQQ', 'SPY', 'SPY 1h', 'gold']);
+  assert.deepEqual([...data.keys()].sort(), ['BTCUSDT', insideKey('BTCUSDT', '1h'), 'IWM', 'QQQ', 'SPY', insideKey('SPY', '1h'), 'gold'].sort());
   assert.deepEqual(prices.map((p) => p.name).sort(), ['BTCUSDT', 'IWM', 'QQQ', 'SPY', 'gold']);
   // Yahoo's whole window is asked for, so the saved hours serve any block; the run keeps those from its first day.
   const hours = d.asked.filter((u) => u.includes('interval=1h') && u.includes('yahoo'));
@@ -97,7 +98,8 @@ test('the runner loads the hours of each Yahoo and Binance ticker in the univers
   const btc = data.get(insideKey('BTCUSDT', '1h'))!;
   assert.equal(btc.t[0], Date.UTC(2026, 0, 1));
   assert.ok(d.asked.some((u) => u.includes('symbol=BTCUSDT&interval=1h&startTime=' + Date.UTC(2026, 0, 1))));
-  assert.ok(d.store.has('yahoo-SPY-1h') && d.store.has('binance-BTCUSDT-1h'));
+  // Binance's are saved apart from a block's own 1h bars of that market; Yahoo's 1h bars are only ever smaller bars.
+  assert.ok(d.store.has('yahoo-SPY-1h') && d.store.has('binance-BTCUSDT-1h-inside') && !d.store.has('binance-BTCUSDT-1h'));
   // The size of the run counts the hours as bars, not as tickers.
   const size = runSize(spec!, data);
   assert.equal(size.tickers, 5);
@@ -136,4 +138,73 @@ test('Binance hours are saved only as far back as the most that is loaded, as re
   // loadInsideBars keeps INSIDE_BARS: with 1h bars that is longer than this market has existed, so everything is kept.
   const all = await loadInsideBars(BTC, '1h', Date.UTC(2025, 0, 1), d, true);
   assert.equal(all.bars.t[0], Date.UTC(2025, 0, 1));
+});
+
+test('a CSV file whose name has a space is never taken for smaller bars, nor smaller bars for a ticker', async () => {
+  // A benchmark file named "SPY 1h.csv" next to the 1h bars of SPY: before, both were kept under "SPY 1h".
+  const csv = 'date,open,high,low,close\n' + ['2025-07-02', '2025-11-26', '2026-11-16', '2026-11-17'].map((d, i) => `${d},${50 + i},${51 + i},${49 + i},${50.5 + i}`).join('\n');
+  const d = { ...network(() => LATE), readVaultFile: async (path: string) => (path === 'Data/SPY 1h.csv' ? csv : null) };
+  const { spec, errors } = parseSpec('universe: SPY\nbenchmark: csv:Data/SPY 1h.csv\nmagnify: 1h\nstop loss: 2%\nbuy when true');
+  assert.deepEqual(errors, []);
+  assert.equal(spec!.benchmark!.name, 'SPY 1h');
+  const { data } = await new Runner(d).loadPrices(spec!);
+  assert.deepEqual(data.get('SPY 1h')!.c, [50.5, 51.5, 52.5, 53.5]);
+  assert.equal(data.get(insideKey('SPY', '1h'))!.t.length, 21);
+  assert.equal(isInsideKey('SPY 1h'), false);
+  assert.equal(isInsideKey(insideKey('SPY 1h', '1h')), true);
+  const size = runSize(spec!, data);
+  assert.equal(size.tickers, 2);
+  const bt = runBacktest(spec!, data);
+  assert.equal(bt.benchmark.label, 'SPY 1h buy & hold');
+});
+
+test('a block with Binance 15m bars and a block that looks inside with them do not make each other download everything again', async () => {
+  const M15 = 900_000;
+  let now = Date.UTC(2026, 10, 17, 12);
+  const start = Date.UTC(2021, 0, 1);
+  const store = new Map<string, string>();
+  let pages = 0;
+  const d: DataDeps = {
+    fetchText: async (url) => {
+      const u = new URL(url);
+      pages++;
+      const step = { '1d': DAY, '15m': M15 }[u.searchParams.get('interval')!]!;
+      const from = Math.max(Number(u.searchParams.get('startTime')), start);
+      const rows: unknown[][] = [];
+      for (let t = Math.ceil((from - start) / step) * step + start; t + step <= now && rows.length < 1000; t += step) rows.push([t, '100', '101', '99', '100.5', '1', t + step - 1]);
+      return JSON.stringify(rows);
+    },
+    readVaultFile: async () => null,
+    cacheRead: async (k) => store.get(k) ?? null,
+    cacheWrite: async (k, v) => void store.set(k, v),
+    now: () => now,
+  };
+  const plain = parseSpec('data: binance\nuniverse: BTCUSDT\ninterval: 15m\nfrom: 2022-01-01\nbuy when close > sma(20)').spec!;
+  const inside = parseSpec('data: binance\nuniverse: BTCUSDT\nfrom: 2022-01-01\nmagnify: 15m\nstop loss: 2%\nbuy when close > sma(20)').spec!;
+  const runner = new Runner(d);
+  const pagesFor = async (spec: typeof plain) => {
+    const before = pages;
+    await runner.loadPrices(spec);
+    return pages - before;
+  };
+  // A file saved by the looking inside before it had a file of its own: cut to the latest INSIDE_BARS, under the shared name.
+  const keep = insideReach('binance', '15m', now);
+  const old = { t: [] as number[], o: [] as number[], h: [] as number[], l: [] as number[], c: [] as number[], v: [] as number[] };
+  for (let t = keep; t + M15 <= now - 7 * 3_600_000; t += M15) for (const [k, x] of [['t', t], ['o', 100], ['h', 101], ['l', 99], ['c', 100.5], ['v', 1]] as const) old[k].push(x);
+  store.set('binance-BTCUSDT-15m', JSON.stringify({ fetched: now - 7 * 3_600_000, since: keep, bars: old }));
+  // Each block loads what it needs once; the old file is too short for the 15m block, which replaces it.
+  assert.ok((await pagesFor(plain)) > 170);
+  assert.ok((await pagesFor(inside)) >= 100);
+  assert.ok(store.has('binance-BTCUSDT-15m-inside'));
+  for (let cycle = 0; cycle < 3; cycle++) {
+    now += 7 * 3_600_000;
+    // After the saved prices go stale, each asks only for what is newer than what it saved: one page each, and a daily one.
+    assert.ok((await pagesFor(inside)) <= 2);
+    assert.ok((await pagesFor(plain)) <= 1);
+  }
+  const shared = JSON.parse(store.get('binance-BTCUSDT-15m')!);
+  const own = JSON.parse(store.get('binance-BTCUSDT-15m-inside')!);
+  assert.ok(shared.since < Date.UTC(2022, 0, 1));
+  assert.equal(own.since, insideReach('binance', '15m', now));
+  assert.equal(own.bars.t[0], own.since);
 });

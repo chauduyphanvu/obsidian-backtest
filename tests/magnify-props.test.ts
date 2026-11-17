@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { insideKey, type Trade } from '../src/engine.ts';
+import { insideKey, isInsideKey, type Trade } from '../src/engine.ts';
 import { explainTrade } from '../src/explain.ts';
 import { runBlock, serve, type FromWorker, type ToWorker } from '../src/jobs.ts';
 import { randomEntries } from '../src/luck.ts';
@@ -113,7 +113,7 @@ test('with each bar its own one smaller bar, every strategy gives exactly the re
 
 test('without the setting nothing changes: hours in the prices are not read', () => {
   const data = prices('binance', 5);
-  const without = new Map([...data].filter(([name]) => !name.includes(' ')));
+  const without = new Map([...data].filter(([name]) => !isInsideKey(name)));
   for (const src of STRATEGIES) {
     const a = run(`data: binance\n${src}`, data);
     const b = run(`data: binance\n${src}`, without);
@@ -246,7 +246,7 @@ test('the hours travel with the prices to every re-run: a single run in the work
   }
   // Random picks keep the strategy's stops, so they are looked inside too: without the hours they come out otherwise.
   const picks = await randomEntries(bt, { seed: 4, runs: 6, pause: () => Promise.resolve() });
-  const without = new Map([...data].filter(([name]) => !name.includes(' ')));
+  const without = new Map([...data].filter(([name]) => !isInsideKey(name)));
   const plain = await randomEntries(runBacktest(parse({}).spec!, without), { seed: 4, runs: 6, pause: () => Promise.resolve() });
   assert.equal(picks.mode, 'picks');
   assert.notDeepEqual(picks, plain);
