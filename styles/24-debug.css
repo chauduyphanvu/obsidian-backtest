@@ -175,6 +175,10 @@
 .bt-debug-idle {
   opacity: 0.55;
 }
+.bt-root .bt-debug-table td.bt-debug-position {
+  min-width: 11em;
+  white-space: normal;
+}
 .bt-root .bt-debug-table th.bt-debug-what,
 .bt-root .bt-debug-table td.bt-debug-what {
   width: 26em;

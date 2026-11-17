@@ -6,7 +6,7 @@
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { DAY, minus, price, stamp } from './dom.ts';
 import { children, findPos, walk, type CmpOp, type Expr, type Rebalance, type Written } from './dsl.ts';
-import type { AssetState, RankPlace, Trade, WarmupInput } from './engine.ts';
+import { SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import type { Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
 import * as ind from './indicators.ts';
@@ -14,13 +14,13 @@ import type { Bars } from './types.ts';
 
 export interface DebugColumn {
   id: string;
-  group: 'buy' | 'sell' | 'rank';
+  group: 'buy' | 'sell' | 'add' | 'rank';
   /**
    * test: a comparison; cross: crosses above or below; flag: a condition that compares nothing, such as month_end;
    * join: and, or or not; score and place: the ranking.
    */
   kind: 'test' | 'cross' | 'flag' | 'join' | 'score' | 'place';
-  /** The word above the heading: Buy, Sell or Ranking. */
+  /** The word above the heading: Buy, Sell, Add or Ranking. */
   caption: string;
   /** Short enough for a column; `text` has the whole of it. */
   heading: string;
@@ -62,7 +62,13 @@ export type DebugEvent =
   /** The buy rule and the sell rule both held at this close. */
   | { k: 'sell-first' }
   /** An order from this last bar of the run, not filled. */
-  | { k: 'pending'; side: 'buy' | 'sell' }
+  | { k: 'pending'; side: 'buy' | 'sell' | 'add' }
+  /** `entry`: which entry of the position this is (2 for the first add). `stage` as for a buy. */
+  | { k: 'add'; stage: 'decided' | 'filled' | 'both'; trade: Trade; entry: number }
+  /** The add rule held with the position already built in all its entries. */
+  | { k: 'whole' }
+  /** The add rule held with room for another entry, and none was made. */
+  | { k: 'add-undone' }
   /** The buy rule held and nothing stood in the way, but no buy was made: there was no cash. */
   | { k: 'no-cash' }
   /** A ranking decision kept the position, or chose a ticker that was not bought, or did not choose an eligible one. */
@@ -98,9 +104,12 @@ export interface DebugRow {
   held: boolean;
   /** The sell rule had a position to read at this close. */
   readHeld: boolean;
-  /** The shares bought; rebalancing may have changed them since (`resized`). NaN when flat. */
+  /** The shares bought, all entries together; rebalancing may have changed them since (`resized`). NaN when flat. */
   shares: number;
   resized: boolean;
+  /** The entries the position has at the end of this bar, 0 when flat, and how many it may have. */
+  entries: number;
+  entriesAllowed: number;
   rank: DebugRank | null;
   events: DebugEvent[];
   /** What happened, in plain words; empty when nothing did. */
@@ -201,7 +210,16 @@ interface AssetIx {
   byExit: Map<number, Trade>;
   byBuy: Map<number, Trade>;
   bySell: Map<number, Trade>;
+  /** Each entry after the first, by the time it filled and by the time of the bar its add rule was read at. */
+  addFills: Map<number, AddAt>;
+  addSignals: Map<number, AddAt>;
   state: AssetState | undefined;
+}
+
+/** An entry after the first: its trade and its place in `trade.entries`. */
+interface AddAt {
+  trade: Trade;
+  k: number;
 }
 
 interface PlanCol {
@@ -217,13 +235,13 @@ interface Plan {
 }
 
 /** The parts of one rule, in the order the trade explanation lists them, then the whole rule. */
-function ruleColumns(group: 'buy' | 'sell', e: Expr, w: Written, params: { name: string; percent: boolean }[]): { cols: PlanCol[]; chain: number[] } {
+function ruleColumns(group: 'buy' | 'sell' | 'add', e: Expr, w: Written, params: { name: string; percent: boolean }[]): { cols: PlanCol[]; chain: number[] } {
   const texts = new Map<Expr, string>();
   let k = 0;
   walk(e, (x) => texts.set(x, w.parts[k++] ?? ''));
   const text = (x: Expr) => texts.get(x) || '';
   const percentText = (s: string) => s.trim().endsWith('%') || params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
-  const caption = group === 'buy' ? 'Buy' : 'Sell';
+  const caption = group === 'buy' ? 'Buy' : group === 'sell' ? 'Sell' : 'Add';
 
   const order: { x: Expr; depth: number }[] = [];
   const visit = (x: Expr, depth: number) => {
@@ -276,6 +294,7 @@ function ruleColumns(group: 'buy' | 'sell', e: Expr, w: Written, params: { name:
 interface Sig {
   buy: number[];
   sell: BarRule | null;
+  add: BarRule | null;
   score: number[] | null;
 }
 
@@ -315,6 +334,15 @@ class Ctx {
       }
       return m;
     };
+    const addFills = new Map<number, AddAt>();
+    const addSignals = new Map<number, AddAt>();
+    for (const trade of trades) {
+      trade.entries?.forEach((e, k) => {
+        if (k === 0) return;
+        addFills.set(e.t, { trade, k });
+        addSignals.set(e.signalT, { trade, k });
+      });
+    }
     ix = {
       name,
       bars,
@@ -325,6 +353,8 @@ class Ctx {
       byExit: index((t) => (t.reason === 'open' ? null : t.exitT)),
       byBuy: index((t) => t.why?.buyT ?? null),
       bySell: index((t) => (t.why?.exit && t.why.exit.k !== 'level' ? t.why.exit.t : null)),
+      addFills,
+      addSignals,
       state: run.states.find((s) => s.name === name),
     };
     this.assets.set(name, ix);
@@ -339,6 +369,7 @@ class Ctx {
       sig = {
         buy: this.ev.eval(rules.buy, name),
         sell: rules.sell ? this.ev.compile(rules.sell, name) : null,
+        add: rules.add ? this.ev.compile(rules.add, name) : null,
         score: spec.rank ? this.ev.eval(spec.rank.by, name) : null,
       };
       this.sigs.set(name, sig);
@@ -360,6 +391,7 @@ class Ctx {
       cols.push(...buy.cols);
     }
     if (rules.sell && written?.sell) cols.push(...ruleColumns('sell', rules.sell, written.sell, spec.params).cols);
+    if (rules.add && written?.add) cols.push(...ruleColumns('add', rules.add, written.add, spec.params).cols);
     if (spec.rank) {
       const by = spec.written?.rank?.text ?? 'the score';
       const rank = { group: 'rank', caption: 'Ranking', whole: false, depth: 0, op: '', percent: false } as const;
@@ -433,7 +465,7 @@ class Ctx {
       const sig = this.sig(a.name);
       const score = sig.score![j];
       const holding = openAtRead(ix, t, this.atClose);
-      const sells = sig.sell !== null && sig.sell(j, holding ? posOf(ix, holding) : null) === 1;
+      const sells = sig.sell !== null && sig.sell(j, holding ? posOf(ix, holding, t, this.atClose) : null) === 1;
       if (sig.buy[j] === 1 && !sells && Number.isFinite(score)) eligible.push({ name: a.name, score, order });
     });
     eligible.sort((x, y) => y.score - x.score || x.order - y.order);
@@ -482,8 +514,26 @@ function openAtRead(ix: AssetIx, t: number, atClose: boolean): Trade | null {
   return tr.reason === 'open' || (tr.reason === 'signal' ? t <= tr.exitT : t < tr.exitT) ? tr : null;
 }
 
-function posOf(ix: AssetIx, tr: Trade): PosState {
-  return { entryIdx: barAt(ix.bars.t, tr.entryT), entryPrice: tr.entryPrice };
+/** How many of a trade's entries had filled by time `t`. A trade made in one go has one. */
+function entriesBy(tr: Trade, t: number): number {
+  if (!tr.entries) return 1;
+  let n = 0;
+  while (n < tr.entries.length && tr.entries[n].t <= t) n++;
+  return n;
+}
+
+/**
+ * What the rules read of the position at the close of `t`: its first entry's bar, its average and latest entry prices and
+ * the entries made by then. The average and the latest are what the trade's records say they were at that bar, not the
+ * final ones. With fill: close the rules are read before the close's own orders fill.
+ */
+function posOf(ix: AssetIx, tr: Trade, t: number, atClose: boolean): PosState {
+  const entryIdx = barAt(ix.bars.t, tr.entryT);
+  if (!tr.entries) return { entryIdx, entryPrice: tr.entryPrice };
+  const n = Math.max(1, entriesBy(tr, atClose ? t - 1 : t));
+  const entries = tr.entries.slice(0, n);
+  const average = n === 1 ? entries[0].price : tr.why?.adds?.[n - 2]?.average ?? entries.reduce((s, e) => s + e.money, 0) / entries.reduce((s, e) => s + e.shares, 0);
+  return { entryIdx, entryPrice: average, lastPrice: entries[n - 1].price, entries: n };
 }
 
 // ---------------------------------------------------------------- columns and rows
@@ -541,6 +591,7 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
   const top = spec.rank?.top ?? 0;
   const lastBar = ix.first + ix.count - 1;
   const checkInputs = cx.everHeldBack(asset);
+  const allowed = spec.entries ?? 1;
 
   // After a stop or target exit the buy rule has to stop holding before it can buy again (rule 29); not with `hold`.
   let stopped: Trade | null = null;
@@ -564,11 +615,14 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     const t = ix.bars.t[b];
     const after = openAfter(ix, t);
     const reading = openAtRead(ix, t, cx.atClose);
-    const pos = reading ? posOf(ix, reading) : null;
+    const pos = reading ? posOf(ix, reading, t, cx.atClose) : null;
+    // The add rule is read only while a position has room for another entry.
+    const room = pos !== null && (pos.entries ?? 1) < allowed;
 
     const cells = readers.map((r): DebugCell => {
       // A part that compares a position value has nothing to compare while no position is held. Joins are still worked out
       // the way the engine does, with the position unknown, since a buy is skipped when the sell rule holds without it.
+      if (r.col.group === 'add' && !room) return na();
       if (r.out === null || (r.readsPos && !pos && (r.col.kind === 'test' || r.col.kind === 'cross'))) return na();
       const o = outcome(r.out(b, pos));
       const cell: DebugCell = { outcome: o, a: NaN, b: NaN, pa: NaN, pb: NaN, note: '' };
@@ -603,6 +657,11 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     if (exited) events.push({ k: 'sell', stage: sold === exited ? 'both' : 'filled', trade: exited });
     if (bought && bought !== entered) events.push({ k: 'buy', stage: 'decided', trade: bought });
     if (sold && sold !== exited) events.push({ k: 'sell', stage: 'decided', trade: sold });
+    const addFill = ix.addFills.get(t);
+    const addSignal = ix.addSignals.get(t);
+    const addMade = (a: AddAt) => ({ trade: a.trade, entry: a.k + 1 });
+    if (addFill) events.push({ k: 'add', stage: addFill.trade.entries![addFill.k].signalT === t ? 'both' : 'filled', ...addMade(addFill) });
+    if (addSignal && (addSignal.trade !== addFill?.trade || addSignal.k !== addFill.k)) events.push({ k: 'add', stage: 'decided', ...addMade(addSignal) });
 
     let rank: DebugRank | null = null;
     if (sig.score) {
@@ -645,7 +704,13 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
         else if (pending !== 'buy') events.push({ k: 'chosen' });
       } else if (!reading && !chosen) events.push({ k: 'ranked-out' });
     }
-    if (pending) events.push({ k: 'pending', side: pending === 'sell' ? 'sell' : 'buy' });
+    if (reading && pos && sig.add && !sold && sell !== 'yes' && pending !== 'sell') {
+      const addHeld = sig.add(b, pos) === 1;
+      const moved = events.some((e) => e.k === 'buy' || e.k === 'sell' || e.k === 'add');
+      if (addHeld && !moved && !room) events.push({ k: 'whole' });
+      else if (addHeld && !addSignal && pending !== 'add' && room) events.push({ k: 'add-undone' });
+    }
+    if (pending) events.push({ k: 'pending', side: pending });
 
     const row: DebugRow = {
       index: k,
@@ -658,8 +723,10 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
       sell,
       held: after !== null,
       readHeld: reading !== null,
-      shares: after?.why?.shares ?? NaN,
+      shares: after?.entries ? after.entries.slice(0, entriesBy(after, t)).reduce((n, e) => n + e.shares, 0) : after?.why?.shares ?? NaN,
       resized: !!after?.why && after.why.topUps + after.why.trims > 0,
+      entries: after ? entriesBy(after, t) : 0,
+      entriesAllowed: allowed,
       rank,
       events,
       what: '',
@@ -721,12 +788,15 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
     switch (e.k) {
       case 'buy': {
         const tr = e.trade;
+        // With entries, the trade's entry price is the average of them all; the first entry filled at its own.
+        const first = tr.entries?.[0].price ?? tr.entryPrice;
+        const entry = tr.entries ? ` entry 1 of ${row.entriesAllowed}` : '';
         if (e.stage === 'filled') {
-          out.push(`Bought at ${cx.atClose ? 'the close' : 'the open'} at ${price(tr.entryPrice)}.`);
+          out.push(`Bought${entry} at ${cx.atClose ? 'the close' : 'the open'} at ${price(first)}.`);
         } else {
           const rank = tr.why?.rank;
           const why = rank ? `Chosen by the ranking, ${placeWords(rank.place, rank.decision.eligible)}` : 'Buy rule held';
-          out.push(`${why}: bought ${fillWords(tr.entryT, tr.entryPrice)}.`);
+          out.push(`${why}: bought${entry} ${fillWords(tr.entryT, first)}.`);
         }
         break;
       }
@@ -741,6 +811,23 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
           const why = tr.why?.exit?.k === 'rank' ? 'The ranking no longer holds it' : 'Sell rule held';
           out.push(`${why}: sold ${fillWords(tr.exitT, tr.exitPrice)}.`);
         }
+        break;
+      }
+      case 'add': {
+        const en = e.trade.entries![e.entry - 1];
+        const entry = `entry ${e.entry} of ${row.entriesAllowed}`;
+        const moved = e.stage === 'decided' ? '' : movedWords(e.trade, e.entry);
+        if (e.stage === 'filled') out.push(`Added ${entry} at ${cx.atClose ? 'the close' : 'the open'} at ${price(en.price)}.${moved}`);
+        else out.push(`Add rule held: added ${entry} ${fillWords(en.t, en.price)}.${moved}`);
+        break;
+      }
+      case 'whole':
+        out.push('Add rule held but the position was already whole.');
+        break;
+      case 'add-undone': {
+        // The run records no add that was left undone, so every reason that fits is named; the commission only when the run left some adds or trades undone for it.
+        const small = cx.bt.run.smallTrades ? `, or its commission would be ${SMALL_TRADE * 100}% or more of it` : '';
+        out.push(`Add rule held, but no entry was made: no cash was free, or the position was already as large as its weight allows${small}.`);
         break;
       }
       case 'long':
@@ -775,11 +862,22 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
   return out.join(' ');
 }
 
-/** "Flat", or "Long" with the shares that were bought. */
+/** What an add moved: the average entry price, and the stop loss and take profit that follow it. Starts with a space; empty when the trade does not say. */
+function movedWords(trade: Trade, entry: number): string {
+  const add = trade.why?.adds?.[entry - 2];
+  if (!add) return '';
+  const parts = [`average entry price now ${price(add.average)}`];
+  if (add.stopLoss !== null) parts.push(`stop loss moved to ${price(add.stopLoss)}`);
+  if (add.takeProfit !== null) parts.push(`take profit moved to ${price(add.takeProfit)}`);
+  return ` ${parts.join('; ').replace(/^./, (c) => c.toUpperCase())}.`;
+}
+
+/** "Flat", or "Long" with the entries made, when a position is built in several, and the shares that were bought. */
 export function positionWords(row: DebugRow): string {
   if (!row.held) return 'Flat';
-  if (Number.isNaN(row.shares)) return 'Long';
-  return row.resized ? `Long, bought ${shareCount(row.shares)} shares` : `Long, ${shareCount(row.shares)} shares`;
+  const long = row.entriesAllowed > 1 ? `Long, ${row.entries} of ${row.entriesAllowed} entries` : 'Long';
+  if (Number.isNaN(row.shares)) return long;
+  return row.resized ? `${long}, bought ${shareCount(row.shares)} shares` : `${long}, ${shareCount(row.shares)} shares`;
 }
 
 /** The marks that say a part held, did not, or is unknown, in words as well as symbols. */
@@ -880,9 +978,10 @@ export function debugCsv(bt: Backtest, asset: string): string {
   const cx = ctxOf(bt);
   const cols = debugColumns(bt, asset);
   const rows = debugRows(bt, asset, 0, cx.asset(asset).count);
-  let out = csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', 'what happened']);
+  const entries = (bt.spec.entries ?? 1) > 1;
+  let out = csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', ...(entries ? ['entries'] : []), 'what happened']);
   for (const r of rows) {
-    out += csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), r.what]);
+    out += csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
   }
   return out;
 }

@@ -180,7 +180,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
       h(li, 'span', 'bt-debug-legend-caption', c.caption);
       h(li, 'span', c.kind === 'score' || c.kind === 'place' ? 'bt-debug-legend-text' : 'bt-debug-legend-text bt-debug-code', `${c.kind === 'score' ? 'Score: ' : ''}${c.text}`);
     }
-    h(legend, 'div', 'bt-debug-legend-key', '✓ yes, ✗ no, ? unknown, – not read (the part needs an open position and none was held). A shaded row is a bar where a position was held at the close; sell rule columns are dimmed on the others.');
+    h(legend, 'div', 'bt-debug-legend-key', '✓ yes, ✗ no, ? unknown, – not read (the part needs an open position and none was held, or, for an add rule, a position that can still take another entry). A shaded row is a bar where a position was held at the close; sell rule columns are dimmed on the others.');
   }
 
   if (picker) {
@@ -263,7 +263,8 @@ function drawCell(tr: HTMLElement, col: DebugColumn, row: DebugRow, n: number): 
   const td = h(tr, 'td', `bt-debug-cell bt-debug-${cell.outcome ?? 'na'}${idle ? ' bt-debug-idle' : ''}`);
   if (cell.outcome === null) {
     td.textContent = '–';
-    td.title = `${col.caption}: ${col.text}\nNot read: it needs an open position, and none was held.`;
+    const why = col.group === 'add' && row.readHeld ? 'the position already had all its entries' : 'it needs an open position, and none was held';
+    td.title = `${col.caption}: ${col.text}\nNot read: ${why}.`;
     return;
   }
   if (text.main) h(td, 'span', 'bt-debug-values', text.main);
