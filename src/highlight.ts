@@ -25,11 +25,18 @@ const PAIRS = new Map<string, RegExp>([
 ]);
 const TICKER_SETTINGS = ['universe', 'symbol', 'benchmark', 'cash rate'];
 /** Settings whose values are numbers, percentages and atr(n), where parameters can stand in. */
-const NUMERIC_SETTINGS = ['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold'];
+const NUMERIC_SETTINGS = ['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold', 'entries'];
+/** Settings whose value is a bar size such as `1h` or `15m`, one word whatever its digits. */
+const SIZE_SETTINGS = ['interval', 'magnify'];
 
+/** Where a comment starts: a `#` or `//` at the start of a line or after a space. Not inside the quotes of a column's name, as in `column("a # b")`. */
 export function commentStart(line: string): number {
-  const m = line.match(/(^|\s)(#|\/\/)/);
-  return m ? m.index! + m[1].length : -1;
+  const quoted = [...line.matchAll(/\bcolumn\s*\(\s*"[^"]*"/gi)].map((m) => [m.index!, m.index! + m[0].length]);
+  for (const m of line.matchAll(/(^|\s)(#|\/\/)/g)) {
+    const at = m.index! + m[1].length;
+    if (!quoted.some(([from, to]) => at >= from && at < to)) return at;
+  }
+  return -1;
 }
 
 function code(line: string): string {
@@ -161,6 +168,13 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
       if (colon + 1 + lead < end) out.push({ from: colon + 1 + lead, to: line.slice(0, end).trimEnd().length, kind: 'value' });
     } else if (NUMERIC_SETTINGS.includes(key)) {
       numericValue(line, colon + 1, end, names, out);
+    } else if (SIZE_SETTINGS.includes(key)) {
+      for (const m of line.slice(0, end).matchAll(/[A-Za-z0-9]+/g)) if (m.index! > colon) out.push({ from: m.index!, to: m.index! + m[0].length, kind: 'value' });
+    } else if (key === 'commission') {
+      // An amount, and the words of "0.005 per share, min 1, max 1%": a comma or a space belongs to neither.
+      for (const m of line.slice(0, end).matchAll(/(\$?(?:\d+(?:\.\d+)?|\.\d+)%?)|([A-Za-z]+)/g)) {
+        if (m.index! > colon) out.push({ from: m.index!, to: m.index! + m[0].length, kind: m[1] ? 'number' : 'value' });
+      }
     } else {
       const re = TICKER_SETTINGS.includes(key) ? /(\d+(?:\.\d+)?\s*%)|([A-Za-z0-9^:/._=-]+)/g : /(\$?\d[\d,_.-]*\s*(?:%|bps?|[kKmM]\b)?)|([A-Za-z]+)/g;
       re.lastIndex = colon + 1;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
-import { csvSteps, debugCsv, debugRange, debugRows, forgetDebug, inSlices, prepareRows, type Progress } from '../src/debug.ts';
+import { CSV_ASK_BYTES, CSV_MAX_BYTES, csvAsk, csvSize, csvSteps, debugCsv, debugRange, debugRows, debugWorkedOut, forgetDebug, holdDebug, inSlices, prepareRows, type Progress } from '../src/debug.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { makeRng } from '../src/rng.ts';
 import type { Bars } from '../src/types.ts';
@@ -123,4 +123,89 @@ test('the file is made in steps of a few hundred bars, and is the same file as t
   assert.ok(progress.every((p) => p.total === 1234));
   assert.equal(text, debugCsv(bt, 'A'));
   assert.equal(text.trimEnd().split('\n').length, 1234 + 1);
+});
+
+const prepare = (bt: Backtest) => {
+  for (const steps = prepareRows(bt, 'A'); !steps.next().done; );
+};
+
+test('two views of one result share what was worked out; it is let go when the last of them closes', () => {
+  const bt = run(RULES, { A: series(400) });
+  const first = holdDebug(bt);
+  const second = holdDebug(bt);
+  assert.equal(debugWorkedOut(bt), false);
+  prepare(bt);
+  assert.equal(debugWorkedOut(bt), true);
+  first();
+  // The other view still has its rows worked out.
+  assert.equal(debugWorkedOut(bt), true);
+  // Closing a view twice does not count for another.
+  first();
+  assert.equal(debugWorkedOut(bt), true);
+  second();
+  assert.equal(debugWorkedOut(bt), false);
+  // A view opened later starts again, and gives the same rows.
+  const plain = all(run(RULES, { A: series(400) }));
+  const third = holdDebug(bt);
+  assert.deepEqual(all(bt), plain);
+  third();
+  assert.equal(debugWorkedOut(bt), false);
+});
+
+test('results held apart do not affect each other', () => {
+  const a = run(RULES, { A: series(300, 1) });
+  const b = run(RULES, { A: series(300, 2) });
+  const [releaseA, releaseB] = [holdDebug(a), holdDebug(b)];
+  prepare(a);
+  prepare(b);
+  releaseA();
+  assert.deepEqual([debugWorkedOut(a), debugWorkedOut(b)], [false, true]);
+  releaseB();
+});
+
+const lines = (csv: string) => csv.trimEnd().split('\n');
+
+test('a file of only some bars has the same header and the same rows as those bars have in the whole file', () => {
+  const bt = run(RULES, { A: series(1234) });
+  const whole = lines(debugCsv(bt, 'A'));
+  const part = (from: number, to: number) => {
+    const steps = csvSteps(bt, 'A', { from, to });
+    const progress: Progress[] = [];
+    for (let n = steps.next(); ; n = steps.next()) {
+      if (n.done) return { text: lines(n.value), progress };
+      progress.push(n.value);
+    }
+  };
+  const window = part(1100, 1160);
+  assert.deepEqual(window.text, [whole[0], ...whole.slice(1 + 1100, 1 + 1160)]);
+  assert.deepEqual(window.progress, [{ done: 60, total: 60 }]);
+  // A range over several steps counts its own bars, and one past the end stops at the last bar.
+  const wide = part(100, 1300);
+  assert.deepEqual(wide.text, [whole[0], ...whole.slice(1 + 100)]);
+  assert.deepEqual(wide.progress.map((p) => [p.done, p.total]), [[500, 1134], [1000, 1134], [1134, 1134]]);
+  assert.deepEqual(part(0, 0).text, [whole[0]]);
+});
+
+test('the size of the file is worked out before it is made: exactly for a short run, closely for a long one', () => {
+  const short = run(RULES, { A: series(150) });
+  assert.deepEqual(csvSize(short, 'A'), { bars: 150, bytes: debugCsv(short, 'A').length });
+  const long = run(RULES, { A: series(3000, 5) });
+  const size = csvSize(long, 'A');
+  const actual = debugCsv(long, 'A').length;
+  assert.equal(size.bars, 3000);
+  assert.ok(Math.abs(size.bytes - actual) / actual < 0.1, `${size.bytes} against ${actual}`);
+  assert.deepEqual(csvSize(run('universe: A\nbuy when close > sma(5)', { A: series(10) }), 'A').bars, 10);
+});
+
+test('a file that would pass about 20 MB is asked about, in the section, with its size; one too large to make whole offers only the bars shown', () => {
+  assert.equal(csvAsk({ bars: 1000, bytes: CSV_ASK_BYTES }, 60), null);
+  assert.equal(csvAsk({ bars: 0, bytes: 0 }, 0), null);
+  const big = csvAsk({ bars: 300_000, bytes: 125_000_000 }, 60)!;
+  assert.deepEqual(big, {
+    text: 'The file with every bar would be about 125 MB (300,000 bars). Save every bar, or only the 60 bars shown?',
+    all: true,
+  });
+  assert.equal(csvAsk({ bars: 40_000, bytes: CSV_ASK_BYTES + 1 }, 1)!.text, 'The file with every bar would be about 20 MB (40,000 bars). Save every bar, or only the 1 bar shown?');
+  const huge = csvAsk({ bars: 1_000_000, bytes: CSV_MAX_BYTES + 1 }, 60)!;
+  assert.deepEqual(huge, { text: 'The file with every bar would be about 400 MB (1,000,000 bars), too large to save as one file. Save only the 60 bars shown?', all: false });
 });

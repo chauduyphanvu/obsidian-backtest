@@ -323,3 +323,25 @@ test('fixChanges: every edit of a fix as a position in the note, none when a lin
   const one = fixFor(['universe: SPY', 'buy when close > smaa(200)'], parseSpec('universe: SPY\nbuy when close > smaa(200)').errors[0])!;
   assert.deepEqual(fixChanges(one, (line) => line * 100), [{ from: 200 + 17, to: 200 + 21, insert: 'sma' }]);
 });
+
+test('an add rule\'s start misspelt is offered a fix as buy and sell are', () => {
+  const entries = [HEAD, 'entries: 2', RULE];
+  assert.equal(fixedBlock([...entries, 'ad when close > last entry price'])[3], 'add when close > last entry price');
+  assert.equal(fixedBlock([...entries, 'add wen close > last entry price'])[3], 'add when close > last entry price');
+  assert.equal(fixedBlock([...entries, 'ad wen close > last entry price'])[3], 'add when close > last entry price');
+  assert.equal(fixedBlock([...entries, '  dad when close > last entry price'])[3], '  add when close > last entry price');
+  // On a line that continues another rule, and with the sell rule before it.
+  assert.equal(fixedBlock([...entries, 'sell when close < sma(100)', 'ad when close > last entry price'])[4], 'add when close > last entry price');
+  const found = firstFix([...entries, 'add wen close > 3'])!;
+  assert.equal(found.fix.hint, 'Did you mean add when?');
+  // A word that is already a rule head is not a typo, and the two-letter reach is only for a rule head.
+  assert.equal(closest('ad', ['buy', 'sell', 'add']), null);
+  assert.equal(fixedBlock([HEAD, 'by when close > 3'])[1], 'buy when close > 3');
+});
+
+test('a parameter written for the number of entries, misspelt, is offered the parameter', () => {
+  const lines = [HEAD, 'steps = 3 in 2..5', 'entries: stepz', RULE, 'add when close > last entry price * 1.01'];
+  const found = firstFix(lines)!;
+  assert.equal(found.fix.hint, 'Did you mean steps?');
+  assert.equal(apply(lines, found.fix)[2], 'entries: steps');
+});
