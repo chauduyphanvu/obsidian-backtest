@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { computeStats } from '../src/backtest.ts';
 import { calmar, deepStats, periodReturns, rollingReturns, sortino, underwater } from '../src/stats.ts';
 import { DAY, near } from './helpers.ts';
 
@@ -78,6 +79,19 @@ test('sortino: mean over downside deviation, annualised', () => {
   // so the ratio is 1/sqrt(3) per step and the data has 3 steps in 3 days: 365.25 steps a year.
   const t = [0, 1, 2, 3].map((i) => d(2024, 1, 1) + i * DAY);
   assert.ok(near(sortino(t, [100, 110, 99, 108.9]), Math.sqrt(365.25 / 3), 1e-9));
+});
+
+test('sortino with cash returns measures returns above them, as computeStats does', () => {
+  // Steps of +10%, -10%, +10% against 1% a step from cash: excess +9%, -11%, +9%.
+  const t = [0, 1, 2, 3].map((i) => d(2024, 1, 1) + i * DAY);
+  const equity = [100, 110, 99, 108.9];
+  const cash = [0, 0.01, 0.01, 0.01];
+  const expected = (0.07 / 3 / Math.sqrt(0.11 ** 2 / 3)) * Math.sqrt(365.25);
+  assert.ok(near(sortino(t, equity, cash), expected, 1e-9));
+  assert.ok(near(computeStats(t, equity, 100, [1, 1, 1, 1], cash).sortino, expected, 1e-9));
+  assert.ok(near(deepStats(t, equity, cash).sortino, expected, 1e-9));
+  // A series that starts later uses the cash returns from its own first value.
+  assert.ok(near(deepStats([d(2023, 12, 31), ...t], [NaN, ...equity], [0, 0.5, ...cash.slice(1)]).sortino, expected, 1e-9));
 });
 
 test('sortino is 0 without a down step', () => {

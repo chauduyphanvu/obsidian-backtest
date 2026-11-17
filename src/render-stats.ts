@@ -8,6 +8,8 @@ export interface DeepStatsInput {
   strategy: number[];
   benchmark: number[];
   benchmarkLabel: string;
+  /** What cash earned over each step, aligned with `t`; the Sortino ratios measure returns above it. */
+  cashReturn?: number[];
 }
 
 /** Appends a collapsed "More statistics" section to `parent`. Returns a cleanup function (disconnects observers). Content is built the first time the section is opened. */
@@ -56,8 +58,8 @@ function cell(row: HTMLElement, value: string, note: string | null): void {
 }
 
 function comparison(body: HTMLElement, input: DeepStatsInput): void {
-  const mine = deepStats(input.t, input.strategy);
-  const bench = deepStats(input.t, input.benchmark);
+  const mine = deepStats(input.t, input.strategy, input.cashReturn);
+  const bench = deepStats(input.t, input.benchmark, input.cashReturn);
   const table = h(body, 'table', 'bt-table');
   const head = h(h(table, 'thead'), 'tr');
   h(head, 'th');

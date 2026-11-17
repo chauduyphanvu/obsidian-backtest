@@ -27,7 +27,8 @@ export interface PeriodReturn {
  * has no return of its own and is left out.
  */
 export function periodReturns(t: number[], equity: number[], period: 'year' | 'month'): PeriodReturn[] {
-  [t, equity] = fromFirstValue(t, equity);
+  const s = firstValue(equity);
+  [t, equity] = [t.slice(s), equity.slice(s)];
   const out: PeriodReturn[] = [];
   const n = t.length;
   for (let i = 0; i < n; ) {
@@ -51,13 +52,18 @@ export function periodReturns(t: number[], equity: number[], period: 'year' | 'm
   return out;
 }
 
-/** Annualised mean return over annualised downside deviation (returns below 0), using steps per year inferred from the data like computeStats does. 0 when there is no downside beyond rounding noise. */
-export function sortino(t: number[], equity: number[]): number {
+/**
+ * Annualised mean return above cash over annualised downside deviation (steps below cash), using steps
+ * per year inferred from the data: the same figure as computeStats' sortino. `cashReturn[i]` is what
+ * cash earned from point i - 1 to i; without it cash earns nothing. 0 when there is no downside
+ * beyond rounding noise.
+ */
+export function sortino(t: number[], equity: number[], cashReturn?: number[]): number {
   const steps = equity.length - 1;
   let sum = 0;
   let downside = 0;
   for (let i = 1; i < equity.length; i++) {
-    const r = equity[i] / equity[i - 1] - 1;
+    const r = equity[i] / equity[i - 1] - 1 - (cashReturn?.[i] ?? 0);
     sum += r;
     if (r < 0) downside += r * r;
   }
@@ -146,22 +152,24 @@ function extremes(list: PeriodReturn[]): [PeriodReturn | null, PeriodReturn | nu
   return [best, worst];
 }
 
-/** The series from its first value on. */
-function fromFirstValue(t: number[], equity: number[]): [number[], number[]] {
+/** Where the series has its first value. */
+function firstValue(equity: number[]): number {
   let s = 0;
   while (s < equity.length && Number.isNaN(equity[s])) s++;
-  return s === 0 ? [t, equity] : [t.slice(s), equity.slice(s)];
+  return s;
 }
 
-export function deepStats(t: number[], equity: number[]): DeepStats {
-  [t, equity] = fromFirstValue(t, equity);
+/** `cashReturn`, aligned with `t`, makes the Sortino ratio measure returns above cash. */
+export function deepStats(t: number[], equity: number[], cashReturn?: number[]): DeepStats {
+  const s = firstValue(equity);
+  [t, equity, cashReturn] = [t.slice(s), equity.slice(s), cashReturn?.slice(s)];
   const years = periodReturns(t, equity, 'year');
   const full = years.filter((y) => !y.partial);
   const months = periodReturns(t, equity, 'month');
   const [bestYear, worstYear] = extremes(full.length > 0 ? full : years);
   const [bestMonth, worstMonth] = extremes(months);
   return {
-    sortino: sortino(t, equity),
+    sortino: sortino(t, equity, cashReturn),
     calmar: calmar(t, equity),
     bestYear,
     worstYear,
