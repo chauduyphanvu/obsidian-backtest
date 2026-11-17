@@ -286,7 +286,7 @@ export class Evaluator {
     const src = e.src ? this.eval(e.src, asset) : bars.c;
     const [a, b, c] = e.args;
     if (NEEDS_VOLUME.includes(e.fn) && !bars.v.some((x) => x > 0)) {
-      throw new Error(`${asset} has no volume, which ${e.fn}() needs. A CSV file needs a volume column, and most indexes have none.`);
+      throw new Error(`${asset} has no volume, which ${e.fn}() needs. A CSV file needs a volume column, and some indexes have none.`);
     }
     switch (e.fn) {
       case 'sma':

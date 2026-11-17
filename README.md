@@ -204,7 +204,7 @@ These are the bar's own values for the ticker the rule belongs to: `open`, `high
 
 Most functions read a series and take one or more periods. Without a series they read the one in the table. To read another, write it first: `sma(volume, 20)`, or `sma(rsi(2), 5)`. Periods must be plain numbers or parameters, whole numbers from 1 to 10000. `slope`, `zscore`, `cci`, `hma` and `correl` need a period of at least 2. A Bollinger or Keltner `width` and the supertrend `mult` can be any number above 0. Empty brackets use the defaults: `macd()`, `rsi()`, `atr()`.
 
-Some functions read the ticker's own high, low, close and volume and take no series, as `atr` does: `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `obv`, `vwap`, `supertrend` and `supertrend_up`. `mfi`, `obv` and `vwap` need volume. A ticker whose prices have none, such as most indexes on Yahoo or a CSV file without a `volume` column, stops the run with "X has no volume, which mfi() needs". `bars_since` takes a condition instead of a series, and `correl` takes the other ticker's series first.
+Some functions read the ticker's own high, low, close and volume and take no series, as `atr` does: `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `obv`, `vwap`, `supertrend` and `supertrend_up`. `mfi`, `obv` and `vwap` need volume. A ticker whose prices have none, such as a CSV file without a `volume` column or an index with no volume, stops the run with "X has no volume, which mfi() needs". `bars_since` takes a condition instead of a series, and `correl` takes the other ticker's series first.
 
 | Function | Arguments (defaults) | Meaning |
 | --- | --- | --- |
