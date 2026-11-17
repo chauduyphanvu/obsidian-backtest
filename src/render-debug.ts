@@ -6,11 +6,13 @@ import {
   MARK,
   barOnOrAfter,
   cellText,
+  csvAsk,
+  csvSize,
   debugColumns,
   csvSteps,
   debugRange,
   debugRows,
-  forgetDebug,
+  holdDebug,
   inSlices,
   interesting,
   positionWords,
@@ -39,10 +41,12 @@ export function renderDebug(parent: HTMLElement, input: DebugInput): () => void 
   const details = h(parent, 'details', 'bt-details');
   h(details, 'summary', undefined, 'Rule values, bar by bar');
   const view = { open: true };
+  // The result is shared with every other block that shows it, so what is worked out goes only when the last view closes.
+  const release = holdDebug(input.backtest);
   details.addEventListener('toggle', () => build(h(details, 'div', 'bt-debug-body'), input, view), { once: true });
   return () => {
     view.open = false;
-    forgetDebug(input.backtest);
+    release();
   };
 }
 
@@ -62,6 +66,8 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
   const controls = h(body, 'div', 'bt-debug-controls');
   const saveError = h(body, 'div', 'bt-warning');
   saveError.hidden = true;
+  const ask = h(body, 'div', 'bt-note bt-debug-ask');
+  ask.hidden = true;
   const saving = h(body, 'div', 'bt-note');
   saving.hidden = true;
   const status = h(body, 'div', 'bt-note bt-debug-status');
@@ -107,14 +113,41 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
     filter = check.checked;
     draw();
   });
+  /** The bars the table shows now, as the first and the end of the window. */
+  const shownBars = (): { from: number; to: number } => {
+    const from = Math.max(0, Math.min(Math.floor(start), count - WINDOW));
+    return { from, to: Math.min(count, from + WINDOW) };
+  };
+  /** Asks in the section, not in a dialog of the browser; resolves with the answer, or null for cancel. */
+  const choose = (question: { text: string; all: boolean }, shown: number): Promise<'all' | 'window' | null> =>
+    new Promise((resolve) => {
+      ask.replaceChildren();
+      h(ask, 'div', undefined, question.text);
+      const row = h(ask, 'div', 'bt-debug-ask-buttons');
+      const answer = (value: 'all' | 'window' | null) => () => {
+        ask.hidden = true;
+        resolve(value);
+      };
+      if (question.all) button(row, 'Save every bar', answer('all'));
+      button(row, `Save the ${shown} ${shown === 1 ? 'bar' : 'bars'} shown`, answer('window'));
+      button(row, 'Cancel', answer(null));
+      ask.hidden = false;
+    });
   const save = button(options, 'Save as CSV', async () => {
     const name = asset;
     save.disabled = true;
     saveError.hidden = true;
+    ask.hidden = true;
     try {
       // The file is made a few hundred bars at a time, so a long run does not freeze the window.
       if (!(await ensure(name))) return;
-      const csv = await inSlices(csvSteps(bt, name), {
+      // A file of the whole run can be over a hundred megabytes: past about 20 MB the reader chooses first.
+      const shown = shownBars();
+      const question = csvAsk(csvSize(bt, name), shown.to - shown.from);
+      const choice = question ? await choose(question, shown.to - shown.from) : 'all';
+      if (choice === null) return;
+      const part = choice === 'window';
+      const csv = await inSlices(csvSteps(bt, name, part ? shown : undefined), {
         onSlice: (p) => {
           saving.textContent = `Making the file: ${p.done.toLocaleString('en-US')} of ${p.total.toLocaleString('en-US')} bars.`;
           saving.hidden = false;
@@ -122,7 +155,8 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
         stop: () => !life.open,
       });
       saving.hidden = true;
-      if (csv !== null) await input.save(`${bt.spec.name ?? 'Backtest'} rule values ${name}`, csv);
+      const title = `${bt.spec.name ?? 'Backtest'} rule values ${name}${part ? ` bars ${shown.from + 1} to ${shown.to}` : ''}`;
+      if (csv !== null) await input.save(title, csv);
     } catch (e) {
       saveError.textContent = `The file couldn't be saved: ${e instanceof Error ? e.message : String(e)}`;
       saveError.hidden = false;
@@ -264,6 +298,11 @@ function drawTable(box: HTMLElement, columns: DebugColumn[], rows: DebugRow[], f
   const head = h(h(table, 'thead'), 'tr');
   h(head, 'th', 'bt-debug-sticky', intraday ? 'Time (UTC)' : 'Date').scope = 'col';
   h(head, 'th', 'bt-num', 'Close').scope = 'col';
+  // What people open the table for comes straight after the close, before the rule columns that can run far off to the right.
+  h(head, 'th', 'bt-debug-what', 'What happened').scope = 'col';
+  const position = h(head, 'th', undefined, 'Position');
+  position.scope = 'col';
+  position.title = 'The position at the end of the bar, after the bar\'s fills';
   for (const c of columns) {
     const th = h(head, 'th', `bt-debug-head bt-debug-head-${c.group}`);
     th.scope = 'col';
@@ -272,8 +311,6 @@ function drawTable(box: HTMLElement, columns: DebugColumn[], rows: DebugRow[], f
     th.title = `${c.caption}: ${c.text}`;
     if (c.heading !== c.text) heading.title = c.text;
   }
-  h(head, 'th', undefined, 'Position').scope = 'col';
-  h(head, 'th', 'bt-debug-what', 'What happened').scope = 'col';
 
   const body = h(table, 'tbody');
   let target: HTMLElement | null = null;
@@ -286,9 +323,9 @@ function drawTable(box: HTMLElement, columns: DebugColumn[], rows: DebugRow[], f
     const when = h(tr, 'th', 'bt-debug-sticky', stamp(row.t, intraday));
     when.scope = 'row';
     h(tr, 'td', 'bt-num', price(row.close));
-    columns.forEach((c, n) => drawCell(tr, c, row, n));
-    h(tr, 'td', 'bt-debug-position', positionWords(row));
     h(tr, 'td', 'bt-debug-what', row.what);
+    h(tr, 'td', 'bt-debug-position', positionWords(row));
+    columns.forEach((c, n) => drawCell(tr, c, row, n));
   }
   if (target) {
     // Two rows of context above the bar, just under the sticky heading.

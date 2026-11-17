@@ -1,4 +1,4 @@
-import type { Spec } from './dsl.ts';
+import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 
 /**
  * Keeps the latest results so a block that re-renders (scrolling, switching views) does not run again.
@@ -79,6 +79,16 @@ function hash(text: string): number {
 export function cacheKey(source: string, defaults: unknown, inputs = ''): string {
   const text = `${stable(defaults)}\u0000${source}${inputs ? `\u0000${inputs}` : ''}`;
   return `${hash(text).toString(36)}-${text.length.toString(36)}`;
+}
+
+/**
+ * Whether the default settings being `now` rather than `drawn` changes what `source` means, so a result made with `drawn` is
+ * out of date. A block that says everything itself (its own capital, costs, commission, cash rate and data source) does not
+ * change, whatever the defaults are.
+ */
+export function defaultsMatter(source: string, drawn: Partial<Defaults>, now: Partial<Defaults>): boolean {
+  const read = (defaults: Partial<Defaults>) => stable(parseSpec(source, { defaults }).spec);
+  return read(drawn) !== read(now);
 }
 
 /** The vault paths of the CSV files a strategy reads, each once, in order. */

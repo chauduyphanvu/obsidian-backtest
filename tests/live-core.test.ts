@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, blockLabel, blockName, changeKind, chooseBlock, locateBlock, waitFor, type Shown } from '../src/live-core.ts';
+import { parseSpec } from '../src/dsl.ts';
+import { Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, blockName, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, waitFor, type Shown } from '../src/live-core.ts';
 
 const BODY_A = ['name: Trend', 'universe: SPY', 'buy when close > sma(200)'];
 const BODY_B = ['universe: QQQ', 'buy when rsi(2) < 10'];
@@ -249,4 +250,96 @@ test('typing a ticker letter by letter is one edit after another, never a switch
   drawn = pending;
   pending = null;
   assert.equal(changeKind(drawn, pending, shown(0, 'universe: SPYG')), 'none');
+});
+
+test('a new draw ends the one before it, and stop ends the one going', () => {
+  const latest = new Latest();
+  const first = latest.start();
+  assert.equal(first.aborted, false);
+  const second = latest.start();
+  assert.equal(first.aborted, true);
+  assert.equal(second.aborted, false);
+  latest.stop();
+  assert.equal(second.aborted, true);
+  // Stopping with nothing going is fine, and a draw after it starts clean.
+  latest.stop();
+  assert.equal(latest.start().aborted, false);
+});
+
+test('a draw that is ended before it finishes lets go of what it held at once; one that has finished is left alone', async () => {
+  const latest = new Latest();
+  let released = 0;
+  const release = () => void released++;
+  let finish!: () => void;
+  const slow = drawHeld(() => new Promise<void>((resolve) => (finish = resolve)), release, latest.start());
+  latest.start();
+  assert.equal(released, 1);
+  finish();
+  const done = await slow;
+  assert.equal(released, 1);
+  // The draw that has finished is on screen: a newer draw starting does not touch it.
+  const shown = await drawHeld(async () => {}, release, latest.start());
+  latest.start();
+  latest.stop();
+  assert.equal(released, 1);
+  shown();
+  done();
+  assert.equal(released, 3);
+});
+
+test('a draw that fails lets go of what it held, and a draw started after its end was asked for is let go too', async () => {
+  const latest = new Latest();
+  let released = 0;
+  const release = () => void released++;
+  await assert.rejects(
+    drawHeld(() => Promise.reject(new Error('boom')), release, latest.start()),
+    /boom/,
+  );
+  assert.equal(released, 1);
+  // The failed draw is no longer listening: ending it later lets go of nothing more.
+  latest.stop();
+  assert.equal(released, 1);
+  const late = latest.start();
+  latest.stop();
+  await drawHeld(async () => {}, release, late);
+  assert.equal(released, 2);
+});
+
+const needs = (src: string) => loadNeeds(parseSpec(src).spec!);
+
+test('what loading a block needs changes with its tickers, dates, interval and reach, and not with its rules', () => {
+  const base = needs('universe: SPY, QQQ\nbuy when close > sma(50)');
+  assert.equal(needs('universe: SPY, QQQ\nbuy when close > sma(20) and rsi(14) < 70\nsell when close < sma(10)'), base);
+  assert.equal(needs('universe: QQQ, SPY\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('universe: SPY, QQQ, IWM\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('universe: SPY, QQQ\nfrom: 2020-01-01\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('universe: SPY, QQQ\nbuy when close > sma(400)'), base);
+  assert.notEqual(needs('universe: SPY, QQQ\ninterval: 1w\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('universe: SPY, binance:QQQ\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('universe: SPY, QQQ\nbenchmark: TLT\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('universe: SPY, QQQ\nbuy when close of IWM > sma(50) of IWM'), base);
+  assert.notEqual(needs('universe: SPY, QQQ\ncash rate: ^IRX\nbuy when close > sma(50)'), base);
+  assert.notEqual(needs('data: binance\ninterval: 1h\nuniverse: BTCUSDT\nmagnify: 5m\nbuy when close > sma(50)'), needs('data: binance\ninterval: 1h\nuniverse: BTCUSDT\nbuy when close > sma(50)'));
+});
+
+test('an answer is kept until it runs out or a price file changes, and a no stays until a file changes', () => {
+  let now = 1000;
+  const memo = new ReadyMemo(() => now, 2);
+  assert.equal(memo.get('a'), undefined);
+  memo.set('a', true, 1500);
+  memo.set('b', false, Infinity);
+  assert.deepEqual([memo.get('a'), memo.get('b')], [true, false]);
+  now = 1499;
+  assert.equal(memo.get('a'), true);
+  now = 1500;
+  assert.equal(memo.get('a'), undefined);
+  now = 9e12;
+  assert.equal(memo.get('b'), false);
+  memo.changed();
+  assert.equal(memo.get('b'), undefined);
+  // Only the latest few are kept.
+  memo.set('x', true, Infinity);
+  memo.set('y', true, Infinity);
+  memo.set('z', true, Infinity);
+  assert.deepEqual([memo.get('x'), memo.get('y'), memo.get('z')], [undefined, true, true]);
 });

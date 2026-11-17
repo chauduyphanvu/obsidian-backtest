@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
-import { cacheKey, csvPaths, csvVersions, debounce, ResultCache } from '../src/result-cache.ts';
+import { cacheKey, csvPaths, csvVersions, debounce, defaultsMatter, ResultCache } from '../src/result-cache.ts';
+import { defaultsFrom, normalizeSettings } from '../src/settings-core.ts';
 
 const clock = () => {
   const c = { t: 1000, now: () => c.t };
@@ -254,4 +255,24 @@ test('a changed or missing CSV file changes the key, and no files leaves the key
   assert.notEqual(cacheKey('universe: csv:a.csv', base, await at(null)), cacheKey('universe: csv:a.csv', base, await at(0)));
   assert.equal(cacheKey('universe: SPY', base), cacheKey('universe: SPY', base, ''));
   assert.notEqual(cacheKey('universe: SPY', base), cacheKey('universe: SPY', base, 'a.csv=1'));
+});
+
+test('defaults that change a result make it out of date; a block that says everything itself is not affected', () => {
+  const drawn = defaultsFrom(normalizeSettings(null));
+  const changed = (more: Record<string, unknown>) => defaultsFrom(normalizeSettings(more));
+  const bare = 'universe: SPY\nbuy when close > sma(50)';
+  assert.equal(defaultsMatter(bare, drawn, drawn), false);
+  for (const more of [{ capital: 50_000 }, { costs: '5 bps' }, { slippage: '3 bps' }, { commission: '1' }, { cashRate: '4%' }, { cashRate: '^IRX' }, { dataSource: 'binance' }]) {
+    assert.equal(defaultsMatter(bare, drawn, changed(more)), true, JSON.stringify(more));
+  }
+  // A setting that is not a default, such as how long saved prices count as fresh, changes nothing.
+  assert.equal(defaultsMatter(bare, drawn, changed({ cacheHours: 24 })), false);
+  const own = 'universe: yahoo:SPY\ncapital: 20000\ncosts: 2 bps\nslippage: 0 bps\ncommission: 1\ncash rate: 3%\nbuy when close > sma(50)';
+  assert.equal(defaultsMatter(own, drawn, changed({ capital: 50_000, costs: '9 bps', commission: '5', cashRate: '1%', dataSource: 'binance' })), false);
+  // Only the part it leaves to the defaults counts.
+  const partly = 'universe: yahoo:SPY\ncapital: 20000\nbuy when close > sma(50)';
+  assert.equal(defaultsMatter(partly, drawn, changed({ capital: 50_000 })), false);
+  assert.equal(defaultsMatter(partly, drawn, changed({ costs: '5 bps' })), true);
+  // A block that does not read has no result on screen to be out of date, and says the same either way.
+  assert.equal(defaultsMatter('universe: SPY', drawn, changed({ capital: 50_000 })), false);
 });

@@ -69,22 +69,22 @@ function closeness(word: string, candidate: string): number[] {
 
 const compare = (a: number[], b: number[]) => a.reduce((out, x, i) => out || x - b[i], 0);
 
-/** Candidates within reach of a typed word, nearest first. A word that is already a candidate has no typo. */
-function ranked(word: string, candidates: readonly string[]): { value: string; key: number[] }[] {
+/** Candidates within reach of a typed word, nearest first. A word that is already a candidate has no typo. `reach` is how many edits away one may be. */
+function ranked(word: string, candidates: readonly string[], reach = allowance(word.length)): { value: string; key: number[] }[] {
   const seen = new Set<string>();
   const out: { value: string; key: number[] }[] = [];
   for (const value of candidates) {
     if (seen.has(value.toLowerCase())) continue;
     seen.add(value.toLowerCase());
     const key = closeness(word, value);
-    if (key[0] >= 1 && key[0] <= allowance(word.length)) out.push({ value, key });
+    if (key[0] >= 1 && key[0] <= reach) out.push({ value, key });
   }
   return out.sort((a, b) => compare(a.key, b.key));
 }
 
 /** The candidate nearest to a typed word, or null when none is near enough or two are equally near. */
-export function closest(word: string, candidates: readonly string[]): string | null {
-  const [best, next] = ranked(word, candidates);
+export function closest(word: string, candidates: readonly string[], reach?: number): string | null {
+  const [best, next] = ranked(word, candidates, reach);
   return best && (!next || compare(best.key, next.key) !== 0) ? best.value : null;
 }
 
@@ -179,13 +179,16 @@ const NAMES = [...SERIES, ...CALENDAR, ...Object.keys(POSITION), 'true', 'false'
 /** Words that can follow a finished value in a condition. */
 const CONNECTIVES = ['and', 'or', 'crosses', 'above', 'below', 'is'];
 
+const HEADS = ['buy', 'sell', 'add'];
+
 /** A rule's start written wrong, such as `sel whn`, on a line that begins with it. */
 function ruleHead(lineNo: number, line: string): Edit | null {
   const m = line.match(/^(\s*)([A-Za-z]+)(\s+)([A-Za-z]+)(?!\w)/);
   if (!m) return null;
   const a = m[2].toLowerCase();
   const b = m[4].toLowerCase();
-  const first = a === 'buy' || a === 'sell' ? a : closest(a, ['buy', 'sell']);
+  // The word after it makes a rule head likely, so a two-letter start such as `ad` is within reach of `add`.
+  const first = HEADS.includes(a) ? a : closest(a, HEADS, Math.max(1, allowance(a.length)));
   const second = b === 'when' ? b : closest(b, ['when']);
   if (!first || !second || (a === first && b === second)) return null;
   return { line: lineNo, from: m[1].length, to: m[1].length + m[2].length + m[3].length + m[4].length, insert: `${first} ${second}` };
@@ -312,7 +315,7 @@ function parameterName(ctx: Context): Fix | null {
     return /^[A-Za-z_]\w*$/.test(typed) ? pick(ctx, typed, params, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : null;
   }
   const key = settingKey(line);
-  if (!key || !['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold'].includes(key)) return null;
+  if (!key || !['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold', 'entries'].includes(key)) return null;
   const known = new Set(['atr', 'top', 'by', 'at', 'inverse', 'volatility', 'of', ...FUNCTIONS, ...NAMES, ...params.map((p) => p.toLowerCase())]);
   const colon = line.indexOf(':');
   const value = line.slice(colon + 1).replace(/(^|\s)(#|\/\/).*$/, '');

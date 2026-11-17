@@ -57,6 +57,24 @@ export function renderLimit(el: HTMLElement, error: LimitError, src: string, onA
   source(root, src);
 }
 
+/**
+ * A line at the top of a drawn result for when the plugin's default settings have changed since it was worked out: it says
+ * the result still has the old ones, and a button works it out again. The line starts hidden; the returned function shows
+ * or hides it.
+ */
+export function renderDefaultsChanged(el: HTMLElement, onRun: () => void): (changed: boolean) => void {
+  const root = el.querySelector('.bt-root') ?? el;
+  const note = document.createElement('div');
+  note.className = 'bt-defaults-changed';
+  note.hidden = true;
+  h(note, 'span', 'bt-defaults-changed-text', 'The default settings were changed after this result was worked out. It still has the old ones.');
+  h(note, 'button', 'bt-button', 'Run again').addEventListener('click', onRun);
+  root.prepend(note);
+  return (changed) => {
+    note.hidden = !changed;
+  };
+}
+
 const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 
 /** The parameters (in lower case) that a stop setting takes as its whole level, as in `stop loss: stop`. */

@@ -348,3 +348,7 @@ test('only the first 20,000 characters of a reply are read', () => {
   const early = `${FENCE}strategy\n${GOOD}\n${FENCE}\nNOTE: early\n${'x'.repeat(30_000)}`;
   assert.deepEqual(parseReply(early)?.notes, ['early']);
 });
+
+test('the prompt says how many rules of each side a scope may have, the add rule included', () => {
+  assert.match(SYSTEM_PROMPT, /At most one buy rule, one sell rule and one add rule per scope, and an add rule only with an entries line\./);
+});

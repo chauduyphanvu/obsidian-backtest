@@ -348,3 +348,23 @@
 .bt-wide {
   overflow-x: auto;
 }
+
+/* A result whose default settings have since changed: the line and its button sit on one row, and wrap in a narrow pane. */
+.bt-defaults-changed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--bt-warning);
+  background: var(--background-secondary);
+}
+.bt-defaults-changed[hidden] {
+  display: none;
+}
+.bt-defaults-changed-text {
+  flex: 1 1 14em;
+  min-width: 0;
+}

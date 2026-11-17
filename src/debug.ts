@@ -419,6 +419,25 @@ class Ctx {
     return v;
   }
 
+  private firstEvents = new WeakMap<Expr, Map<string, number>>();
+
+  /**
+   * The first bar where a condition holds or is unknown, or the number of bars when neither ever happens. Before it a
+   * `bars_since` of the condition has had nothing to count from.
+   */
+  firstEvent(cond: Expr, asset: string): number {
+    let byAsset = this.firstEvents.get(cond);
+    if (!byAsset) this.firstEvents.set(cond, (byAsset = new Map()));
+    let first = byAsset.get(asset);
+    if (first === undefined) {
+      const v = this.ev.eval(cond, asset);
+      first = v.findIndex((x) => x === 1 || Number.isNaN(x));
+      if (first < 0) first = v.length;
+      byAsset.set(asset, first);
+    }
+    return first;
+  }
+
   /** Whether the run held buy signals back for this ticker while an input warmed up. */
   everHeldBack(name: string): boolean {
     return this.bt.run.skipped.some((s) => s.asset === name);
@@ -488,6 +507,33 @@ function ctxOf(bt: Backtest): Ctx {
 /** Lets go of what the table worked out over the whole run for this result: one array of the run's length for each part of the rules. */
 export function forgetDebug(bt: Backtest): void {
   contexts.delete(bt);
+}
+
+/** How many views are open on each result. A result is shared by every block that shows it, so one view closing must not take what the others read. */
+const views = new WeakMap<Backtest, number>();
+
+/**
+ * Registers a view of this result's rule values. The returned function closes it; what was worked out for the result is
+ * let go when the last view closes. Closing a view again does nothing.
+ */
+export function holdDebug(bt: Backtest): () => void {
+  views.set(bt, (views.get(bt) ?? 0) + 1);
+  let open = true;
+  return () => {
+    if (!open) return;
+    open = false;
+    const left = (views.get(bt) ?? 1) - 1;
+    if (left > 0) views.set(bt, left);
+    else {
+      views.delete(bt);
+      forgetDebug(bt);
+    }
+  };
+}
+
+/** Whether the rule values of this result are held, as they are once a table has worked them out and until its last view closes. */
+export function debugWorkedOut(bt: Backtest): boolean {
+  return contexts.has(bt);
 }
 
 /** How far a job done in steps has got. */
@@ -707,16 +753,23 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
       else if (stopped && buy !== 'yes') stopped = null;
     }
 
-    const events: DebugEvent[] = [];
-    if (entered) events.push({ k: 'buy', stage: bought === entered ? 'both' : 'filled', trade: entered });
-    if (exited) events.push({ k: 'sell', stage: sold === exited ? 'both' : 'filled', trade: exited });
-    if (bought && bought !== entered) events.push({ k: 'buy', stage: 'decided', trade: bought });
-    if (sold && sold !== exited) events.push({ k: 'sell', stage: 'decided', trade: sold });
+    // In the order they happened within the bar: orders from the last close fill at the open, a stop or target is reached
+    // inside the bar, and the close reads the rules and decides, or with fill: close decides and fills.
+    const timed: { at: 'open' | 'inside' | 'close'; event: DebugEvent }[] = [];
+    if (entered) timed.push({ at: bought === entered ? 'close' : 'open', event: { k: 'buy', stage: bought === entered ? 'both' : 'filled', trade: entered } });
+    if (exited) timed.push({ at: sold === exited ? 'close' : isLevelExit(exited) ? 'inside' : 'open', event: { k: 'sell', stage: sold === exited ? 'both' : 'filled', trade: exited } });
+    if (bought && bought !== entered) timed.push({ at: 'close', event: { k: 'buy', stage: 'decided', trade: bought } });
+    if (sold && sold !== exited) timed.push({ at: 'close', event: { k: 'sell', stage: 'decided', trade: sold } });
     const addFill = ix.addFills.get(t);
     const addSignal = ix.addSignals.get(t);
     const addMade = (a: AddAt) => ({ trade: a.trade, entry: a.k + 1 });
-    if (addFill) events.push({ k: 'add', stage: addFill.trade.entries![addFill.k].signalT === t ? 'both' : 'filled', ...addMade(addFill) });
-    if (addSignal && (addSignal.trade !== addFill?.trade || addSignal.k !== addFill.k)) events.push({ k: 'add', stage: 'decided', ...addMade(addSignal) });
+    if (addFill) {
+      const both = addFill.trade.entries![addFill.k].signalT === t;
+      timed.push({ at: both ? 'close' : 'open', event: { k: 'add', stage: both ? 'both' : 'filled', ...addMade(addFill) } });
+    }
+    if (addSignal && (addSignal.trade !== addFill?.trade || addSignal.k !== addFill.k)) timed.push({ at: 'close', event: { k: 'add', stage: 'decided', ...addMade(addSignal) } });
+    const moment = { open: 0, inside: 1, close: 2 };
+    const events: DebugEvent[] = timed.sort((x, y) => moment[x.at] - moment[y.at]).map((x) => x.event);
 
     let rank: DebugRank | null = null;
     if (sig.score) {
@@ -817,12 +870,43 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
       const why = visit(c, a, j);
       if (why) return why;
     }
-    if (x.k === 'ind') return 'still warming up';
+    if (x.k === 'ind') return whyIndicator(cx, x, a, j);
     if (x.k === 'bin' && x.op === '/') return 'divides by 0';
     if (x.k === 'cmp' && (x.op === 'xup' || x.op === 'xdn')) return 'the bar before is unknown';
     return '';
   };
   return visit(e, asset, i);
+}
+
+/**
+ * Why an indicator is unknown at bar `j` although what it reads is known, when that can be told from its inputs. A window
+ * with one value all through has no spread to measure, which is not the same as a window not yet full. Nothing is said of a
+ * `bars_since` that was reset by an unknown bar, where no cheap reason fits.
+ */
+function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j: number): string {
+  const warming = 'still warming up';
+  if (x.src && findPos(x.src)) return x.fn === 'bars_since' ? '' : warming;
+  if (x.fn === 'bars_since') return j < cx.firstEvent(x.src!, asset) ? 'the condition has not held yet' : '';
+  const n = x.args[0];
+  const window = (series: number[], length: number): number[] | null => {
+    const w = j - length + 1 < 0 ? null : series.slice(j - length + 1, j + 1);
+    return w && !w.some(Number.isNaN) ? w : null;
+  };
+  const same = (w: number[] | null) => w !== null && w.every((v) => v === w[0]);
+  if (x.fn === 'zscore') {
+    const series = x.src ? cx.ev.eval(x.src, asset) : cx.bt.data.get(asset)?.c;
+    return series && same(window(series, n)) ? 'every value in the window is the same' : warming;
+  }
+  if (x.fn === 'correl' && x.src) {
+    const both = [cx.bt.data.get(asset)?.c, cx.ev.eval(x.src, asset)];
+    // Each series' changes over the n bars, as correl reads them, which is one more price than bars.
+    const changes = both.map((series) => {
+      const w = series ? window(series, n + 1) : null;
+      return w ? ind.returns(w).slice(1) : null;
+    });
+    return changes.some(same) ? 'one of the two series changed by the same amount on every bar in the window' : warming;
+  }
+  return warming;
 }
 
 // ---------------------------------------------------------------- what happened, in words
@@ -1026,27 +1110,66 @@ function csvFields(col: DebugColumn, cell: DebugCell): string[] {
 
 /** Bars of the file made between one step and the next. */
 const CSV_BARS = 500;
+/** A file bigger than this is asked about before it is made: the whole run, or only the bars on screen. */
+export const CSV_ASK_BYTES = 20_000_000;
+/** A file bigger than this is not made whole at all: it is one string, which the engine limits to about 536 million characters, and an estimate can be a little low. */
+export const CSV_MAX_BYTES = 400_000_000;
+/** Bars read to work out how long a row of the file is. */
+const CSV_SAMPLE = 200;
+
+/** What a file's rows and heading are made of, for one ticker. */
+function csvLayout(bt: Backtest, asset: string) {
+  const cx = ctxOf(bt);
+  const cols = debugColumns(bt, asset);
+  const entries = (bt.spec.entries ?? 1) > 1;
+  const header = csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', ...(entries ? ['entries'] : []), 'what happened']);
+  const row = (r: DebugRow) => csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
+  return { count: cx.asset(asset).count, header, row };
+}
 
 /**
  * Makes the file in steps of a few hundred bars, so a caller can let other work in between (see inSlices), and returns
- * it at the end: every bar of the ticker in the run, with the columns of the table, values as plain numbers and outcomes
- * as yes, no or unknown.
+ * it at the end: the bars of the ticker in the run, all of them or those from `range.from` up to but not including
+ * `range.to`, with the columns of the table, values as plain numbers and outcomes as yes, no or unknown.
  */
-export function* csvSteps(bt: Backtest, asset: string): Generator<Progress, string> {
-  const cx = ctxOf(bt);
-  const cols = debugColumns(bt, asset);
-  const count = cx.asset(asset).count;
-  const entries = (bt.spec.entries ?? 1) > 1;
-  const parts = [csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', ...(entries ? ['entries'] : []), 'what happened'])];
-  for (let from = 0; from < count; from += CSV_BARS) {
+export function* csvSteps(bt: Backtest, asset: string, range?: { from: number; to: number }): Generator<Progress, string> {
+  const { count, header, row } = csvLayout(bt, asset);
+  const first = Math.max(0, Math.min(count, range?.from ?? 0));
+  const last = Math.max(first, Math.min(count, range?.to ?? count));
+  const parts = [header];
+  for (let from = first; from < last; from += CSV_BARS) {
+    const to = Math.min(last, from + CSV_BARS);
     let text = '';
-    for (const r of debugRows(bt, asset, from, from + CSV_BARS)) {
-      text += csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
-    }
+    for (const r of debugRows(bt, asset, from, to)) text += row(r);
     parts.push(text);
-    yield { done: Math.min(count, from + CSV_BARS), total: count };
+    yield { done: to - first, total: last - first };
   }
   return parts.join('');
+}
+
+/**
+ * How big the file of the whole run will be, worked out from a sample of its rows in the middle of the run: exact for a run
+ * of a few hundred bars, and within a few per cent for a longer one. Sizes are in characters, which is bytes for a file that
+ * is nearly all numbers.
+ */
+export function csvSize(bt: Backtest, asset: string): { bars: number; bytes: number } {
+  const { count, header, row } = csvLayout(bt, asset);
+  const from = count <= CSV_SAMPLE ? 0 : Math.floor((count - CSV_SAMPLE) / 2);
+  const sample = debugRows(bt, asset, from, from + CSV_SAMPLE);
+  const length = sample.reduce((n, r) => n + row(r).length, 0);
+  return { bars: count, bytes: header.length + (sample.length ? Math.round((length / sample.length) * count) : 0) };
+}
+
+/**
+ * What to ask the reader before making the file of the whole run, or null when it is small enough to just make. `all` is
+ * whether the whole run may be offered; `shown` is how many bars the table shows.
+ */
+export function csvAsk(size: { bars: number; bytes: number }, shown: number): { text: string; all: boolean } | null {
+  if (size.bytes <= CSV_ASK_BYTES) return null;
+  const about = `about ${Math.round(size.bytes / 1e6).toLocaleString('en-US')} MB (${size.bars.toLocaleString('en-US')} bars)`;
+  const bars = `${shown.toLocaleString('en-US')} ${shown === 1 ? 'bar' : 'bars'}`;
+  if (size.bytes > CSV_MAX_BYTES) return { text: `The file with every bar would be ${about}, too large to save as one file. Save only the ${bars} shown?`, all: false };
+  return { text: `The file with every bar would be ${about}. Save every bar, or only the ${bars} shown?`, all: true };
 }
 
 /** The whole file at once. */

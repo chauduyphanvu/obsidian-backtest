@@ -4,15 +4,19 @@ import { ItemView, MarkdownView, type App, type WorkspaceLeaf } from 'obsidian';
 import { h } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 import { hintFor } from './fixes.ts';
-import { blockLabel, changeKind, chooseBlock, locateBlock, waitFor, type Choice, type Shown } from './live-core.ts';
+import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, waitFor, type Choice, type Shown } from './live-core.ts';
 import { debounce } from './result-cache.ts';
 
 export const VIEW_TYPE_LIVE = 'backtest-live';
 
 /** What the panel needs from the plugin. */
 export interface LiveHost {
-  /** Draws the strategy's result into `el` (clearing it first). Resolves when drawn, with a function that disposes of it. Rejects when the run fails. */
-  show(source: string, el: HTMLElement, opts: { notePath: string; apply: (values: Record<string, number>) => Promise<void> }): Promise<() => void>;
+  /**
+   * Draws the strategy's result into `el` (clearing it first). Resolves when drawn, with a function that disposes of it. Rejects
+   * when the run fails. When `signal` aborts before then, the run is stopped and the draw resolves with nothing drawn. A draw
+   * that fails lets go of what it held.
+   */
+  show(source: string, el: HTMLElement, opts: { notePath: string; apply: (values: Record<string, number>) => Promise<void>; signal: AbortSignal }): Promise<() => void>;
   /** True when the block parses and every ticker's prices are already saved, so running it needs no download. */
   pricesReady(source: string): Promise<boolean>;
   /** The block's problems, empty when it can run. */
@@ -84,6 +88,8 @@ export class LiveView extends ItemView {
   private timer: number | undefined;
   /** Counts runs, so the answer of an older one is dropped when a newer one has started. */
   private runId = 0;
+  /** The run in flight: a newer run, or closing the panel, stops it. */
+  private latest = new Latest();
   /** Counts looks at the note, so a look that was waiting for an answer gives way to a newer one. */
   private looks = 0;
   private look = debounce(() => void this.refresh(), LOOK_AFTER_MS);
@@ -219,6 +225,7 @@ export class LiveView extends ItemView {
       return;
     }
     const id = ++this.runId;
+    const signal = this.latest.start();
     const errors = this.host.errors(selected.text);
     if (errors.length > 0) {
       this.showProblem(reading, selected, { kind: 'errors', errors, text: selected.text });
@@ -233,7 +240,7 @@ export class LiveView extends ItemView {
       el.remove();
     };
     try {
-      dispose = await this.host.show(selected.text, el, { notePath: reading.note, apply: (values) => this.apply(reading, selected, values) });
+      dispose = await this.host.show(selected.text, el, { notePath: reading.note, apply: (values) => this.apply(reading, selected, values), signal });
       if (id !== this.runId) return drop();
       if (this.result && this.sameBlock(selected)) restoreOpen(el, openDetails(this.result.el));
       await settle();
@@ -293,6 +300,7 @@ export class LiveView extends ItemView {
     window.clearTimeout(this.timer);
     this.timer = undefined;
     this.runId++;
+    this.latest.stop();
     this.pending = null;
     if (this.running) {
       this.running = false;
