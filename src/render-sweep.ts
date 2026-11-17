@@ -342,7 +342,7 @@ function bestValues(el: HTMLElement, params: SweepParam[], sum: SweepSummary, pe
   const row = h(el, 'div', 'bt-sweep-best');
   h(row, 'span', undefined, words.label);
   params.forEach((p, i) => {
-    if (i > 0) row.append(' ');
+    if (i > 0) row.append(', ');
     h(row, 'code', undefined, `${p.name} = ${paramText(p, sum.best.values[p.name])}`);
   });
   row.append(`. ${words.advice}`);
