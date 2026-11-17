@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { runBacktest } from '../src/backtest.ts';
+import { parseSpec } from '../src/dsl.ts';
 import type { ExitReason, Trade } from '../src/engine.ts';
 import {
   MARKER_SPACING,
+  boughtWording,
   buyAndHold,
+  buyPoints,
   clipBars,
   clipTrades,
   decimate,
@@ -267,4 +271,70 @@ test('the summary line gives the trade count, the time held and the buy and hold
   assert.equal(summaryLine(1, 0.5, -0.1234), '1 trade, held 50% of the time. Bought and held, it returned −12.3% over this period.');
   assert.equal(summaryLine(0, 0, 0.05), 'No trades. Bought and held, it returned 5.0% over this period.');
   assert.equal(summaryLine(3, 0.04, null), '3 trades, held 4.0% of the time.');
+});
+
+const entry = (a: number, price: number) => ({ t: day(a), price, shares: 1, money: price, signalT: day(a - 1) });
+
+test('a trade made in one go has one buy marker, where the buy was, exactly as before entries existed', () => {
+  const held = clipTrades([trade(2, 9), trade(5, 20, { reason: 'open' }), trade(0, 6)], 'AAA', day(1), day(12));
+  assert.deepEqual(held.map((w) => buyPoints(w).length), [1, 1, 0]);
+  for (const w of held) assert.equal(buyPoints(w).length, w.buy ? 1 : 0);
+  assert.deepEqual(buyPoints(held[0]), [{ t: day(2), price: 102 }]);
+  // A trade made under `entries` that happened to make one entry is the same.
+  const [one] = clipTrades([trade(2, 9, { entries: [entry(2, 102)] })], 'AAA', day(0), day(20));
+  assert.deepEqual(buyPoints(one), [{ t: day(2), price: 102 }]);
+});
+
+test('a position built in entries has a buy marker for each entry, at its own fill price', () => {
+  const entries = [entry(2, 100), entry(5, 110), entry(8, 125)];
+  const t = trade(2, 15, { entries, entryPrice: 111.7 });
+  const [whole] = clipTrades([t], 'AAA', day(0), day(30));
+  assert.deepEqual(buyPoints(whole), [{ t: day(2), price: 100 }, { t: day(5), price: 110 }, { t: day(8), price: 125 }]);
+  // The window cuts away the entries before it, as it does a buy.
+  const [late] = clipTrades([t], 'AAA', day(4), day(30));
+  assert.deepEqual(buyPoints(late).map((p) => p.price), [110, 125]);
+  // And after it, for a position that is still held at the window's end.
+  const [open] = clipTrades([{ ...t, reason: 'open' }], 'AAA', day(0), day(6));
+  assert.deepEqual(buyPoints(open).map((p) => p.price), [100, 110]);
+  // The entry on the window's first and last day counts.
+  assert.deepEqual(buyPoints(clipTrades([t], 'AAA', day(5), day(5))[0]).map((p) => p.price), [110]);
+});
+
+test('the markers of a position built in entries are counted one by one, with the sell', () => {
+  const t = trade(2, 15, { entries: [entry(2, 100), entry(5, 110), entry(8, 125)] });
+  assert.equal(markerCount(clipTrades([t], 'AAA', day(0), day(30))), 4);
+  assert.equal(markerCount(clipTrades([t], 'AAA', day(4), day(30))), 3);
+  assert.equal(markerCount(clipTrades([t, trade(20, 25)], 'AAA', day(0), day(30))), 4 + 2);
+});
+
+test('the price axis covers the price of every entry', () => {
+  const closes = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109];
+  const t = trade(0, 9, { entries: [entry(0, 100), entry(4, 80), entry(7, 140)], entryPrice: 106.7, exitPrice: 109 });
+  assert.deepEqual(priceRange(closes, clipTrades([t], 'AAA', day(0), day(9))), { lo: 80, hi: 140 });
+  // A marker off the window does not stretch it.
+  assert.deepEqual(priceRange(closes.slice(5), clipTrades([t], 'AAA', day(5), day(9))), { lo: 105, hi: 140 });
+});
+
+test('the tooltip says how many entries and the average, or the day and price of a single buy', () => {
+  const when = (t: number) => `day ${(t - T0) / DAY}`;
+  const money = (v: number) => v.toFixed(2);
+  assert.equal(boughtWording(trade(2, 9), when, money), 'day 2 at 102.00');
+  assert.equal(boughtWording(trade(2, 9, { entries: [entry(2, 102)] }), when, money), 'day 2 at 102.00');
+  assert.equal(boughtWording(trade(2, 9, { entries: [entry(2, 100), entry(5, 110)], entryPrice: 105 }), when, money), '2 entries from day 2, 105.00 on average');
+});
+
+test('on a real run every entry of every trade gets its marker, on the bar it filled at its fill price', () => {
+  const closes = Array.from({ length: 300 }, (_, i) => 100 + i * 0.4 + 8 * Math.sin(i / 7));
+  const data = new Map([['AAA', bars(closes)]]);
+  const { spec, errors } = parseSpec('universe: AAA\nentries: 3\nbuy when close > sma(10)\nadd when close > last entry price * 1.01\nsell when close < sma(10)');
+  assert.deepEqual(errors, []);
+  const bt = runBacktest(spec!, data);
+  assert.ok(bt.run.trades.some((t) => t.entries!.length === 3));
+  const held = clipTrades(bt.run.trades, 'AAA', day(0), day(299));
+  const points = held.flatMap(buyPoints);
+  assert.equal(points.length, bt.run.trades.reduce((s, t) => s + t.entries!.length, 0));
+  assert.equal(markerCount(held), points.length + held.filter((w) => w.sell).length);
+  const b = data.get('AAA')!;
+  for (const p of points) assert.ok(b.t.includes(p.t));
+  assert.deepEqual(points, bt.run.trades.flatMap((t) => t.entries!.map((e) => ({ t: e.t, price: e.price }))));
 });

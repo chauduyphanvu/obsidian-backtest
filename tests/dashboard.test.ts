@@ -161,6 +161,24 @@ test('the next orders give a time unless it is the next open, and what filled at
   assert.match(COLUMNS.find((c) => c.key === 'next')!.hint!, /next open.*another time.*Bought and Sold.*last close/);
 });
 
+test('a later entry is an Add, not a Buy, in the Next column: after the buys, and in its own words at the last close', () => {
+  // A holds one entry and its add rule holds at the last close; B has no position and its buy rule holds.
+  const data = { A: bars([10, 10, 12, 15]), B: bars([5, 5, 5, 20]) };
+  const src = (fill: string) => `universe: A, B\ncapital: 1000\nentries: 3\n${fill}buy when close > 9\nadd when close > last entry price * 1.01\nsell when close < 5`;
+  const open = rowFrom('n.md', 'S', run(src(''), data), NOW);
+  assert.deepEqual([open.next, open.orders], [['Buy B', 'Add A'], 2]);
+  const close = rowFrom('n.md', 'S', run(src('fill: close\n'), data), NOW);
+  assert.deepEqual([close.next, close.orders], [['Bought B at the last close', 'Added A at the last close'], 2]);
+  // Several tickers adding are listed as buys are, and cut the same way.
+  const names = ['A', 'B', 'C', 'D', 'E'];
+  const all = Object.fromEntries(names.map((n) => [n, bars([10, 10, 12, 15])]));
+  const many = rowFrom('n.md', 'S', run(`universe: ${names.join(', ')}\ncapital: 1000\nentries: 3\nbuy when close > 9\nadd when close > last entry price * 1.01`, all), NOW);
+  assert.deepEqual(many.next, ['Add A, B, C and 2 more']);
+  // A strategy without entries never says Add.
+  const plain = rowFrom('n.md', 'S', run('universe: A, B\ncapital: 1000\nbuy when close > 9', data), NOW);
+  assert.deepEqual(plain.next, ['Buy B']);
+});
+
 test('an order a close-fill ranking could not fill yet is for the next close', () => {
   const days = (weekdays: boolean) => {
     const out: number[] = [];

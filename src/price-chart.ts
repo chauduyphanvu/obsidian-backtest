@@ -65,6 +65,12 @@ export function clipTrades(trades: Trade[], ticker: string, from: number, to: nu
   return out;
 }
 
+/** Where one trade's buy markers go in the window: one for each entry in it, at its own fill price. */
+export function buyPoints(w: WindowTrade): { t: number; price: number }[] {
+  const fills = w.trade.entries ?? [{ t: w.trade.entryT, price: w.trade.entryPrice }];
+  return fills.filter((e) => e.t >= w.from && e.t <= w.to).map((e) => ({ t: e.t, price: e.price }));
+}
+
 /** The periods the strategy held the ticker, with trades that touch or overlap joined. Needs `held` in time order. */
 export function heldIntervals(held: WindowTrade[]): { from: number; to: number }[] {
   const out: { from: number; to: number }[] = [];
@@ -118,7 +124,7 @@ export function priceRange(c: number[], held: WindowTrade[]): { lo: number; hi: 
   };
   for (const v of c) see(v);
   for (const w of held) {
-    if (w.buy) see(w.trade.entryPrice);
+    for (const p of buyPoints(w)) see(p.price);
     if (w.sell) see(w.trade.exitPrice);
   }
   if (hi <= lo) {
@@ -170,7 +176,7 @@ export function decimate(c: number[], plotW: number): number[] {
 
 /** How many buy and sell markers the window would carry. */
 export function markerCount(held: WindowTrade[]): number {
-  return held.reduce((sum, w) => sum + (w.buy ? 1 : 0) + (w.sell ? 1 : 0), 0);
+  return held.reduce((sum, w) => sum + buyPoints(w).length + (w.sell ? 1 : 0), 0);
 }
 
 /** Markers are drawn only when there is room for about one per `MARKER_SPACING` pixels. */
@@ -186,6 +192,12 @@ export function markerPath(kind: 'buy' | 'sell', x: number, y: number): string {
   const dir = kind === 'buy' ? 1 : -1;
   const f = (v: number) => v.toFixed(1);
   return `M${f(x)},${f(y + 2 * dir)}L${f(x - 5)},${f(y + 11 * dir)}L${f(x + 5)},${f(y + 11 * dir)}Z`;
+}
+
+/** What the tooltip says about the buying: the day and price, or for a position built in entries their number, the first day and the average price. */
+export function boughtWording(trade: Trade, when: (t: number) => string, price: (v: number) => string): string {
+  const n = trade.entries?.length ?? 1;
+  return n > 1 ? `${n} entries from ${when(trade.entryT)}, ${price(trade.entryPrice)} on average` : `${when(trade.entryT)} at ${price(trade.entryPrice)}`;
 }
 
 /** Why a position ended, worded as in the trades table. */

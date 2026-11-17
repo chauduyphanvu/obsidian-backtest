@@ -550,3 +550,26 @@ test('mapLimit keeps results in order and never runs more than the limit at once
   assert.deepEqual(await mapLimit([], 3, async (x) => x), []);
   assert.deepEqual(await mapLimit([1, 2], 10, async (x) => x * 2), [2, 4]);
 });
+
+test('the orders window words a later entry as Add, in the list, its grouping and the note it saves', () => {
+  const data = { A: bars([10, 10, 12, 15]), B: bars([5, 5, 5, 20]) };
+  const src = (fill: string) => `universe: A, B\ncapital: 1000\nentries: 3\n${fill}buy when close > 9\nadd when close > last entry price * 1.01\nsell when close < 5`;
+  const shown = (fill: string) => {
+    const status = statusFrom('Notes/Adding.md', 'Adding', run(src(fill), data), NOW);
+    return { status, rows: todoRows([status]) };
+  };
+  const open = shown('');
+  // What the window draws for each row: the action word and the size line.
+  assert.deepEqual(
+    todoGroups(open.rows).flatMap((g) => g.rows.map(({ order }) => [g.when, actionWord(order), order.ticker, orderSize(order).split(':')[0]])),
+    [
+      ['next open', 'Add', 'A', 'Step 3 of 3'],
+      ['next open', 'Buy', 'B', 'Step 1 of 3'],
+    ],
+  );
+  assert.match(ordersMarkdown([open.status], NOW), /\| Add \| A \| Step 3 of 3: /);
+  assert.match(ordersMarkdown([open.status], NOW), /\| Buy \| B \| Step 1 of 3: /);
+  const close = shown('fill: close\n');
+  assert.deepEqual(close.rows.map(({ order }) => [actionWord(order), order.ticker]), [['Added', 'A'], ['Bought', 'B']]);
+  assert.match(ordersMarkdown([close.status], NOW), /\| Added \| A \| Step 3 of 3: /);
+});
