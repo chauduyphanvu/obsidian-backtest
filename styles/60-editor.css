@@ -48,3 +48,57 @@
 .bt-setting-error:empty {
   display: none;
 }
+
+.bt-diag-tip {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+.bt-fix {
+  display: block;
+  margin-top: 4px;
+  padding: 1px 8px;
+  height: auto;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.bt-help {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.bt-diag-tip-row + .bt-help {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-help-sig {
+  font-family: var(--font-monospace);
+  font-weight: var(--font-semibold);
+}
+.bt-help-text {
+  color: var(--text-normal);
+}
+.bt-help-example {
+  padding: 2px 6px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  white-space: pre-wrap;
+}
+
+/* A ticker from a lookup carries a company name, which can be long; the ticker stays whole. */
+.bt-suggest-hit .bt-suggest-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The suggestion under a problem in the list shown instead of a result. */
+.bt-error-hint {
+  display: block;
+  margin: 2px 0 0 56px;
+  color: var(--text-muted);
+}

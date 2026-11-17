@@ -20,7 +20,7 @@ const TICKER_SETTINGS = ['universe', 'symbol', 'benchmark', 'cash rate'];
 /** Settings whose values are numbers, percentages and atr(n), where parameters can stand in. */
 const NUMERIC_SETTINGS = ['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold'];
 
-function commentStart(line: string): number {
+export function commentStart(line: string): number {
   const m = line.match(/(^|\s)(#|\/\/)/);
   return m ? m.index! + m[1].length : -1;
 }
@@ -152,13 +152,19 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
   return out;
 }
 
-/** Tokens for each line of a whole block. */
-export function tokenizeBlock(lines: string[]): Token[][] {
-  const params = declaredParams(lines).map((p) => p.name);
+/** What each line of a whole block is, with a rule's continuation lines read in context. */
+export function lineKinds(lines: string[]): LineKind[] {
   let inRule = false;
   return lines.map((line) => {
     const kind = lineKind(line, inRule);
     inRule = kind === 'rule' || kind === 'continuation';
-    return tokenize(line, kind, params);
+    return kind;
   });
+}
+
+/** Tokens for each line of a whole block. */
+export function tokenizeBlock(lines: string[]): Token[][] {
+  const params = declaredParams(lines).map((p) => p.name);
+  const kinds = lineKinds(lines);
+  return lines.map((line, i) => tokenize(line, kinds[i], params));
 }
