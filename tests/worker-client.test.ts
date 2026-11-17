@@ -297,6 +297,27 @@ test('with a slider moved, the luck checks test the run on screen and the sweep 
   assert.ok(near(w.declaredReturn, shown.run.equity[at(w.testTo)] / shown.run.equity[at(w.testFrom) - 1] - 1, 1e-12));
 });
 
+test('entries and a commission reach the luck checks alike in the worker and here: the worker reads them from the text and the defaults', async (t) => {
+  // `entries` and the add rule come from the block's text; the commission only from the plugin's defaults.
+  const defaults: Partial<Defaults> = { ...DEFAULTS, commission: { k: 'share', fee: 0.01, min: 1, max: null } };
+  const source = 'universe: A 50%, B 50%\nentries: 3\nbuy when close > sma(10)\nadd when close > last entry price * 1.01\nsell when close < sma(10)';
+  const base = input(source, 4);
+  const parse: Parse = (overrides) => parseSpec(source, { defaults, overrides });
+  const block: JobInput = { ...base, defaults, parse, backtest: runBacktest(parse({}).spec!, base.backtest.data) };
+  assert.ok(block.backtest.run.commission! > 0 && block.backtest.run.trades.some((tr) => tr.entries!.length === 3));
+  const results: Record<string, RandomEntriesResult> = {};
+  for (const [label, make] of [['worker', inProcess().make], ['here', noWorker]] as const) {
+    const section = track(t, { makeWorker: make }).forBlock(block);
+    results[label] = (await section.run({ kind: 'random', seed: 5, runs: 30 }).done) as RandomEntriesResult;
+    section.close();
+  }
+  assert.deepStrictEqual(results.worker, results.here);
+  assert.deepStrictEqual(results.here, await randomEntries(block.backtest, { seed: 5, runs: 30 }));
+  // The same block with neither feature gives other numbers, so both were really in the tries.
+  const plain = input('universe: A 50%, B 50%\nbuy when close > sma(10)\nsell when close < sma(10)', 4);
+  assert.notDeepEqual(results.here.random.cagr, (await randomEntries(plain.backtest, { seed: 5, runs: 30 })).random.cagr);
+});
+
 test('one worker keeps a block\'s prices once and a separate run for each set of values, never reusing the wrong one', async (t) => {
   const w = inProcess();
   const client = track(t, { makeWorker: w.make });
