@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseCompare } from '../src/compare.ts';
+import { parseDashboard } from '../src/dashboard.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, parseSpec } from '../src/dsl.ts';
 import { resultProperties } from '../src/export.ts';
 import { notOurNoteMessage, ORDERS_MARKER } from '../src/orders.ts';
@@ -51,6 +52,15 @@ test('every compare block in the README parses without errors', () => {
   }
 });
 
+test('every backtests block in the README parses without errors', () => {
+  const found = blocks.filter((b) => b.lang === 'backtests');
+  assert.ok(found.length >= 1, 'no backtests block found');
+  for (const b of found) {
+    const { errors } = parseDashboard(b.body);
+    assert.deepEqual(errors, [], `the backtests block on README line ${b.line} ("${first(b.body)}") has errors`);
+  }
+});
+
 test('the README mentions every setting, function, series, calendar value and position value', () => {
   const missing: string[] = [];
   for (const name of [...SETTINGS, ...Object.keys(INDICATORS), ...SERIES, ...CALENDAR]) {
@@ -84,8 +94,20 @@ test('the README says what the orders note carries, what refuses a save, and who
 });
 
 test('the README lists the source files by name', () => {
-  const layout = readme.slice(readme.indexOf('Layout of `src/`'));
+  const start = readme.indexOf('Layout of `src/`');
+  assert.ok(start >= 0, 'no source layout in the README');
+  const layout = readme.slice(start, readme.indexOf('\n## ', start));
   for (const file of ['sweep.ts', 'luck.ts', 'rng.ts', 'render-sweep.ts', 'render-luck.ts', 'render-compare.ts']) assert.ok(layout.includes(`\`${file}\``), file);
+  const files = readdirSync(new URL('../src/', import.meta.url)).filter((f) => f.endsWith('.ts'));
+  assert.ok(files.length > 40, `only ${files.length} files found in src/`);
+  assert.deepEqual(files.filter((f) => !layout.includes(`\`${f}\``)), [], 'files in src/ that the layout does not name');
+});
+
+test('the README names every setting the settings tab shows', () => {
+  const tab = read('src/settings.ts');
+  const names = [...tab.matchAll(/\.setName\('([^']+)'\)(?!\s*\.setHeading)/g), ...tab.matchAll(/this\.field\(\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(names.length >= 15, `only ${names.length} settings found`);
+  assert.deepEqual(names.filter((n) => !readme.includes(n)), [], 'settings the README does not name');
 });
 
 test('the README holds no path from anyone\'s own machine', () => {

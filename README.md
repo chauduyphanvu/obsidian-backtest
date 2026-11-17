@@ -12,14 +12,24 @@ buy  when close > sma(200)
 sell when close < sma(200)
 ```
 
-Under the block you get the strategy's return per year, worst drawdown, Sharpe ratio and other figures next to buy and hold, a chart of both, the positions held now, and a list of every trade.
+Under the block you get the strategy's return per year, worst drawdown, Sharpe ratio and other figures next to buy and hold, a chart of both, the positions held now, and a list of every trade, each with the reasons for it. If the strategy has parameters, sliders run it again with other values. A result can be folded to one line.
 
-This README is the full guide to the plugin. Every `strategy` block and `compare` block in it is checked by the plugin's own parser when the tests run.
+The plugin also gives you:
+
+- starter strategies, and a helper that turns a CSV file into a ticker or a small strategy;
+- help while you write: colours, auto-complete, help on hover, "did you mean" fixes and a lookup of tickers;
+- a preview panel that shows the result of the block you are editing;
+- parameter sweeps and luck checks, which run in the background;
+- `compare` blocks, which chart several strategies together, and `backtests` blocks, which list every strategy in the vault;
+- today's orders, as a window and as a count in the status bar;
+- saved results, and results written to note properties.
+
+This README is the full guide to the plugin. Every `strategy`, `compare` and `backtests` block in it is checked by the plugin's own parser when the tests run.
 
 ## What it is not
 
 - It is long or flat only. There is no shorting, no leverage and no options. Weights that add up to more than 100% are rejected, and a sell rule only closes a position you hold.
-- It never places orders. "Today's orders" lists what your rules would do at the next open. You place any trade yourself, somewhere else.
+- It never places orders. "Today's orders" lists the orders your rules give and when each applies. You place any trade yourself, somewhere else.
 - It is a backtest on adjusted historical prices. It shows what the rules would have done on past data. It does not predict anything.
 - It is not financial advice.
 
@@ -35,13 +45,15 @@ Manual install:
 
 The minimum Obsidian version is 1.11.4 (`minAppVersion` in `manifest.json`). The manifest does not mark the plugin desktop-only, but it has never been run on a phone (see "How far to trust it").
 
+Two features use the network on their own: the check for orders at start-up, and the ticker lookup in the editor. Both are on by default and each has a setting (see "Network requests").
+
 To build from source, run `npm install` and then `npm run build`. The three files land in `dist/`. The tests run `.ts` files directly with Node, so use a Node version that does that without flags; the project is developed and released with Node 26.
 
 ## Writing a strategy
 
 ### The shape of a block
 
-A strategy is a code block whose language is `strategy`. The fence can be backticks or tildes. In reading view, and in live preview while the cursor is outside it, the block is replaced by its result. In source mode, or with the cursor inside it, you see the text.
+A strategy is a code block whose language is `strategy`. The fence can be backticks or tildes. In reading view, and in live preview while the cursor is outside it, the block is replaced by its result. In source mode, or with the cursor inside it, you see the text; the strategy preview panel (see "Strategy preview") shows the result next to it.
 
 Each line is one of these:
 
@@ -273,7 +285,7 @@ stop = 8% in 4%..12% step 2%
 - A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below is of buy sell when for all in step at top by true false always never min max abs bars entry bars_held entry_price`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
 - Declare a name once. Names do not care about capital letters. A parameter can sit anywhere in the block.
 
-A range changes nothing by itself: the block runs with the value written. See "Try other parameter values" under "Reading a result".
+A range changes nothing by itself: the block runs with the value written. Every declared parameter gets a slider in the result (see "The Parameters bar" under "Reading a result"), and a range also enables "Try other parameter values".
 
 ### Comments
 
@@ -367,6 +379,20 @@ buy when close > sma(150)
 sell when close < sma(150)
 ```
 
+**Filling at the close.** The same trend rule on SPY, but each order fills at the close the rule was read at, as a market-on-close order would, instead of at the next open. The result assumes you can trade at that closing price. A real order can only come near it, by being placed just before the close.
+
+```strategy
+name: Trend at the close
+universe: SPY
+from: 2010-01-01
+costs: 5 bps
+slippage: 2 bps
+fill: close
+
+buy when close > sma(200)
+sell when close < sma(200)
+```
+
 **Parameters with ranges, and a test date.** Three numbers have ranges. The results before 2018 and from 2018 on are reported apart.
 
 ```strategy
@@ -435,6 +461,23 @@ sell when close < sma(100)
 
 The formats a CSV file can take are listed under "Prices and privacy".
 
+### Starter strategies
+
+The command "Insert strategy block" opens a window called "Start from a strategy". It lists eight strategies and an "Empty block", each with a few lines on what it does and when it tends to struggle. Choose an entry with the mouse or the arrow keys (Home and End jump to the first and last) to see its text, coloured as it is in a result. "Insert", Enter, or a double-click on an entry puts the block at the cursor of the note you are editing, on its own line. The command works only while a note is open for editing.
+
+| Starter | What it shows |
+| --- | --- |
+| Trend following on one fund | A buy and a sell rule on one fund, with costs and slippage. |
+| Moving-average cross | Parameters with ranges, for "Try other parameter values", and `test from`. |
+| Dip buyer in an uptrend | A short RSI, an exit by `bars held`, and a stop loss. |
+| Bitcoin breakout | A Binance ticker, a breakout rule and an ATR trailing stop as the only exit. |
+| Momentum rotation | `hold: top 3 by roc(126)`, chosen monthly. |
+| Three funds with trend filters | Weights, quarterly rebalancing, a `for` section and a benchmark. |
+| Calm funds get more weight | `weighting: inverse volatility(60)`. |
+| November to April | The `month` calendar value. |
+
+The starters are examples of the language, not advice. Each is long or flat and charges costs and slippage. How a strategy did on past prices says nothing about future prices (see "How far to trust it").
+
 ## How the simulation works
 
 These are the engine's rules. Each is exact.
@@ -444,7 +487,7 @@ These are the engine's rules. Each is exact.
 1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker. With `fill: close` it fills at that same close instead, and so does everything else that would fill at the next open: ranking decisions, rebalancing and buying again after a stop (rules 17, 18, 23, 26, 27 and 31 say how).
 2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders". With `fill: close` it has filled at that last close, so nothing is left pending, except an order from a ranking decision made at a time a ticker had no bar, which fills at that ticker's next close.
 3. The run starts on `from`, or on the first day every ticker in the universe has prices if that is later. Tickers read only with `of`, and the benchmark, do not delay the start. The result warns when the run starts more than 7 days after `from`. It ends on `to`, or on the last bar.
-4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr` and `macd` count five times their period, because they depend on where they started. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
+4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr` and `macd` count five times their period, because they depend on where they started. A period or lag given by a parameter with a range counts at the largest value of its range, so the sliders, "Try other parameter values" and "Was it luck?" can try any value in it on the prices already loaded. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
 5. The run has one step for each time at which any ticker in the universe has a bar. A ticker with no bar that day keeps its last close for valuing the position.
 6. A value read with `of`, the benchmark's value and a cash-rate ticker's yield come from that series' latest bar that had ended by the end of the strategy's bar. A bar ends at its start plus its series' step, the shortest gap between its bars. From a step of 20 days on, the step is counted in calendar months, so a monthly bar dated the 1st ends on the 1st of the next month. Daily series on the same dates line up day for day, whichever days each trades; a weekly bar dated Monday is read from the following Monday; an hourly rule reads a daily bar from that day's 23:00 bar on.
 
@@ -518,27 +561,54 @@ These are the engine's rules. Each is exact.
 
 From the top:
 
-1. **Title and summary.** The `name` (or "Backtest"), then a line of what was run: tickers and weights, sizing, rebalancing, bar size, costs, slippage, stops, and parameter values.
+1. **Title and summary.** The `name` (or "Backtest"), on a button that folds the result to one line (see "Folding a result"). Then a line of what was run: tickers and weights, sizing, rebalancing, bar size, costs, slippage, stops, and parameter values.
 2. **Refresh prices.** A button that fetches the prices again and runs the block again.
 3. **The strategy as written**, coloured.
-4. **Notes.** Prices that could not be refreshed (see "Prices and privacy"); notes from the run itself: buy signals held back while a sizing or stop input warmed up, a buy rule or `hold` score still unknown at the start of the run, and a benchmark whose prices start later; the parser's notes with their line number; and a warning when the run starts more than 7 days after `from`.
-5. **Six figures.** Return per year, total return, worst drawdown and Sharpe ratio, each with the benchmark's value underneath. Then "Time invested", with volatility a year underneath. Then "Trades": the count of closed trades, how many were won and the average return. It says "none closed yet" when only open positions exist, and "the buy rule never fired" when there were none.
-6. **The chart.** The strategy and the benchmark on a log scale, with the final value of each in the key above it. Underneath, the drawdown from the previous high. Hover or tap to see the date, both values, both drawdowns and the share invested. A benchmark whose prices start later is drawn from its first value, and shows "–" before it. With `test from`, the test period is shaded.
-7. **A short note.** The dates, the starting money, "A rule seen at a close fills at the next open.", costs paid, and interest earned on cash. Then "Prices through" a date, from Yahoo, Binance or your CSV files.
-8. **Before and after the test date**, only with `test from`. A table of return per year (strategy and benchmark), worst drawdown, Sharpe ratio and trades, for each part.
-9. **Positions.** One row for each ticker: its weight, whether you are long since a date or in cash, whether an order is waiting for the next open, the closed trades, the share won and the average trade.
-10. **Trades.** A list you open, newest first: ticker, bought, price, sold, price, return after costs, profit and how it ended: "sell rule", "stop loss", "trailing stop", "take profit" or "still held". It shows the latest 500 trades. Intraday times are in UTC.
-11. **More statistics.** A table for the strategy and the benchmark: Sortino ratio, return per year divided by worst drawdown, best and worst year, the share of months with a gain, the longest time below a previous high, and best and worst month. Then a chart of the return in each calendar year, and a table of the strategy's return by month. Years the data only partly covers are faded. The Sortino ratio here takes off what cash earned, like the Sharpe ratio, and is the same figure as in the parameter sweep (rule 40 under "How the simulation works"). A benchmark whose prices start later is measured from its first value.
-12. **Prices and trades.** The price of one ticker with the periods you held it shaded, and a marker for each buy and sell. With more than one ticker there is one button for each, or a list when there are more than 12. Above it: the number of trades, the share of the time held, and what holding it throughout returned. When there are too many trades to mark at the chart's width, only the shaded bands are drawn.
-13. **Try other parameter values.** Shown when a parameter is declared with a range, such as `fast = 50 in 20..100 step 10`. A button runs every combination of the ranges, up to 2,000 combinations. Then it shows a chart for one ranged parameter, or a heatmap for two. They show where the values written in the note rank among all the variants, the median variant, and whether the best variant's neighbours do similarly well. With `test from` set, the view starts on the period before the date, the best variant is chosen on that period, and its result after the date is shown. The line under the reading says which period chose the best values ("Best before 2015-01-01: fast = 40, slow = 250"). If you switch the view to the whole run or to the period after the date, that line no longer suggests values, because values picked there have seen the test period and their later result would not be a fair test. Nothing is written back to the note.
-14. **Was it luck?** A button that runs three checks. *Reshuffled history* resamples the run's returns in blocks, to give a range for return per year and for worst drawdown. It shows how much the path and the drawdown depended on the order of the returns; it says nothing about whether the average return will persist, because every version is made from the run's own returns. *Random entries* makes the same number and length of trades at random times, to see how often random timing does as well. *Walk-forward* runs only when a parameter has a range: it picks the best values on a training window, applies them to the next unseen window, and repeats. Each window is measured from the last close before it, so the test windows' growth multiplies to the line's.
-15. **Save buttons.** "Save trades as CSV", "Save value history as CSV" and "Keep this result as a note" (see "Saving results").
+4. **Parameters.** Only when the strategy declares parameters: a bar with a slider for each one (see "The Parameters bar").
+5. **Notes.** Prices that could not be refreshed (see "Prices and privacy"); notes from the run itself: buy signals held back while a sizing or stop input warmed up, a buy rule or `hold` score still unknown at the start of the run, a benchmark whose prices start later, and, with `fill: close`, that the run assumes you can trade at the close the rule read; the parser's notes with their line number; and a warning when the run starts more than 7 days after `from`.
+6. **Six figures.** Return per year, total return, worst drawdown and Sharpe ratio, each with the benchmark's value underneath. Then "Time invested", with volatility a year underneath. Then "Trades": the count of closed trades, how many were won and the average return. It says "none closed yet" when only open positions exist, and "the buy rule never fired" when there were none.
+7. **The chart.** The strategy and the benchmark on a log scale, with the final value of each in the key above it. Underneath, the drawdown from the previous high. Hover or tap to see the date, both values, both drawdowns and the share invested. A benchmark whose prices start later is drawn from its first value, and shows "–" before it. With `test from`, the test period is shaded.
+8. **A short note.** The dates, the starting money, "A rule seen at a close fills at the next open." (with `fill: close`: "A rule seen at a close fills at that close."), costs paid, and interest earned on cash. Then "Prices through" a date, from Yahoo, Binance or your CSV files.
+9. **Before and after the test date**, only with `test from`. A table of return per year (strategy and benchmark), worst drawdown, Sharpe ratio and trades, for each part.
+10. **Positions.** One row for each ticker: its weight, whether you are long since a date or in cash, whether an order is waiting (for the next open, or with `fill: close` for the next close) or was made at the last close, the closed trades, the share won and the average trade.
+11. **Trades.** A list you open, newest first: a button, ticker, bought, price, sold, price, return after costs, profit and how it ended: "sell rule", "stop loss", "trailing stop", "take profit" or "still held". It shows the latest 500 trades. Intraday times are in UTC. The button at the start of each row, "Explain this trade", says why the trade happened (see "Explaining a trade").
+12. **More statistics.** A table for the strategy and the benchmark: Sortino ratio, return per year divided by worst drawdown, best and worst year, the share of months with a gain, the longest time below a previous high, and best and worst month. Then a chart of the return in each calendar year, and a table of the strategy's return by month. Years the data only partly covers are faded. The Sortino ratio here takes off what cash earned, like the Sharpe ratio, and is the same figure as in the parameter sweep (rule 40 under "How the simulation works"). A benchmark whose prices start later is measured from its first value.
+13. **Prices and trades.** The price of one ticker with the periods you held it shaded, and a marker for each buy and sell. With more than one ticker there is one button for each, or a list when there are more than 12. Above it: the number of trades, the share of the time held, and what holding it throughout returned. When there are too many trades to mark at the chart's width, only the shaded bands are drawn.
+14. **Try other parameter values.** Shown when a parameter is declared with a range, such as `fast = 50 in 20..100 step 10`. A button runs every combination of the ranges, up to 2,000 combinations. Then it shows a chart for one ranged parameter, or a heatmap for two. They show where the values written in the note rank among all the variants, the median variant, and whether the best variant's neighbours do similarly well. With `test from` set, the view starts on the period before the date, the best variant is chosen on that period, and its result after the date is shown. The line under the reading says which period chose the best values ("Best before 2015-01-01: fast = 40, slow = 250"). If you switch the view to the whole run or to the period after the date, that line no longer suggests values, because values picked there have seen the test period and their later result would not be a fair test. To put a variant's values into the block, click or tap its point on the chart, its cell in the heatmap, or its row in the table of best variants, then press "Use these values in the block". The best variant has the same button, except on a view that includes the test period. It writes the numbers the way "Write these values to the block" does (see "The Parameters bar"). Nothing is written to the note unless you press the button.
+15. **Was it luck?** A button that runs three checks. *Reshuffled history* resamples the run's returns in blocks, to give a range for return per year and for worst drawdown. It shows how much the path and the drawdown depended on the order of the returns; it says nothing about whether the average return will persist, because every version is made from the run's own returns. *Random entries* makes the same number and length of trades at random times, to see how often random timing does as well. *Walk-forward* runs only when a parameter has a range: it picks the best values on a training window, applies them to the next unseen window, and repeats. Each window is measured from the last close before it, so the test windows' growth multiplies to the line's.
+16. **Save buttons.** "Save trades as CSV", "Save value history as CSV" and "Keep this result as a note" (see "Saving results").
+
+The variants and the checks run in the background, so the note stays usable while they run. A bar shows how far they have got, and "Stop" ends them at once. A stopped sweep shows the variants it had finished, and a stopped check says it stopped; "Run checks again" runs them again. When several blocks run at once they take turns, and a block that waits says "Waiting for another run to finish…". Where Obsidian cannot start a background worker, they run in the foreground, a few backtests at a time between repaints.
 
 A result is kept in memory (the latest 40), so scrolling or switching views does not run it again. It runs again when the block's text or the plugin's defaults change, when the modified time of a CSV file it reads changes (or the file goes missing), when the kept result is older than the "Keep saved prices for" time, or when you press Refresh prices.
 
+### Folding a result
+
+The title is a button. Click it to fold the result to one line, and click again to open it. The line shows the strategy's name, return per year, worst drawdown, what it holds now ("Long SPY since 2026-03-02", "Holds 2 of 5" or "In cash") and any order waiting or made at the last close ("buys TLT at the next open"). A strategy with no name shows its tickers after "Backtest". A small mark says how many notes the result has. The chart, the tables and the sections are drawn only when the block is first opened.
+
+The setting "How results first appear" decides how a block starts: Full (the default) opens it, Compact folds it. Obsidian draws a block again when you scroll or switch views, and the block comes back the way you left it for the rest of the session. A named block is remembered by its name, and an unnamed one by its place in the note. A block that can't run always shows in full, with its problems.
+
+### The Parameters bar
+
+A strategy that declares parameters gets a "Parameters" bar under its text, with a slider for each parameter and its value in the block's own form (`50`, `8%`). With a range, the slider follows it (`in 20..100 step 10`). Without one, it runs from about half to double the value, in whole steps for whole numbers.
+
+- Drag a slider, or use the arrow keys, and the strategy runs again with that value on the prices already loaded. While you drag, the figures, the key and the main chart follow and the rest of the result dims. When you let go, the whole result is drawn again, so a section you had open closes.
+- A value the language rejects is not run. The bar says why and keeps the last result that ran.
+- When the result on screen differs from the block, a line says so ("Showing fast 80. The block says fast 50.") and shows two buttons. "Reset" goes back to the block's values. "Write these values to the block" changes only those numbers in the note; spacing, comments, ranges and `%` stay as they were. The button is missing where the block cannot be edited, such as in some embeds. If the note has changed since the result was drawn, nothing is written and a notice says to try again.
+- When Obsidian draws the block again, the sliders go back to the block's values.
+
+### Explaining a trade
+
+The button "Explain this trade", a small arrow at the start of each row of the trade list, opens a box under the row. Click it again to close the box. The box has four parts. Its numbers are worked out again from the same prices when you open it.
+
+- **Why it was bought.** The close the buy rule was read at. The rule as you wrote it, with the value of each part there and whether it held (✓ yes, ✗ no, ? unknown). For `crosses above` and `crosses below`, the bar before. For `of`, which bar of the other ticker was read. The parameter values. With `hold`, the ticker's place in the ranking, and the whole ranking when there are 12 tickers or fewer. Then anything that made the buy wait: an input still warming up, a stop or target exit after which the rule had to stop holding first, or the sells of the same ranking.
+- **How much.** The portfolio's value at the fill; the weight, or the risk per trade with its ATR, or the volatility for `weighting: inverse volatility`; any cut for lack of cash; the money and the shares; and the fill price at the open (with `fill: close`, the close) with the slippage.
+- **Why it was sold**, or **Why it is still held**. The sell rule with its values, or the stop or target: where it was, how it was set, the ATR or highest price behind it, and whether the bar opened beyond it or crossed it during the bar. With `hold`, the ranking it dropped out of. For a position still held: the sell rule at the last close, and whether a sell is waiting.
+- **Result.** Return and profit after costs, the bars held, the costs paid, and how often rebalancing topped the position up or trimmed it.
+
 ## Comparing and combining strategies
 
-A code block marked `compare` puts the equity curves of strategies from other notes on one chart, and can combine them into one portfolio.
+A code block marked `compare` puts the equity curves of strategies from other notes on one chart, and can combine them into one portfolio. To list the figures of every strategy in the vault side by side, use a `backtests` block (see "All strategies in one table").
 
 ```compare
 # One line for each strategy
@@ -569,19 +639,60 @@ What you get:
 
 Each strategy runs as written, with the plugin's defaults for what it leaves out. If one cannot run, the comparison says which line and why.
 
+## All strategies in one table
+
+A code block marked `backtests` lists every strategy in the vault with its latest figures, so one note gives the overview. The command "Insert strategy dashboard" inserts one. Strategies are found as in "Today's orders". It reads the results themselves, so it needs no note properties (see "Note properties" for the other way to list strategies).
+
+```backtests
+# Only the notes under Trading, best return per year first
+folder: Trading
+sort: return
+```
+
+An empty block is valid: it lists everything, by name. Each of the two settings is optional and can be written once. A line that starts with `#` is a comment.
+
+| Setting | What it does |
+| --- | --- |
+| `folder: Trading` | Lists only strategies in notes under that folder, subfolders included. Capital letters do not matter. |
+| `sort: return` | How the table is sorted at first: `return` (highest first), `drawdown` (smallest first), `sharpe` (highest first) or `name` (A to Z). The default is `name`. |
+
+Any other line is an error, shown with its line number like the errors of a `compare` block.
+
+Each strategy is one row: its name with its note's name under it (click to open the note), return per year, the benchmark's return per year (its name under the figure), worst drawdown, Sharpe ratio, trades, what it holds now ("Long SPY", "Long 2 of 5" or "In cash"), its orders in words, and the date its prices go through, with "may be old" when they are out of date by the rule under "Today's orders". The figures are the ones in the strategy's own result.
+
+The "Next" column lists the orders, sells first. An order for the next open has no time after it ("Sell TLT, GLD"). An order for the next close ends "at the next close", and what a strategy with `fill: close` did at the last close reads "Bought SPY at the last close" or "Sold SPY at the last close". A dash means no order.
+
+Rows appear as each strategy finishes, three at a time; until then a row says "Running…". A strategy that cannot run shows why across its row and does not stop the others. Click a column heading to sort by it, and again to reverse; strategies that could not run or are still running stay at the bottom. Under the table are the number of strategies, when the figures were worked out, and "Run again", which lists the vault again and runs everything with fresh prices. On a narrow pane the table scrolls sideways and the strategy's name stays in view. If the vault has no strategies, the block says so and how to add one.
+
 ## Today's orders
 
-The command "Show today's orders" opens a window. It runs every `strategy` block in every note of the vault that has the word "strategy" in it, and lists what each would do at the next open. Blocks are found as described under "Comparing and combining strategies": ones in callouts count, examples inside a longer fence do not.
+The command "Show today's orders", or the ribbon icon of the same name, opens a window. It runs every `strategy` block in every note of the vault that has the word "strategy" in it, and lists the orders each one has and when each applies. Blocks are found as described under "Comparing and combining strategies": ones in callouts count, examples inside a longer fence do not.
 
-- **To do at the next open.** One row for each order: Buy or Sell, the ticker, the size, the strategy (click it to open its note), the last close, and which bar it is based on, such as "Based on the close of 2026-11-13". For strategies with bars shorter than a day the row shows the time too, in UTC, such as "Based on the 5m bar starting 2026-11-13 14:05 UTC". Sells are listed first. A buy's size is its target share of the strategy and about how many dollars that is at the backtest's current value, which grows or shrinks from the block's `capital`. A sell is the whole position. Scale the percentage to your own money. The dollar figures are about the backtest, not about your account.
-- **Holding.** Strategies that hold something or have no order, and what they hold.
+- **To do at the next open.** One row for each order of a strategy that fills at the next open: Buy or Sell, the ticker, the size, the strategy (click it to open its note), the last close, and which bar it is based on, such as "Based on the close of 2026-11-13". For strategies with bars shorter than a day the row shows the time too, in UTC, such as "Based on the 5m bar starting 2026-11-13 14:05 UTC". Sells are listed first. A buy's size is its target share of the strategy and about how many dollars that is at the backtest's current value, which grows or shrinks from the block's `capital`. A sell is the whole position. Scale the percentage to your own money. The dollar figures are about the backtest, not about your account.
+- **To do at the next close.** Orders of a strategy with `fill: close` that could not fill at the close they were decided at. This happens when a ranking decision is made at a time a ticker has no bar: its order waits for that ticker's next close. The rows look like the ones above.
+- **Traded at the last close.** What a strategy with `fill: close` did at the close that has just passed. Its backtest has already bought or sold, so the row says Bought or Sold. To match it, the order had to be placed before that close. A buy shows its share of the strategy, a sell the whole position and the day it was opened.
+- **Holding.** Strategies that hold something or have no order, and what they hold. A position that has an order row, including one bought at the last close, is not listed again here.
+- **Strategies that fill at the close.** The strategies with `fill: close`, under this note: "A strategy with fill: close decides and fills an order at the same close, so the order has to be placed just before a close. What is listed for it is what its rules said at the last close."
 - **Problems.** A block that could not run, prices that are out of date, and any warning from loading prices. For daily bars, prices are out of date when they end more than 4 calendar days ago. For bars shorter than a day, they are out of date when the last bar is more than 3 bars old, and for weekly bars when it is more than 2 bars old.
 
-The header says which bar the orders are based on. The orders are for the open after that bar. When the strategies with orders end on different bars, the header shows the oldest and says so, and each row shows its own. Yahoo's bar for the current day is used once the exchange's regular session has closed, when Yahoo's answer gives that time; until then, and when it does not, the orders refer to the previous close. Check the date.
+A group with no rows is left out. When no strategy has an order, the window says "Nothing to do. No strategy has an order."
 
-Refresh prices downloads each ticker once, however many strategies use it, then runs the strategies again, three at a time. "Save as note" writes the same list to the note named in the "Note for today's orders" setting, creating it if it does not exist and replacing its whole contents each time. The generated note starts with the property `backtest_orders: true`. An existing note is replaced only if it has that property; otherwise nothing is written and the window says "<path> already exists and was not made by Backtest Blocks. Choose another note in settings." With no note set, it says so. Nothing in the window places an order.
+The header says which bar the orders are based on. Orders under "To do at the next open" are for the open after that bar, and under "To do at the next close" for the close after it. "Traded at the last close" is that bar's own close. When the strategies with orders end on different bars, the header shows the oldest and says so, and each row shows its own. Yahoo's bar for the current day is used once the exchange's regular session has closed, when Yahoo's answer gives that time; until then, and when it does not, the orders refer to the previous close. Check the date.
+
+Refresh prices downloads each ticker once, however many strategies use it, then runs the strategies again, three at a time. "Save as note" writes the same list to the note named in the "Note for today’s orders" setting, creating it if it does not exist and replacing its whole contents each time. The saved note has one section for each group that has rows ("To do at the next open", "To do at the next close", "Traded at the last close"), or "To do" with "No strategy has an order." when there are none, and names the strategies with `fill: close` under "Strategies that fill at the close". The generated note starts with the property `backtest_orders: true`. An existing note is replaced only if it has that property; otherwise nothing is written and the window says "<path> already exists and was not made by Backtest Blocks. Choose another note in settings." With no note set, it says so. Nothing in the window places an order.
 
 A block with no `name` is listed under its note's file name, or "file name 1", "file name 2" when a note has several.
+
+### In the status bar
+
+A few seconds after Obsidian starts, the plugin runs every strategy in the vault quietly, from saved prices where they are fresh, and shows how many orders there are in the status bar, counting every group in the window: "2 orders today", "1 order today" or "No orders today". Rest the pointer on it to see the first five, each with its timing, such as "Sell SPY at the next open, Trend following" or "Bought TLT at the last close, Close mover". Click it, or press Enter when it has focus, to open the window.
+
+- A small dot after the text means some strategy could not run, has old prices or came with a price warning. The tooltip says how many.
+- When no strategy could run, or the check itself failed, it says "Couldn't check orders". It shows nothing when the vault has no strategies.
+- It checks again by itself once its answer is older than the "Keep saved prices for" time, and it takes the answer of the orders window whenever you open that, so the two agree.
+- Where there is no status bar, as on a phone, a notice with the same text appears once at start-up when there are orders, and nothing appears otherwise.
+- The setting "Check for orders when Obsidian starts" turns this off. With it off, the status bar shows nothing; the window and the ribbon icon still work. A change to the setting takes effect the next time Obsidian starts.
+- Like the window, the check fetches prices for every strategy's tickers (see "Network requests").
 
 ## Saving results
 
@@ -589,11 +700,11 @@ Three buttons under a result write files to the "Folder for saved results" (defa
 
 - **Save trades as CSV** has the columns `ticker`, `bought`, `buy_price`, `sold`, `sell_price`, `return_pct`, `profit`, `bars` and `exit`. Open positions have no `sold` or `sell_price`. `exit` is `signal`, `stop loss`, `trailing stop`, `take profit` or `open`.
 - **Save value history as CSV** has the columns `date`, `strategy`, the benchmark's label (such as `SPY buy & hold`) and `drawdown_pct`, one row for each step of the run. The benchmark's field is empty before its first price.
-- **Keep this result as a note** writes a note with the tag `backtest/snapshot` and a `created` date. It holds the strategy as plain text in a `text` block, so it does not run again, then the figures, the split before and after the test date if there is one, the positions now, and the latest 30 trades.
+- **Keep this result as a note** writes a note with the tag `backtest/snapshot` and a `created` date. It holds the strategy as plain text in a `text` block, so it does not run again, with the parameter values that were on screen, then the figures, the split before and after the test date if there is one, the positions now, and the latest 30 trades.
 
 ### Note properties
 
-The command "Save this note's results to its properties" runs the strategies in the active note and writes the main figures of each to the note's properties (front matter). The setting "Write results to note properties" does the same for the note a block is in, a moment after its blocks have rendered: a note with several blocks is written once, from the kept results, without running anything again. It is off by default, because it edits your notes.
+The command "Save this note's results to its properties" runs the strategies in the active note and writes the main figures of each to the note's properties (front matter). The setting "Write results to note properties" does the same for the note a block is in, a moment after its blocks have rendered: a note with several blocks is written once, from the kept results, without running anything again. A block drawn in the strategy preview panel does not trigger it. It is off by default, because it edits your notes.
 
 | Property | Value |
 | --- | --- |
@@ -610,7 +721,7 @@ The command "Save this note's results to its properties" runs the strategies in 
 
 A note with one strategy uses the plain `bt_` keys above. When a note holds more than one strategy, each block gets its own keys, with a part between `bt_` and the rest of the key. A block with a `name` uses it: "Trend following" writes `bt_trend_following_sharpe`, `bt_trend_following_trades` and so on. The name is turned into lower case, and each run of characters that are not letters or digits becomes `_`. A block with no name, a name with no letters or digits, or a name that would give the same keys as an earlier block uses its position in the note instead: `bt_2_return_per_year` for the second block. No two blocks share a key. Renaming or reordering blocks changes their keys.
 
-The plugin owns every property that starts with `bt_`. It updates them, and when every strategy in the note ran, it removes `bt_` properties that no strategy in the note produces any more, such as the keys of a block you deleted or renamed. Do not name your own properties `bt_...`. If a block could not run, nothing is removed, so its earlier figures stay. A property is written only when its value changed, and `bt_last_run` (for each block, the day its figures last changed) moves only when something else in the note changed, so opening a note on a new day does not edit it. Properties let a Base list your strategies.
+The plugin owns every property that starts with `bt_`. It updates them, and when every strategy in the note ran, it removes `bt_` properties that no strategy in the note produces any more, such as the keys of a block you deleted or renamed. Do not name your own properties `bt_...`. If a block could not run, nothing is removed, so its earlier figures stay. A property is written only when its value changed, and `bt_last_run` (for each block, the day its figures last changed) moves only when something else in the note changed, so opening a note on a new day does not edit it. Properties let a Base list your strategies. A `backtests` block lists them without properties (see "All strategies in one table").
 
 ## Drafting from plain English
 
@@ -645,8 +756,23 @@ The model may get a strategy wrong. Read the draft and the model's notes before 
 Inside a `strategy` block the editor helps you write it.
 
 - **Colours.** The parts of a block are coloured with your theme's code colours: setting and parameter names, keywords (`buy`, `when`, `and`, `of`, `for`), functions, series and calendar values, numbers and values, tickers, parameters used in rules, operators, and comments in italics. The result shows the block coloured the same way.
-- **Auto-complete.** A pop-up offers what can come next, with a line of help for each item. At the start of a line it offers `buy when`, `sell when`, `for`, and the settings (only the stops inside a `for` section). After `of` and `for` it offers the tickers named in your `universe`, `symbol` and `benchmark` lines. After a setting name it offers values, such as the choices for `rebalance`, `data` and `interval`. Inside a rule it offers series, calendar values, your parameters, functions and words such as `crosses above`. `bars held` and `entry price` are offered only in sell rules. It stays quiet while you type a number.
+- **Auto-complete.** A pop-up offers what can come next, with a line of help for each item. At the start of a line it offers `buy when`, `sell when`, `for`, and the settings (only the stops inside a `for` section). After `of` and `for` it offers the tickers named in your `universe`, `symbol` and `benchmark` lines. After a setting name it offers values, such as the choices for `rebalance`, `data`, `interval` and `fill`. Inside a rule it offers series, calendar values, your parameters, functions and words such as `crosses above`. `bars held` and `entry price` are offered only in sell rules. It stays quiet while you type a number.
 - **Underlines.** Problems are underlined with a wavy line, in the theme's error colour. Notes (such as the fixed-price one) are underlined in its warning colour. Hover the underline to read the message, which starts with "Problem:" or "Note:". The editor reads the block with the same parser as the result, using the plugin's defaults.
+- **Help on hover.** Hold the pointer over a word in a `strategy` block to see what it means: its form, one or two sentences, and an example. This covers settings and their fixed values (`monthly`, `yahoo`, `1h`, `next open`), functions, series, calendar and position values, rule words (`crosses above`, `of`, `for all`, `and`), `%` and `bps`, the `[n]` lag, and `in ... step` on a parameter line. A two-word name such as `bars held` is one word. A parameter you declared shows its value and range wherever it is used. When the spot also has a problem, the problem comes first and the help under it.
+- **Fixes.** When a problem looks like a typo, the tooltip offers a button such as "Change to sma". It covers a misspelt setting, function, series, word in a condition, setting value (`montly`, `yaho`), `for` ticker or parameter name, and habits from other languages: `&&`, `||`, `!` before a word, `=>` and `=<`. A fix is offered only when the corrected block no longer has that problem, and none is offered when two words are equally close. Clicking it is an ordinary edit. The command "Fix the problem at the cursor" does the same from the keyboard for the problem at the cursor, or else the first one on its line. In the list that replaces a result when the block cannot run, the same suggestion is a sentence ("Did you mean sma?").
+- **Ticker lookup.** With the setting "Look tickers up while writing" on, which is the default, typing a ticker on a `universe`, `symbol`, `benchmark` or `cash rate` line offers real ones with their names, from Yahoo and Binance. The tickers already in the block are offered at once. A ticker from the other source is written with its prefix, such as `binance:BTCUSDT`. Typing `csv:` offers the CSV files in your vault. Only the ticker word is completed, so a weight such as `SPY 60%` is left alone. A ticker its source does not know, in the universe or after `of`, is underlined as a note ("Yahoo has no ticker called SPYY."), with a button to change it to a near one when there is one. That note never stops a run, and it waits until the cursor leaves the ticker. The lookup sends tickers over the network; see "Network requests" for what and when.
+
+### Strategy preview
+
+A strategy block shows its result only when the cursor leaves it in live preview, and never in source mode. The command "Open strategy preview" opens a panel in the right sidebar that shows the result of the block you are writing, so you can see it without moving the cursor away.
+
+- **Which block.** The block the cursor is in, counting its opening and closing fence lines. When the cursor is outside every block, the panel keeps the block it last showed from that note, or else shows the note's first block. In reading view there is no cursor, so the same rule applies. A block you have not closed yet is shown as soon as it reads cleanly. A strategy block inside a callout or a quote is not shown here. Opening another note makes the panel follow that note. A note with no strategy block gets a short message that says how to start.
+- **The heading** names the note and the strategy: its `name`, or "Strategy 2 of 3".
+- **When it updates.** After you stop typing: about half a second when the prices for every ticker are already saved, about a second and a half otherwise, so typing a ticker does not send a request for every letter. Moving the cursor into another block, or opening another note, updates it after a short pause. Typing elsewhere in the note does nothing.
+- **Problems.** While the block has problems, they are listed at the top in the same words as in the note. The last result that ran stays underneath, dimmed, with a line saying it is the last version that ran. If nothing has run yet, only the problems show. A run that fails, such as a ticker with no prices, shows "The backtest couldn't run", the reason and a "Try again" button over the dimmed last result in the same way.
+- The result is always shown open, whatever "How results first appear" says. The panel keeps its scroll position and any section you opened, such as the trade list, when the same block updates. It runs nothing while it is hidden, for example when the sidebar is collapsed.
+- The buttons that write values into the block ("Write these values to the block" and "Use these values in the block") change the block in the note, if it still has the text the result was drawn from. If you have changed it since, the panel says so and writes nothing.
+- The panel never writes the note's properties, even with "Write results to note properties" on.
 
 ## Settings
 
@@ -660,10 +786,13 @@ Settings are under Community plugins, then Backtest Blocks.
 | Interest on cash | A rate such as `4%`, or a ticker whose price is a yield, such as `^IRX`. A `cash rate` line overrides it. | `0%` |
 | Where plain tickers come from | Yahoo or Binance, for tickers written without a prefix such as `binance:`. | Yahoo |
 | Keep saved prices for | Hours before saved prices are fetched again, from 1 to 168. | 6 |
-| Clear saved prices | A button that removes every price file the plugin saved. | |
+| Saved prices | A button, "Clear saved prices", that removes every price file the plugin saved. | |
 | Write results to note properties | When a note's strategies have run, save their main figures to the note's properties. Properties that start with `bt_` belong to the plugin: it updates them and removes ones no strategy in the note produces any more. This edits your notes. | off |
-| Note for today's orders | Vault path of the note to write them to, such as `Trading/Orders.md`. The note is rewritten each time you save, and an existing note is replaced only if the plugin made it. Empty for none. | empty |
+| Note for today’s orders | Vault path of the note to write them to, such as `Trading/Orders.md`. The note is rewritten each time you save, and an existing note is replaced only if the plugin made it. Empty for none. | empty |
 | Folder for saved results | Vault folder where saved results go. | `Backtests` |
+| How results first appear | Full opens every result. Compact shows one line for each strategy, which opens on a click and suits a note with several (see "Folding a result"). | Full |
+| Check for orders when Obsidian starts | Runs every strategy in the vault shortly after start-up and shows how many orders are due in the status bar (see "Today's orders"). This fetches prices for every strategy's tickers. A change takes effect at the next start. | on |
+| Look tickers up while writing | Suggests matching tickers and marks ones that do not exist. The tickers in your strategies, and what you type where a ticker goes, are sent to Yahoo to search. Nothing else from your notes is sent (see "Network requests"). | on |
 | Provider | The service that turns a description into a strategy: Anthropic, or an OpenAI-compatible server. | Anthropic |
 | Server address | Anthropic: empty for Anthropic's own address, or a proxy. OpenAI-compatible: required, such as `http://localhost:8000/v1`. | empty |
 | Model | Anthropic: empty for `claude-opus-5-5`. OpenAI-compatible: required, the name of the model on your server. | empty |
@@ -677,11 +806,17 @@ The command palette shows each name with "Backtest Blocks:" in front.
 
 | Command | What it does |
 | --- | --- |
-| Insert strategy block | Inserts a starting block at the cursor (the example at the top of this README). |
+| Insert strategy block | Opens the starter strategies and inserts the one you choose at the cursor. |
+| Use a CSV file in a strategy | Opens the CSV helper: choose a file in the vault, see how it is read, fix its columns if needed, and insert its ticker or a small strategy. |
 | Draft a strategy from a description | Opens the drafting window. |
-| Show today's orders | Opens the list of orders for the next open. |
+| Open strategy preview | Opens the strategy preview in the right sidebar. |
+| Fix the problem at the cursor | Applies the "did you mean" fix for the problem at the cursor. |
+| Insert strategy dashboard | Inserts a `backtests` block at the cursor. |
+| Show today's orders | Opens the list of orders: what to do at the next open or close, and what `fill: close` strategies already did at the last close. |
 | Save this note's results to its properties | Runs the note's strategies and writes their results to its properties. |
 | Clear saved prices | Removes the saved price files. |
+
+"Insert strategy block", "Fix the problem at the cursor" and "Insert strategy dashboard" are offered only while a note is open for editing. The list icon in the ribbon opens the same window as "Show today's orders".
 
 ## Prices and privacy
 
@@ -689,7 +824,25 @@ The command palette shows each name with "Backtest Blocks:" in front.
 
 - **Yahoo.** The unofficial chart endpoint behind Yahoo Finance, on `query1.finance.yahoo.com` and `query2.finance.yahoo.com`. Yahoo does not publish it as an API, can change or rate-limit it without notice, and its terms allow personal use only. The plugin asks for the whole history each time, as daily or weekly bars. If a request fails or Yahoo sends something other than price data, it tries again, on `query1`, then `query2`, then `query1`, waiting 0.5 and then 1.5 seconds. Open, high, low and close are adjusted for splits and dividends. The bar for the current day is left out until the exchange's regular session has closed, when Yahoo's answer gives that time, and otherwise until the next day; weekly bars wait for the week to end. A ticker Yahoo does not know gives "Yahoo has no prices for X. Check the ticker."
 - **Binance.** The public market-data endpoint `data-api.binance.vision` (klines, 1000 bars a request). It needs no key. The bar still open is left out. A refresh asks only for bars newer than the saved ones. A ticker it does not know gives "Binance has no market called X".
-- **CSV files in your vault.** Read directly, with no network. The file needs a header row with a date column (`date`, `time`, `timestamp` or `datetime`) and `open`, `high`, `low` and `close` columns; `volume` is optional. The separator can be a comma, semicolon or tab. Dates can be `2024-01-31` (with an optional time, read as UTC), `01/31/2024`, `31/01/2024` (read as day first when some first number is above 12 and no second number is), `31.01.2024`, or Unix seconds or milliseconds. An `adj close` column, if present, adjusts the other prices. Rows with an unreadable date, a price at or below 0, or a high or low that does not contain the open and close are skipped. Rows are sorted by date. Prices are not saved: the file is read each time a block runs. A result is kept in memory (see "Reading a result"), and it runs again when the file's modified time changes.
+- **CSV files in your vault.** Read directly, with no network. The file needs a header row with a date column (`date`, `time`, `timestamp` or `datetime`) and `open`, `high`, `low` and `close` columns; `volume` is optional. The separator can be a comma, semicolon or tab. Dates can be `2024-01-31` (with an optional time, read as UTC), `01/31/2024`, `31/01/2024` (read as day first when some first number is above 12 and no second number is), `31.01.2024`, or Unix seconds or milliseconds. An `adj close` column, if present, adjusts the other prices. Rows with an unreadable date, a price at or below 0, or a high or low that does not contain the open and close are skipped. Rows are sorted by date. Numbers need a decimal point. Prices are not saved: the file is read each time a block runs. A result is kept in memory (see "Reading a result"), and it runs again when the file's modified time changes. The command "Use a CSV file in a strategy" helps with a file that does not fit (see below).
+
+### Using a CSV file
+
+The command "Use a CSV file in a strategy" opens a window that finds the CSV files in your vault, shows how the plugin reads one, and puts a ticker or a small strategy into your note.
+
+1. **Choose a file.** The box at the top narrows the list as you type. The arrow keys and Enter work too.
+2. **See how it was read.** The window shows the number of rows, the first and last date, and the first and last rows. It lists anything doubtful in plain words: rows that were skipped and why, dates that could be read two ways, no volume column, rows out of date order, long gaps, dates with a time of day, and a history too short for the starter strategy.
+3. **Insert it.** "Insert the ticker" puts `csv:<path>` at the cursor. "Insert a strategy using it" puts a complete block with the file as `symbol`, `costs: 5 bps` and a 100-day trend rule. When no note is open for editing, the text is shown with a "Copy" button instead.
+
+A strategy cannot name a file whose path has a space or a comma in it, because the `universe` line is split at commas and spaces and has no way to quote a path. The window says so and inserts nothing. Rename the file or its folder, for example with a dash. A path with other unusual characters, such as a bracket or an accented letter, works on a `universe`, `symbol` or `benchmark` line but not after `of` in a rule; the window says so.
+
+When the plugin cannot read a file as it is, the window says why: for example the columns have other names, there are only dates and closes, the numbers use a decimal comma, or the dates are written with month names. It guesses which column is which and lets you choose each one, and for dates like 02/01/2024 whether they are day first or month first. A preview shows the first rows as they would be read. "Save a cleaned copy and use it" writes a new file next to the original with `-clean` added to its name (`-clean-2` and so on when that name is taken). It never replaces a file and never changes the original. The copy has the header `date,open,high,low,close,volume`, dates as `2024-01-31`, oldest first, and a decimal point. Rows that cannot be read are left out and counted.
+
+The cleaned copy fills what the file lacks:
+
+- No open, high or low: the open is the close, the high is the larger of the open and the close, and the low is the smaller. A file with only dates and closes gets all three equal to the close. Then a fill at the next open is made at that bar's close, a stop can only act at a close, and the average true range counts only moves from one close to the next.
+- No volume: 0 on every bar, as for any file without a volume column.
+- An adjusted-close column you choose scales the prices, as an `adj close` column does.
 
 ### What is saved on disk
 
@@ -706,23 +859,31 @@ The plugin contacts these hosts, and no others:
 - `api.anthropic.com`, only when you draft a strategy with the Anthropic provider and no server address.
 - The server address you enter, only when you draft a strategy. That can be a server on your own machine.
 
-Nothing else leaves your vault. There is no telemetry, no analytics, no update check and no remote code. Your notes are never sent anywhere; only what is described under "Drafting from plain English" goes to a model.
+Two features make requests on their own, to the Yahoo and Binance hosts above and no others:
+
+- The check for orders when Obsidian starts runs every strategy in the vault a few seconds after start-up. It fetches the prices of every ticker they use that are not saved, or are older than the "Keep saved prices for" time. The setting "Check for orders when Obsidian starts" turns it off. The orders window and a `backtests` block do the same when you open them.
+- The ticker lookup, while "Look tickers up while writing" is on, which is the default, sends two kinds of request. Neither carries a note's name or text.
+  - A search on `query2.finance.yahoo.com`, then `query1`, at the path `/v1/finance/search`. The query is only a ticker: the word you typed where a ticker goes (250 ms after the last key, and only when it is not already one of the block's tickers), or a Yahoo ticker that a strategy block on screen names in its `universe`, `symbol`, `benchmark` or `cash rate` line or after `of` (0.7 seconds after typing stops, at most 6 each time, and not the one the cursor is in). At most 24 characters from `A-Z a-z 0-9 ^ . _ = -` are sent, and nothing else.
+  - The list of Binance prices, `data-api.binance.vision/api/v3/ticker/price`. It carries no parameters and no text from your notes. It is fetched the first time a Binance ticker is checked or a plain word is completed, and again after 6 hours.
+  - Answers are kept in memory only. At most 2 lookups run at once. A failed lookup is silent and is not repeated for 30 seconds, and 3 failures in a row pause that host for 60 seconds.
+
+Nothing else leaves your vault. There is no telemetry, no analytics, no update check and no remote code. No note's text is sent anywhere. The only words taken from your notes are ticker symbols, and only for the lookup above; what is described under "Drafting from plain English" goes to a model. The plugin sets no `User-Agent` of its own: the request carries whatever Obsidian's `requestUrl` sends.
 
 ## How far to trust it
 
 **What has been checked**
 
-- Unit tests cover the language, the indicators, the engine's rules (fills, costs, slippage, stops, gaps, rebalancing, ranking, sizing, warm-up, interest, reading other tickers by bar end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders, exports, settings and drafting with a fake model.
-- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 24 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. It found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar, slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
+- Unit tests cover the language, the indicators, the engine's rules (fills, costs, slippage, stops, gaps, rebalancing, ranking, sizing, warm-up, interest, reading other tickers by bar end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders and the status bar count, the `backtests` block, the explanation of each trade, rewriting parameter values in a note, the background jobs with a fake worker, the starter strategies and the CSV helper, hover help, fixes and the ticker lookup with a fake network, exports, settings and drafting with a fake model.
+- A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 29 strategy pairs and 24 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. Five of the 29 cases fill at the close, against Rearview's `fill same_close`. The check found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar (and, with `fill: close`, where it starts), slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR, how interest counts days, and the Sharpe ratio. The table is in `xcheck/README.md`. The check is run by hand and is not part of `npm test`. It still passes after the fixes in the next point.
 - An independent review of the engine and the statistics, which confirmed each finding with a script. It found defects that are now fixed, each with a test: on mixed calendars (stocks with crypto) a ticker could miss its rebalance and a ranking buy could leave its slot in cash; a ticker with longer bars, a daily benchmark or a daily yield on shorter bars could be read before its bar had ended; entries were sized or left without their ATR stop while those inputs warmed up; and results could depend on which prices happened to be saved. It also corrected statistics (a benchmark whose prices start later, Sharpe and Sortino made of rounding noise, the `test from` split, two different Sortino ratios), and runs of more than about 125,000 bars no longer fail. A review finds what it looks for; this one does not show that no other defects remain.
 
 **What has not been checked against anything**
 
-The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars.
+The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only: inverse-volatility weighting, a cash rate from a ticker, ATR take-profits, `entry price` in sell rules, calendar values (`month`, `month_start` and the others), yearly rebalancing, ranking with `rebalance: never`, stops in ranking or rebalancing strategies, slippage on rebalances with weights under 100%, `of` on a day the other ticker has no bar, the benchmark, `test from`, and weekly or intraday bars. The cross-check of `fill: close` uses daily bars only.
 
 Also not checked:
 
-- The plugin has never been run on a phone, though the manifest does not rule it out.
+- The plugin has never been run on a phone, though the manifest does not rule it out. The parts that depend on Obsidian itself have been checked by unit tests and by drawing them in a browser with stand-ins for Obsidian's own objects, not in a running Obsidian: the strategy preview panel, the status bar count, writing values into a block, the remembered fold state, the background worker (which falls back to the foreground when it cannot start), the starter and CSV windows, and hover help and fixes in the editor.
 - Drafting has never been run against a live model at the time of writing. The tests use a fake server.
 - The drawing of the charts and the layout uses the DOM and has no automated tests. Only helpers such as tick spacing and marker placement are tested.
 - The cross-check used made-up prices. It says nothing about the data feeds.
@@ -732,7 +893,7 @@ Also not checked:
 - Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded. A rule that compares a price with a fixed number, such as `close > 100`, then means something different in 2005 than today. The plugin warns about it on that line, unless every ticker it reads is an index, which Yahoo does not adjust. Compare with averages, percentages or earlier prices.
 - Yahoo only lists tickers that exist now. A test over a basket of today's tickers is a test of survivors, which flatters the results.
 - A backtest overstates what to expect, and more so after you have tried many variants. Each rule, parameter or variant you try on the same history raises the chance that the one that looks best fits noise. `test from`, "Try other parameter values" and "Was it luck?" help you see this. They do not remove it.
-- Real fills differ from the next open: spreads, size and liquidity, outages, and your taxes are not in the numbers.
+- Real fills differ from the next open and from the close: spreads, size and liquidity, outages, and your taxes are not in the numbers. A run with `fill: close` assumes you can trade at a closing price that is not known until the close. A real order can only come near it, by being placed just before the close.
 
 ## Development
 
@@ -743,23 +904,28 @@ npm run build      # type check, then bundle into dist/
 node xcheck/run.ts # optional cross-check; needs the second backtester's command-line tool
 ```
 
-The cross-check needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
+Obsidian loads one script for a plugin, so the background worker is built into `main.js`: `npm run build` bundles `src/worker.ts` first (`esbuild.config.mjs`) and embeds its text in the main bundle, which starts it from that text.
+
+The cross-check runs 29 cases and 24 indicator expressions. It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
 
 Pushing a tag equal to the `version` in `manifest.json` runs `.github/workflows/release.yml`. It runs the tests, builds, and creates a draft GitHub release with `main.js`, `manifest.json` and `styles.css` attached. `versions.json` maps each plugin version to the minimum Obsidian version.
 
 Layout of `src/`:
 
-- `dsl.ts`, `complete.ts`, `highlight.ts`, `diagnostics.ts`, `editor.ts`: the language and the editor (parser, help text, colours, underlines, auto-complete).
+- `dsl.ts`, `docs.ts`, `complete.ts`, `highlight.ts`, `diagnostics.ts`, `fixes.ts`, `editor.ts`, `symbols.ts`: the language and the editor (parser, help text for hover and auto-complete, colours, underlines, "did you mean" fixes, ticker lookup).
 - `evaluate.ts`, `indicators.ts`: evaluating rules, and the indicator maths.
-- `engine.ts`, `backtest.ts`, `stats.ts`: the simulation, the benchmark and the statistics.
+- `engine.ts`, `backtest.ts`, `stats.ts`, `explain.ts`: the simulation, the benchmark, the statistics, and the reasons behind each trade.
 - `data.ts`, `runner.ts`, `result-cache.ts`: prices and their cache, running a block, and keeping results in memory.
-- `compare.ts`, `orders.ts`, `export.ts`: the compare block, orders, and the files, notes and properties a result can become.
+- `compare.ts`, `dashboard.ts`, `orders.ts`, `orders-badge.ts`, `export.ts`, `rewrite.ts`: the compare block, the `backtests` block (its parser, sorting and running), orders, the status bar count of orders, the files, notes and properties a result can become, and writing parameter values into a block's text.
 - `sweep.ts`, `luck.ts`, `rng.ts`: parameter sweeps and the luck checks (reshuffled history, random entries, walk-forward), and the seeded random numbers they use.
+- `jobs.ts`, `worker.ts`, `worker-client.ts`: the sweeps and luck checks as jobs, the background worker that runs them, and the plugin's side of it, which starts the worker, sends it prices and stops it.
 - `llm.ts`, `llm-modal.ts`: drafting.
-- `render*.ts`, `price-chart.ts`, `dom.ts`, `orders-view.ts`: drawing results, charts and windows. `render-sweep.ts` and `render-luck.ts` draw the sweep and luck sections, and `render-compare.ts` the compare block.
+- `gallery.ts`, `gallery-modal.ts`, `csv-import.ts`, `csv-modal.ts`: the starter strategies and the CSV helper, each with its logic and its window.
+- `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.
+- `render.ts`, `render-params.ts`, `render-trades.ts`, `render-stats.ts`, `render-price.ts`, `price-chart.ts`, `render-sweep.ts`, `render-luck.ts`, `render-compare.ts`, `render-dashboard.ts`, `render-actions.ts`, `orders-view.ts`, `dom.ts`: drawing results, charts, tables and windows. `render-params.ts` draws the Parameters bar, `render-sweep.ts` and `render-luck.ts` the sweep and luck sections, `render-compare.ts` the compare block and `render-dashboard.ts` the `backtests` block.
 - `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `types.ts`: the plugin itself, settings and shared types.
 
-`styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy` and `compare` block in this file.
+`styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy`, `compare` and `backtests` block in this file.
 
 ## Licence
 
