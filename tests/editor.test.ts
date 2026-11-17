@@ -69,8 +69,8 @@ test('line starts offer settings and rule openers', () => {
   const r = complete(BLOCK, [], '  tr')!;
   assert.deepEqual([r.from, r.items[0].insert], [2, 'trailing stop: ']);
   // Inside a rule, a new line can also continue it.
-  assert.deepEqual(labels(['buy when close > 1'], 'a'), ['and']);
-  assert.equal(labels([], 'a'), null);
+  assert.deepEqual(labels(['buy when close > 1'], 'a'), ['add when', 'and']);
+  assert.deepEqual(labels([], 'a'), ['add when']);
 });
 
 test('setting values', () => {
@@ -156,7 +156,7 @@ test('rules colour parameters, position values and calendar values', () => {
 test('completions: position values in sell rules only, calendar values and parameters everywhere in a rule', () => {
   assert.deepEqual(labels([], 'sell when ba', V2), ['bars held', 'bars_since']);
   assert.deepEqual(labels([], 'buy when ba', V2), ['bars_since']);
-  assert.deepEqual(labels(['sell when close > 1'], '  or en', V2), ['entry price']);
+  assert.deepEqual(labels(['sell when close > 1'], '  or en', V2), ['entry price', 'entries made']);
   assert.equal(labels(['buy when close > 1'], '  or en', V2), null);
   assert.deepEqual(labels([], 'buy when month_', V2), ['month_start', 'month_end']);
   assert.deepEqual(labels([], 'buy when we', V2), ['weekday']);
@@ -178,7 +178,7 @@ test('completions: hints for the new settings, and only stops inside a for secti
   assert.deepEqual(labels([], 'ca'), ['capital', 'cash rate']);
   assert.deepEqual(labels(['for TLT:'], 's'), ['sell when', 'stop loss']);
   assert.equal(labels(['for TLT:'], 'c'), null);
-  assert.deepEqual(labels(['for TLT:', 'for all:'], 'c'), ['capital', 'costs', 'cash rate']);
+  assert.deepEqual(labels(['for TLT:', 'for all:'], 'c'), ['capital', 'costs', 'cash rate', 'commission']);
 });
 
 test('completion descriptions come from the help table', () => {

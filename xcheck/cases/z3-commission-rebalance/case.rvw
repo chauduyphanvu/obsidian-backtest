@@ -1,0 +1,9 @@
+language 1
+strategy "z3: fixed weights, monthly rebalance, commission" {
+  universe   symbols("TRND", "MREV", "CHOP")
+  // series("w") holds each ticker's weight: 0.5, 0.3 and 0.15.
+  enter long when close > 0
+  rank by    series("w")
+  size       weight series("w"), max 3 positions
+  rebalance  monthly
+}

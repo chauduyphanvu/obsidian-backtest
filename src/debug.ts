@@ -645,7 +645,7 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
         else if (pending !== 'buy') events.push({ k: 'chosen' });
       } else if (!reading && !chosen) events.push({ k: 'ranked-out' });
     }
-    if (pending) events.push({ k: 'pending', side: pending });
+    if (pending) events.push({ k: 'pending', side: pending === 'sell' ? 'sell' : 'buy' });
 
     const row: DebugRow = {
       index: k,

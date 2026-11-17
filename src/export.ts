@@ -7,6 +7,12 @@ import { positionOrder } from './orders.ts';
 
 const SNAPSHOT_TRADES = 30;
 
+/** When a trade was bought: its first entry, and how many entries it had when there were several (its price is then their average). */
+export function boughtText(t: Trade, intraday: boolean): string {
+  const n = t.entries?.length ?? 1;
+  return n > 1 ? `${stamp(t.entryT, intraday)}, ${n} entries` : stamp(t.entryT, intraday);
+}
+
 const csvField = (v: string | number): string => {
   const x = String(v);
   return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
@@ -20,10 +26,17 @@ const fixed = (x: number, digits: number): string => {
 /** Up to `digits` decimals, without trailing zeros. */
 const trimmed = (x: number, digits: number): string => String(Number(x.toFixed(digits)));
 
+/**
+ * One row per trade. A strategy that builds positions in steps gets four more columns at the end: the number of entries,
+ * and each entry's date, price and shares, separated by semicolons; `bought` is then the first entry and `buy_price` their
+ * average.
+ */
 export function tradesCsv(trades: Trade[], intraday: boolean): string {
-  let out = csvLine(['ticker', 'bought', 'buy_price', 'sold', 'sell_price', 'return_pct', 'profit', 'bars', 'exit']);
+  const steps = trades.some((t) => t.entries);
+  let out = csvLine(['ticker', 'bought', 'buy_price', 'sold', 'sell_price', 'return_pct', 'profit', 'bars', 'exit', ...(steps ? ['entries', 'entry_dates', 'entry_prices', 'entry_shares'] : [])]);
   for (const t of trades) {
     const open = t.reason === 'open';
+    const entries = t.entries ?? [{ t: t.entryT, price: t.entryPrice, shares: NaN }];
     out += csvLine([
       t.asset,
       stamp(t.entryT, intraday),
@@ -34,6 +47,14 @@ export function tradesCsv(trades: Trade[], intraday: boolean): string {
       fixed(t.pnl, 2),
       t.bars,
       t.reason,
+      ...(steps
+        ? [
+            entries.length,
+            entries.map((e) => stamp(e.t, intraday)).join(';'),
+            entries.map((e) => trimmed(e.price, 6)).join(';'),
+            entries.map((e) => (Number.isNaN(e.shares) ? '' : trimmed(e.shares, 6))).join(';'),
+          ]
+        : []),
     ]);
   }
   return out;
@@ -125,7 +146,8 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
         ['Ticker', 'Weight', 'Now'],
         run.states.map((st) => {
           const order = positionOrder(st, spec.fill);
-          return [st.name, pct(st.weight, 0), (st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash') + (order ? `, ${order}` : '')];
+          const built = st.long && (spec.entries ?? 1) > 1 ? `, ${st.entries} of ${spec.entries} entries` : '';
+          return [st.name, pct(st.weight, 0), (st.long ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash') + (order ? `, ${order}` : '')];
         }),
         'lrl',
       ),
@@ -136,7 +158,7 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
     const open = t.reason === 'open';
     return [
       t.asset,
-      stamp(t.entryT, intraday),
+      boughtText(t, intraday),
       price(t.entryPrice),
       open ? '–' : stamp(t.exitT, intraday),
       open ? '–' : price(t.exitPrice),

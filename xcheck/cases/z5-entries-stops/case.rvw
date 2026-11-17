@@ -1,0 +1,12 @@
+language 1
+strategy "z5: two entries with a stop and a target" {
+  universe   symbols("MREV")
+  enter long when close < sma(close, 20) * 0.97 and not (close > sma(close, 20))
+  add when   close < sma(close, 20) * 0.94 and not (close > sma(close, 20))
+  max adds   1
+  exit when  close > sma(close, 20)
+  stop       6%
+  target     8%
+  size       50% of equity, max 1 positions
+  max position 100%
+}

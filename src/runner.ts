@@ -101,7 +101,7 @@ export function lookbackBars(spec: Spec): number {
     return p ? Math.max(value, ...paramValues(p).filter((v) => v <= max)) : value;
   };
   let bars = MIN_LOOKBACK;
-  const exprs = Object.values(spec.rules).flatMap((r) => (r.sell ? [r.buy, r.sell] : [r.buy]));
+  const exprs = Object.values(spec.rules).flatMap((r) => [r.buy, ...(r.sell ? [r.sell] : []), ...(r.add ? [r.add] : [])]);
   if (spec.rank) exprs.push(spec.rank.by);
   for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest));
   for (const st of Object.values(spec.stops)) {

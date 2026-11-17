@@ -4,8 +4,8 @@ export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
 export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn';
 /** Values read from the bar's UTC date. */
 export type CalName = 'month' | 'day' | 'weekday' | 'year' | 'month_start' | 'month_end';
-/** Values that belong to the open position, so only sell rules can read them. */
-export type PosName = 'bars_held' | 'entry_price';
+/** Values that belong to the open position, so only sell and add rules can read them. */
+export type PosName = 'bars_held' | 'entry_price' | 'last_entry_price' | 'entries_made';
 
 // `params` on `ind`, `param` on `lag` and `nParam` below name the parameter a period or a lag came
 // from, when one did, so the history loaded can cover every value of its range (see lookbackBars).
@@ -33,6 +33,8 @@ export const FILL: Fill[] = ['next open', 'close'];
 export interface Rules {
   buy: Expr;
   sell: Expr | null;
+  /** When to make the next entry of a position built in steps; present only with an `entries` line. */
+  add?: Expr;
 }
 
 /**
@@ -57,6 +59,12 @@ export interface Stops {
 
 /** What uninvested cash earns: a fixed yearly rate, or a ticker whose close is a yearly yield in percent. */
 export type CashRate = { k: 'fixed'; rate: number } | { k: 'ticker'; ref: AssetRef };
+
+/**
+ * A charge per order on top of `costs`, in the account's money: a fixed amount per order, or an amount per share
+ * (fractions of a share counted as fractions) raised to `min` and then capped at `max` times the order's value.
+ */
+export type Commission = { k: 'order'; fee: number } | { k: 'share'; fee: number; min: number; max: number | null };
 
 export type Sizing = { k: 'fixed' } | { k: 'invvol'; n: number; nParam?: string } | { k: 'risk'; risk: number; mult: number; n: number; nParam?: string };
 
@@ -97,7 +105,11 @@ export interface Spec {
   /** Absent means next open. */
   fill?: Fill;
   /** The rules and the ranking score as written, per universe asset name; null where the parser supplied the rule. */
-  written?: { rules: Record<string, { buy: Written | null; sell: Written | null }>; rank: Written | null };
+  written?: { rules: Record<string, { buy: Written | null; sell: Written | null; add?: Written | null }>; rank: Written | null };
+  /** Charged on every order besides `costBps`; absent when there is none. */
+  commission?: Commission;
+  /** The number of entries a position is built in; absent when the block has no `entries` line. */
+  entries?: number;
 }
 
 export interface Defaults {
@@ -107,6 +119,8 @@ export interface Defaults {
   /** Text of a `cash rate` setting, such as "0%" or "^IRX". */
   cashRate: string;
   dataSource: 'yahoo' | 'binance';
+  /** Used when the block has no `commission` line; absent means none. */
+  commission?: Commission;
 }
 
 export interface ParseOptions {
@@ -188,7 +202,7 @@ export const CONDITIONS = ['supertrend_up'];
 export const SERIES: SeriesName[] = ['open', 'high', 'low', 'close', 'volume'];
 export const CALENDAR: CalName[] = ['month', 'day', 'weekday', 'year', 'month_start', 'month_end'];
 /** How each position value is written. */
-export const POSITION: Record<PosName, string> = { bars_held: 'bars held', entry_price: 'entry price' };
+export const POSITION: Record<PosName, string> = { bars_held: 'bars held', entry_price: 'entry price', last_entry_price: 'last entry price', entries_made: 'entries made' };
 export const BINANCE_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const YAHOO_INTERVALS = ['1d', '1w'];
 export const REBALANCE: Rebalance[] = ['never', 'weekly', 'monthly', 'quarterly', 'yearly'];
@@ -196,6 +210,7 @@ export const REBALANCE: Rebalance[] = ['never', 'weekly', 'monthly', 'quarterly'
 export const SETTINGS = [
   'name', 'universe', 'symbol', 'from', 'to', 'data', 'interval', 'capital', 'costs', 'size', 'rebalance', 'benchmark',
   'stop loss', 'trailing stop', 'take profit', 'slippage', 'cash rate', 'test from', 'hold', 'weighting', 'risk per trade', 'fill',
+  'commission', 'entries',
 ];
 /** The settings a `for TICKER:` section can hold. */
 export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
@@ -203,7 +218,7 @@ export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 /** Names a parameter can't take. */
 export const RESERVED = new Set([
   'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
-  'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price',
+  'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
   ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
 ]);
 
@@ -213,6 +228,7 @@ export const PARAM_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*(.*)$/;
 const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
 const PARAM_VALUE = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(${NUM})(?:\s+step\s+(${NUM}))?)?$`, 'id');
 const MAX_PARAM_VALUES = 200;
+const MAX_ENTRIES = 10;
 /** `2 atr(14)`, `2.5 atr` or `k atr(n)`; a name needs a space before atr, so a parameter called `flatr` stays itself. The period is trimmed by the caller. */
 const ATR_DISTANCE = /^(\d+(?:\.\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*(?=\s))\s*atr\s*(?:\(([^)]*)\))?$/i;
 /** A setting's name: words with runs of spaces between them, so no two parts of the pattern compete for the same spaces. */
@@ -389,8 +405,8 @@ function isFixed(e: Expr): boolean {
 interface ExprContext {
   resolveAsset(sym: Tok): string;
   params: Map<string, Param>;
-  /** Position values only exist while a position is open, which only a sell rule sees. */
-  sell: boolean;
+  /** Position values only exist while a position is open, which only sell and add rules see. */
+  positions: boolean;
   /** A price compared with a fixed number; `asset` is the `of` ticker, or null for the rule's own. */
   priceVsNumber(at: At, asset: string | null): void;
   /** The block's text from the start of token `a` to the end of token `b`, lines joined by a space. */
@@ -677,17 +693,23 @@ class ExprParser {
   private position(t: Tok): Expr | null {
     let name: PosName;
     let end = t;
-    if (t.s === 'bars_held' || t.s === 'entry_price') {
+    const pairs: Record<string, [string, PosName]> = { bars: ['held', 'bars_held'], entry: ['price', 'entry_price'], entries: ['made', 'entries_made'] };
+    if (t.s === 'bars_held' || t.s === 'entry_price' || t.s === 'last_entry_price' || t.s === 'entries_made') {
       name = t.s;
-    } else if (t.s === 'bars' || t.s === 'entry') {
-      const second = t.s === 'bars' ? 'held' : 'price';
+    } else if (Object.hasOwn(pairs, t.s)) {
+      const [second, full] = pairs[t.s];
       if (!this.isId(second)) throw new SpecError(at(t), `"${t.s}" on its own is not a name. Write "${t.s} ${second}"`);
       end = this.next();
-      name = t.s === 'bars' ? 'bars_held' : 'entry_price';
+      name = full;
+    } else if (t.s === 'last' && this.isId('entry') && this.toks[this.i + 1].t === 'id' && this.toks[this.i + 1].s === 'price') {
+      // "last" alone stays free for a parameter's name.
+      this.next();
+      end = this.next();
+      name = 'last_entry_price';
     } else {
       return null;
     }
-    if (!this.ctx.sell) throw new SpecError(span(t, end), `"${POSITION[name]}" only makes sense in a sell rule`);
+    if (!this.ctx.positions) throw new SpecError(span(t, end), `"${POSITION[name]}" only makes sense in a sell or add rule`);
     return { k: 'pos', name };
   }
 
@@ -819,6 +841,39 @@ function parseBps(what: string) {
   };
 }
 
+const COMMISSION_FORMS = 'Write it as 1 for a fixed amount per order, or as 0.005 per share, with min 1 or max 1% after it if you want them';
+
+/** `1`, `1 per order`, `0.005 per share`, `0.005 per share, min 1, max 1%`; null for no commission (`0`). */
+function parseCommission(text: string, where: At): Commission | null {
+  const parts = text.split(',').map((x) => x.trim());
+  const head = parts[0].match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)(?:\s+per\s+(order|share))?$/i);
+  if (!head) throw new SpecError(where, `"${text}" is not a commission. ${COMMISSION_FORMS}`);
+  const fee = Number(head[1]);
+  if (head[2]?.toLowerCase() !== 'share') {
+    if (parts.length > 1) throw new SpecError(where, '"min" and "max" go with a commission per share, as in 0.005 per share, min 1, max 1%');
+    return fee === 0 ? null : { k: 'order', fee };
+  }
+  if (fee === 0) throw new SpecError(where, 'The commission per share must be above 0');
+  let min: number | null = null;
+  let max: number | null = null;
+  for (const part of parts.slice(1)) {
+    const m = part.match(/^(min|max)\s+(.*)$/i);
+    if (!m) throw new SpecError(where, `Can't read "${part}". After the amount per share, write min 1 or max 1%`);
+    const which = m[1].toLowerCase();
+    if ((which === 'min' ? min : max) !== null) throw new SpecError(where, `"${which}" is written twice`);
+    if (which === 'min') {
+      const v = m[2].match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)$/);
+      if (!v || Number(v[1]) <= 0) throw new SpecError(where, 'The minimum must be an amount above 0, as in min 1');
+      min = Number(v[1]);
+    } else {
+      const v = m[2].match(/^(\d+(?:\.\d+)?|\.\d+)\s*%$/);
+      if (!v || Number(v[1]) <= 0 || Number(v[1]) >= 10) throw new SpecError(where, 'The maximum must be a percentage of the order\'s value, above 0% and under 10%, as in max 1%');
+      max = Number(v[1]) / 100;
+    }
+  }
+  return { k: 'share', fee, min: min ?? 0, max };
+}
+
 /** The values a parameter's range steps through, rounded so 0.1 + 0.2 reads as 0.3. */
 export function paramValues(p: Param): number[] {
   if (!p.range) return [p.value];
@@ -872,7 +927,7 @@ interface SettingLine {
 }
 
 interface RawRule {
-  side: 'buy' | 'sell';
+  side: 'buy' | 'sell' | 'add';
   scope: string | null;
   /** The ticker's name on the `for` line. */
   scopeAt: At | null;
@@ -891,6 +946,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     slippageBps: given.slippageBps ?? BUILTIN_DEFAULTS.slippageBps,
     cashRate: given.cashRate ?? BUILTIN_DEFAULTS.cashRate,
     dataSource: given.dataSource ?? BUILTIN_DEFAULTS.dataSource,
+    commission: given.commission,
   };
   const errors: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
@@ -931,9 +987,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const name = text.slice(3, -1);
       const from = lead + 3 + name.length - name.trimStart().length;
       scopeAt = scope === null ? null : { line, from, to: from + forName.length };
-    } else if ((m = text.match(/^(buy|sell)\s+when\b(.*)$/i))) {
+    } else if ((m = text.match(/^(buy|sell|add)\s+when\b(.*)$/i))) {
       const exprFrom = text.length - m[2].length;
-      const rule: RawRule = { side: m[1].toLowerCase() as 'buy' | 'sell', scope, scopeAt, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
+      const rule: RawRule = { side: m[1].toLowerCase() as RawRule['side'], scope, scopeAt, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
       open = rule;
       rawRules.push(rule);
       guard(() => lex(m![2], line, lead + exprFrom, rule.toks));
@@ -1110,10 +1166,10 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     parts.push(plainLines[b.line - 1].slice(0, b.to));
     return parts.map((s) => s.trim()).join(' ');
   };
-  const context = (sell: boolean, ruleScope: string | null): ExprContext => ({
+  const context = (positions: boolean, ruleScope: string | null): ExprContext => ({
     resolveAsset,
     params,
-    sell,
+    positions,
     priceVsNumber: (where, asset) => priceChecks.push({ at: where, asset, scope: ruleScope }),
     text,
   });
@@ -1129,8 +1185,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     reported.add(at.line);
     throw new SpecError(at, `"for ${name}:" names a ticker that is not in the universe`);
   };
-  const shared: { buy?: Expr; sell?: Expr } = {};
-  const own = new Map<string, { buy?: Expr; sell?: Expr }>();
+  const shared: { buy?: Expr; sell?: Expr; add?: Expr } = {};
+  const own = new Map<string, { buy?: Expr; sell?: Expr; add?: Expr }>();
+  const addHeads: At[] = [];
   const writtenOf = new Map<Expr, Written>();
   for (const r of rawRules) {
     guard(() => {
@@ -1148,10 +1205,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       }
       if (target[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule${r.scope ? ` for ${r.scope}` : ''}. Join conditions with "and" or "or"`);
       r.toks.push(endTok(r.toks, r.head));
-      const parser = new ExprParser(r.toks, context(r.side === 'sell', ruleScope));
+      const parser = new ExprParser(r.toks, context(r.side !== 'buy', ruleScope));
       const e = parser.parseCondition();
       target[r.side] = e;
       writtenOf.set(e, parser.written(e));
+      if (r.side === 'add') addHeads.push(r.head);
     });
   }
 
@@ -1169,15 +1227,40 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     });
   }
 
+  const entriesLine = settings.get('entries');
+  const entries = get(
+    'entries',
+    (v, w) => {
+      const n = plain(v, w, 'entries', 'entries: 3');
+      if (!Number.isInteger(n) || n < 1 || n > MAX_ENTRIES) throw new SpecError(w, `entries must be a whole number from 1 to ${MAX_ENTRIES}, not ${n}`);
+      return n;
+    },
+    null as number | null,
+  );
+  if (!entriesLine && addHeads.length) errors.push(diag(addHeads[0], '"add when" needs an entries line that says how many entries a position is built in, such as entries: 3'));
+
   const rules: Record<string, Rules> = {};
-  const writtenRules: Record<string, { buy: Written | null; sell: Written | null }> = {};
+  const writtenRules: Record<string, { buy: Written | null; sell: Written | null; add?: Written | null }> = {};
+  const noAdd: string[] = [];
   for (const a of universe) {
     const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true } as Expr) : undefined);
     const sell = own.get(a.name)?.sell ?? shared.sell ?? null;
+    const add = own.get(a.name)?.add ?? shared.add;
     if (buy) {
-      rules[a.name] = { buy, sell };
+      rules[a.name] = add && entriesLine ? { buy, sell, add } : { buy, sell };
       writtenRules[a.name] = { buy: writtenOf.get(buy) ?? null, sell: sell ? (writtenOf.get(sell) ?? null) : null };
+      if (add && entriesLine) writtenRules[a.name].add = writtenOf.get(add) ?? null;
     } else if (errors.length === 0) errors.push({ line: 1, message: `There is no buy rule${universe.length > 1 ? ` for ${a.name}` : ''}. Add one, such as "buy when close > sma(200)"` });
+    if (!add) noAdd.push(a.name);
+  }
+  if (entries !== null && entries > 1 && noAdd.length && universe.length) {
+    const whom = noAdd.length === universe.length ? '' : ` for ${noAdd.join(', ')}`;
+    errors.push(
+      diag(
+        entriesLine!.keyAt,
+        `"entries: ${entries}" builds each position in ${entries} entries, so it needs an add rule${whom} that says when to make the next one, such as add when close > last entry price * 1.03`,
+      ),
+    );
   }
 
   const interval = get('interval', (v) => v.toLowerCase(), '1d');
@@ -1322,6 +1405,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     fill: get('fill', (v, w) => oneOf(FILL, 'fill')(v.replace(/\s+/g, ' '), w), 'next open' as Fill),
     written: { rules: writtenRules, rank: rankWritten },
   };
+  const commission = settings.has('commission') ? get('commission', parseCommission, null) : (defaults.commission ?? null);
+  if (commission) spec.commission = commission;
+  if (entries !== null) spec.entries = entries;
 
   errors.sort((a, b) => a.line - b.line);
   warnings.sort((a, b) => a.line - b.line);

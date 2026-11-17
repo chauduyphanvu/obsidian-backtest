@@ -1,0 +1,8 @@
+universe: MREV
+capital: 100000
+entries: 2
+stop loss: 6%
+take profit: 8%
+buy when close < sma(20) * 0.97
+add when close < sma(20) * 0.94
+sell when close > sma(20)

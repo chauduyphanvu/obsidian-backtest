@@ -5,7 +5,7 @@
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { DAY, minus, price, stamp } from './dom.ts';
 import { findPos, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
-import type { ExitReason, ExitWhy, RankPlace, Trade, TradeWhy } from './engine.ts';
+import { commissionFee, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
@@ -26,7 +26,8 @@ export interface Row {
 }
 
 export interface Section {
-  id: 'bought' | 'size' | 'sold' | 'result';
+  /** `add` is an entry after the first, for a position built in steps; there is one for each. */
+  id: 'bought' | 'size' | 'add' | 'sold' | 'result';
   title: string;
   rows: Row[];
 }
@@ -49,6 +50,8 @@ export interface Facts {
   exitPrice: number;
   /** Return after costs from those two prices. */
   ret: number;
+  /** With `entries` above 1: each entry, the first one first, with the rule read for it (null for the first when there is no buy rule). `entryPrice` is then their average. */
+  entries?: { t: number; signalT: number; rule: Outcome | null; price: number; shares: number }[];
 }
 
 export interface Explanation {
@@ -145,6 +148,8 @@ class Explainer {
   private slip: number;
   private cost: number;
   private facts: Facts;
+  /** Every entry of a position built in steps; empty otherwise. */
+  private entries: TradeEntry[];
 
   constructor(bt: Backtest, trade: Trade, why: TradeWhy) {
     this.bt = bt;
@@ -157,19 +162,24 @@ class Explainer {
     this.slip = bt.spec.slippageBps / 10_000;
     this.cost = bt.spec.costBps / 10_000;
     this.facts = { buyT: why.buyT, buyRule: null, entryPrice: NaN, shares: NaN, reason: trade.reason, sellT: null, sellRule: null, level: null, exitPrice: NaN, ret: NaN };
+    this.entries = trade.entries ?? [];
+    if (trade.entries) this.facts.entries = [];
   }
 
   build(): Explanation {
     const { trade } = this;
     // In this order: each section fills in the facts the next one uses.
+    const n = this.bt.spec.entries ?? 1;
     const sections: Section[] = [
       { id: 'bought', title: 'Why it was bought', rows: this.bought() },
-      { id: 'size', title: 'How much', rows: this.size() },
+      { id: 'size', title: n > 1 ? `How much: entry 1 of ${n}` : 'How much', rows: this.size() },
+      ...(this.why.adds ?? []).map((add, j): Section => ({ id: 'add', title: `Entry ${j + 2} of ${n}`, rows: this.added(add, j) })),
       { id: 'sold', title: trade.reason === 'open' ? 'Why it is still held' : 'Why it was sold', rows: this.sold() },
       { id: 'result', title: 'Result', rows: this.result() },
     ];
     const sold = trade.reason === 'open' ? 'still held' : `sold ${this.date(trade.exitT)} at ${price(trade.exitPrice)}`;
-    return { asset: trade.asset, title: `${trade.asset}: bought ${this.date(trade.entryT)} at ${price(trade.entryPrice)}, ${sold}`, sections, facts: this.facts };
+    const bought = this.entries.length > 1 ? `bought in ${this.entries.length} entries from ${this.date(trade.entryT)}, at ${price(trade.entryPrice)} on average` : `bought ${this.date(trade.entryT)} at ${price(trade.entryPrice)}`;
+    return { asset: trade.asset, title: `${trade.asset}: ${bought}, ${sold}`, sections, facts: this.facts };
   }
 
   // ---------------------------------------------------------------- words for times
@@ -202,9 +212,11 @@ class Explainer {
     if (written) {
       const rule = this.rule('buy when', rules.buy, written, i, null);
       this.facts.buyRule = rule.result;
+      this.facts.entries?.push({ t: trade.entryT, signalT: why.buyT, rule: rule.result, price: NaN, shares: NaN });
       rows.push(...rule.rows);
     } else if (why.rank) {
       rows.push(row('There is no buy rule, so every ticker with a known score could be chosen.'));
+      this.facts.entries?.push({ t: trade.entryT, signalT: why.buyT, rule: null, price: NaN, shares: NaN });
     }
     if (why.rank) rows.push(...this.ranking(why.rank));
     rows.push(...this.waits());
@@ -382,19 +394,19 @@ class Explainer {
   private size(): Row[] {
     const { why, trade, bt } = this;
     const spec = bt.spec;
+    const n = spec.entries ?? 1;
     const rows: Row[] = [];
-    const fillAt = barAt(this.bars.t, trade.entryT);
-    const px = this.atClose ? this.bars.c[fillAt] : this.bars.o[fillAt];
-    const fill = px * (1 + this.slip);
+    const { px, fill } = this.fillOf(trade.entryT);
     this.facts.entryPrice = fill;
     this.facts.shares = why.spent / fill;
-    const where = this.atClose ? `at ${this.closeOf(trade.entryT)}` : `at ${this.openOf(trade.entryT)}`;
-    rows.push(row(`Portfolio value ${where}`, money(why.equity)));
+    if (this.facts.entries?.length) Object.assign(this.facts.entries[0], { price: fill, shares: why.spent / fill });
+    rows.push(row(`Portfolio value ${this.atFill(trade.entryT)}`, money(why.equity)));
 
     const configured = spec.universe.find((a) => a.name === trade.asset)?.weight ?? why.weight;
     const inputs = this.closeOf(why.inputT);
     const inputIdx = barAt(this.bars.t, why.inputT);
     const ofThat = `${share(why.weight)} of that: ${money(why.weight * why.equity)}`;
+    let whole = why.weight * why.equity;
     if (spec.sizing.k === 'risk') {
       const s = spec.sizing;
       const atr = ind.atr(this.bars.h, this.bars.l, this.bars.c, s.n)[inputIdx];
@@ -405,6 +417,7 @@ class Explainer {
       rows.push(row(`Distance: ${fixed(s.mult, 4)} × ATR(${s.n}) at ${inputs}`, `${fixed(s.mult, 4)} × ${fixed(atr, 4)} = ${fixed(each, 4)} a share`));
       rows.push(row(`Shares that lose ${money(amount)} over that distance`, `${shareCount(riskShares)}, worth ${money(riskShares * fill)} at the fill`));
       if (riskShares * fill > why.weight * why.equity) rows.push(row(`That is more than its weight, so the buy is capped at the weight`, ofThat));
+      else whole = riskShares * fill;
     } else if (spec.sizing.k === 'invvol') {
       const vol = ind.stdev(ind.returns(this.bars.c), spec.sizing.n)[inputIdx];
       rows.push(row(`Volatility of its last ${spec.sizing.n} one-bar returns, at ${inputs}`, vol > 0 ? share(vol) : `${Number.isNaN(vol) ? 'unknown' : '0'}, so it keeps its configured weight`));
@@ -414,20 +427,101 @@ class Explainer {
     } else {
       rows.push(row('Weight', ofThat));
     }
-    if (why.spent < why.wanted * (1 - 1e-9)) {
-      if (why.cash >= why.wanted * (1 - 1e-9)) rows.push(row(`The costs are paid on top, so the ${money(why.cash)} in cash covered`, money(why.spent)));
-      else rows.push(row(`Only ${money(why.cash)} was in cash, so the buy was cut to what that covers${this.cost > 0 ? ' with its costs' : ''}`, money(why.spent)));
-    }
-    const fee = why.spent * this.cost;
-    rows.push(row('Money put in', `${money(why.spent)}${fee > 0 ? ` plus ${money(fee)} costs` : ''}, for ${shareCount(why.shares)} shares`));
-
+    if (n > 1) rows.push(row(`Each of the ${n} entries is 1/${n} of a whole position, ${money(whole)}`, money(why.wanted)));
+    rows.push(...this.paid(why, 'buy'));
     if (this.atClose) {
       rows.push(row(`Filled at ${this.closeOf(trade.entryT)}${this.readAt(why.buyT, trade.entryT, why.rank ? 'ranking' : 'rule')}`, this.slipped(px, fill, 'plus')));
     } else {
-      const before = fillAt > 0 && this.bars.t[fillAt - 1] === why.buyT ? `; the close the rule read was ${price(this.bars.c[fillAt - 1])}` : '';
-      rows.push(row(`Filled at ${this.openOf(trade.entryT)}`, `${this.slipped(px, fill, 'plus')}${before}`));
+      rows.push(row(`Filled at ${this.openOf(trade.entryT)}`, `${this.slipped(px, fill, 'plus')}${this.readBefore(trade.entryT, why.buyT)}`));
     }
     return rows;
+  }
+
+  /** The price filled at the open (or close) of the bar at `t`, before and after slippage. */
+  private fillOf(t: number): { px: number; fill: number } {
+    const k = barAt(this.bars.t, t);
+    const px = this.atClose ? this.bars.c[k] : this.bars.o[k];
+    return { px, fill: px * (1 + this.slip) };
+  }
+
+  private atFill(t: number): string {
+    return this.atClose ? `at ${this.closeOf(t)}` : `at ${this.openOf(t)}`;
+  }
+
+  /** After an open fill: the close the rule read, when it is the bar just before. */
+  private readBefore(filled: number, read: number): string {
+    const k = barAt(this.bars.t, filled);
+    return k > 0 && this.bars.t[k - 1] === read ? `; the close the rule read was ${price(this.bars.c[k - 1])}` : '';
+  }
+
+  /** What is paid on top of a buy: any cut to the cash there was, then the money put in with its costs and commission. */
+  private paid(b: Pick<TradeWhy, 'wanted' | 'spent' | 'cash' | 'shares'>, what: 'buy' | 'add'): Row[] {
+    const rows: Row[] = [];
+    const commission = this.bt.spec.commission;
+    const fee = b.spent * this.cost;
+    const comm = commission ? commissionFee(commission, b.spent, b.shares) : 0;
+    const charges = [this.cost > 0 ? 'costs' : '', comm > 0 ? 'commission' : ''].filter(Boolean);
+    if (b.spent < b.wanted * (1 - 1e-9)) {
+      const onTop = charges.join(' and ') || 'costs';
+      if (b.cash >= b.wanted * (1 - 1e-9)) rows.push(row(`The ${onTop} ${onTop === 'commission' ? 'is' : 'are'} paid on top, so the ${money(b.cash)} in cash covered`, money(b.spent)));
+      else rows.push(row(`Only ${money(b.cash)} was in cash, so the ${what} was cut to what that covers${charges.length ? ` with its ${charges.join(' and ')}` : ''}`, money(b.spent)));
+    }
+    const extra = [fee > 0 ? `${money(fee)} costs` : '', comm > 0 ? `${money(comm)} commission` : ''].filter(Boolean);
+    rows.push(row('Money put in', `${money(b.spent)}${extra.length ? ` plus ${extra.join(' and ')}` : ''}, for ${shareCount(b.shares)} shares`));
+    return rows;
+  }
+
+  /** An entry after the first: the add rule at its close, the size of the step, the fill, and where the levels moved. */
+  private added(add: AddWhy, j: number): Row[] {
+    const { trade, bt } = this;
+    const spec = bt.spec;
+    const n = spec.entries ?? 1;
+    const entry = this.entries[j + 1];
+    const rows: Row[] = [row(`The add rule was read at ${this.closeOf(add.signalT)}.`)];
+    const rule = bt.spec.rules[trade.asset].add;
+    const written = bt.spec.written?.rules[trade.asset]?.add;
+    let outcome: Outcome | null = null;
+    if (rule && written) {
+      const r = this.rule('add when', rule, written, barAt(this.bars.t, add.signalT), this.positionBefore(j + 1));
+      outcome = r.result;
+      rows.push(...r.rows);
+    }
+    const { px, fill } = this.fillOf(entry.t);
+    this.facts.entries?.push({ t: entry.t, signalT: add.signalT, rule: outcome, price: fill, shares: add.spent / fill });
+    rows.push(row(`Portfolio value ${this.atFill(entry.t)}`, money(add.equity)));
+    const whole = spec.sizing.k === 'risk' ? 'A whole position by risk per trade, capped at its weight' : `A whole position, ${share(add.weight)} of that`;
+    rows.push(row(whole, money(add.full)));
+    rows.push(row(`One entry is 1/${n} of it`, money(add.full / n)));
+    if (add.wanted < (add.full / n) * (1 - 1e-9)) {
+      rows.push(row(`The position was worth ${money(add.held)}, so the entry was cut to what keeps it within a whole position`, money(add.wanted)));
+    }
+    rows.push(...this.paid(add, 'add'));
+    if (this.atClose) rows.push(row(`Filled at ${this.closeOf(entry.t)}${this.readAt(add.signalT, entry.t, 'rule')}`, this.slipped(px, fill, 'plus')));
+    else rows.push(row(`Filled at ${this.openOf(entry.t)}`, `${this.slipped(px, fill, 'plus')}${this.readBefore(entry.t, add.signalT)}`));
+    rows.push(row(`Average entry price of the ${j + 2} entries`, price(add.average)));
+    const stops = spec.stops[trade.asset];
+    if (add.stopLoss !== null && stops.stopLoss) rows.push(row('The stop loss moved to', `${price(add.stopLoss)}, ${this.distance(stops.stopLoss, 'under', 'the average')}`));
+    if (add.takeProfit !== null && stops.takeProfit) rows.push(row('The take profit moved to', `${price(add.takeProfit)}, ${this.distance(stops.takeProfit, 'over', 'the average')}`));
+    return rows;
+  }
+
+  /** A stop's or target's distance from a price, as set at the first entry. */
+  private distance(s: StopLevel, way: 'under' | 'over', from: string): string {
+    if (s.k === 'pct') return `${share(s.v)} ${way} ${from}`;
+    const atr = ind.atr(this.bars.h, this.bars.l, this.bars.c, s.n)[barAt(this.bars.t, this.why.inputT)];
+    return `${fixed(s.mult, 4)} × ATR(${s.n}) ${fixed(atr, 4)} (at ${this.closeOf(this.why.inputT)}) = ${fixed(s.mult * atr, 4)} ${way} ${from}`;
+  }
+
+  /** The position as a rule read it before entry number `made + 1`: its first `made` entries. */
+  private positionBefore(made: number): PosState {
+    const first = this.entries[0];
+    let money = first.money;
+    let shares = first.shares;
+    for (let k = 1; k < made; k++) {
+      money += this.entries[k].money;
+      shares += this.entries[k].shares;
+    }
+    return { entryIdx: barAt(this.bars.t, first.t), entryPrice: made === 1 ? first.price : money / shares, lastPrice: this.entries[made - 1].price, entries: made };
   }
 
   /** After a close fill at `filled`: that it is the close the decision read at `read`, or which close it read instead. */
@@ -464,19 +558,47 @@ class Explainer {
       rows.push(...this.ranking(exit.rank));
     }
     const px = this.atClose ? this.bars.c[j] : this.bars.o[j];
-    this.exitAt(px * (1 - this.slip));
+    this.exitAt(px, true);
     const at = this.atClose ? `Sold at ${this.closeOf(trade.exitT)}${this.readAt(exit.t, trade.exitT, exit.k === 'rank' ? 'ranking' : 'rule')}` : `Sold at ${this.openOf(trade.exitT)}`;
     rows.push(row(at, this.slipped(px, px * (1 - this.slip), 'less')));
     return rows;
   }
 
+  /** The position as its sell rule reads it: every entry made. */
   private position(): PosState {
+    if (this.entries.length > 1) return this.positionBefore(this.entries.length);
     return { entryIdx: barAt(this.bars.t, this.trade.entryT), entryPrice: this.trade.entryPrice };
   }
 
-  private exitAt(exitPrice: number): void {
+  /** The exit at `px`, slipped when `sold`, and the return after costs and commission from the entries' prices. */
+  private exitAt(px: number, sold: boolean): void {
+    const exitPrice = sold ? px * (1 - this.slip) : px;
     this.facts.exitPrice = exitPrice;
-    this.facts.ret = (exitPrice * (1 - this.cost)) / (this.facts.entryPrice * (1 + this.cost)) - 1;
+    const entries = this.facts.entries;
+    if (entries && entries.length > 1) {
+      let money = 0;
+      let shares = 0;
+      for (const e of entries) {
+        money += e.price * e.shares;
+        shares += e.shares;
+      }
+      this.facts.entryPrice = money / shares;
+    }
+    const c = this.bt.spec.commission;
+    const held = this.why.commission?.exitShares;
+    if (!c || held === undefined) {
+      this.facts.ret = (exitPrice * (1 - this.cost)) / (this.facts.entryPrice * (1 + this.cost)) - 1;
+      return;
+    }
+    const value = sold ? held * px * (1 - this.slip) : held * px;
+    const exitFee = commissionFee(c, value, held);
+    let entryFees = 0;
+    let entryShares = 0;
+    for (const e of entries && entries.length > 1 ? entries : [{ price: this.facts.entryPrice, shares: this.facts.shares }]) {
+      entryFees += commissionFee(c, e.price * e.shares, e.shares);
+      entryShares += e.shares;
+    }
+    this.facts.ret = (exitPrice * (1 - this.cost) - exitFee / held) / (this.facts.entryPrice * (1 + this.cost) + entryFees / entryShares) - 1;
   }
 
   /** A stop or the target: where it sat, how it was set, and what the bar did. */
@@ -487,9 +609,8 @@ class Explainer {
     const [o, h, l] = [this.bars.o[j], this.bars.h[j], this.bars.l[j]];
     const inputIdx = barAt(this.bars.t, why.inputT);
     const atr = (s: StopLevel) => (s.k === 'atr' ? ind.atr(this.bars.h, this.bars.l, this.bars.c, s.n)[inputIdx] : NaN);
-    const distance = (s: StopLevel, from: string, way: 'under' | 'over') =>
-      s.k === 'pct' ? `${share(s.v)} ${way} ${from}` : `${fixed(s.mult, 4)} × ATR(${s.n}) ${fixed(atr(s), 4)} (at ${this.closeOf(why.inputT)}) = ${fixed(s.mult * atr(s), 4)} ${way} ${from}`;
-    const fill = `the ${price(trade.entryPrice)} fill`;
+    const distance = (s: StopLevel, from: string, way: 'under' | 'over') => this.distance(s, way, from);
+    const fill = this.entries.length > 1 ? `the ${price(trade.entryPrice)} average entry price of the ${this.entries.length} entries` : `the ${price(trade.entryPrice)} fill`;
     const rows: Row[] = [];
     let level: number;
     if (trade.reason === 'take profit') {
@@ -505,7 +626,8 @@ class Explainer {
         const high = exit.high!;
         level = s.k === 'pct' ? high * (1 - s.v) : high - s.mult * atr(s);
         const first = j === barAt(this.bars.t, trade.entryT) + (this.atClose ? 1 : 0);
-        const highest = first ? `${price(high)}, the ${this.atClose ? 'close' : 'open'} it was bought at` : `${price(high)}, the highest price from the buy to the bar before`;
+        const since = this.entries.length > 1 ? 'the first entry' : 'the buy';
+        const highest = first ? `${price(high)}, the ${this.atClose ? 'close' : 'open'} it was bought at` : `${price(high)}, the highest price from ${since} to the bar before`;
         rows.push(row(`Trailing stop at ${price(level)}`, distance(s, highest, 'under')));
         if (why.stopLoss !== null) rows.push(row(`The stop loss, at ${price(why.stopLoss)}, was lower.`));
       } else {
@@ -520,7 +642,7 @@ class Explainer {
     this.facts.level = level;
     const atOpen = trade.reason === 'take profit' ? o > level : o < level;
     const px = atOpen ? o : level;
-    this.exitAt(px * (1 - this.slip));
+    this.exitAt(px, true);
     rows.push(row(`Sold at ${atOpen ? 'the open' : trade.reason === 'take profit' ? 'the target' : 'the stop'}`, this.slipped(px, px * (1 - this.slip), 'less')));
     if (this.atClose && j === barAt(this.bars.t, trade.entryT) + 1) rows.push(row('Bought at a close, the position was watched by its stops from the next bar on.'));
     return rows;
@@ -530,7 +652,7 @@ class Explainer {
     const { trade, bt } = this;
     const rows: Row[] = [];
     const j = barAt(this.bars.t, bt.run.t[bt.run.t.length - 1]);
-    this.exitAt(this.bars.c[j]);
+    this.exitAt(this.bars.c[j], false);
     rows.push(row(`Still held at the end of the run. It is valued at the last close, ${this.date(this.bars.t[j])}.`, price(this.bars.c[j])));
     const sell = bt.spec.rules[trade.asset].sell;
     const written = bt.spec.written?.rules[trade.asset]?.sell;
@@ -553,9 +675,11 @@ class Explainer {
     rows.push(row(open ? 'Return so far, after costs' : 'Return after costs', percent(trade.ret)));
     rows.push(row(open ? 'Profit so far' : 'Profit', `${trade.pnl > 0 ? '+' : ''}${money(trade.pnl)}`));
     rows.push(row('Held', `${plural(trade.bars, 'bar')}, from ${this.date(trade.entryT)} to ${this.date(trade.exitT)}`));
+    if (this.entries.length > 1) rows.push(row(`Bought in ${this.entries.length} entries of the ${this.bt.spec.entries} allowed`, `at ${price(trade.entryPrice)} on average`));
     if (why.fees > 0) {
-      const toSell = open ? `; selling at the last close would cost ${money(trade.exitPrice * this.sharesHeld() * this.cost)} more` : '';
-      rows.push(row(open ? 'Costs paid so far' : 'Costs paid', `${money(why.fees)}${toSell}`));
+      const toSell = open ? `; selling at the last close would cost ${money(trade.exitPrice * this.sharesHeld() * this.cost + (why.commission?.exit ?? 0))} more` : '';
+      const ofWhich = why.commission && why.commission.paid > 0 ? `, of which ${money(why.commission.paid)} commission` : '';
+      rows.push(row(open ? 'Costs paid so far' : 'Costs paid', `${money(why.fees)}${ofWhich}${toSell}`));
     }
     if (why.topUps || why.trims) {
       const parts = [why.topUps ? `topped it up ${times(why.topUps)}` : '', why.trims ? `trimmed it ${times(why.trims)}` : ''].filter(Boolean);

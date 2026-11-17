@@ -176,6 +176,8 @@ Only universe is required. Add the others when the description asks for them or 
   weighting: inverse volatility(60) calmer tickers get more weight; volatility is measured over the last 60 returns
   risk per trade: 1% at 2 atr(14)   size each buy so that a fall of 2 average true ranges loses 1% of equity
   fill: close                       fill each order at the close the rule was read at; the default, next open, fills at the next bar's open
+  commission: 1                     a charge per order in the account's money, added to costs; also 0.005 per share, or 0.005 per share, min 1, max 1%
+  entries: 3                        build each position in up to 3 entries, each a third of its weight; needs an add when rule
 universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, csv:Data/gold.csv for a CSV file in the vault. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
 Stops are checked on top of the sell rule. With no sell rule a position is held until a stop closes it or the run ends.
 
@@ -183,6 +185,7 @@ Stops are checked on top of the sell rule. With no sell rule a position is held 
 
 buy when <condition>      opens a position when the condition holds and the ticker is not held
 sell when <condition>     closes it when the condition holds
+add when <condition>      with entries: 3, adds the next entry to a position held when the condition holds, until there are 3; write it only with an entries line
 A rule that holds at a close fills at the next open, or with fill: close at that same close. At most one buy rule and one sell rule per scope. A buy rule is optional only when hold is set (then every ticker is eligible).
 Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
 
@@ -232,10 +235,13 @@ Functions, written with parentheses. A period is a plain number or a parameter, 
 Calendar values, read from each bar's date:
   month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), year such as 2024
   month_start and month_end are conditions: the first and the last bar of a month
-Position values, in sell rules only (written with a space, not inside functions, not with [n] or "of"):
-  bars held      completed bars since the buy filled, 0 on that bar
-  entry price    the price the position was bought at
+Position values, in sell and add rules only (written with a space, not inside functions, not with [n] or "of"):
+  bars held          completed bars since the buy filled, 0 on that bar
+  entry price        the price the position was bought at; with several entries, their average
+  last entry price   the price of the latest entry
+  entries made       how many entries the position has, 1 after the buy
   Example: sell when bars held >= 10 or close > entry price * 1.1
+  Example: add when close > last entry price * 1.03
 
 ## Parameters
 
@@ -249,7 +255,7 @@ A parameter is a named number on its own line: fast = 50. Use its name wherever 
 - Do not set the same setting twice.
 - Do not write dates any way but YYYY-MM-DD, such as 2015-01-31.
 - Do not use shorting, leverage, options or margin, and do not let weights add up to more than 100%. A sell rule only closes a long position.
-- Do not use bars held or entry price in a buy rule, inside a function, or with [n] or "of".
+- Do not use bars held, entry price, last entry price or entries made in a buy rule, inside a function, or with [n] or "of".
 - Do not put an expression where a function wants a period: write sma(200), not sma(100 * 2).
 - Do not leave a blank line inside a rule, or put prose in the fence. A # comment line is fine.
 - Do not give universe weights when you use hold, and do not use weights together with size.

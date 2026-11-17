@@ -1,0 +1,6 @@
+universe: TRND
+capital: 100000
+entries: 4
+buy when close > sma(50)
+add when close > highest(close, 20)[1]
+sell when close < sma(50)

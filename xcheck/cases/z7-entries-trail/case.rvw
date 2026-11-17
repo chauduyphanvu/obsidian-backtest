@@ -1,0 +1,11 @@
+language 1
+strategy "z7: two entries with a trailing stop" {
+  universe   symbols("CHOP")
+  enter long when close > sma(close, 40) and not (close < sma(close, 40))
+  add when   close > highest(close, 10)[1] and not (close < sma(close, 40))
+  max adds   1
+  exit when  close < sma(close, 40)
+  trail      6%
+  size       50% of equity, max 1 positions
+  max position 100%
+}

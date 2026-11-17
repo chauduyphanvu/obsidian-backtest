@@ -7,6 +7,8 @@ export interface Settings {
   /** Text in the language's own form, such as "5 bps". */
   costs: string;
   slippage: string;
+  /** Text of a `commission` line, such as "1" or "0.005 per share, min 1"; "0" for none. */
+  commission: string;
   /** A yearly rate or a yield ticker, such as "4%" or "^IRX". */
   cashRate: string;
   dataSource: 'yahoo' | 'binance';
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   capital: 10_000,
   costs: '0 bps',
   slippage: '0 bps',
+  commission: '0',
   cashRate: '0%',
   dataSource: 'yahoo',
   cacheHours: 6,
@@ -72,14 +75,14 @@ export function providerText(provider: Settings['llmProvider']): { address: { de
   };
 }
 
-type TextKey = 'costs' | 'slippage' | 'cashRate';
+type TextKey = 'costs' | 'slippage' | 'commission' | 'cashRate';
 
-const SETTING_LINE: Record<TextKey, string> = { costs: 'costs', slippage: 'slippage', cashRate: 'cash rate' };
-const EXAMPLE: Record<TextKey, string> = { costs: '5 bps or 0.05%', slippage: '5 bps or 0.05%', cashRate: '4% or ^IRX' };
+const SETTING_LINE: Record<TextKey, string> = { costs: 'costs', slippage: 'slippage', commission: 'commission', cashRate: 'cash rate' };
+const EXAMPLE: Record<TextKey, string> = { costs: '5 bps or 0.05%', slippage: '5 bps or 0.05%', commission: '1, 0.005 per share, min 1, or 0 for none', cashRate: '4% or ^IRX' };
 /** A block that reads cleanly on its own, so any problem found after adding one setting line is that line's. */
 const VALID_BLOCK = 'universe: SPY\nbuy when true';
 
-/** Reads one text setting as the language would read it on a `costs:`, `slippage:` or `cash rate:` line. */
+/** Reads one text setting as the language would read it on a `costs:`, `slippage:`, `commission:` or `cash rate:` line. */
 function read(key: TextKey, text: string): { spec: Spec } | { error: string } {
   const value = text.trim();
   if (/[\r\n]/.test(value)) return { error: 'Use a single line.' };
@@ -96,18 +99,21 @@ export function validateSetting(key: TextKey, text: string): string | null {
   return 'error' in result ? result.error : null;
 }
 
-/** The parser defaults these settings imply (costs and slippage read from their text; text that cannot be read counts as 0). */
+/** The parser defaults these settings imply (costs, slippage and commission read from their text; text that cannot be read counts as none). */
 export function defaultsFrom(settings: Settings): Defaults {
   const bps = (key: 'costs' | 'slippage'): number => {
     const result = read(key, settings[key]);
     return 'spec' in result ? (key === 'costs' ? result.spec.costBps : result.spec.slippageBps) : 0;
   };
+  const charge = read('commission', settings.commission);
+  const commission = 'spec' in charge ? charge.spec.commission : undefined;
   return {
     capital: settings.capital,
     costBps: bps('costs'),
     slippageBps: bps('slippage'),
     cashRate: settings.cashRate.trim(),
     dataSource: settings.dataSource,
+    ...(commission ? { commission } : {}),
   };
 }
 
@@ -125,6 +131,7 @@ export function normalizeSettings(saved: unknown): Settings {
     capital: typeof given.capital === 'number' && Number.isFinite(given.capital) && given.capital > 0 ? given.capital : d.capital,
     costs: readable('costs'),
     slippage: readable('slippage'),
+    commission: readable('commission'),
     cashRate: readable('cashRate'),
     dataSource: given.dataSource === 'yahoo' || given.dataSource === 'binance' ? given.dataSource : d.dataSource,
     cacheHours: typeof hours === 'number' && Number.isFinite(hours) ? Math.min(CACHE_HOURS_MAX, Math.max(CACHE_HOURS_MIN, Math.round(hours))) : d.cacheHours,

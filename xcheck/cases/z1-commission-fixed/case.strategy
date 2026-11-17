@@ -1,0 +1,5 @@
+universe: TRND
+capital: 100000
+commission: 5
+buy when close > sma(30)
+sell when close < sma(30)

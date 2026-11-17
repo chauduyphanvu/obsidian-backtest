@@ -1,5 +1,5 @@
 import type { Backtest, Segment } from './backtest.ts';
-import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
+import type { Commission, Diagnostic, Spec, StopLevel } from './dsl.ts';
 import { colourSource, DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { hintFor } from './fixes.ts';
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
@@ -87,9 +87,11 @@ export function summary(spec: Spec, source = ''): string {
   ];
   if (spec.sizing.k === 'invvol') parts.push('sized by inverse volatility');
   if (spec.sizing.k === 'risk') parts.push(`${pct(spec.sizing.risk, 1)} risked per trade`);
+  if ((spec.entries ?? 1) > 1) parts.push(`bought in up to ${spec.entries} entries`);
   if (spec.rebalance !== 'never') parts.push(spec.rank ? `chosen ${spec.rebalance}` : `rebalanced ${spec.rebalance}`);
   if (spec.interval !== '1d') parts.push(`${spec.interval} bars`);
-  parts.push(spec.costBps ? `${spec.costBps} bps costs` : 'no costs');
+  if (spec.costBps || !spec.commission) parts.push(spec.costBps ? `${spec.costBps} bps costs` : 'no costs');
+  if (spec.commission) parts.push(commissionText(spec.commission));
   if (spec.slippageBps) parts.push(`${spec.slippageBps} bps slippage`);
   const level = (l: StopLevel | null) => (l === null ? '' : l.k === 'pct' ? formatParam({ percent: true }, l.v) : `${l.mult} ATR`);
   const text = (name: string) => {
@@ -104,6 +106,13 @@ export function summary(spec: Spec, source = ''): string {
   const listed = spec.params.filter((p) => !asStops.has(p.name.toLowerCase()));
   if (listed.length) parts.push(listed.map((p) => `${p.name} ${formatParam(p, p.value)}`).join(', '));
   return parts.join(', ');
+}
+
+/** A commission as the summary names it: "commission 1 an order", "commission 0.005 a share, at least 1, at most 1% of the order". */
+export function commissionText(c: Commission): string {
+  if (c.k === 'order') return `commission ${c.fee} an order`;
+  const limits = [c.min > 0 ? `at least ${c.min}` : '', c.max !== null ? `at most ${formatParam({ percent: true }, c.max)} of the order` : ''].filter(Boolean);
+  return `commission ${c.fee} a share${limits.length ? `, ${limits.join(', ')}` : ''}`;
 }
 
 /** A section added under the standard result; returns a cleanup function when it holds observers. */
@@ -147,16 +156,20 @@ export function compactFacts(out: RunOutput): CompactFacts {
   const { stats, run } = out.backtest;
   const intraday = run.t.some((t) => t % DAY !== 0);
   const long = run.states.filter((st) => st.long);
-  const holding = long.length === 0 ? 'In cash' : long.length === 1 ? `Long ${long[0].name} since ${stamp(long[0].since!, intraday)}` : `Holds ${long.length} of ${run.states.length}`;
+  const steps = out.spec.entries ?? 1;
+  const built = long.length === 1 && steps > 1 ? `, ${long[0].entries} of ${steps} entries` : '';
+  const holding = long.length === 0 ? 'In cash' : long.length === 1 ? `Long ${long[0].name} since ${stamp(long[0].since!, intraday)}${built}` : `Holds ${long.length} of ${run.states.length}`;
   const list = (names: string[], most = 2, joiner = ' and ') => (names.length <= most ? names.join(joiner) : `${names.length} tickers`);
-  const named = (side: 'buy' | 'sell') => run.states.filter((st) => st.pending === side).map((st) => st.name);
+  const named = (side: 'buy' | 'sell' | 'add') => run.states.filter((st) => st.pending === side).map((st) => st.name);
   const buys = named('buy');
   const sells = named('sell');
-  const due = [...(buys.length ? [`buys ${list(buys)}`] : []), ...(sells.length ? [`sells ${list(sells)}`] : [])];
-  const made = (side: 'buy' | 'sell') => run.states.filter((st) => st.filled?.side === side).map((st) => st.name);
+  const adds = named('add');
+  const due = [...(buys.length ? [`buys ${list(buys)}`] : []), ...(adds.length ? [`adds to ${list(adds)}`] : []), ...(sells.length ? [`sells ${list(sells)}`] : [])];
+  const made = (side: 'buy' | 'sell' | 'add') => run.states.filter((st) => st.filled?.side === side).map((st) => st.name);
   const bought = made('buy');
+  const added = made('add');
   const sold = made('sell');
-  const done = [...(bought.length ? [`bought ${list(bought)}`] : []), ...(sold.length ? [`sold ${list(sold)}`] : [])];
+  const done = [...(bought.length ? [`bought ${list(bought)}`] : []), ...(added.length ? [`added to ${list(added)}`] : []), ...(sold.length ? [`sold ${list(sold)}`] : [])];
   const order = [
     ...(due.length ? [`${due.join(' and ')} ${timingPhrase(pendingTiming(out.spec.fill))}`] : []),
     ...(done.length ? [`${done.join(' and ')} at the last close`] : []),
@@ -246,7 +259,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() =
   const intraday = isIntraday(bt);
   const stops: (() => void)[] = [];
   const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, fillSentence(spec)];
-  if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}.`);
+  if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}${run.commission ? `, of which ${money(run.commission)} commission` : ''}.`);
   facts.push(bt.interest > 0 ? `${bt.cashRateNote}: ${money(bt.interest)} of interest.` : `${bt.cashRateNote}.`);
   h(root, 'div', 'bt-note', facts.join(' '));
   const traded = prices.filter((p) => spec.universe.some((a) => a.name === p.name));

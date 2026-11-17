@@ -1,0 +1,7 @@
+universe: CHOP
+capital: 100000
+entries: 2
+trailing stop: 6%
+buy when close > sma(40)
+add when close > highest(close, 10)[1]
+sell when close < sma(40)

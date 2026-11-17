@@ -1,0 +1,10 @@
+language 1
+strategy "z4: four entries" {
+  universe   symbols("TRND")
+  enter long when close > sma(close, 50) and not (close < sma(close, 50))
+  add when   close > highest(close, 20)[1] and not (close < sma(close, 50))
+  max adds   3
+  exit when  close < sma(close, 50)
+  size       25% of equity, max 1 positions
+  max position 100%
+}

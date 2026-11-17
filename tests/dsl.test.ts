@@ -274,7 +274,7 @@ test('ranking with hold: equal shares of size, optional buy rule', () => {
   errorOf('universe: SPY, QQQ\nhold: top 3 by close', /"top 3" is more tickers than the universe has \(2\)/);
   errorOf('universe: SPY, QQQ\nhold: best 1', /Write it as top 3 by roc\(126\)/);
   errorOf('universe: SPY, QQQ\nhold: top 1 by close > 1', /The ranking needs a number/);
-  const pos = errorOf('universe: SPY, QQQ\nhold: top 1 by bars held', /"bars held" only makes sense in a sell rule/);
+  const pos = errorOf('universe: SPY, QQQ\nhold: top 1 by bars held', /"bars held" only makes sense in a sell or add rule/);
   assert.deepEqual([pos.line, pos.from, pos.to], [2, 15, 24]);
 });
 
@@ -295,7 +295,7 @@ test('position values only in sell rules, and never lagged or read with "of"', (
   const json = JSON.stringify(spec.rules.SPY.sell);
   assert.equal(json.match(/"k":"pos","name":"bars_held"/g)!.length, 2);
   assert.equal(json.match(/"k":"pos","name":"entry_price"/g)!.length, 2);
-  const buy = errorOf('universe: SPY\nbuy when bars held > 1', /"bars held" only makes sense in a sell rule/);
+  const buy = errorOf('universe: SPY\nbuy when bars held > 1', /"bars held" only makes sense in a sell or add rule/);
   assert.deepEqual([buy.line, buy.from, buy.to], [2, 9, 18]);
   errorOf('universe: SPY\nbuy when true\nsell when bars_held[1] > 2', /"bars held" can't be read for an earlier bar/);
   errorOf('universe: SPY\nbuy when true\nsell when (close - entry price) of QQQ > 1', /"entry price" belongs to the open position/);
