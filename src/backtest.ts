@@ -1,8 +1,8 @@
 import { INSIDE_BARS } from './data.ts';
-import { DAY, stamp } from './dom.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
 import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
 import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
+import { DAY, isIntraday, stamp, YEAR } from './format.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -55,7 +55,6 @@ export interface Backtest {
   notes: string[];
 }
 
-const YEAR = 365.25 * 86_400_000;
 /** A deviation per step below this is floating-point noise, not risk. */
 export const NOISE = 1e-12;
 
@@ -357,7 +356,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
   };
 
-  const intraday = run.t.some((t) => t % DAY !== 0);
+  const intraday = isIntraday(run.t);
   const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec, data)];
   if (run.smallTrades) {
     const n = run.smallTrades;

@@ -4,9 +4,7 @@
 // later) and measure it from its first value.
 
 import { maxDrawdown, NOISE } from './backtest.ts';
-import { DAY } from './dom.ts';
-
-const YEAR = 365.25 * DAY;
+import { DAY, YEAR } from './format.ts';
 
 /** Daily data starts and ends a few days inside a period (weekends, holidays); that still counts as covering it. */
 const GRACE = 4 * DAY;

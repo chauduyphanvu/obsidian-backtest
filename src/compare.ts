@@ -1,8 +1,8 @@
 // Comparing and combining strategies: the `compare` block's syntax, putting equity curves on one timeline,
 // a rebalanced portfolio of them, and how alike they move. Pure; the caller loads notes and runs strategies.
 
-import { isoDate } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
+import { isoDate } from './format.ts';
 
 export const MIN_ENTRIES = 2;
 export const MAX_ENTRIES = 8;

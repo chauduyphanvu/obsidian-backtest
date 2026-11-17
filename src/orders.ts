@@ -1,6 +1,6 @@
-import { DAY, isoDate, money, price, signedPct, stamp } from './dom.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
+import { DAY, isoDate, money, price, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 
 /**

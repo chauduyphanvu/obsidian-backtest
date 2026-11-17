@@ -4,12 +4,12 @@
 // bar where the run made no trade is explained by reading the rules at that bar, never by simulating again.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { DAY, minus, price, stamp } from './dom.ts';
 import { children, findPos, walk, type CmpOp, type Expr, type Rebalance, type Written } from './dsl.ts';
 import { SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import type { Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
 import { csvLine } from './export.ts';
+import { DAY, isIntraday, minus, price, stamp } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
 
@@ -314,7 +314,7 @@ class Ctx {
   constructor(bt: Backtest) {
     this.bt = bt;
     this.ev = specEvaluator(bt.spec, bt.data);
-    this.intraday = bt.run.t.some((t) => t % DAY !== 0);
+    this.intraday = isIntraday(bt.run.t);
     this.atClose = bt.spec.fill === 'close';
   }
 

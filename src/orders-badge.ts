@@ -1,5 +1,6 @@
 // The count of today's orders in the status bar, worked out quietly after start-up.
 
+import { HOUR } from './format.ts';
 import { actionWord, problemsOf, timingPhrase, todoRows, type StrategyStatus } from './orders.ts';
 
 export type BadgeState = { kind: 'checking' } | { kind: 'failed'; message: string } | { kind: 'ready'; statuses: StrategyStatus[] };
@@ -91,7 +92,6 @@ export const START_DELAY_MS = 5000;
 const LOOK_EVERY_MS = 5 * 60_000;
 /** After a check that failed, the next try comes this soon. */
 const RETRY_MS = 10 * 60_000;
-const HOUR = 3_600_000;
 
 export class OrdersBadge {
   private el: BadgeElement | null;

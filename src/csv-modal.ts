@@ -1,6 +1,7 @@
 import { Modal, type App } from 'obsidian';
 import { cleanedPath, csvColumn, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvSignal, type CsvUnread, type DateOrder } from './csv-import.ts';
-import { h, price } from './dom.ts';
+import { h } from './dom.ts';
+import { price } from './format.ts';
 
 export interface CsvHost {
   /** Vault paths of every .csv file. */

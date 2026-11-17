@@ -1,9 +1,9 @@
 // The `backtests` block: one table with every strategy in the vault. Pure; the host finds and runs the strategies.
 
 import { extractBlocks } from './blocks.ts';
-import { isoDate, minus, pct } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 import type { AssetState } from './engine.ts';
+import { isoDate, minus, pct } from './format.ts';
 import { actionWord, barTime, mapLimit, statusFrom, timingPhrase, TIMINGS, type OrderRow } from './orders.ts';
 import type { RunOutput } from './runner.ts';
 

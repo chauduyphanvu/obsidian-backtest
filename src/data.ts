@@ -1,7 +1,7 @@
 import { intervalMs, YAHOO_INSIDE_DAYS } from './dsl.ts';
+import { DAY } from './format.ts';
 import { columnName, emptyBars, MAX_COLUMNS, sliceBars, type AssetRef, type Bars, type Column, type UnreadColumn } from './types.ts';
 
-const DAY = 86_400_000;
 const FRESH_FOR = 6 * 3_600_000;
 /** Yahoo hosts in the order they are tried, with the wait before each retry. */
 const YAHOO_HOSTS = ['query1', 'query2', 'query1'];

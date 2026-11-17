@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
-import { price } from '../src/dom.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { Trade } from '../src/engine.ts';
 import { cellText, debugColumns, debugCsv, debugRange, debugRows, positionWords, type DebugRow } from '../src/debug.ts';
+import { price } from '../src/format.ts';
 import * as ind from '../src/indicators.ts';
 import { makeRng } from '../src/rng.ts';
 import type { Bars } from '../src/types.ts';

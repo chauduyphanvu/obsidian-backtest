@@ -2,8 +2,9 @@
 // worker-client.ts), reads the result honestly, and can write a variant's values into the block.
 
 import type { Backtest, Stats } from './backtest.ts';
-import { h, minus, niceStep, pct, s } from './dom.ts';
+import { h, s } from './dom.ts';
 import type { Defaults } from './dsl.ts';
+import { minus, niceStep, pct } from './format.ts';
 import {
   METRICS,
   isDeclared,

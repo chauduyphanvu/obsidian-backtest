@@ -2,9 +2,9 @@
 import { CSV_GUESSES, CSV_HEADERS, CSV_SLASHED_DATE, detectCsvSeparator, tidyHeader as tidy, parseCsv, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
 import { parseSpec } from './dsl.ts';
 import { rowDating } from './evaluate.ts';
+import { DAY } from './format.ts';
 import { columnName, MAX_COLUMNS, type Bars } from './types.ts';
 
-const DAY = 86_400_000;
 /** Raw rows kept for display. */
 const RAW_ROWS = 5;
 /** Parsed rows shown at each end of a file. */

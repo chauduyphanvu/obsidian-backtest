@@ -1,6 +1,7 @@
 // The "More statistics" section: a comparison table, yearly returns chart and monthly returns table.
 
-import { MONTHS, h, minus, niceStep, pct, s, signedPct } from './dom.ts';
+import { h, s } from './dom.ts';
+import { minus, MONTHS, niceStep, pct, signedPct } from './format.ts';
 import { deepStats, periodReturns, type DeepStats, type PeriodReturn, type Underwater } from './stats.ts';
 
 export interface DeepStatsInput {

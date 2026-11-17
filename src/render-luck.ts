@@ -2,7 +2,8 @@
 
 import type { Backtest } from './backtest.ts';
 import type { Param } from './dsl.ts';
-import { h, isoDate, money, moneyTicks, niceStep, pct, s, timeTicks } from './dom.ts';
+import { h, s } from './dom.ts';
+import { isoDate, money, moneyTicks, niceStep, pct, timeTicks } from './format.ts';
 import type { JobOf, Kind, Results } from './jobs.ts';
 import { monthOfBars, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { formatParam } from './render-params.ts';

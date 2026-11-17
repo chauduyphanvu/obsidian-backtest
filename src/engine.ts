@@ -1,5 +1,6 @@
 import { intervalMs, type CashRate, type Commission, type Fill, type Rebalance, type Sizing, type StopLevel, type Stops } from './dsl.ts';
 import type { BarRule, PosState } from './evaluate.ts';
+import { DAY } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -282,7 +283,6 @@ export interface InsideReport {
   whole: number;
 }
 
-const DAY = 86_400_000;
 /**
  * An add or a rebalancing trade is not made when its commission would be this share of its value or more: the ceiling
  * the language puts on `costs`.

@@ -5,9 +5,9 @@ import { cashIndex, parseCompare, type Curve } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import { csvColumnNames, type DataDeps } from './data.ts';
-import { DAY, isoDate } from './dom.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
+import { HOUR, isIntraday, isoDate } from './format.ts';
 import { GalleryModal } from './gallery-modal.ts';
 import { LIMITS, LimitError, WeighedCache, resultBytes } from './limits.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
@@ -40,7 +40,6 @@ function place(editor: Editor, text: string): void {
   editor.replaceSelection(text.startsWith('```') && !atLineStart ? `\n${text}` : text);
 }
 
-const HOUR = 3_600_000;
 /** Blocks whose open or folded state is remembered for the session. */
 const KEPT_BLOCK_STATES = 500;
 /** How long after the last block of a note renders its properties are written, so a note with several blocks is written once. */
@@ -414,7 +413,7 @@ export default class BacktestBlocks extends Plugin {
       drawing.follow(out);
       const sections = (shown: RunOutput): Section[] => {
         const bt = shown.backtest;
-        const intraday = bt.run.t.some((t) => t % DAY !== 0);
+        const intraday = isIntraday(bt.run.t);
         const name = shown.spec.name ?? 'Backtest';
         // The sweep and the luck checks start from the block's own text and put values on top of it.
         const tryValues = { source, backtest: bt, parse: drawing.parse, defaults: drawing.defaults, apply: opts.apply };

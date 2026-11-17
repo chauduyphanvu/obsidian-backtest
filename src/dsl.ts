@@ -1,3 +1,4 @@
+import { DAY } from './format.ts';
 import { columnName, type Asset, type AssetRef, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
@@ -254,7 +255,6 @@ const SETTING_LINE = new RegExp(SETTING_NAME.source + String.raw`\s*(.*)$`);
 /** Deepest an expression may nest: brackets, function calls and operators each add a level. */
 const MAX_DEPTH = 64;
 const TOO_DEEP = `This rule nests too deeply. Keep it to at most ${MAX_DEPTH} levels of brackets, functions and operators`;
-const DAY = 86_400_000;
 
 /** Where a problem is: a line, and columns in it when they are known. */
 interface At {

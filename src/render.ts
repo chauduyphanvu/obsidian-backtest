@@ -1,7 +1,8 @@
 import type { Backtest, Segment } from './backtest.ts';
 import type { Commission, Diagnostic, Spec, StopLevel } from './dsl.ts';
-import { colourSource, DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
+import { colourSource, h, s } from './dom.ts';
 import { hintFor } from './fixes.ts';
+import { DAY, isIntraday, isoDate, minus, money, moneyTicks, niceStep, pct, signedPct, stamp, timeTicks } from './format.ts';
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, timingPhrase } from './orders.ts';
@@ -172,7 +173,7 @@ export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill ===
 /** What a folded block shows besides its name, worded like the positions table. */
 export function compactFacts(out: RunOutput): CompactFacts {
   const { stats, run } = out.backtest;
-  const intraday = run.t.some((t) => t % DAY !== 0);
+  const intraday = isIntraday(run.t);
   const long = run.states.filter((st) => st.long);
   const steps = out.spec.entries ?? 1;
   const built = long.length === 1 && steps > 1 ? `, ${long[0].entries} of ${steps} entries` : '';
@@ -234,8 +235,6 @@ function segments(root: HTMLElement, bt: Backtest): void {
   h(wrap, 'div', 'bt-note', 'Rules chosen by looking at the first period are only tested by the second.');
 }
 
-const isIntraday = (bt: Backtest) => bt.run.t.some((t) => t % DAY !== 0);
-
 function fillTiles(tiles: HTMLElement, bt: Backtest): void {
   tiles.replaceChildren();
   const { stats, tradeStats, benchmark } = bt;
@@ -274,7 +273,7 @@ function fillLegend(legend: HTMLElement, bt: Backtest): void {
 function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() => void)[] {
   const { spec, backtest: bt, prices } = out;
   const { run } = bt;
-  const intraday = isIntraday(bt);
+  const intraday = isIntraday(bt.run.t);
   const stops: (() => void)[] = [];
   const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, fillSentence(spec)];
   if (spec.magnify) facts.push(`A bar with a stop or target inside it is followed through its ${spec.magnify} bars, where it has them.`);
@@ -355,7 +354,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
     // Drawing the chart changes its height, which would notify the observer again within the same frame.
     const observer = new ResizeObserver((entries) => {
       const width = Math.floor(entries[0].contentRect.width);
-      if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawChart(chart, tip, (drawn = width), bt, isIntraday(bt)));
+      if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawChart(chart, tip, (drawn = width), bt, isIntraday(bt.run.t)));
     });
     observer.observe(chart);
     cleanups.push(() => observer.disconnect());
@@ -368,7 +367,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
       fillLegend(legend, bt);
       chart.querySelector('svg')?.remove();
       drawn = Math.floor(chart.clientWidth);
-      if (drawn > 0) drawChart(chart, tip, drawn, bt, isIntraday(bt));
+      if (drawn > 0) drawChart(chart, tip, drawn, bt, isIntraday(bt.run.t));
     };
     let stops: (() => void)[] = [];
     const stopRest = () => {

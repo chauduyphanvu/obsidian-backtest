@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest, type Segment, type Stats, type TradeStats } from '../src/backtest.ts';
-import { money } from '../src/dom.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { AssetState, Trade } from '../src/engine.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
 import { bars, DAY, T0 } from './helpers.ts';
+import { money } from '../src/format.ts';
 
 const utc = (y: number, m: number, d: number, hh = 0, mm = 0) => Date.UTC(y, m - 1, d, hh, mm);
 

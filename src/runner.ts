@@ -2,9 +2,9 @@ import { runBacktest, type Backtest } from './backtest.ts';
 import { barsFrom, insideReach, loadBars, loadInsideBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
 import { paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
+import { DAY } from './format.ts';
 import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
-const DAY = 86_400_000;
 const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w: 7 * DAY };
 const MIN_LOOKBACK = 250;
 /** Recursive averages (EMA, RSI, ATR) depend on where they started; this many periods makes that negligible. */

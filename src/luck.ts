@@ -4,11 +4,11 @@ import { computeStats, maxDrawdown, type Backtest, type Stats } from './backtest
 import { parseSpec } from './dsl.ts';
 import { simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
 import { specEvaluator, type BarRule } from './evaluate.ts';
+import { YEAR } from './format.ts';
 import { makeRng, shuffle, type Rng } from './rng.ts';
 import { baseSpec, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
 import type { Bars } from './types.ts';
 
-const YEAR = 365.25 * 86_400_000;
 const BATCH = 4;
 const tidy = (x: number) => Number(x.toPrecision(12));
 

@@ -3,10 +3,10 @@
 // same prices, so each value shown is the one the run used. Pure data; render-trades.ts draws it.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { DAY, minus, price, stamp } from './dom.ts';
 import { findPos, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import { commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
+import { isIntraday, minus, price, stamp } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
 
@@ -157,7 +157,7 @@ class Explainer {
     this.why = why;
     this.ev = evaluatorFor(bt);
     this.bars = bt.data.get(trade.asset)!;
-    this.intraday = bt.run.t.some((t) => t % DAY !== 0);
+    this.intraday = isIntraday(bt.run.t);
     this.atClose = bt.spec.fill === 'close';
     this.slip = bt.spec.slippageBps / 10_000;
     this.cost = bt.spec.costBps / 10_000;

@@ -1210,6 +1210,7 @@ Layout of `src/`:
 - `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.
 - `render.ts`, `render-params.ts`, `render-trades.ts`, `render-stats.ts`, `render-price.ts`, `price-chart.ts`, `render-debug.ts`, `render-sweep.ts`, `render-luck.ts`, `render-compare.ts`, `render-dashboard.ts`, `render-actions.ts`, `orders-view.ts`, `dom.ts`: drawing results, charts, tables and windows. `render-params.ts` draws the Parameters bar, `render-debug.ts` the bar-by-bar table, `render-sweep.ts` and `render-luck.ts` the sweep and luck sections, `render-compare.ts` the compare block and `render-dashboard.ts` the `backtests` block.
 - `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `types.ts`: the plugin itself, settings and shared types.
+- `format.ts`: how numbers, dates and times are written, and the ticks of chart axes, for the logic and the drawing alike.
 
 `styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy`, `compare` and `backtests` block in this file.
 
