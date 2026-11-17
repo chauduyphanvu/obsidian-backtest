@@ -164,7 +164,7 @@ test('day-first dates: proven ones are read, ambiguous ones are flagged and can 
   assert.deepEqual(parseCsv(cleaned(remapCsv(ambiguous, a.columns)).text).t, parseCsv(ambiguous).t);
 });
 
-test('extra columns are ignored, and the cleaned copy keeps only the standard ones', () => {
+test('a column with text in it is left out of the cleaned copy, and one with numbers is kept', () => {
   const rows = days(7);
   const text = `Date,Symbol,Open,High,Low,Close,Volume,Dividends,Stock Splits\n${rows
     .map((r) => [iso(r.t), 'SPY', r.o, r.h, r.l, r.c, r.v, 0, 0].join(','))
@@ -172,7 +172,8 @@ test('extra columns are ignored, and the cleaned copy keeps only the standard on
   const r = read(text);
   assert.deepEqual(r.columns, { date: 0, open: 2, high: 3, low: 4, close: 5, volume: 6, adjClose: null, dateOrder: null });
   const c = cleaned(remapCsv(text, r.columns));
-  assert.equal(c.text.split('\n')[0], 'date,open,high,low,close,volume');
+  assert.equal(c.text.split('\n')[0], 'date,open,high,low,close,volume,Dividends,Stock Splits');
+  assert.deepEqual(c.columns, ['dividends', 'stock_splits']);
   assert.deepEqual(parseCsv(c.text), parseCsv(text));
 });
 
@@ -218,7 +219,7 @@ test('an empty file, a header with no rows and a file that is not prices are exp
   assert.deepEqual(n.columns, map({}));
   assert.deepEqual(remapCsv(contacts, n.columns), { ok: false, reason: 'Choose which column holds the date.' });
 
-  const sales = unread('date,customer,amount\n2024-01-02,Ann,31\n2024-01-03,Bob,45\n');
+  const sales = unread('date,customer,status\n2024-01-02,Ann,paid\n2024-01-03,Bob,due\n');
   assert.match(sales.reason, /no column looks like a closing price/);
   assert.equal(sales.columns.date, 0);
   assert.equal(sales.columns.close, null);

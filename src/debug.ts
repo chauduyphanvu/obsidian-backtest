@@ -684,6 +684,7 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
   const visit = (x: Expr, a: string, j: number): string => {
     if (!Number.isNaN(value(x, a, j))) return '';
     if (x.k === 'pos') return 'no position is held';
+    if (x.k === 'column') return 'the file has no number in that row';
     if (x.k === 'of') {
       if (x.asset === a) return visit(x.a, a, j);
       const k = cx.ev.barOf(x.asset, a, j);

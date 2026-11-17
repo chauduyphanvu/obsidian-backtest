@@ -1,4 +1,4 @@
-import { emptyBars, type AssetRef, type Bars } from './types.ts';
+import { columnName, emptyBars, MAX_COLUMNS, type AssetRef, type Bars, type Column, type UnreadColumn } from './types.ts';
 
 const DAY = 86_400_000;
 const FRESH_FOR = 6 * 3_600_000;
@@ -160,6 +160,13 @@ function detectSeparator(header: string): string {
 
 const num = (s: string | undefined): number => (s === undefined || s === '' ? NaN : Number(s));
 
+/** A number in a column beyond the prices: digits with an optional point and exponent, nothing else (no hex, no "Infinity"). */
+const COLUMN_NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+const columnCell = (s: string | undefined): number => {
+  const n = s !== undefined && COLUMN_NUMBER.test(s) ? Number(s) : NaN;
+  return Number.isFinite(n) ? n : NaN;
+};
+
 /** The header names parseCsv looks for, compared in lower case. */
 export const CSV_HEADERS = {
   date: ['date', 'time', 'timestamp', 'datetime'],
@@ -171,10 +178,72 @@ export const CSV_HEADERS = {
   adjClose: ['adj close', 'adj_close', 'adjclose'],
 } as const;
 
+const PRICE_HEADERS: readonly string[] = [...CSV_HEADERS.open, ...CSV_HEADERS.high, ...CSV_HEADERS.low, ...CSV_HEADERS.close];
+
+/**
+ * The columns of a header line that can be columns a rule reads: every header with something in it that the reader does not
+ * use as a date or a price. A file with no price header at all uses none of them as a price, so there `volume` and
+ * `adj close` are columns like the rest.
+ */
+function extraColumns(names: string[]): number[] {
+  const header = names.map((h) => h.toLowerCase());
+  const priced = header.some((h) => PRICE_HEADERS.includes(h));
+  const used: readonly string[] = priced ? Object.values(CSV_HEADERS).flat() : CSV_HEADERS.date;
+  return names.flatMap((h, i) => (h !== '' && !used.includes(header[i]) ? [i] : []));
+}
+
+/**
+ * The names a rule can use for the columns of a CSV file, read from its first line alone: what `column(...)` would
+ * accept, before the rows say which of them hold numbers. Empty for any text that is not a header.
+ */
+export function csvColumnNames(text: string): string[] {
+  const first = text.replace(/^\uFEFF/, '').split(/\r?\n/).find((l) => l.trim());
+  if (!first) return [];
+  const names = splitLine(first, detectSeparator(first));
+  const out: string[] = [];
+  for (const i of extraColumns(names)) {
+    const name = columnName(names[i]);
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out.slice(0, MAX_COLUMNS);
+}
+
+/** Quoted header names in a sentence: "A", "A and B", "A, B and C". */
+function quotedList(names: string[]): string {
+  const q = names.map((n) => `"${n}"`);
+  return q.length < 2 ? q.join('') : `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}`;
+}
+
+/**
+ * The columns beyond date and prices that hold numbers, lined up with the rows kept, and the ones that cannot be read by
+ * name. A header that clashes with another after `columnName` makes none of them readable: a rule would have to guess.
+ * Those problems are kept with the bars, not raised, so a file that read before reads the same now.
+ */
+function readColumns(names: string[], rows: string[][]): Pick<Bars, 'columns' | 'unread'> {
+  const numeric = extraColumns(names)
+    .map((i) => ({ i, header: names[i], name: columnName(names[i]) }))
+    .filter((c) => c.name !== '' && rows.some((r) => !Number.isNaN(columnCell(r[c.i]))));
+  const unread: UnreadColumn[] = [];
+  const readable: typeof numeric = [];
+  for (const c of numeric) {
+    const same = numeric.filter((o) => o.name === c.name);
+    if (same.length > 1) {
+      if (same[0] === c) unread.push({ name: c.name, why: `${same.length} columns would all be called ${c.name}: ${quotedList(same.map((o) => o.header))}. Rename all but one in the file` });
+    } else if (readable.length < MAX_COLUMNS) readable.push(c);
+    else unread.push({ name: c.name, why: `only the first ${MAX_COLUMNS} columns of a file can be read`, limit: true });
+  }
+  const out: Pick<Bars, 'columns' | 'unread'> = {};
+  if (readable.length) out.columns = readable.map((c): Column => ({ name: c.name, header: c.header, v: rows.map((r) => columnCell(r[c.i])) }));
+  if (unread.length) out.unread = unread;
+  return out;
+}
+
 /**
  * CSV with a header row naming a date or time column and open, high, low, close (volume optional).
  * Separators can be commas, semicolons or tabs; dates can be ISO, MM/DD/YYYY, DD/MM/YYYY (when some day is above 12), the
  * same two with dashes, or DD.MM.YYYY.
+ * Every other column that holds numbers is kept as a column a rule can read (see `columnName` for how a header becomes a
+ * name). A file with a date and such columns but no price header at all has no prices: it is kept as `unpriced`.
  */
 export function parseCsv(text: string): Bars {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
@@ -187,20 +256,43 @@ export function parseCsv(text: string): Bars {
   const [oi, hi, li, ci, vi] = [col(...CSV_HEADERS.open), col(...CSV_HEADERS.high), col(...CSV_HEADERS.low), col(...CSV_HEADERS.close), col(...CSV_HEADERS.volume)];
   const ai = col(...CSV_HEADERS.adjClose);
   const missing = [ti < 0 && 'date', oi < 0 && 'open', hi < 0 && 'high', li < 0 && 'low', ci < 0 && 'close'].filter(Boolean);
-  if (missing.length) throw new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
+  const noPrices = ti >= 0 && [oi, hi, li, ci].every((i) => i < 0);
+  const lackPrices = new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
+  if (missing.length && !(noPrices && extraColumns(names).length > 0)) throw lackPrices;
 
   const fields = lines.slice(1).map((line) => splitLine(line, sep));
   const dayFirst = slashedDatesAreDayFirst(fields.map((f) => f[ti] ?? ''));
+  const bars = emptyBars();
+  const kept: string[][] = [];
+
+  if (noPrices) {
+    const dated = fields.map((f) => ({ t: parseTime(f[ti] ?? '', dayFirst), f })).filter((r) => Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
+    for (const r of dated) {
+      if (bars.t.length && r.t <= bars.t[bars.t.length - 1]) continue;
+      bars.t.push(r.t);
+      kept.push(r.f);
+    }
+    if (bars.t.length === 0) throw new Error(`The CSV has no usable rows: no date in the "${names[ti]}" column could be read. Dates should look like 2024-01-31`);
+    for (const k of ['o', 'h', 'l', 'c'] as const) bars[k] = bars.t.map(() => NaN);
+    bars.v = bars.t.map(() => 0);
+    const read = readColumns(names, kept);
+    if (!read.columns && !read.unread) throw lackPrices;
+    return { ...bars, ...read, unpriced: true };
+  }
+
   const rows = fields.map((f) => {
     const c = num(f[ci]);
     const adj = ai >= 0 && num(f[ai]) > 0 ? num(f[ai]) / c : 1;
-    return { t: parseTime(f[ti] ?? '', dayFirst), o: num(f[oi]) * adj, h: num(f[hi]) * adj, l: num(f[li]) * adj, c: c * adj, v: vi >= 0 ? num(f[vi]) : 0 };
+    return { t: parseTime(f[ti] ?? '', dayFirst), o: num(f[oi]) * adj, h: num(f[hi]) * adj, l: num(f[li]) * adj, c: c * adj, v: vi >= 0 ? num(f[vi]) : 0, f };
   });
   // A NaN time would make the comparator's answer NaN, and the sort undefined.
   const dated = rows.filter((r) => Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
-  const bars = emptyBars();
-  for (const r of dated) push(bars, r.t, r.o, r.h, r.l, r.c, r.v);
-  if (bars.t.length > 0) return bars;
+  for (const r of dated) {
+    const before = bars.t.length;
+    push(bars, r.t, r.o, r.h, r.l, r.c, r.v);
+    if (bars.t.length > before) kept.push(r.f);
+  }
+  if (bars.t.length > 0) return { ...bars, ...readColumns(names, kept) };
 
   if (dated.length === 0) throw new Error(`The CSV has no usable rows: no date in the "${names[ti]}" column could be read. Dates should look like 2024-01-31`);
   for (const [name, key] of [[names[oi], 'o'], [names[hi], 'h'], [names[li], 'l'], [names[ci], 'c']] as const) {

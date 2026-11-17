@@ -1,4 +1,4 @@
-import type { Asset, AssetRef, Source } from './types.ts';
+import { columnName, type Asset, type AssetRef, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
 export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn';
@@ -22,6 +22,8 @@ export type Expr =
   | { k: 'not'; a: Expr }
   | { k: 'lag'; a: Expr; n: number; param?: string }
   | { k: 'of'; a: Expr; asset: string }
+  /** A numeric column of a CSV file, by `columnName`: of the rule's own ticker, or of another through `of`. */
+  | { k: 'column'; name: string }
   | { k: 'cal'; name: CalName }
   | { k: 'pos'; name: PosName };
 
@@ -294,6 +296,15 @@ function lex(text: string, line: number, offset: number, out: Tok[]): void {
         push('op', 'of', start, i);
         push('sym', sym[1], i + sym[0].length - sym[1].length, i + sym[0].length);
         i += sym[0].length;
+      } else if (word === 'column' && (m = text.slice(i).match(/^(\s*\(\s*)(?:"([^"]*)"|([A-Za-z0-9_]+))(\s*\))/))) {
+        // A column's name is read as written, so a name may start with a digit or sit in quotes with spaces in it.
+        const written = m[2] !== undefined ? m[2].length + 2 : m[3].length;
+        const nameAt = i + m[1].length;
+        push('id', word, start, i);
+        push('op', '(', i + m[1].indexOf('('), i + m[1].indexOf('(') + 1);
+        push('sym', m[2] ?? m[3], nameAt, nameAt + written);
+        push('op', ')', nameAt + written + m[4].indexOf(')'), nameAt + written + m[4].indexOf(')') + 1);
+        i = nameAt + written + m[4].length;
       } else {
         push('id', word, start, i);
       }
@@ -324,6 +335,8 @@ export function isBool(e: Expr): boolean {
       return false;
   }
 }
+
+const COLUMN_USAGE = 'column needs the name of a column in brackets, as in column(score) of signals. A name is letters, digits and underscores; a header with spaces goes in quotes, as in column("News Sentiment")';
 
 /** The first position value the expression reads, or null when it reads none. */
 export function findPos(e: Expr): PosName | null {
@@ -402,8 +415,24 @@ function isFixed(e: Expr): boolean {
   }
 }
 
+/** The first column an expression reads from the ticker its rule belongs to: one that no `of` sends to another ticker. */
+export function ownColumns(e: Expr): Extract<Expr, { k: 'column' }>[] {
+  if (e.k === 'column') return [e];
+  return e.k === 'of' ? [] : children(e).flatMap(ownColumns);
+}
+
+const SOURCE_NAME: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'a CSV file' };
+const COLUMN_EXAMPLE = 'column(score) of csv:Data/signals.csv';
+
+/** Why a column cannot be read from a ticker whose prices come from `source`. */
+function notCsv(name: string, asset: string, source: Source): string {
+  return `${asset} comes from ${SOURCE_NAME[source]}, not from a CSV file, so it has no column called ${name}. Name the file, as in ${COLUMN_EXAMPLE.replace('score', name)}`;
+}
+
 interface ExprContext {
   resolveAsset(sym: Tok): string;
+  /** Where a ticker `resolveAsset` named gets its prices from. */
+  sourceOf(name: string): Source | null;
   params: Map<string, Param>;
   /** Position values only exist while a position is open, which only sell and add rules see. */
   positions: boolean;
@@ -643,7 +672,11 @@ class ExprParser {
         const sym = this.next();
         const pos = findPos(e);
         if (pos) throw new SpecError(span(of, sym), `"${POSITION[pos]}" belongs to the open position, so it can't be read with "of"`);
-        e = this.mark(this.node({ k: 'of', a: e, asset: this.ctx.resolveAsset(sym) }, of, e), start);
+        const asset = this.ctx.resolveAsset(sym);
+        const source = this.ctx.sourceOf(asset);
+        const read = ownColumns(e)[0];
+        if (read && source !== null && source !== 'csv') throw new SpecError(span(of, sym), notCsv(read.name, asset, source));
+        e = this.mark(this.node({ k: 'of', a: e, asset }, of, e), start);
       } else {
         return e;
       }
@@ -668,6 +701,7 @@ class ExprParser {
       if (t.s === 'false' || t.s === 'never') return { k: 'bool', v: false };
       if ((SERIES as string[]).includes(t.s)) return { k: 'series', name: t.s as SeriesName };
       if (t.s === 'min' || t.s === 'max' || t.s === 'abs') return this.math(t);
+      if (t.s === 'column' && this.isOp('(')) return this.column(t);
       if (t.s in INDICATORS) return this.indicator(t);
       if ((CALENDAR as string[]).includes(t.s)) return { k: 'cal', name: t.s as CalName };
       const pos = this.position(t);
@@ -679,15 +713,36 @@ class ExprParser {
         this.paramOf.set(e, p.name);
         return e;
       }
+      if (t.s === 'column') throw new SpecError(at(t), COLUMN_USAGE);
       const known = [
         `Series: ${SERIES.join(', ')}`,
-        `Functions: ${Object.keys(INDICATORS).join(', ')}, min, max, abs`,
+        `Functions: ${Object.keys(INDICATORS).join(', ')}, min, max, abs, column`,
         `Dates: ${CALENDAR.join(', ')}`,
         ...(this.ctx.params.size ? [`Parameters: ${[...this.ctx.params.values()].map((x) => x.name).join(', ')}`] : []),
       ];
       throw new SpecError(at(t), `Unknown name "${t.s}". ${known.join('. ')}`);
     }
     throw new SpecError(at(t), t.t === 'end' ? 'The rule ends too early' : `Unexpected "${t.s}"`);
+  }
+
+  /** `column(score)`: the name was read as one token, so the brackets and the name are all that follow. */
+  private column(t: Tok): Expr {
+    this.next();
+    const name = this.peek();
+    if (name.t !== 'sym') throw new SpecError(span(t, name), COLUMN_USAGE);
+    this.next();
+    this.expect(')');
+    const key = columnName(name.s);
+    if (!key) throw new SpecError(at(name), `A column's name needs a letter or a digit, and "${name.s}" has none`);
+    return { k: 'column', name: key };
+  }
+
+  /** Each column the expression reads from its rule's own ticker, with where it was written. */
+  ownColumns(root: Expr): { name: string; at: At }[] {
+    return ownColumns(root).map((e) => {
+      const [a, b] = this.spans.get(e)!;
+      return { name: e.name, at: span(this.toks[a], this.toks[b]) };
+    });
   }
 
   private position(t: Tok): Expr | null {
@@ -1168,6 +1223,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   const context = (positions: boolean, ruleScope: string | null): ExprContext => ({
     resolveAsset,
+    sourceOf: (name) => [...universe, ...extras].find((a) => a.name === name)?.source ?? null,
     params,
     positions,
     priceVsNumber: (where, asset) => priceChecks.push({ at: where, asset, scope: ruleScope }),
@@ -1189,6 +1245,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const own = new Map<string, { buy?: Expr; sell?: Expr; add?: Expr }>();
   const addHeads: At[] = [];
   const writtenOf = new Map<Expr, Written>();
+  /** The columns each rule reads from its own ticker, which must be a CSV file wherever the rule applies. */
+  const ownReads = new Map<Expr, { name: string; at: At }[]>();
   for (const r of rawRules) {
     guard(() => {
       let target = shared;
@@ -1209,12 +1267,14 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const e = parser.parseCondition();
       target[r.side] = e;
       writtenOf.set(e, parser.written(e));
+      ownReads.set(e, parser.ownColumns(e));
       if (r.side === 'add') addHeads.push(r.head);
     });
   }
 
   let rank: Spec['rank'] = null;
   let rankWritten: Written | null = null;
+  let rankReads: { name: string; at: At }[] = [];
   if (rankTop !== null && rankBy !== null) {
     const by: { text: string; from: number; line: number } = rankBy;
     guard(() => {
@@ -1224,6 +1284,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const parser = new ExprParser(toks, context(false, null));
       rank = { top: rankTop!, by: parser.parseNumber('The ranking') };
       rankWritten = parser.written(rank.by);
+      rankReads = parser.ownColumns(rank.by);
     });
   }
 
@@ -1239,6 +1300,17 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   );
   if (!entriesLine && addHeads.length) errors.push(diag(addHeads[0], '"add when" needs an entries line that says how many entries a position is built in, such as entries: 3'));
 
+  const checked = new Set<string>();
+  const ownColumnsOf = (reads: { name: string; at: At }[], a: Asset): void => {
+    if (a.source === 'csv') return;
+    for (const r of reads) {
+      const key = `${r.at.line}:${r.at.from}:${r.at.to}`;
+      if (checked.has(key)) continue;
+      checked.add(key);
+      errors.push(diag(r.at, `column(${r.name}) reads a column of the ticker the rule belongs to, and ${a.name} comes from ${SOURCE_NAME[a.source]}, not from a CSV file. Name the file instead, as in ${COLUMN_EXAMPLE.replace('score', r.name)}`));
+    }
+  };
+  for (const a of universe) ownColumnsOf(rankReads, a);
   const rules: Record<string, Rules> = {};
   const writtenRules: Record<string, { buy: Written | null; sell: Written | null; add?: Written | null }> = {};
   const noAdd: string[] = [];
@@ -1246,6 +1318,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true } as Expr) : undefined);
     const sell = own.get(a.name)?.sell ?? shared.sell ?? null;
     const add = own.get(a.name)?.add ?? shared.add;
+    for (const e of [buy, sell, add]) if (e) ownColumnsOf(ownReads.get(e) ?? [], a);
     if (buy) {
       rules[a.name] = add && entriesLine ? { buy, sell, add } : { buy, sell };
       writtenRules[a.name] = { buy: writtenOf.get(buy) ?? null, sell: sell ? (writtenOf.get(sell) ?? null) : null };

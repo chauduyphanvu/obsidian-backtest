@@ -1,6 +1,6 @@
 import { docFor, shortOf, valueId, FIXED_VALUES } from './docs.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
-import { declaredParams, lineKind, settingKey } from './highlight.ts';
+import { commentStart, declaredParams, lineKind, settingKey } from './highlight.ts';
 import type { Suggestion } from './symbols.ts';
 
 export interface Completion {
@@ -50,7 +50,7 @@ const VALUE_HINTS: Record<string, Completion[]> = {
   entries: [{ label: '3', insert: '3', detail: 'each position in up to 3 entries, each a third; needs an add rule' }],
 };
 
-const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
+const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'column'];
 
 /** A function's signature and what it does, as one line. */
 const functionDetail = (f: string) => `${docFor(f)!.signature} \u00b7 ${shortOf(f)}`;
@@ -88,11 +88,33 @@ export function tickers(lines: string[], keys: string[] = ['universe', 'symbol',
   return out;
 }
 
+/** The names a CSV file's columns can be read by, from the file's path; undefined when they are not known. */
+export type ColumnsOf = (path: string) => readonly string[] | undefined;
+
+/** Where the cursor is inside the brackets of `column(`: what has been typed of the name, which may sit in quotes. */
+export function columnWord(before: string): string | null {
+  const m = before.match(/\bcolumn\s*\(\s*(?:"([^")]*)|([A-Za-z0-9_]*))$/i);
+  return m ? (m[1] ?? m[2]) : null;
+}
+
+/** The paths of the CSV files a block names anywhere, as written, without repeats. */
+export function csvFiles(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    const end = commentStart(line);
+    for (const m of (end < 0 ? line : line.slice(0, end)).matchAll(/\bcsv:([A-Za-z0-9^:/._=-]+)/gi)) {
+      if (!out.some((o) => o.toLowerCase() === m[1].toLowerCase())) out.push(m[1]);
+    }
+  }
+  return out;
+}
+
 /**
  * What can come next. `before` is the cursor's line up to the cursor; `above` the block's lines
- * before that line and `block` every line of the block.
+ * before that line and `block` every line of the block. `columnsOf` knows the columns of CSV files
+ * the plugin has read; without it nothing is offered inside `column(`.
  */
-export function complete(block: string[], above: string[], before: string): CompletionResult | null {
+export function complete(block: string[], above: string[], before: string, columnsOf?: ColumnsOf): CompletionResult | null {
   const word = before.match(/[A-Za-z0-9_]*$/)![0];
   const from = before.length - word.length;
   const head = before.slice(0, from);
@@ -124,6 +146,14 @@ export function complete(block: string[], above: string[], before: string): Comp
 
   /** Inside an expression: series, values, parameters, functions and words. */
   const expression = (positions: boolean): CompletionResult | null => {
+    const inColumn = columnWord(before);
+    if (inColumn !== null) {
+      const typed = inColumn.toLowerCase();
+      const items = csvFiles(block).flatMap((path) =>
+        (columnsOf?.(path) ?? []).filter((n) => n.startsWith(typed)).map((n) => ({ label: n, insert: n, detail: `column of ${path.split('/').pop()}` })),
+      );
+      return items.length === 0 || (items.length === 1 && items[0].insert === typed) ? null : { from: before.length - inColumn.length, items };
+    }
     if (/\bof\s+$/i.test(head)) return match(names('', 'read this ticker instead'), true);
     if (/\bcrosses\s+$/i.test(head)) return match([{ label: 'above', insert: 'above ', detail: '' }, { label: 'below', insert: 'below ', detail: '' }], true);
     if (/^\d/.test(word) || /[\d.]$/.test(head)) return null;

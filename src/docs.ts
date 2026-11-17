@@ -352,6 +352,14 @@ for (const name of Object.keys(INDICATORS)) {
 add('function', 'min', 'min(a, b)', 'the smaller value', 'The smaller of two values.', 'buy when close > min(sma(20), sma(50))');
 add('function', 'max', 'max(a, b)', 'the larger value', 'The larger of two values.', 'buy when close > max(sma(20), sma(50))');
 add('function', 'abs', 'abs(x)', 'value without its sign', 'The value without its sign.', 'buy when abs(close - open) > atr(14)');
+add(
+  'function',
+  'column',
+  'column(name) of file',
+  'a column of a CSV file: column(score) of signals',
+  'Reads a numeric column of a CSV file by its header, in lower case with underscores for spaces, such as column(score) of signals. A row counts as known at the close of the day it is dated.',
+  'buy when column(score) of csv:Data/signals.csv > 0.7',
+);
 
 const ADJUSTED = 'With Yahoo data prices are adjusted for splits and dividends, so compare them with an average, not a fixed number.';
 add('series', 'open', 'open', "the bar's open", `The open price of each bar of the ticker the rule belongs to. ${ADJUSTED}`, 'buy when open > close[1]');
@@ -628,6 +636,7 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
   }
 
   if (t.kind === 'function') return target(t.from, t.to, here);
+  if (t.kind === 'series' && i >= 2 && toks[i - 2].kind === 'function' && text(toks[i - 2]).toLowerCase() === 'column' && text(toks[i - 1]) === '(') return target(t.from, t.to, 'column');
   if (t.kind === 'series') {
     const id = spaced(here);
     return target(t.from, t.to, WORD_ALIASES[id] ?? id);
