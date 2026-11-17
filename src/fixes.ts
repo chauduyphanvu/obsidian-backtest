@@ -1,6 +1,6 @@
-import { tickers } from './complete.ts';
-import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
-import { declaredParams, settingKey, tokenizeBlock } from './highlight.ts';
+import { FUNCTIONS, tickers } from './complete.ts';
+import { CALENDAR, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
+import { declaredParams, NUMERIC_SETTINGS, settingKey, tokenizeBlock } from './highlight.ts';
 
 /** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
 export interface FixEdit {
@@ -174,7 +174,6 @@ function pick(ctx: Context, word: string, candidates: readonly string[], build: 
   return fix(good[0].edit, word);
 }
 
-const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'column'];
 const NAMES = [...SERIES, ...CALENDAR, ...Object.keys(POSITION), 'true', 'false', 'always', 'never'];
 /** Words that can follow a finished value in a condition. */
 const CONNECTIVES = ['and', 'or', 'crosses', 'above', 'below', 'is'];
@@ -315,7 +314,7 @@ function parameterName(ctx: Context): Fix | null {
     return /^[A-Za-z_]\w*$/.test(typed) ? pick(ctx, typed, params, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : null;
   }
   const key = settingKey(line);
-  if (!key || !['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold', 'entries'].includes(key)) return null;
+  if (!key || !NUMERIC_SETTINGS.includes(key)) return null;
   const known = new Set(['atr', 'top', 'by', 'at', 'inverse', 'volatility', 'of', ...FUNCTIONS, ...NAMES, ...params.map((p) => p.toLowerCase())]);
   const colon = line.indexOf(':');
   const value = line.slice(colon + 1).replace(/(^|\s)(#|\/\/).*$/, '');

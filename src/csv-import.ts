@@ -2,9 +2,9 @@
 import { CSV_GUESSES, CSV_HEADERS, CSV_SLASHED_DATE, detectCsvSeparator, tidyHeader as tidy, parseCsv, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
 import { parseSpec } from './dsl.ts';
 import { rowDating } from './evaluate.ts';
+import { csvField, DAY, plural } from './format.ts';
 import { columnName, MAX_COLUMNS, type Bars } from './types.ts';
 
-const DAY = 86_400_000;
 /** Raw rows kept for display. */
 const RAW_ROWS = 5;
 /** Parsed rows shown at each end of a file. */
@@ -112,8 +112,6 @@ export type CsvCleaned =
   | { ok: false; reason: string };
 
 export type CsvInsert = { ok: true; text: string; note: string | null } | { ok: false; reason: string };
-
-const plural = (n: number, one: string, many = `${one}s`): string => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
 /** How a row of a column is dated, in the words the helper window uses, for a file of days (see datingOf). */
 export const SIGNAL_DATING =
@@ -613,9 +611,6 @@ function unreadableOf(bars: Bars): string[] {
 
 const CLEAN_HEADER = 'date,open,high,low,close,volume';
 const KNOWN_HEADERS: readonly string[] = Object.values(CSV_HEADERS).flat();
-
-/** A header written into a comma-separated line: in quotes when it holds a comma or a quote. */
-const csvField = (text: string): string => (/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
 
 interface Kept {
   header: string;

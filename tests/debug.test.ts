@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
-import { price, stamp } from '../src/dom.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { Trade } from '../src/engine.ts';
 import {
@@ -18,6 +17,7 @@ import {
   tradeStops,
   type DebugRow,
 } from '../src/debug.ts';
+import { price, stamp } from '../src/format.ts';
 import { makeRng } from '../src/rng.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, near, DAY, T0 } from './helpers.ts';

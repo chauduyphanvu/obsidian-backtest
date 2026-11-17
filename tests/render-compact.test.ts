@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
-import { isoDate } from '../src/dom.ts';
 import { parseSpec } from '../src/dsl.ts';
+import { isoDate } from '../src/format.ts';
 import { blockStateKey, compactFacts, fillSentence, summary } from '../src/render.ts';
 import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';

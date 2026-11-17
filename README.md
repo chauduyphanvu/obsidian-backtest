@@ -1202,6 +1202,10 @@ Layout of `src/`:
 - `evaluate.ts`, `indicators.ts`: evaluating rules, and the indicator maths.
 - `engine.ts`, `backtest.ts`, `stats.ts`, `explain.ts`, `debug.ts`: the simulation (commission, entries and looking inside bars included), the benchmark, the statistics, the reasons behind each trade, and the value of each part of the rules at each bar.
 - `data.ts`, `runner.ts`, `result-cache.ts`: prices and their cache (the smaller bars of `magnify` and the columns of CSV files included), running a block, and keeping results in memory.
+- `price-store.ts`: the saved price files, in the vault and in memory, the column names of the CSV files read, and whether a block's prices are all saved and fresh.
+- `results.ts`: running a block's text and keeping the result, so a block drawn again, the other blocks, the orders and the note properties reuse a recent run.
+- `strategy-block.ts`: a strategy block's drawings: running it or reusing a kept result, drawing the result and its sections, and what a drawing leaves behind until the block is drawn again or goes away.
+- `vault-writes.ts`: writing into the vault: a note's `bt_` properties once its blocks have rendered, saved results under a dated name, and the CSV helper's cleaned copies under a free name.
 - `compare.ts`, `dashboard.ts`, `orders.ts`, `orders-badge.ts`, `export.ts`, `rewrite.ts`: the compare block, the `backtests` block (its parser, sorting and running), orders, the status bar count of orders, the files, notes and properties a result can become, and writing parameter values into a block's text.
 - `sweep.ts`, `luck.ts`, `rng.ts`: parameter sweeps and the luck checks (reshuffled history, random entries, walk-forward), and the seeded random numbers they use.
 - `jobs.ts`, `worker.ts`, `worker-client.ts`, `limits.ts`: backtests, sweeps and luck checks as jobs, the two background workers that run them (one for single backtests, one for sweeps and luck checks), the plugin's side of them, which starts the workers, sends them prices and stops them, and the limits on how large one backtest may be and how long it may run.
@@ -1210,6 +1214,7 @@ Layout of `src/`:
 - `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.
 - `render.ts`, `render-params.ts`, `render-trades.ts`, `render-stats.ts`, `render-price.ts`, `price-chart.ts`, `render-debug.ts`, `render-sweep.ts`, `render-luck.ts`, `render-compare.ts`, `render-dashboard.ts`, `render-actions.ts`, `orders-view.ts`, `dom.ts`: drawing results, charts, tables and windows. `render-params.ts` draws the Parameters bar, `render-debug.ts` the bar-by-bar table, `render-sweep.ts` and `render-luck.ts` the sweep and luck sections, `render-compare.ts` the compare block and `render-dashboard.ts` the `backtests` block.
 - `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `types.ts`: the plugin itself, settings and shared types.
+- `format.ts`: how numbers, dates and times are written, and the ticks of chart axes, for the logic and the drawing alike.
 
 `styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy`, `compare` and `backtests` block in this file.
 

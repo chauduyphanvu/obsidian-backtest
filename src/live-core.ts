@@ -1,4 +1,4 @@
-import { findBlocks, type BlockSpan } from './diagnostics.ts';
+import { blockName, findBlocks, type BlockSpan } from './blocks.ts';
 import type { Spec } from './dsl.ts';
 import { lookbackBars } from './runner.ts';
 
@@ -18,17 +18,6 @@ export interface Choice {
   text: string;
   /** The block's `name:` setting. */
   name: string | null;
-}
-
-// The same comment rule the language uses.
-const COMMENT = /(^|\s)(#|\/\/).*$/;
-
-export function blockName(text: string): string | null {
-  for (const line of text.split('\n')) {
-    const m = line.replace(COMMENT, '').match(/^\s*name\s*:\s*(.+?)\s*$/i);
-    if (m) return m[1];
-  }
-  return null;
 }
 
 /** What the panel's header calls a block. */

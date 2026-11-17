@@ -1,12 +1,13 @@
 import { Facet, StateEffect, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, hoverTooltip, type DecorationSet, type Tooltip, type ViewUpdate } from '@codemirror/view';
 import { EditorSuggest, type App, type Editor, type EditorPosition, type EditorSuggestContext, type EditorSuggestTriggerInfo } from 'obsidian';
+import { closesFence, fenceOf, findBlocks } from './blocks.ts';
 import { complete, hitCompletions, localTickers, tickerPosition, writtenTickers, type Completion } from './complete.ts';
-import { analyzeBlock, closesFence, fenceOf, findBlocks, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
+import { analyzeBlock, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
 import { helpAt, type Doc } from './docs.ts';
 import type { Defaults } from './dsl.ts';
 import { fixChanges, type Fix } from './fixes.ts';
-import { lineKinds, type TokenKind } from './highlight.ts';
+import { lineKinds, TICKER_SETTINGS, type TokenKind } from './highlight.ts';
 import { ResultCache } from './result-cache.ts';
 import { blockSource, blockTickers, type SymbolLookup, type TickerRef } from './symbols.ts';
 
@@ -416,7 +417,7 @@ export class StrategySuggest extends EditorSuggest<Completion> {
     const lookup = this.options.lookup?.() ?? null;
     const pos = lookup ? tickerPosition(before) : null;
     if (!lookup || !pos) return null;
-    const taken = writtenTickers([line], ['universe', 'symbol', 'benchmark', 'cash rate']);
+    const taken = writtenTickers([line], TICKER_SETTINGS);
     this.items = localTickers(around.block, pos, taken, this.options.csvPaths?.() ?? []);
     if (/^csv:/i.test(pos.word)) {
       if (!this.items.length) return null;

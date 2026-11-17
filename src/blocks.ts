@@ -1,4 +1,3 @@
-import { closesFence, fenceOf } from './diagnostics.ts';
 import { parseSpec } from './dsl.ts';
 
 export interface Block {
@@ -8,6 +7,54 @@ export interface Block {
   source: string;
   /** 0-based line of the opening fence in the note. */
   line: number;
+}
+
+/** A line that opens or closes a fenced code block: the fence, and what follows it. */
+export function fenceOf(line: string): { fence: string; info: string } | null {
+  const m = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+  return m ? { fence: m[1], info: m[2].trim() } : null;
+}
+
+/** Whether a line closes a block opened with `fence`: only fence characters, at least as many. */
+export function closesFence(line: string, fence: string): boolean {
+  const m = line.match(/^\s*(`{3,}|~{3,})\s*$/);
+  return !!m && m[1][0] === fence[0] && m[1].length >= fence.length;
+}
+
+/** Lines of a strategy block in a note: 0-based indexes of its first and last content line (`last` is below `first` for an empty block). */
+export interface BlockSpan {
+  first: number;
+  last: number;
+}
+
+/**
+ * The strategy blocks in a note, found from the top because a fence can only be read in context.
+ * Lines after `upTo` are read only to finish a block that is still open there. A fence that is
+ * never closed runs to the end, as in the note itself.
+ */
+export function findBlocks(lines: Iterable<string>, upTo = Infinity): BlockSpan[] {
+  const out: BlockSpan[] = [];
+  let fence: string | null = null;
+  let strategy = false;
+  let start = 0;
+  let i = 0;
+  for (const line of lines) {
+    if (fence === null) {
+      if (i > upTo) return out;
+      const open = fenceOf(line);
+      if (open) {
+        fence = open.fence;
+        strategy = open.info === 'strategy';
+        start = i + 1;
+      }
+    } else if (closesFence(line, fence)) {
+      if (strategy) out.push({ first: start, last: i - 1 });
+      fence = null;
+    }
+    i++;
+  }
+  if (fence !== null && strategy) out.push({ first: start, last: i - 1 });
+  return out;
 }
 
 const QUOTE_MARKER = /^[ \t]*>[ \t]?/;
@@ -27,6 +74,15 @@ function unquote(line: string, max = Infinity): { text: string; levels: number }
   return { text, levels };
 }
 
+/** A block's `name:` line as written, minus its comment; null when it has none. */
+export function blockName(text: string): string | null {
+  for (const line of text.split('\n')) {
+    const m = line.replace(COMMENT, '').match(/^\s*name\s*:\s*(.+?)\s*$/i);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 /** The name the parser reads; when the block has other problems, the `name:` line as written, minus its comment. */
 function nameOf(source: string): string | null {
   try {
@@ -35,11 +91,7 @@ function nameOf(source: string): string | null {
   } catch {
     // Fall through to reading the line.
   }
-  for (const line of source.split('\n')) {
-    const m = line.replace(COMMENT, '').match(/^\s*name\s*:\s*(.+?)\s*$/i);
-    if (m) return m[1];
-  }
-  return null;
+  return blockName(source);
 }
 
 /**

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { closesFence, fenceOf, findBlocks } from '../src/blocks.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { blockTickers } from '../src/symbols.ts';
-import { analyzeBlock, blockDiagnostics, closesFence, fenceOf, findBlocks, fixForDiagnostic, placeDiagnostic, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
+import { analyzeBlock, blockDiagnostics, fixForDiagnostic, placeDiagnostic, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
 
 /** Where a diagnostic points: line, columns, severity and the text under it. */
 const at = (lines: string[], d: BlockDiagnostic) => [d.line, d.from, d.to, d.severity, lines[d.line].slice(d.from, d.to)];

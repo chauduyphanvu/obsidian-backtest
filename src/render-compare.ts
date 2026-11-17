@@ -2,8 +2,9 @@
 
 import { computeStats, type Stats } from './backtest.ts';
 import { alignCurves, cashReturns, combine, correlations, weightedCashReturn, type Aligned, type Curve } from './compare.ts';
-import { DAY, h, minus, money, moneyTicks, pct, s, stamp, timeTicks } from './dom.ts';
+import { h, s } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
+import { isIntraday, minus, money, moneyTicks, pct, stamp, timeTicks } from './format.ts';
 
 export interface CompareInput {
   /** One per entry, already loaded and run. */
@@ -61,7 +62,7 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
     return () => {};
   }
   const { t } = aligned;
-  const intraday = t.some((x) => x % DAY !== 0);
+  const intraday = isIntraday(t);
   const cash = cashReturns(aligned);
   const lines: Line[] = aligned.series.map((values, i) => ({ mark: String(i + 1), label: input.curves[i].label, cls: `bt-cmp-c${i + 1}`, values, cashReturn: cash[i], combined: false }));
   const combined: Line | null = input.weights

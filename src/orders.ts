@@ -1,6 +1,6 @@
-import { DAY, isoDate, money, price, signedPct, stamp } from './dom.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
+import { DAY, isoDate, money, price, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 
 /**
@@ -308,6 +308,41 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, in
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
+}
+
+/** Strategies run side by side when today's orders are worked out. */
+const ORDERS_CONCURRENCY = 3;
+
+/** What a scan of the vault for today's orders needs from the plugin. */
+export interface ScanHost {
+  /** Drops the kept results, so every strategy runs again. */
+  clear(): void;
+  /** Every strategy block in the vault. */
+  find(): Promise<{ note: string; name: string; source: string }[]>;
+  /** Runs a block's text (Results.runSource). */
+  run(source: string, opts: { freshForMs?: number; background: boolean }): Promise<RunOutput>;
+}
+
+/** Every strategy in the vault, run and read as today's orders. `force` refetches every price once. */
+export async function scanOrders(host: ScanHost, force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]> {
+  const started = Date.now();
+  // Results are dropped so every strategy runs again. A price fetched since the scan began is fresh for the strategies
+  // that come after, so each ticker is downloaded once however many strategies use it.
+  if (force) host.clear();
+  const found = await host.find();
+  let done = 0;
+  onProgress(0, found.length);
+  return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
+    let status: StrategyStatus;
+    try {
+      const freshForMs = force ? Date.now() - started : undefined;
+      status = statusFrom(f.note, f.name, await host.run(f.source, { freshForMs, background: true }), Date.now());
+    } catch (e) {
+      status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
+    }
+    onProgress(++done, found.length);
+    return status;
+  });
 }
 
 /** A note body for today's orders; the date is the reader's today. */

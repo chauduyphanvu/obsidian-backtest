@@ -3,7 +3,6 @@
 
 import type { Backtest } from './backtest.ts';
 import {
-  MARK,
   barOnOrAfter,
   cellText,
   csvAsk,
@@ -21,7 +20,9 @@ import {
   type DebugColumn,
   type DebugRow,
 } from './debug.ts';
-import { h, isoDate, price, stamp } from './dom.ts';
+import { h } from './dom.ts';
+import { MARK } from './explain.ts';
+import { isoDate, price, stamp } from './format.ts';
 
 export interface DebugInput {
   backtest: Backtest;

@@ -1,4 +1,4 @@
-import { BINANCE_INTERVALS, CALENDAR, INDICATORS, POSITION, REBALANCE, SERIES } from './dsl.ts';
+import { BINANCE_INTERVALS, CALENDAR, INDICATORS, NUM, POSITION, REBALANCE, SERIES } from './dsl.ts';
 import { commentStart, declaredParams, lineKinds, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
 
 export type DocKind = 'setting' | 'value' | 'function' | 'series' | 'calendar' | 'position' | 'word' | 'unit' | 'parameter';
@@ -178,183 +178,244 @@ setting(
   'magnify: 1h',
 );
 
-/** Names of a function's arguments, in the order INDICATORS lists their defaults. */
-const ARGUMENTS: Record<string, string[]> = {
-  sma: ['n'],
-  ema: ['n'],
-  rsi: ['n'],
-  roc: ['n'],
-  stdev: ['n'],
-  highest: ['n'],
-  lowest: ['n'],
-  atr: ['n'],
-  macd: ['fast', 'slow'],
-  macd_signal: ['fast', 'slow', 'signal'],
-  bb_upper: ['n', 'width'],
-  bb_lower: ['n', 'width'],
-  stoch_k: ['n', 'smooth'],
-  stoch_d: ['n', 'smooth', 'd'],
-  adx: ['n'],
-  plus_di: ['n'],
-  minus_di: ['n'],
-  cci: ['n'],
-  williams_r: ['n'],
-  mfi: ['n'],
-  obv: [],
-  vwap: ['n'],
-  keltner_upper: ['n', 'width', 'atr'],
-  keltner_lower: ['n', 'width', 'atr'],
-  supertrend: ['n', 'mult'],
-  supertrend_up: ['n', 'mult'],
-  wma: ['n'],
-  hma: ['n'],
-  median: ['n'],
-  zscore: ['n'],
-  percent_rank: ['n'],
-  slope: ['n'],
-  correl: ['n'],
-  bars_since: [],
-};
+/**
+ * What the help says about each function: its arguments' names, in the order INDICATORS lists their defaults, a short and a
+ * full description, an example, and what it reads where the usual sentence about its series is not the whole story.
+ */
+interface FunctionDoc {
+  args: string[];
+  short: string;
+  text: string;
+  example: string;
+  series?: string;
+}
 
-const FUNCTION_TEXT: Record<string, [string, string]> = {
-  sma: ['simple average of the last n closes', 'Simple average of the last n closes.'],
-  ema: ['exponential average', 'Exponential average, started from the simple average of the first n values.'],
-  rsi: ['relative strength index, 0 to 100', 'Relative strength index, from 0 to 100, with Wilder’s smoothing.'],
-  roc: ['change over n bars, as a fraction', 'Change over n bars, as a fraction, so compare it with a percentage: roc(20) > 5%.'],
-  stdev: ['standard deviation of the last n closes', 'Standard deviation of the last n closes, dividing by n.'],
-  highest: ['highest high of the last n bars; add [1] to leave out this bar', 'Highest high of the last n bars, this bar included; add [1] to leave out this bar.'],
-  lowest: ['lowest low of the last n bars', 'Lowest low of the last n bars, this bar included.'],
-  atr: ['average true range', 'Average true range, with Wilder’s smoothing.'],
-  macd: ['fast average minus slow average', 'The fast exponential average minus the slow one.'],
-  macd_signal: ['average of the macd line', 'Exponential average of the macd line over signal bars.'],
-  bb_upper: ['upper Bollinger band', 'Upper Bollinger band: the average plus width standard deviations.'],
-  bb_lower: ['lower Bollinger band', 'Lower Bollinger band: the average minus width standard deviations.'],
-  stoch_k: [
-    'stochastic %K, 0 to 100',
-    'Stochastic %K, from 0 to 100: where the close sits between the lowest low and the highest high of the last n bars, averaged over smooth bars (1 for no averaging).',
-  ],
-  stoch_d: ['stochastic %D: stoch_k averaged over d bars', 'Stochastic %D: stoch_k, with the same n and smooth, averaged over d more bars.'],
-  adx: [
-    'average directional index, 0 to 100',
-    'Wilder’s average directional index, from 0 to 100: how strong the trend is, whichever way, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di).',
-  ],
-  plus_di: [
-    'plus directional indicator, 0 to 100',
-    'Wilder’s plus directional indicator, from 0 to 100: the Wilder average over n bars of upward movement, divided by that of the true range, times 100.',
-  ],
-  minus_di: [
-    'minus directional indicator, 0 to 100',
-    'Wilder’s minus directional indicator, from 0 to 100: the Wilder average over n bars of downward movement, divided by that of the true range, times 100.',
-  ],
-  cci: [
-    'commodity channel index of the typical price',
-    'Commodity channel index: the typical price (high + low + close) / 3 minus its n-bar average, divided by 0.015 times its mean absolute deviation from that average.',
-  ],
-  williams_r: [
-    'Williams %R, -100 to 0',
-    'Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) over the last n bars.',
-  ],
-  mfi: [
-    'money flow index, 0 to 100',
-    'Money flow index, from 0 to 100: 100 - 100 / (1 + money flowing in / money flowing out) over the last n bars, where a bar’s flow is its typical price times its volume, counted in when the typical price rose and out when it fell.',
-  ],
-  obv: [
-    'on-balance volume, a running total',
-    'On-balance volume: a running total that adds a bar’s volume when the close rose and takes it off when it fell, starting at 0 on the first bar.',
-  ],
-  vwap: ['volume-weighted average price of the last n bars', 'Volume-weighted average of the typical price (high + low + close) / 3 over the last n bars.'],
-  keltner_upper: [
-    'upper Keltner channel',
-    'Upper Keltner channel: the n-bar exponential average plus width times the average true range over atr bars, which is read from the ticker’s own bars.',
-  ],
-  keltner_lower: [
-    'lower Keltner channel',
-    'Lower Keltner channel: the n-bar exponential average minus width times the average true range over atr bars, which is read from the ticker’s own bars.',
-  ],
-  supertrend: [
-    'supertrend line, under the price in an uptrend',
-    'Supertrend line: bands at (high + low) / 2 plus and minus mult average true ranges over n bars, each moving only towards the price until the close crosses it, the lower band in an uptrend and the upper in a downtrend.',
-  ],
-  supertrend_up: ['condition: the supertrend is in an uptrend', 'A condition that is true while the supertrend is in an uptrend, with its line under the price, and false in a downtrend.'],
-  wma: ['weighted average of the last n values', 'Linearly weighted average of the last n values, the newest weighing n and the oldest 1.'],
-  hma: [
-    'Hull moving average',
-    'Hull moving average: the weighted average over sqrt(n) bars of twice the weighted average over n / 2 bars minus the one over n bars, with n / 2 and sqrt(n) rounded down.',
-  ],
-  median: ['median of the last n values', 'Median of the last n values, the mean of the two middle ones when n is even.'],
-  zscore: [
-    'standard deviations from the n-bar average',
-    'How many standard deviations the value is from its average over the last n values, dividing by n as stdev does, and unknown when they are all equal.',
-  ],
-  percent_rank: ['share of the previous n values below this one', 'The share of the previous n values that are below this one, from 0 to 100.'],
-  slope: ['least-squares slope over n bars, per bar', 'Slope of the least-squares line through the last n values, in the series’ units per bar.'],
-  correl: [
-    'correlation with another ticker, -1 to 1',
-    'Correlation, from -1 to 1, of the one-bar changes of this ticker’s close and of the series written first, over the last n bars, unknown when either one is constant.',
-  ],
-  bars_since: ['bars since a condition was last true', 'Bars since the condition was last true: 0 on a bar where it is, and unknown until it has been true.'],
-};
-
-/** What a function's text says about the series it reads, where the usual sentence is not the whole story. */
-const SERIES_TEXT: Record<string, string> = {
-  mfi: 'It takes no series and needs volume.',
-  obv: 'It takes no series and needs volume.',
-  vwap: 'It takes no series and needs volume.',
-  correl: 'It reads close for this ticker; the series written first is read as of reads it, so it lines up with this ticker’s bars.',
-  bars_since: 'It takes no series, only a condition.',
-};
-
-const FUNCTION_EXAMPLE: Record<string, string> = {
-  sma: 'buy when close > sma(200)',
-  ema: 'buy when close > ema(50)',
-  rsi: 'buy when rsi(14) < 30',
-  roc: 'buy when roc(20) > 5%',
-  stdev: 'buy when close > sma(20) + stdev(20)',
-  highest: 'buy when close > highest(20)[1]',
-  lowest: 'sell when close < lowest(20)[1]',
-  atr: 'buy when close > close[1] + atr(14)',
-  macd: 'buy when macd() > 0',
-  macd_signal: 'buy when macd() crosses above macd_signal()',
-  bb_upper: 'buy when close > bb_upper(20, 2)',
-  bb_lower: 'buy when close < bb_lower(20, 2)',
-  stoch_k: 'buy when stoch_k(14, 3) < 20',
-  stoch_d: 'buy when stoch_k() crosses above stoch_d()',
-  adx: 'buy when adx(14) > 25 and plus_di(14) > minus_di(14)',
-  plus_di: 'buy when plus_di(14) > minus_di(14)',
-  minus_di: 'sell when minus_di(14) > plus_di(14)',
-  cci: 'buy when cci(20) < -100',
-  williams_r: 'buy when williams_r(14) < -80',
-  mfi: 'buy when mfi(14) < 20',
-  obv: 'buy when obv() > sma(obv(), 20)',
-  vwap: 'buy when close > vwap(20)',
-  keltner_upper: 'buy when close > keltner_upper(20, 2, 10)',
-  keltner_lower: 'buy when close < keltner_lower(20, 2, 10)',
-  supertrend: 'buy when close > supertrend(10, 3)',
-  supertrend_up: 'buy when supertrend_up(10, 3)',
-  wma: 'buy when close > wma(20)',
-  hma: 'buy when close > hma(21)',
-  median: 'buy when close > median(20)',
-  zscore: 'buy when zscore(20) < -2',
-  percent_rank: 'buy when percent_rank(100) > 95',
-  slope: 'buy when slope(90) / close > 0.1%',
-  correl: 'buy when correl(close of SPY, 60) < 0.5',
-  bars_since: 'buy when bars_since(close crosses above sma(50)) < 10',
+const FUNCTION_DOCS: Record<string, FunctionDoc> = {
+  sma: {
+    args: ['n'],
+    short: 'simple average of the last n closes',
+    text: 'Simple average of the last n closes.',
+    example: 'buy when close > sma(200)',
+  },
+  ema: {
+    args: ['n'],
+    short: 'exponential average',
+    text: 'Exponential average, started from the simple average of the first n values.',
+    example: 'buy when close > ema(50)',
+  },
+  rsi: {
+    args: ['n'],
+    short: 'relative strength index, 0 to 100',
+    text: 'Relative strength index, from 0 to 100, with Wilder’s smoothing.',
+    example: 'buy when rsi(14) < 30',
+  },
+  roc: {
+    args: ['n'],
+    short: 'change over n bars, as a fraction',
+    text: 'Change over n bars, as a fraction, so compare it with a percentage: roc(20) > 5%.',
+    example: 'buy when roc(20) > 5%',
+  },
+  stdev: {
+    args: ['n'],
+    short: 'standard deviation of the last n closes',
+    text: 'Standard deviation of the last n closes, dividing by n.',
+    example: 'buy when close > sma(20) + stdev(20)',
+  },
+  highest: {
+    args: ['n'],
+    short: 'highest high of the last n bars; add [1] to leave out this bar',
+    text: 'Highest high of the last n bars, this bar included; add [1] to leave out this bar.',
+    example: 'buy when close > highest(20)[1]',
+  },
+  lowest: {
+    args: ['n'],
+    short: 'lowest low of the last n bars',
+    text: 'Lowest low of the last n bars, this bar included.',
+    example: 'sell when close < lowest(20)[1]',
+  },
+  atr: {
+    args: ['n'],
+    short: 'average true range',
+    text: 'Average true range, with Wilder’s smoothing.',
+    example: 'buy when close > close[1] + atr(14)',
+  },
+  macd: {
+    args: ['fast', 'slow'],
+    short: 'fast average minus slow average',
+    text: 'The fast exponential average minus the slow one.',
+    example: 'buy when macd() > 0',
+  },
+  macd_signal: {
+    args: ['fast', 'slow', 'signal'],
+    short: 'average of the macd line',
+    text: 'Exponential average of the macd line over signal bars.',
+    example: 'buy when macd() crosses above macd_signal()',
+  },
+  bb_upper: {
+    args: ['n', 'width'],
+    short: 'upper Bollinger band',
+    text: 'Upper Bollinger band: the average plus width standard deviations.',
+    example: 'buy when close > bb_upper(20, 2)',
+  },
+  bb_lower: {
+    args: ['n', 'width'],
+    short: 'lower Bollinger band',
+    text: 'Lower Bollinger band: the average minus width standard deviations.',
+    example: 'buy when close < bb_lower(20, 2)',
+  },
+  stoch_k: {
+    args: ['n', 'smooth'],
+    short: 'stochastic %K, 0 to 100',
+    text: 'Stochastic %K, from 0 to 100: where the close sits between the lowest low and the highest high of the last n bars, averaged over smooth bars (1 for no averaging).',
+    example: 'buy when stoch_k(14, 3) < 20',
+  },
+  stoch_d: {
+    args: ['n', 'smooth', 'd'],
+    short: 'stochastic %D: stoch_k averaged over d bars',
+    text: 'Stochastic %D: stoch_k, with the same n and smooth, averaged over d more bars.',
+    example: 'buy when stoch_k() crosses above stoch_d()',
+  },
+  adx: {
+    args: ['n'],
+    short: 'average directional index, 0 to 100',
+    text: 'Wilder’s average directional index, from 0 to 100: how strong the trend is, whichever way, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di).',
+    example: 'buy when adx(14) > 25 and plus_di(14) > minus_di(14)',
+  },
+  plus_di: {
+    args: ['n'],
+    short: 'plus directional indicator, 0 to 100',
+    text: 'Wilder’s plus directional indicator, from 0 to 100: the Wilder average over n bars of upward movement, divided by that of the true range, times 100.',
+    example: 'buy when plus_di(14) > minus_di(14)',
+  },
+  minus_di: {
+    args: ['n'],
+    short: 'minus directional indicator, 0 to 100',
+    text: 'Wilder’s minus directional indicator, from 0 to 100: the Wilder average over n bars of downward movement, divided by that of the true range, times 100.',
+    example: 'sell when minus_di(14) > plus_di(14)',
+  },
+  cci: {
+    args: ['n'],
+    short: 'commodity channel index of the typical price',
+    text: 'Commodity channel index: the typical price (high + low + close) / 3 minus its n-bar average, divided by 0.015 times its mean absolute deviation from that average.',
+    example: 'buy when cci(20) < -100',
+  },
+  williams_r: {
+    args: ['n'],
+    short: 'Williams %R, -100 to 0',
+    text: 'Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) over the last n bars.',
+    example: 'buy when williams_r(14) < -80',
+  },
+  mfi: {
+    args: ['n'],
+    short: 'money flow index, 0 to 100',
+    text: 'Money flow index, from 0 to 100: 100 - 100 / (1 + money flowing in / money flowing out) over the last n bars, where a bar’s flow is its typical price times its volume, counted in when the typical price rose and out when it fell.',
+    example: 'buy when mfi(14) < 20',
+    series: 'It takes no series and needs volume.',
+  },
+  obv: {
+    args: [],
+    short: 'on-balance volume, a running total',
+    text: 'On-balance volume: a running total that adds a bar’s volume when the close rose and takes it off when it fell, starting at 0 on the first bar.',
+    example: 'buy when obv() > sma(obv(), 20)',
+    series: 'It takes no series and needs volume.',
+  },
+  vwap: {
+    args: ['n'],
+    short: 'volume-weighted average price of the last n bars',
+    text: 'Volume-weighted average of the typical price (high + low + close) / 3 over the last n bars.',
+    example: 'buy when close > vwap(20)',
+    series: 'It takes no series and needs volume.',
+  },
+  keltner_upper: {
+    args: ['n', 'width', 'atr'],
+    short: 'upper Keltner channel',
+    text: 'Upper Keltner channel: the n-bar exponential average plus width times the average true range over atr bars, which is read from the ticker’s own bars.',
+    example: 'buy when close > keltner_upper(20, 2, 10)',
+  },
+  keltner_lower: {
+    args: ['n', 'width', 'atr'],
+    short: 'lower Keltner channel',
+    text: 'Lower Keltner channel: the n-bar exponential average minus width times the average true range over atr bars, which is read from the ticker’s own bars.',
+    example: 'buy when close < keltner_lower(20, 2, 10)',
+  },
+  supertrend: {
+    args: ['n', 'mult'],
+    short: 'supertrend line, under the price in an uptrend',
+    text: 'Supertrend line: bands at (high + low) / 2 plus and minus mult average true ranges over n bars, each moving only towards the price until the close crosses it, the lower band in an uptrend and the upper in a downtrend.',
+    example: 'buy when close > supertrend(10, 3)',
+  },
+  supertrend_up: {
+    args: ['n', 'mult'],
+    short: 'condition: the supertrend is in an uptrend',
+    text: 'A condition that is true while the supertrend is in an uptrend, with its line under the price, and false in a downtrend.',
+    example: 'buy when supertrend_up(10, 3)',
+  },
+  wma: {
+    args: ['n'],
+    short: 'weighted average of the last n values',
+    text: 'Linearly weighted average of the last n values, the newest weighing n and the oldest 1.',
+    example: 'buy when close > wma(20)',
+  },
+  hma: {
+    args: ['n'],
+    short: 'Hull moving average',
+    text: 'Hull moving average: the weighted average over sqrt(n) bars of twice the weighted average over n / 2 bars minus the one over n bars, with n / 2 and sqrt(n) rounded down.',
+    example: 'buy when close > hma(21)',
+  },
+  median: {
+    args: ['n'],
+    short: 'median of the last n values',
+    text: 'Median of the last n values, the mean of the two middle ones when n is even.',
+    example: 'buy when close > median(20)',
+  },
+  zscore: {
+    args: ['n'],
+    short: 'standard deviations from the n-bar average',
+    text: 'How many standard deviations the value is from its average over the last n values, dividing by n as stdev does, and unknown when they are all equal.',
+    example: 'buy when zscore(20) < -2',
+  },
+  percent_rank: {
+    args: ['n'],
+    short: 'share of the previous n values below this one',
+    text: 'The share of the previous n values that are below this one, from 0 to 100.',
+    example: 'buy when percent_rank(100) > 95',
+  },
+  slope: {
+    args: ['n'],
+    short: 'least-squares slope over n bars, per bar',
+    text: 'Slope of the least-squares line through the last n values, in the series’ units per bar.',
+    example: 'buy when slope(90) / close > 0.1%',
+  },
+  correl: {
+    args: ['n'],
+    short: 'correlation with another ticker, -1 to 1',
+    text: 'Correlation, from -1 to 1, of the one-bar changes of this ticker’s close and of the series written first, over the last n bars, unknown when either one is constant.',
+    example: 'buy when correl(close of SPY, 60) < 0.5',
+    series: 'It reads close for this ticker; the series written first is read as of reads it, so it lines up with this ticker’s bars.',
+  },
+  bars_since: {
+    args: [],
+    short: 'bars since a condition was last true',
+    text: 'Bars since the condition was last true: 0 on a bar where it is, and unknown until it has been true.',
+    example: 'buy when bars_since(close crosses above sma(50)) < 10',
+    series: 'It takes no series, only a condition.',
+  },
 };
 
 /** The call as written, with each default from INDICATORS: `rsi(n = 14)`, `sma(n)`, and a leading series or condition where the function needs one. */
 export function functionSignature(name: string): string {
   const def = INDICATORS[name];
-  const names = ARGUMENTS[name];
+  const names = FUNCTION_DOCS[name].args;
   const lead = def.lead === 'series' ? ['other'] : def.lead === 'condition' ? ['condition'] : [];
   return `${name}(${[...lead, ...def.params.map((d, i) => (d === null ? names[i] : `${names[i]} = ${d}`))].join(', ')})`;
 }
 
 for (const name of Object.keys(INDICATORS)) {
   const def = INDICATORS[name];
-  const [short, meaning] = FUNCTION_TEXT[name];
+  const doc = FUNCTION_DOCS[name];
   const sample = `${name}(volume, ${def.params.map((d) => d ?? 20).join(', ')})`;
-  const series = SERIES_TEXT[name] ?? (def.src === null ? 'It takes no series.' : `Without a series it reads ${def.src}; write another first, as in ${sample}.`);
-  add('function', name, functionSignature(name), short, `${meaning} ${series}`, FUNCTION_EXAMPLE[name]);
+  const series = doc.series ?? (def.src === null ? 'It takes no series.' : `Without a series it reads ${def.src}; write another first, as in ${sample}.`);
+  add('function', name, functionSignature(name), doc.short, `${doc.text} ${series}`, doc.example);
 }
 add('function', 'min', 'min(a, b)', 'the smaller value', 'The smaller of two values.', 'buy when close > min(sma(20), sma(50))');
 add('function', 'max', 'max(a, b)', 'the larger value', 'The larger of two values.', 'buy when close > max(sma(20), sma(50))');
@@ -574,7 +635,6 @@ export interface HelpTarget {
   doc: Doc;
 }
 
-const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
 const PARAM_DECL = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(${NUM})(?:\s+step\s+(${NUM}))?)?$`);
 
 function parameterDoc(name: string, written: string): Doc {

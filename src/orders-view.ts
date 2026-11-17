@@ -1,5 +1,6 @@
 import { Modal, Notice, setIcon, type App } from 'obsidian';
-import { h, price, signedPct } from './dom.ts';
+import { h } from './dom.ts';
+import { price, signedPct } from './format.ts';
 import { actionWord, barLabel, barTime, basisOf, CLOSE_FILL_NOTE, LAST_CLOSE_NOTE, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoGroups, todoRows, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
 
 export interface OrdersHost {

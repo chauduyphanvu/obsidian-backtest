@@ -1,6 +1,7 @@
 // The "More statistics" section: a comparison table, yearly returns chart and monthly returns table.
 
-import { MONTHS, h, minus, niceStep, pct, s, signedPct } from './dom.ts';
+import { h, s } from './dom.ts';
+import { minus, MONTHS, niceStep, pct, signedPct, ungroupedPlural } from './format.ts';
 import { deepStats, periodReturns, type DeepStats, type PeriodReturn, type Underwater } from './stats.ts';
 
 export interface DeepStatsInput {
@@ -31,15 +32,13 @@ function build(body: HTMLElement, input: DeepStatsInput): ResizeObserver {
   return observer;
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
 /** "45 days" up to two months, then "1 year 3 months". */
 function duration(days: number): string {
   if (days < 1) return 'less than a day';
-  if (days < 60) return plural(Math.round(days), 'day');
+  if (days < 60) return ungroupedPlural(Math.round(days), 'day');
   const months = Math.round(days / 30.4375);
   const years = Math.floor(months / 12);
-  return [years > 0 ? plural(years, 'year') : '', months % 12 > 0 ? plural(months % 12, 'month') : ''].filter(Boolean).join(' ');
+  return [years > 0 ? ungroupedPlural(years, 'year') : '', months % 12 > 0 ? ungroupedPlural(months % 12, 'month') : ''].filter(Boolean).join(' ');
 }
 
 function periodName(p: PeriodReturn): string {

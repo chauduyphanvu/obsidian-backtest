@@ -1,8 +1,8 @@
 // Text a result can be kept as: CSV files, a snapshot note and note properties. Pure; the caller reads the clock and writes files.
 
 import { drawdowns, type Backtest, type Segment } from './backtest.ts';
-import { DAY, isoDate, minus, money, pct, price, signedPct, stamp } from './dom.ts';
 import type { Trade } from './engine.ts';
+import { csvField, isIntraday, isoDate, minus, money, pct, price, signedPct, stamp } from './format.ts';
 import { positionOrder } from './orders.ts';
 
 const SNAPSHOT_TRADES = 30;
@@ -13,10 +13,6 @@ export function boughtText(t: Trade, intraday: boolean): string {
   return n > 1 ? `${stamp(t.entryT, intraday)}, ${n} entries` : stamp(t.entryT, intraday);
 }
 
-const csvField = (v: string | number): string => {
-  const x = String(v);
-  return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
-};
 export const csvLine = (fields: (string | number)[]): string => fields.map(csvField).join(',') + '\n';
 /** Fixed decimals, without a "-0.00" for a loss too small to show. */
 const fixed = (x: number, digits: number): string => {
@@ -95,7 +91,7 @@ const tradesText = (n: Backtest['tradeStats']) => (n.open > 0 ? `${n.count} clos
 export function snapshotMarkdown(input: { name: string; source: string; backtest: Backtest; now: number }): string {
   const { backtest: bt } = input;
   const { run, stats, tradeStats, benchmark, spec } = bt;
-  const intraday = run.t.some((t) => t % DAY !== 0);
+  const intraday = isIntraday(run.t);
   const day = isoDate(input.now);
   const sections: string[] = [];
 

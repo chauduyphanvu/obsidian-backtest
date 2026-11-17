@@ -1,4 +1,5 @@
 import { children, findPos, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
+import { DAY } from './format.ts';
 import type { Bars } from './types.ts';
 import * as ind from './indicators.ts';
 
@@ -73,8 +74,6 @@ export function columnFiles(spec: Spec): string[] {
   }
   return [...out];
 }
-
-const DAY = 86_400_000;
 
 /** A length of time in words: "15 minutes", "1 hour", "4 hours". */
 function span(ms: number): string {

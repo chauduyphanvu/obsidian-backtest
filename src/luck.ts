@@ -2,15 +2,12 @@
 
 import { computeStats, maxDrawdown, type Backtest, type Stats } from './backtest.ts';
 import { parseSpec } from './dsl.ts';
-import { simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
+import { firstAtOrAfter, simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
 import { specEvaluator, type BarRule } from './evaluate.ts';
+import { tidy, YEAR } from './format.ts';
 import { makeRng, shuffle, type Rng } from './rng.ts';
-import { baseSpec, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
+import { baseSpec, BATCH, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
 import type { Bars } from './types.ts';
-
-const YEAR = 365.25 * 86_400_000;
-const BATCH = 4;
-const tidy = (x: number) => Number(x.toPrecision(12));
 
 export interface Spread {
   /** 5th percentile, median and 95th percentile: lo..hi holds the middle 90%. */
@@ -120,20 +117,9 @@ export function returnOverDrawdown(s: Pick<Stats, 'cagr' | 'maxDrawdown'>): numb
   return s.cagr > 0 ? Infinity : s.cagr < 0 ? -Infinity : 0;
 }
 
-function lowerBound(t: number[], x: number): number {
-  let a = 0;
-  let b = t.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (t[m] < x) a = m + 1;
-    else b = m;
-  }
-  return a;
-}
-
 /** The asset's bars inside the run: `first` is the first bar a signal can be read on, `last` the last bar. */
 function barsInRun(bars: Bars, run: RunResult): { first: number; last: number } {
-  return { first: lowerBound(bars.t, run.t[0]), last: lowerBound(bars.t, run.t[run.t.length - 1] + 1) - 1 };
+  return { first: firstAtOrAfter(bars.t, run.t[0]), last: firstAtOrAfter(bars.t, run.t[run.t.length - 1] + 1) - 1 };
 }
 
 /** k distinct whole numbers from [0, n), by Floyd's algorithm. */
@@ -200,7 +186,7 @@ export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Ho
     const bars = bt.data.get(a.name)!;
     const { first, last } = barsInRun(bars, bt.run);
     const mine = bt.run.trades.filter((t) => t.asset === a.name);
-    const at = (t: number) => lowerBound(bars.t, t);
+    const at = (t: number) => firstAtOrAfter(bars.t, t);
     const adds = mine.some((t) => t.entries) ? mine.map((t) => (t.entries ?? []).slice(1).map((e) => at(e.t) - at(t.entryT))) : undefined;
     holdings.set(a.name, placeHoldings(mine.map((t) => t.bars), first + 1, last, rng, adds));
   }
@@ -408,9 +394,9 @@ export function walkWindows(t: number[], trainMonths: number, testMonths: number
     const testEnd = addMonths(t[0], (k + 1) * testMonths + trainMonths);
     if (testStart > end) break;
     if (end - testStart < 0.25 * (testEnd - testStart)) break;
-    const i0 = lowerBound(t, trainStart);
-    const j0 = lowerBound(t, testStart);
-    const j1 = lowerBound(t, testEnd) - 1;
+    const i0 = firstAtOrAfter(t, trainStart);
+    const j0 = firstAtOrAfter(t, testStart);
+    const j1 = firstAtOrAfter(t, testEnd) - 1;
     if (j1 < j0 || j0 - i0 < 2) break;
     out.push({ train: [i0, j0 - 1], test: [j0, j1] });
   }

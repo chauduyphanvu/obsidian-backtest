@@ -2,6 +2,7 @@
 
 import { runBacktest, type Backtest, type Stats } from './backtest.ts';
 import { paramValues, parseSpec, type ParseResult, type Spec } from './dsl.ts';
+import { tidy } from './format.ts';
 import type { Bars } from './types.ts';
 
 export type Metric = 'cagr' | 'sharpe' | 'sortino' | 'maxDrawdown' | 'totalReturn';
@@ -19,7 +20,7 @@ export const METRICS: Record<Metric, { label: string; noun: string; percent: boo
 
 export const MAX_RUNS = 2000;
 /** Backtests between pauses that let the note repaint and the Stop button work. */
-const BATCH = 4;
+export const BATCH = 4;
 
 export type Parse = (overrides: Record<string, number>) => ParseResult;
 
@@ -54,8 +55,6 @@ export interface SweepResult {
 }
 
 export const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-const tidy = (x: number) => Number(x.toPrecision(12));
 
 /** The parameters with a range, each with the values to try. A declared value off the step grid is tried too. */
 export function sweepParams(spec: Spec): SweepParam[] {

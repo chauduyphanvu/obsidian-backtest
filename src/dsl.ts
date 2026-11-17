@@ -1,3 +1,4 @@
+import { DAY } from './format.ts';
 import { columnName, type Asset, type AssetRef, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
@@ -242,9 +243,12 @@ export const RESERVED = new Set([
 /** `name = value`, optionally followed by `in lo..hi step s`. A single `=`, so `x == 1` stays a comparison. */
 export const PARAM_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*(.*)$/;
 
-const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
+/** A number as a setting or parameter writes it, with an optional `%`. */
+export const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
 const PARAM_VALUE = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(${NUM})(?:\s+step\s+(${NUM}))?)?$`, 'id');
 const MAX_PARAM_VALUES = 200;
+/** The longest period a function or a setting can take, so a range reaching past it needs no more history than this. */
+export const MAX_PERIOD = 10_000;
 const MAX_ENTRIES = 10;
 /** `2 atr(14)`, `2.5 atr` or `k atr(n)`; a name needs a space before atr, so a parameter called `flatr` stays itself. The period is trimmed by the caller. */
 const ATR_DISTANCE = /^(\d+(?:\.\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*(?=\s))\s*atr\s*(?:\(([^)]*)\))?$/i;
@@ -254,7 +258,6 @@ const SETTING_LINE = new RegExp(SETTING_NAME.source + String.raw`\s*(.*)$`);
 /** Deepest an expression may nest: brackets, function calls and operators each add a level. */
 const MAX_DEPTH = 64;
 const TOO_DEEP = `This rule nests too deeply. Keep it to at most ${MAX_DEPTH} levels of brackets, functions and operators`;
-const DAY = 86_400_000;
 
 /** Where a problem is: a line, and columns in it when they are known. */
 interface At {
@@ -862,8 +865,8 @@ class ExprParser {
       const n = a.e.v;
       const noun = def.real?.[i];
       const shortest = i === 0 ? (def.min ?? 1) : 1;
-      if (noun ? n <= 0 : !Number.isInteger(n) || n < shortest || n > 10000) {
-        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${noun ?? 'period'}${noun ? '' : `. Use a whole number from ${shortest} to 10000`}`);
+      if (noun ? n <= 0 : !Number.isInteger(n) || n < shortest || n > MAX_PERIOD) {
+        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${noun ?? 'period'}${noun ? '' : `. Use a whole number from ${shortest} to ${MAX_PERIOD}`}`);
       }
       return n;
     });
@@ -1180,7 +1183,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   const period = (text: string, where: At, what: string, min: number): number => {
     const n = text === '' ? 14 : plain(text, where, what, `${what.replace(/\(\)$/, '')}(14)`);
-    if (!Number.isInteger(n) || n < min || n > 10000) throw new SpecError(where, `${what}: ${n} is not a valid period. Use a whole number from ${min} to 10000`);
+    if (!Number.isInteger(n) || n < min || n > MAX_PERIOD) throw new SpecError(where, `${what}: ${n} is not a valid period. Use a whole number from ${min} to ${MAX_PERIOD}`);
     return n;
   };
   /** `{ nParam }` when a period is written as a parameter's name, to spread into the setting's value. */

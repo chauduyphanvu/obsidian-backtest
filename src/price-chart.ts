@@ -1,7 +1,7 @@
 // What the "Prices and trades" charts show and where it goes. No DOM: render-price.ts draws what this decides.
 
-import { moneyTicks, niceStep, pct } from './dom.ts';
 import type { ExitReason, Trade } from './engine.ts';
+import { moneyTicks, niceStep, pct } from './format.ts';
 import type { Bars } from './types.ts';
 
 /** A ticker's closes inside the window. */

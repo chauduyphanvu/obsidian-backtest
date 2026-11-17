@@ -1,8 +1,10 @@
 // Comparing and combining strategies: the `compare` block's syntax, putting equity curves on one timeline,
-// a rebalanced portfolio of them, and how alike they move. Pure; the caller loads notes and runs strategies.
+// a rebalanced portfolio of them, and how alike they move. Pure; the caller hands in how to read notes and run strategies.
 
-import { isoDate } from './dom.ts';
+import { extractBlocks } from './blocks.ts';
 import type { Diagnostic } from './dsl.ts';
+import { isoDate } from './format.ts';
+import type { RunOutput } from './runner.ts';
 
 export const MIN_ENTRIES = 2;
 export const MAX_ENTRIES = 8;
@@ -132,6 +134,42 @@ export interface Curve {
 }
 
 /** The growth of cash as an index starting at 1, from a run's cash return per step (`cashReturn[i]` is what cash earned from step i - 1 to i). */
+/** What resolving a compare block's entries needs from the plugin. */
+export interface CompareHost<F extends { basename: string }> {
+  /** The note a link points at from the compare block's own note, or null. */
+  note(link: string): F | null;
+  /** The note's text (Obsidian's cachedRead). */
+  read(file: F): Promise<string>;
+  /** Runs a block's text (Results.runSource). */
+  run(source: string): Promise<RunOutput>;
+}
+
+/**
+ * The curve of each entry's strategy, in the order of the entries, run one after another. Rejects with a message that
+ * names the line of the first entry whose note, strategy or run is missing.
+ */
+export async function compareCurves<F extends { basename: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<Curve[]> {
+  const curves: Curve[] = [];
+  for (const entry of entries) {
+    const file = host.note(entry.link.replace(/\.md$/i, ''));
+    if (!file) throw new Error(`Line ${entry.line}: there is no note called "${entry.link}".`);
+    const blocks = extractBlocks(await host.read(file));
+    const block = entry.block === null ? blocks[0] : blocks.find((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
+    if (!block) {
+      throw new Error(entry.block === null ? `Line ${entry.line}: "${file.basename}" has no strategy block.` : `Line ${entry.line}: "${file.basename}" has no strategy named "${entry.block}".`);
+    }
+    let out: RunOutput;
+    try {
+      out = await host.run(block.source);
+    } catch (e) {
+      throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const { run } = out.backtest;
+    curves.push({ label: entry.label ?? block.name ?? file.basename, t: run.t, equity: run.equity, cash: cashIndex(run.cashReturn) });
+  }
+  return curves;
+}
+
 export function cashIndex(cashReturn: number[]): number[] {
   const out: number[] = [];
   let level = 1;

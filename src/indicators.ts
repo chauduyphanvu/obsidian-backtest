@@ -1,5 +1,7 @@
 // Every indicator returns an array as long as its input, with NaN where the value is not yet known.
 
+import { DAY } from './format.ts';
+
 function filled(n: number): number[] {
   return new Array<number>(n).fill(NaN);
 }
@@ -469,8 +471,6 @@ export function supertrend(h: number[], l: number[], c: number[], n: number, mul
   }
   return { line, up };
 }
-
-const DAY = 86_400_000;
 
 function isWeekend(t: number): boolean {
   const d = new Date(t).getUTCDay();

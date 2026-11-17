@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { blockName } from '../src/blocks.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, blockName, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, waitFor, type Shown } from '../src/live-core.ts';
+import { Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, waitFor, type Shown } from '../src/live-core.ts';
 
 const BODY_A = ['name: Trend', 'universe: SPY', 'buy when close > sma(200)'];
 const BODY_B = ['universe: QQQ', 'buy when rsi(2) < 10'];

@@ -1,5 +1,6 @@
 import { h } from './dom.ts';
-import type { Param } from './dsl.ts';
+import { MAX_PERIOD, type Param } from './dsl.ts';
+import { tidy } from './format.ts';
 import { plainNumber } from './rewrite.ts';
 import type { RunOutput } from './runner.ts';
 
@@ -29,22 +30,19 @@ export interface ParamsHook {
   accepts?: (values: Record<string, number>) => boolean;
 }
 
-const clean = (x: number) => Number(x.toPrecision(12));
-const shown = (p: Pick<Param, 'percent'>, value: number) => clean(p.percent ? value * 100 : value);
-const stored = (p: Pick<Param, 'percent'>, x: number) => clean(p.percent ? x / 100 : x);
+const shown = (p: Pick<Param, 'percent'>, value: number) => tidy(p.percent ? value * 100 : value);
+const stored = (p: Pick<Param, 'percent'>, x: number) => tidy(p.percent ? x / 100 : x);
 
 /** A value the way the block writes it: `50`, `8%`, `6.5%`. */
 export function formatParam(p: Pick<Param, 'percent'>, value: number): string {
   return plainNumber(shown(p, value)) + (p.percent ? '%' : '');
 }
 
-/** The longest window a period can be. */
-const MAX_PERIOD = 10_000;
 /** Most positions a slider offers, so the step stays easy to hit and to walk with the arrow keys. */
 const MAX_POSITIONS = { whole: 120, percent: 100, other: 60 };
 
 function decimals(x: number): number {
-  const text = String(clean(Math.abs(x)));
+  const text = String(tidy(Math.abs(x)));
   const dot = text.indexOf('.');
   return dot < 0 ? 0 : Math.min(6, text.length - dot - 1);
 }
@@ -53,7 +51,7 @@ function decimals(x: number): number {
 function niceSteps(from: number): number[] {
   const out: number[] = [];
   for (let e = Math.floor(Math.log10(from)); e <= 7; e++) {
-    for (const m of [1, 2, 5]) if (m * 10 ** e >= from * (1 - 1e-9)) out.push(clean(m * 10 ** e));
+    for (const m of [1, 2, 5]) if (m * 10 ** e >= from * (1 - 1e-9)) out.push(tidy(m * 10 ** e));
   }
   return out;
 }
@@ -82,7 +80,7 @@ function around(v: number, percent: boolean): SliderScale {
   const limit = whole ? MAX_POSITIONS.whole : percent ? MAX_POSITIONS.percent : MAX_POSITIONS.other;
   const positions = (step: number) => Math.floor((hi - lo) / step + 1e-9) + 1;
   const step = candidates.find((c) => positions(c) <= limit) ?? candidates[candidates.length - 1];
-  return { lo: clean(v - Math.floor((v - lo) / step + 1e-9) * step), hi: clean(v + Math.floor((hi - v) / step + 1e-9) * step), step };
+  return { lo: tidy(v - Math.floor((v - lo) / step + 1e-9) * step), hi: tidy(v + Math.floor((hi - v) / step + 1e-9) * step), step };
 }
 
 /**
@@ -94,7 +92,7 @@ export function sliderScale(p: Param): SliderScale {
   const v = shown(p, p.declared);
   if (!p.range) return around(v, p.percent);
   const { lo, hi, step } = { lo: shown(p, p.range.lo), hi: shown(p, p.range.hi), step: shown(p, p.range.step) };
-  return { lo: clean(v - Math.floor((v - lo) / step + 1e-9) * step), hi, step };
+  return { lo: tidy(v - Math.floor((v - lo) / step + 1e-9) * step), hi, step };
 }
 
 /**
@@ -108,8 +106,8 @@ export function acceptedScale(p: Param, accepts: (value: number) => boolean): Sl
   const v = shown(p, p.declared);
   const near = (x: number) => Math.abs(x - v) < scale.step / 2;
   let { lo, hi } = scale;
-  while (!near(hi) && !accepts(stored(p, hi))) hi = clean(hi - scale.step);
-  while (!near(lo) && !accepts(stored(p, lo))) lo = clean(lo + scale.step);
+  while (!near(hi) && !accepts(stored(p, hi))) hi = tidy(hi - scale.step);
+  while (!near(lo) && !accepts(stored(p, lo))) lo = tidy(lo + scale.step);
   return { ...scale, lo, hi };
 }
 
@@ -117,12 +115,12 @@ export function acceptedScale(p: Param, accepts: (value: number) => boolean): Sl
 export function sliderValues(p: Param): number[] {
   const { lo, hi, step } = sliderScale(p);
   const count = Math.floor((hi - lo) / step + 1e-9) + 1;
-  return Array.from({ length: count }, (_, k) => stored(p, clean(lo + k * step)));
+  return Array.from({ length: count }, (_, k) => stored(p, tidy(lo + k * step)));
 }
 
 /** The line under the bar when what is on screen differs from the block. */
 export function differenceText(params: Param[], values: Record<string, number>): string | null {
-  const changed = params.filter((p) => clean(values[p.name]) !== clean(p.declared));
+  const changed = params.filter((p) => tidy(values[p.name]) !== tidy(p.declared));
   if (changed.length === 0) return null;
   const list = (value: (p: Param) => number) => changed.map((p) => `${p.name} ${formatParam(p, value(p))}`).join(', ');
   return `Showing ${list((p) => values[p.name])}. The block says ${list((p) => p.declared)}.`;

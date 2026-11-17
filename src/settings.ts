@@ -2,8 +2,6 @@ import { Notice, PluginSettingTab, SecretComponent, Setting, type App, type Plug
 import { DRAFT_PRIVACY } from './llm.ts';
 import { CACHE_HOURS_MAX, CACHE_HOURS_MIN, providerText, validateSetting, type Settings } from './settings-core.ts';
 
-export { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, validateSetting, type Settings } from './settings-core.ts';
-
 export interface SettingsHost {
   settings: Settings;
   saveSettings(): Promise<void>;

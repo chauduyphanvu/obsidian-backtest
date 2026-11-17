@@ -1,7 +1,8 @@
 // The "Prices and trades" section: a ticker's price with the strategy's holding periods, buys and sells marked.
 
-import { h, price, s, signedPct, stamp, timeTicks } from './dom.ts';
+import { h, s } from './dom.ts';
 import type { Trade } from './engine.ts';
+import { price, signedPct, stamp, timeTicks } from './format.ts';
 import {
   MARKER_REACH,
   boughtWording,

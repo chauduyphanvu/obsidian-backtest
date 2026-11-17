@@ -1,5 +1,6 @@
 import { intervalMs, type CashRate, type Commission, type Fill, type Rebalance, type Sizing, type StopLevel, type Stops } from './dsl.ts';
 import type { BarRule, PosState } from './evaluate.ts';
+import { DAY } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -282,7 +283,6 @@ export interface InsideReport {
   whole: number;
 }
 
-const DAY = 86_400_000;
 /**
  * An add or a rebalancing trade is not made when its commission would be this share of its value or more: the ceiling
  * the language puts on `costs`.
@@ -373,6 +373,18 @@ export function firstAtOrAfter(t: number[], at: number): number {
   return a;
 }
 
+/** The index of the last of `t` at or before `at` (t sorted), or -1. */
+export function barAt(t: number[], at: number): number {
+  let a = 0;
+  let b = t.length;
+  while (a < b) {
+    const m = (a + b) >> 1;
+    if (t[m] <= at) a = m + 1;
+    else b = m;
+  }
+  return a - 1;
+}
+
 /**
  * The smaller bars inside an asset's bar `i`, as simulate reads them: those that start within the bar's span, which is
  * `interval` from its start. A Binance bar must hold every one of them, since Binance makes a bar every interval around the
@@ -388,7 +400,8 @@ export function insideBar(bars: Bars, i: number, source: string, small: Bars, in
 /** How many smaller bars a bar of `span` must hold: all of them on Binance, any number from 1 elsewhere. */
 const insideCount = (source: string, span: number, small: number): number => (source === 'binance' ? span / small : 0);
 
-function periodKey(t: number, mode: Rebalance): number {
+/** The period of time `t` for a rebalance or ranking: bars with the same key fall in one period. */
+export function periodKey(t: number, mode: Rebalance): number {
   const d = new Date(t);
   switch (mode) {
     case 'weekly':
