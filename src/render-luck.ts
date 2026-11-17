@@ -83,10 +83,12 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
 
   let seed = DEFAULT_SEED;
   let running: { stop(): void } | null = null;
+  // One set of checks at a time: each shares `running`, which Stop ends.
   const busy = (on: boolean) => {
     stop.hidden = !on;
     progress.show(on);
     shuffle.disabled = on;
+    run.disabled = on;
   };
   stop.addEventListener('click', () => running?.stop());
   /** A fresh set of observers for a check's block, the old ones disconnected. */

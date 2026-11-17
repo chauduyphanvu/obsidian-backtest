@@ -46,24 +46,26 @@ const benchOf = (i: JobInput): Bench => ({ source: i.source, parse: i.parse, dat
  * A worker in this process: the real message handler, every message copied as postMessage copies it. Messages to it
  * arrive a turn later; its answers arrive at once, so a test can stop a job in the middle. Ending it silences it.
  */
-function inProcess(opts: { ready?: boolean; failFirstJob?: boolean } = {}) {
+function inProcess(opts: { ready?: boolean | ((made: number) => boolean); failFirstJob?: boolean } = {}) {
   const log: string[] = [];
   let made = 0;
   let jobs = 0;
   const make: MakeWorker = (on) => {
     made++;
+    // `ready` as a function says, for the n-th worker made, whether it starts.
+    const starts = typeof opts.ready === 'function' ? opts.ready(made) : opts.ready !== false;
     let alive = true;
     const handle = serve((m) => {
       if (alive) on.message(structuredClone(m));
     }, 0);
     // A worker that never gets ready never answers either.
-    if (opts.ready !== false) setTimeout(() => alive && on.message({ type: 'ready' }));
+    if (starts) setTimeout(() => alive && on.message({ type: 'ready' }));
     return {
       post: (m: ToWorker) => {
         log.push(m.type === 'job' ? `job ${m.job.kind}` : m.type === 'run' ? `run ${JSON.stringify(m.block.overrides)}` : `${m.type} ${m.id}`);
         const copy = structuredClone(m);
         setTimeout(() => {
-          if (!alive || opts.ready === false) return;
+          if (!alive || !starts) return;
           if (copy.type === 'job' && opts.failFirstJob && jobs++ === 0) on.error('Out of memory');
           else void handle(copy);
         });
@@ -219,6 +221,34 @@ test('a worker that never says it is ready is given up after a while', async (t)
   const result = await client.forBlock(block).run({ kind: 'reshuffle', seed: 1, runs: 10 }).done;
   assert.deepStrictEqual(result, await runJob({ kind: 'reshuffle', seed: 1, runs: 10 }, benchOf(block)));
   assert.equal(w.log.at(-1), 'end');
+});
+
+test('after one worker slow to start, the next job tries a fresh worker', async (t) => {
+  const w = inProcess({ ready: (n) => n > 1 });
+  const client = track(t, { makeWorker: w.make, startMs: 30 });
+  const block = input();
+  const jobs = client.forBlock(block);
+  const job = { kind: 'reshuffle', seed: 1, runs: 10 } as const;
+  assert.deepStrictEqual(await jobs.run(job).done, await runJob(job, benchOf(block)));
+  assert.equal(client.foreground(), false);
+  assert.deepStrictEqual(await jobs.run(job).done, await runJob(job, benchOf(block)));
+  assert.equal(w.made(), 2);
+  assert.equal(w.log.filter((m) => m === 'job reshuffle').length, 2);
+  assert.equal(client.foreground(), false);
+});
+
+test('two workers in a row slow to start give up on workers for good', async (t) => {
+  const w = inProcess({ ready: false });
+  const client = track(t, { makeWorker: w.make, startMs: 30 });
+  const block = input();
+  const jobs = client.forBlock(block);
+  const job = { kind: 'reshuffle', seed: 1, runs: 10 } as const;
+  await jobs.run(job).done;
+  assert.equal(client.foreground(), false);
+  assert.deepStrictEqual(await jobs.run(job).done, await runJob(job, benchOf(block)));
+  assert.equal(client.foreground(), true);
+  await jobs.run(job).done;
+  assert.equal(w.made(), 2);
 });
 
 test('a worker that dies during a job fails that job with a message; the next job starts a fresh worker', async (t) => {

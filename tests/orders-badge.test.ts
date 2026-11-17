@@ -443,6 +443,22 @@ test('a check that fails shows it, never throws out of the timer, and is tried a
   assert.deepEqual(unhandled, []);
 });
 
+test('when every strategy failed it says so and tries again as soon as after a failed check', async () => {
+  let fail = true;
+  const { badge, el, log } = setup({ scan: async () => (fail ? [failedStatus('a.md', 'A', 'offline'), failedStatus('b.md', 'B', 'offline')] : [status('A', [['buy', 'X']])]) });
+  badge.start();
+  await advance(START_DELAY_MS);
+  assert.equal(el!.textContent, "Couldn't check orders");
+  assert.equal(el!.classes.has('bt-badge-error'), true);
+  fail = false;
+  await advance(5 * MINUTE);
+  assert.equal(log.scans, 1);
+  await advance(10 * MINUTE);
+  assert.equal(log.scans, 2);
+  assert.equal(el!.textContent, '1 order today');
+  badge.stop();
+});
+
 test('a scan that throws at once, or with something that is not an Error, is handled the same way', async () => {
   const thrown = setup({
     scan: () => {
