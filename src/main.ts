@@ -8,7 +8,7 @@ import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
 import { HOUR, isIntraday, isoDate } from './format.ts';
 import { GalleryModal } from './gallery-modal.ts';
-import { LIMITS, LimitError, WeighedCache, resultBytes } from './limits.ts';
+import { LimitError } from './limits.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { drawHeld } from './live-core.ts';
@@ -25,13 +25,14 @@ import { renderPriceCharts } from './render-price.ts';
 import { renderLuck } from './render-luck.ts';
 import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type Section } from './render.ts';
 import { renderSweep } from './render-sweep.ts';
-import { ResultCache, cacheKey, csvPaths, csvVersions, debounce, defaultsMatter, pricesAsOf } from './result-cache.ts';
+import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
+import { Results } from './results.ts';
 import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
-import { Runner, type RunOutput } from './runner.ts';
+import type { RunOutput } from './runner.ts';
 import { SymbolLookup } from './symbols.ts';
-import { BlockDrawing, blockRuns, shutdownWorkers, type BlockRuns } from './worker-client.ts';
+import { blockRuns, shutdownWorkers } from './worker-client.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
-import type { Defaults, Spec } from './dsl.ts';
+import type { Defaults } from './dsl.ts';
 
 /** Puts text at the cursor; a block starts on its own line. */
 function place(editor: Editor, text: string): void {
@@ -49,12 +50,6 @@ const ORDERS_CONCURRENCY = 3;
 const DEFAULTS_CHECK_MS = 400;
 
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-
-/** A result kept in memory, with when its prices were current (pricesAsOf). */
-interface Kept {
-  out: RunOutput;
-  asOf: number;
-}
 
 /** What a caller of `renderStrategy` says about where the block is. */
 interface StrategyOptions {
@@ -86,7 +81,12 @@ export default class BacktestBlocks extends Plugin {
       return res.text;
     },
   });
-  private results = this.keptResults(6 * HOUR);
+  private results = new Results({
+    deps: () => this.prices.deps(),
+    defaults: () => defaultsFrom(this.settings),
+    freshForMs: () => this.settings.cacheHours * HOUR,
+    modified: async (path) => (await this.app.vault.adapter.stat(normalizePath(path)))?.mtime ?? null,
+  });
   /** What to run before a rendered block draws again or goes away. */
   private disposers = new WeakMap<MarkdownRenderChild, () => void>();
   private propertyWrites = new Map<string, { (): void; cancel(): void }>();
@@ -103,7 +103,7 @@ export default class BacktestBlocks extends Plugin {
 
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
-    this.results = this.keptResults(this.settings.cacheHours * HOUR);
+    this.results.reset(this.settings.cacheHours * HOUR);
     this.addSettingTab(new BacktestSettingTab(this.app, this));
 
     this.registerMarkdownCodeBlockProcessor('strategy', (source, el, ctx) => {
@@ -210,7 +210,7 @@ export default class BacktestBlocks extends Plugin {
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
     // Defaults are part of every result's key, but the freshness window is not.
-    this.results = this.keptResults(this.settings.cacheHours * HOUR);
+    this.results.reset(this.settings.cacheHours * HOUR);
     this.prices.ready.changed();
     // Blocks already on screen keep the defaults they were drawn with and say so; this runs once typing in a setting has paused.
     this.checkDefaults();
@@ -233,80 +233,6 @@ export default class BacktestBlocks extends Plugin {
     if (!this.settings.tickerLookup) return null;
     const deps = this.prices.deps();
     return (this.symbolLookup ??= new SymbolLookup({ now: deps.now, fetchText: deps.fetchText, sleep: deps.sleep }));
-  }
-
-  private runner(freshForMs = this.settings.cacheHours * HOUR): Runner {
-    return new Runner(this.prices.deps(), defaultsFrom(this.settings), { freshForMs });
-  }
-
-  /** One drawing of a block. The defaults are read from the settings here, once, and everything made from the drawing uses them. */
-  private drawing(source: string, runs: BlockRuns, opts: { freshForMs?: number; anyway?: boolean; background?: boolean } = {}): BlockDrawing {
-    return new BlockDrawing({
-      source,
-      defaults: defaultsFrom(this.settings),
-      deps: this.prices.deps(),
-      freshForMs: opts.freshForMs ?? this.settings.cacheHours * HOUR,
-      runs,
-      anyway: opts.anyway,
-      background: opts.background,
-    });
-  }
-
-  /** A result's key: the strategy's text, the defaults it was read with, and the version of every CSV file it reads. */
-  private async resultKey(spec: Spec, source: string, defaults: Defaults): Promise<string> {
-    const adapter = this.app.vault.adapter;
-    const files = await csvVersions(csvPaths(spec), async (path) => (await adapter.stat(normalizePath(path)))?.mtime ?? null);
-    return cacheKey(source, defaults, files);
-  }
-
-  /** Results kept in memory, up to a count and a total size (limits.ts). */
-  private keptResults(maxAgeMs: number): WeighedCache<Kept> {
-    return new WeighedCache<Kept>({ maxEntries: LIMITS.keptResults, maxAgeMs, weigh: (k) => resultBytes(k.out), maxWeight: LIMITS.keptBytes });
-  }
-
-  /**
-   * The kept result for `key` when its prices are no older than `freshForMs`, the age the caller takes saved prices at. A
-   * forced round passes the time since it began, so a run that started before it, and finished after it dropped the kept
-   * results, is not reused.
-   */
-  private kept(key: string, freshForMs: number): RunOutput | undefined {
-    const hit = this.results.get(key);
-    return hit && Date.now() - hit.asOf < freshForMs ? hit.out : undefined;
-  }
-
-  private async runSpec(drawing: BlockDrawing, spec: Spec, key: string, force = false): Promise<RunOutput | null> {
-    if (!force) {
-      const hit = this.kept(key, drawing.freshForMs);
-      if (hit) return hit;
-    }
-    const out = await drawing.run(spec, { force });
-    if (out) this.results.set(key, { out, asOf: pricesAsOf(out.prices, Date.now()) });
-    return out;
-  }
-
-  /**
-   * Runs a block's text, reusing a recent result for the same text, defaults and CSV files. A block that does not parse rejects
-   * with its first problem. With `cachedOnly` nothing runs: a block with no kept result rejects. `background` is for a scan
-   * of the vault, whose runs wait for those of the blocks on screen. `freshForMs` is how old saved prices may be.
-   */
-  private async runSource(source: string, opts: { force?: boolean; freshForMs?: number; cachedOnly?: boolean; background?: boolean } = {}): Promise<RunOutput> {
-    const runs = blockRuns();
-    try {
-      const drawing = this.drawing(source, runs, { freshForMs: opts.freshForMs, background: opts.background });
-      const { spec, errors } = drawing.parse();
-      if (!spec) throw new Error(`Line ${errors[0].line}: ${errors[0].message}`);
-      const key = await this.resultKey(spec, source, drawing.defaults);
-      if (opts.cachedOnly) {
-        const hit = this.kept(key, drawing.freshForMs);
-        if (!hit) throw new Error('This strategy has not run yet.');
-        return hit;
-      }
-      const out = await this.runSpec(drawing, spec, key, opts.force);
-      if (!out) throw new Error('The run was stopped.');
-      return out;
-    } finally {
-      runs.close();
-    }
   }
 
   private dispose(child: MarkdownRenderChild): void {
@@ -335,7 +261,7 @@ export default class BacktestBlocks extends Plugin {
     const stop = () => runs.close();
     this.disposers.set(child, stop);
     // Everything this drawing parses, runs and hands to its sections is made with the defaults it reads here, once.
-    const drawing = this.drawing(source, runs, { anyway: opts.anyway });
+    const drawing = this.results.drawing(source, runs, { anyway: opts.anyway });
     const force = opts.force ?? false;
     // In the panel a failed first run is for the panel to show, but a retry has nobody above it: it draws its own failure.
     const redraw = (more: Pick<StrategyOptions, 'force' | 'anyway'>): void => {
@@ -350,10 +276,10 @@ export default class BacktestBlocks extends Plugin {
         renderErrors(el, errors, source);
         return;
       }
-      const key = await this.resultKey(spec, source, drawing.defaults);
+      const key = await this.results.resultKey(spec, source, drawing.defaults);
       if (this.disposers.get(child) !== stop) return;
-      if (force || this.kept(key, drawing.freshForMs) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
-      const out = await this.runSpec(drawing, spec, key, force);
+      if (force || this.results.kept(key, drawing.freshForMs) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
+      const out = await this.results.runSpec(drawing, spec, key, force);
       // Stopped, or a kept result came back after the block was drawn again or went away.
       if (!out || this.disposers.get(child) !== stop) return;
       // A result that was run without the size limits is shown with its sliders without them too.
@@ -430,7 +356,7 @@ export default class BacktestBlocks extends Plugin {
         return drawHeld(() => this.renderStrategy(source, el, child, { notePath, apply, compact: false, panel: true }), () => this.dispose(child), signal);
       },
       pricesReady: (source) => this.pricesReady(source),
-      errors: (source) => this.runner().parse(source).errors,
+      errors: (source) => this.results.runner().parse(source).errors,
       rewrite: setParamValues,
     };
   }
@@ -452,7 +378,7 @@ export default class BacktestBlocks extends Plugin {
         if (force) this.results.clear();
         return this.findStrategies();
       },
-      run: (source, force) => this.runSource(source, { background: true, ...(force ? { freshForMs: Date.now() - started } : {}) }),
+      run: (source, force) => this.results.runSource(source, { background: true, ...(force ? { freshForMs: Date.now() - started } : {}) }),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       now: () => Date.now(),
     };
@@ -499,7 +425,7 @@ export default class BacktestBlocks extends Plugin {
     let ran = 0;
     for (const [i, block] of blocks.entries()) {
       try {
-        const out = await this.runSource(block.source, { cachedOnly: !announce });
+        const out = await this.results.runSource(block.source, { cachedOnly: !announce });
         Object.assign(produced, resultProperties(out.backtest, Date.now(), ids[i]));
         ran++;
       } catch {
@@ -546,7 +472,7 @@ export default class BacktestBlocks extends Plugin {
         }
         let out: RunOutput;
         try {
-          out = await this.runSource(block.source);
+          out = await this.results.runSource(block.source);
         } catch (e) {
           throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -588,7 +514,7 @@ export default class BacktestBlocks extends Plugin {
       let status: StrategyStatus;
       try {
         const freshForMs = force ? Date.now() - started : undefined;
-        status = statusFrom(f.note, f.name, await this.runSource(f.source, { freshForMs, background: true }), Date.now());
+        status = statusFrom(f.note, f.name, await this.results.runSource(f.source, { freshForMs, background: true }), Date.now());
       } catch (e) {
         status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
       }
