@@ -1,8 +1,10 @@
-import type { Backtest } from './backtest.ts';
+import type { Backtest, Segment } from './backtest.ts';
 import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
 import type { Trade } from './engine.ts';
 import { DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, price, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { tokenizeBlock } from './highlight.ts';
+import { renderDeepStats } from './render-stats.ts';
+import type { RunOutput } from './runner.ts';
 
 const MAX_TRADE_ROWS = 500;
 
@@ -53,35 +55,86 @@ export function renderFailure(el: HTMLElement, message: string, src: string, onR
 }
 
 function summary(spec: Spec): string {
-  const parts = [spec.universe.map((a) => (spec.universe.length > 1 || a.weight < 1 ? `${a.name} ${Number((a.weight * 100).toFixed(1))}%` : a.name)).join(' · ')];
-  if (spec.rebalance !== 'never') parts.push(`rebalanced ${spec.rebalance}`);
+  const names = spec.universe.map((a) => a.name);
+  const parts = [
+    spec.rank
+      ? `the top ${spec.rank.top} of ${names.length > 6 ? `${names.length} tickers` : names.join(', ')}, ${pct(spec.universe[0].weight, 0)} each`
+      : spec.universe.map((a) => (names.length > 1 || a.weight < 1 ? `${a.name} ${Number((a.weight * 100).toFixed(1))}%` : a.name)).join(' \u00b7 '),
+  ];
+  if (spec.sizing.k === 'invvol') parts.push('sized by inverse volatility');
+  if (spec.sizing.k === 'risk') parts.push(`${pct(spec.sizing.risk, 1)} risked per trade`);
+  if (spec.rebalance !== 'never') parts.push(spec.rank ? `chosen ${spec.rebalance}` : `rebalanced ${spec.rebalance}`);
   if (spec.interval !== '1d') parts.push(`${spec.interval} bars`);
   parts.push(spec.costBps ? `${spec.costBps} bps costs` : 'no costs');
-  const stops = spec.stops[spec.universe[0].name];
-  const level = (l: StopLevel) => (l.k === 'pct' ? pct(l.v, 0) : `${l.mult} ATR`);
-  if (stops.stopLoss) parts.push(`${level(stops.stopLoss)} stop`);
-  if (stops.trailingStop) parts.push(`${level(stops.trailingStop)} trailing stop`);
-  if (stops.takeProfit) parts.push(`${level(stops.takeProfit)} target`);
+  if (spec.slippageBps) parts.push(`${spec.slippageBps} bps slippage`);
+  const level = (l: StopLevel | null) => (l === null ? '' : l.k === 'pct' ? pct(l.v, 0) : `${l.mult} ATR`);
+  const text = (name: string) => {
+    const st = spec.stops[name];
+    return [st.stopLoss && `${level(st.stopLoss)} stop`, st.trailingStop && `${level(st.trailingStop)} trailing stop`, st.takeProfit && `${level(st.takeProfit)} target`].filter(Boolean).join(', ');
+  };
+  const stops = new Set(names.map(text));
+  if (stops.size > 1) parts.push('stops set per ticker');
+  else if (text(names[0])) parts.push(text(names[0]));
+  if (spec.params.length) parts.push(spec.params.map((p) => `${p.name} ${p.percent ? pct(p.value, 1) : p.value}`).join(', '));
   return parts.join(', ');
 }
 
-export function renderResult(el: HTMLElement, spec: Spec, bt: Backtest, warnings: string[], src: string, onRefresh: () => void): () => void {
+/** A section added under the standard result; returns a cleanup function when it holds observers. */
+export type Section = (root: HTMLElement) => (() => void) | void;
+
+export interface ResultView {
+  source: string;
+  out: RunOutput;
+  /** The parser's warnings for this block. */
+  notes: Diagnostic[];
+  onRefresh: () => void;
+  /** Sections placed after the trade list, in order. */
+  sections?: Section[];
+}
+
+function segments(root: HTMLElement, bt: Backtest): void {
+  if (!bt.segments) return;
+  const wrap = h(root, 'div', 'bt-split');
+  h(wrap, 'div', 'bt-split-title', 'Before and after the test date');
+  const table = h(wrap, 'table', 'bt-table');
+  const head = h(h(table, 'thead'), 'tr');
+  h(head, 'th');
+  for (const seg of bt.segments) h(head, 'th', 'bt-num', seg.label);
+  const body = h(table, 'tbody');
+  const row = (label: string, cell: (seg: Segment) => string) => {
+    const tr = h(body, 'tr');
+    h(tr, 'td', undefined, label);
+    for (const seg of bt.segments!) h(tr, 'td', 'bt-num', cell(seg));
+  };
+  const num = (x: number) => (Number.isFinite(x) ? minus(x.toFixed(2)) : '\u2013');
+  row('Return per year', (g) => pct(g.stats.cagr));
+  row(`${bt.benchmark.label}, per year`, (g) => pct(g.benchmarkStats.cagr));
+  row('Worst drawdown', (g) => pct(g.stats.maxDrawdown));
+  row('Sharpe ratio', (g) => num(g.stats.sharpe));
+  row('Trades', (g) => String(g.tradeStats.count));
+  h(wrap, 'div', 'bt-note', 'Rules chosen by looking at the first period are only tested by the second.');
+}
+
+export function renderResult(el: HTMLElement, view: ResultView): () => void {
   el.replaceChildren();
   const root = h(el, 'div', 'bt-root');
+  const { spec, backtest: bt, warnings, prices } = view.out;
   const { run, stats, tradeStats, benchmark } = bt;
   const first = run.t[0];
   const last = run.t[run.t.length - 1];
   const intraday = run.t.some((t) => t % DAY !== 0);
+  const cleanups: (() => void)[] = [];
 
   const head = h(root, 'div', 'bt-head');
   const titles = h(head, 'div');
   h(titles, 'div', 'bt-title', spec.name ?? 'Backtest');
   h(titles, 'div', 'bt-sub', summary(spec));
   const refresh = h(head, 'button', 'bt-button', 'Refresh prices');
-  refresh.addEventListener('click', onRefresh);
-  source(root, src);
+  refresh.addEventListener('click', view.onRefresh);
+  source(root, view.source);
 
   for (const w of warnings) h(root, 'div', 'bt-warning', w);
+  for (const n of view.notes) h(root, 'div', 'bt-warning', `Line ${n.line}: ${n.message}`);
   if (spec.from !== null && first - spec.from > 7 * DAY) {
     h(root, 'div', 'bt-warning', `The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
   }
@@ -123,12 +176,28 @@ export function renderResult(el: HTMLElement, spec: Spec, bt: Backtest, warnings
     if (width > 0) drawChart(chart, tip, width, bt, intraday);
   });
   observer.observe(chart);
+  cleanups.push(() => observer.disconnect());
 
-  h(root, 'div', 'bt-note', `${stamp(first, intraday)} to ${stamp(last, intraday)}, starting with ${money(spec.capital)}. A rule seen at a close fills at the next open.${run.costs > 0 ? ` Costs paid: ${money(run.costs)}.` : ''}`);
+  const facts = [`${stamp(first, intraday)} to ${stamp(last, intraday)}, starting with ${money(spec.capital)}.`, 'A rule seen at a close fills at the next open.'];
+  if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}.`);
+  facts.push(bt.interest > 0 ? `${bt.cashRateNote}: ${money(bt.interest)} of interest.` : `${bt.cashRateNote}.`);
+  h(root, 'div', 'bt-note', facts.join(' '));
+  const traded = prices.filter((p) => spec.universe.some((a) => a.name === p.name));
+  if (traded.length) {
+    const through = Math.min(...traded.map((p) => p.through));
+    const sources = [...new Set(traded.map((p) => ({ yahoo: 'Yahoo', binance: 'Binance', stooq: 'Stooq', csv: 'your CSV files' })[p.source]))].join(' and ');
+    h(root, 'div', 'bt-note', `Prices through ${stamp(through, intraday)}, from ${sources}.`);
+  }
 
+  segments(root, bt);
   positions(root, bt, intraday);
   trades(root, run.trades, intraday);
-  return () => observer.disconnect();
+  cleanups.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: benchmark.equity, benchmarkLabel: benchmark.label }));
+  for (const section of view.sections ?? []) {
+    const stop = section(root);
+    if (stop) cleanups.push(stop);
+  }
+  return () => cleanups.forEach((stop) => stop());
 }
 
 function positions(root: HTMLElement, bt: Backtest, intraday: boolean): void {
@@ -163,7 +232,7 @@ function trades(root: HTMLElement, all: Trade[], intraday: boolean): void {
       if (shown.length < all.length) h(d, 'div', 'bt-note', `Showing the latest ${shown.length} of ${all.length}.`);
       const table = h(h(d, 'div', 'bt-scroll'), 'table', 'bt-table');
       const head = h(h(table, 'thead'), 'tr');
-      for (const [text, num] of [['Ticker', 0], ['Bought', 0], ['At', 1], ['Sold', 0], ['At', 1], ['Return', 1], ['Exit', 0]] as const) {
+      for (const [text, num] of [['Ticker', 0], ['Bought', 0], ['At', 1], ['Sold', 0], ['At', 1], ['Return', 1], ['Profit', 1], ['Exit', 0]] as const) {
         h(head, 'th', num ? 'bt-num' : undefined, text);
       }
       const body = h(table, 'tbody');
@@ -175,6 +244,7 @@ function trades(root: HTMLElement, all: Trade[], intraday: boolean): void {
         h(row, 'td', undefined, t.reason === 'open' ? '–' : stamp(t.exitT, intraday));
         h(row, 'td', 'bt-num', price(t.exitPrice));
         h(row, 'td', 'bt-num', signedPct(t.ret));
+        h(row, 'td', 'bt-num', (t.pnl > 0 ? '+' : '') + minus(money(t.pnl)));
         h(row, 'td', undefined, t.reason === 'open' ? 'still held' : t.reason === 'signal' ? 'sell rule' : t.reason);
       }
     },
@@ -215,6 +285,12 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   for (let i = 0; i < n; i++) ddMin = Math.min(ddMin, drawdown[i], benchmark.drawdown[i]);
   ddMin = Math.min(ddMin, -0.01);
   const yDd = (v: number) => ddTop + (v / ddMin) * ddH;
+
+  const split = bt.spec.testFrom;
+  if (split !== null && split > t[0] && split < t[n - 1]) {
+    s(svg, 'rect', { x: x(split), y: top, width: width - right - x(split), height: ddTop + ddH - top, class: 'bt-test-band' });
+    s(svg, 'text', { x: x(split) + 5, y: top + 12, class: 'bt-axis' }, 'Test period');
+  }
 
   // Grid and axis labels.
   for (const v of moneyTicks(Math.exp(l0), Math.exp(l1))) {

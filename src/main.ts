@@ -83,7 +83,7 @@ export default class BacktestBlocks extends Plugin {
   }
 
   private async run(source: string, el: HTMLElement, child: MarkdownRenderChild, force: boolean): Promise<void> {
-    const { spec, errors } = parseSpec(source);
+    const { spec, errors, warnings } = parseSpec(source);
     if (!spec) {
       renderErrors(el, errors, source);
       return;
@@ -92,7 +92,7 @@ export default class BacktestBlocks extends Plugin {
     renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
     try {
       const out = await new Runner(this.deps()).run(spec, force);
-      const stop = renderResult(el, spec, out.backtest, out.warnings, source, retry(true));
+      const stop = renderResult(el, { source, out, notes: warnings, onRefresh: retry(true) });
       child.register(stop);
     } catch (e) {
       renderFailure(el, e instanceof Error ? e.message : String(e), source, retry(false));
