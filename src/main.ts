@@ -55,6 +55,7 @@ export default class BacktestBlocks extends Plugin {
     const file = (key: string) => `${this.cacheDir()}/${key}.json`;
     return {
       now: () => Date.now(),
+      sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
       fetchText: async (url) => {
         const res = await requestUrl({ url, throw: false });
         // The services explain a bad ticker in a JSON body, which the parsers turn into a message.

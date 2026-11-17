@@ -277,6 +277,9 @@
 .bt-tok-value {
   color: var(--code-value);
 }
+.bt-tok-param {
+  color: var(--code-important);
+}
 .bt-tok-ticker {
   color: var(--code-string);
 }
