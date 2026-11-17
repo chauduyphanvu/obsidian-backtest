@@ -21,6 +21,12 @@
 .bt-root .bt-dash-table th {
   vertical-align: bottom;
 }
+/* Words are never broken inside a cell; Obsidian's own table rules outrank a bare class, so the cells are named in full. */
+.bt-root .bt-dash-table th,
+.bt-root .bt-dash-table td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
 
 /* The strategy's name stays in view while the rest of a wide table scrolls under it. */
 .bt-root .bt-dash-table .bt-dash-first {
@@ -103,13 +109,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.bt-dash-table td.bt-num,
-.bt-dash-now,
-.bt-dash-next,
-.bt-dash-through {
+.bt-root .bt-dash-table td.bt-num,
+.bt-root .bt-dash-table td.bt-dash-now,
+.bt-root .bt-dash-table td.bt-dash-next,
+.bt-root .bt-dash-table td.bt-dash-through {
   white-space: nowrap;
 }
-.bt-dash-table td.bt-num .bt-dash-sub {
+.bt-root .bt-dash-table td.bt-num .bt-dash-sub {
   margin-left: auto;
 }
 .bt-dash-none {
@@ -124,6 +130,8 @@
   width: max-content;
   max-width: calc(100cqw - var(--bt-dash-first) - 20px);
   white-space: normal;
+  /* A path or a ticker with no space in it still wraps inside the visible width. */
+  overflow-wrap: anywhere;
 }
 .bt-dash-running .bt-dash-msgtext {
   color: var(--text-muted);

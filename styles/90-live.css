@@ -78,6 +78,10 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.bt-live-top .bt-error-hint {
+  grid-column: 2;
+  margin: 2px 0 0;
+}
 .bt-live-empty {
   margin-top: 6px;
 }

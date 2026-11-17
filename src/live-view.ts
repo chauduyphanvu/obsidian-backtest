@@ -3,6 +3,7 @@ import { EditorView } from '@codemirror/view';
 import { ItemView, MarkdownView, type App, type WorkspaceLeaf } from 'obsidian';
 import { h } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
+import { hintFor } from './fixes.ts';
 import { blockLabel, changeKind, chooseBlock, locateBlock, waitFor, type Choice, type Shown } from './live-core.ts';
 import { debounce } from './result-cache.ts';
 
@@ -364,7 +365,7 @@ export class LiveView extends ItemView {
 }
 
 /** The problems with a block, in the words of the result shown in the note, without repeating the block itself. */
-function drawErrors(root: HTMLElement, errors: Diagnostic[], text: string): void {
+export function drawErrors(root: HTMLElement, errors: Diagnostic[], text: string): void {
   h(root, 'div', 'bt-error-title', errors.length === 1 ? "This strategy can't run yet" : `This strategy can't run yet: ${errors.length} problems`);
   const lines = text.split('\n');
   const list = h(root, 'ul', 'bt-errors');
@@ -374,6 +375,8 @@ function drawErrors(root: HTMLElement, errors: Diagnostic[], text: string): void
     h(li, 'span', undefined, e.message);
     const line = lines[e.line - 1]?.trim();
     if (line) h(li, 'code', 'bt-error-src', line);
+    const hint = hintFor(lines, e);
+    if (hint) h(li, 'span', 'bt-error-hint', hint);
   }
   if (errors.length > MAX_ERRORS) h(root, 'div', 'bt-note', `And ${errors.length - MAX_ERRORS} more.`);
 }

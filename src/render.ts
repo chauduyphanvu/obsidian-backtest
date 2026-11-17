@@ -300,7 +300,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
     }
 
     const notes = h(body, 'div', 'bt-notes');
-    const tiles = h(body, 'div', 'bt-tiles');
+    const tiles = h(h(body, 'div', 'bt-tiles-box'), 'div', 'bt-tiles');
     const legend = h(body, 'div', 'bt-legend');
     const chart = h(body, 'div', 'bt-chart');
     const tip = h(chart, 'div', 'bt-tip');
