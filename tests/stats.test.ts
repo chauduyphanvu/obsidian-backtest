@@ -91,6 +91,15 @@ test('sortino is 0 when the only falls are rounding noise', () => {
   assert.equal(sortino(t, [1, 1 - 1e-14, 1 + 2e-14]), 0);
 });
 
+test('a series that starts with NaN is measured from its first value', () => {
+  // The first two points (November) have no value: the series starts at 110 on 15 December.
+  const late = [NaN, NaN, ...A_E.slice(2)];
+  assert.deepEqual(deepStats(A_T, late), deepStats(A_T.slice(2), A_E.slice(2)));
+  const months = periodReturns(A_T, late, 'month');
+  assert.deepEqual(months[0], { key: '2023-12', t: d(2023, 12, 1), ret: 121 / 110 - 1, partial: true });
+  assert.equal(months.length, 4);
+});
+
 test('calmar: return per year over the worst drawdown', () => {
   // 365 days, 100 to 150 with a drop from 120 to 90 (-25%).
   const t = [d(2021, 1, 1), d(2021, 4, 1), d(2021, 9, 1), d(2022, 1, 1)];

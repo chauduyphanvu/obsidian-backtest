@@ -1,3 +1,4 @@
+import { DAY, stamp } from './dom.ts';
 import type { Spec } from './dsl.ts';
 import { simulate, type RunResult, type Signals, type Trade } from './engine.ts';
 import { Evaluator } from './evaluate.ts';
@@ -42,12 +43,15 @@ export interface Backtest {
   stats: Stats;
   tradeStats: TradeStats;
   drawdown: number[];
+  /** Aligned with `run.t`; NaN before the benchmark's first bar, whose statistics start there. */
   benchmark: { label: string; equity: number[]; drawdown: number[]; stats: Stats };
   /** Interest earned on cash. */
   interest: number;
   cashRateNote: string;
   /** Before and from `test from`; null when it is not set. */
   segments: Segment[] | null;
+  /** Plain sentences about how the run went that the reader should know, such as a benchmark with a shorter history. */
+  notes: string[];
 }
 
 const YEAR = 365.25 * 86_400_000;
@@ -159,9 +163,22 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   );
   // A named benchmark can trade on other days or bars than the strategy: carry the value of its
   // latest bar that had ended by the end of each of the strategy's bars.
+  // Before its first bar the benchmark has no value; while that bar is still open it is the capital.
   const at = alignByEnd(bench.t, run.t);
-  const benchEquity = run.t.map((_, i) => (at[i] < 0 ? spec.capital : bench.equity[at[i]]));
+  const benchEquity = run.t.map((t, i) => (at[i] >= 0 ? bench.equity[at[i]] : t >= bench.t[0] ? spec.capital : NaN));
   const benchExposure = run.t.map(() => 1);
+  /** Statistics over the run's steps s to e - 1, from the first one the series has a value at. */
+  const measure = (eq: number[], ex: number[], s: number, e: number, capital?: number): Stats => {
+    while (s < e && Number.isNaN(eq[s])) s++;
+    const cut = (xs: number[]) => xs.slice(s, e);
+    return computeStats(cut(run.t), cut(eq), capital ?? eq[s], cut(ex), cut(run.cashReturn));
+  };
+
+  const notes: string[] = [];
+  const intraday = run.t.some((t) => t % DAY !== 0);
+  if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
+    notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
+  }
 
   let segments: Segment[] | null = null;
   if (spec.testFrom !== null) {
@@ -169,19 +186,14 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     const cut = run.t.findIndex((t) => t >= split);
     const k = cut < 0 ? run.t.length : cut;
     const day = new Date(split).toISOString().slice(0, 10);
-    const part = (label: string, s: number, e: number, mine: (t: Trade) => boolean): Segment => {
-      const t = run.t.slice(s, e);
-      const slice = (xs: number[]) => xs.slice(s, e);
-      const stats = (eq: number[], ex: number[]) => computeStats(t, eq, eq[0], ex, slice(run.cashReturn));
-      return {
-        label,
-        from: t.length ? t[0] : split,
-        to: t.length ? t[t.length - 1] : split,
-        stats: stats(slice(run.equity), slice(run.exposure)),
-        benchmarkStats: stats(slice(benchEquity), slice(benchExposure)),
-        tradeStats: computeTradeStats(run.trades.filter(mine)),
-      };
-    };
+    const part = (label: string, s: number, e: number, mine: (t: Trade) => boolean): Segment => ({
+      label,
+      from: s < e ? run.t[s] : split,
+      to: s < e ? run.t[e - 1] : split,
+      stats: measure(run.equity, run.exposure, s, e),
+      benchmarkStats: measure(benchEquity, benchExposure, s, e),
+      tradeStats: computeTradeStats(run.trades.filter(mine)),
+    });
     segments = [
       part(`Before ${day}`, 0, k, (tr) => tr.entryT < split),
       part(`From ${day}`, k, run.t.length, (tr) => tr.entryT >= split),
@@ -192,17 +204,18 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     spec,
     data,
     run,
-    stats: computeStats(run.t, run.equity, spec.capital, run.exposure, run.cashReturn),
+    stats: measure(run.equity, run.exposure, 0, run.t.length, spec.capital),
     tradeStats: computeTradeStats(run.trades),
     drawdown: drawdowns(run.equity),
     benchmark: {
       label: spec.benchmark ? `${spec.benchmark.name} buy & hold` : spec.rank ? 'Equal-weight buy & hold' : 'Buy & hold',
       equity: benchEquity,
       drawdown: drawdowns(benchEquity),
-      stats: computeStats(run.t, benchEquity, spec.capital, benchExposure, run.cashReturn),
+      stats: measure(benchEquity, benchExposure, 0, run.t.length, spec.capital),
     },
     interest: run.interest,
     cashRateNote: cashRateNote(spec),
     segments,
+    notes,
   };
 }

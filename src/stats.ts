@@ -1,5 +1,7 @@
 // Statistics beyond the headline tiles: calendar-period returns, downside-adjusted ratios and time under water.
 // All functions take an equity series as `t` (epoch ms, ascending) and `equity` (same length, at least 2 points).
+// periodReturns and deepStats also take a series that starts with NaN (a benchmark whose prices start
+// later) and measure it from its first value.
 
 import { maxDrawdown, NOISE } from './backtest.ts';
 import { DAY } from './dom.ts';
@@ -25,6 +27,7 @@ export interface PeriodReturn {
  * has no return of its own and is left out.
  */
 export function periodReturns(t: number[], equity: number[], period: 'year' | 'month'): PeriodReturn[] {
+  [t, equity] = fromFirstValue(t, equity);
   const out: PeriodReturn[] = [];
   const n = t.length;
   for (let i = 0; i < n; ) {
@@ -143,7 +146,15 @@ function extremes(list: PeriodReturn[]): [PeriodReturn | null, PeriodReturn | nu
   return [best, worst];
 }
 
+/** The series from its first value on. */
+function fromFirstValue(t: number[], equity: number[]): [number[], number[]] {
+  let s = 0;
+  while (s < equity.length && Number.isNaN(equity[s])) s++;
+  return s === 0 ? [t, equity] : [t.slice(s), equity.slice(s)];
+}
+
 export function deepStats(t: number[], equity: number[]): DeepStats {
+  [t, equity] = fromFirstValue(t, equity);
   const years = periodReturns(t, equity, 'year');
   const full = years.filter((y) => !y.partial);
   const months = periodReturns(t, equity, 'month');

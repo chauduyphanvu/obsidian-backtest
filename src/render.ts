@@ -134,6 +134,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   source(root, view.source);
 
   for (const w of warnings) h(root, 'div', 'bt-warning', w);
+  for (const n of bt.notes) h(root, 'div', 'bt-warning', n);
   for (const n of view.notes) h(root, 'div', 'bt-warning', `Line ${n.line}: ${n.message}`);
   if (spec.from !== null && first - spec.from > 7 * DAY) {
     h(root, 'div', 'bt-warning', `The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
@@ -272,11 +273,15 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': 'Strategy and benchmark value over time, with drawdowns below' });
   const x = (time: number) => left + ((time - t[0]) / (t[n - 1] - t[0])) * plotW;
 
+  // The benchmark has no value (NaN) before its first bar when its prices start later.
   let lo = Infinity;
   let hi = -Infinity;
   for (let i = 0; i < n; i++) {
-    lo = Math.min(lo, run.equity[i], benchmark.equity[i]);
-    hi = Math.max(hi, run.equity[i], benchmark.equity[i]);
+    for (const v of [run.equity[i], benchmark.equity[i]]) {
+      if (!Number.isFinite(v)) continue;
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
   }
   lo = Math.max(lo, 1e-9);
   const pad = Math.max(Math.log(hi / lo) * 0.04, 0.01);
@@ -284,7 +289,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   const yEq = (v: number) => top + (1 - (Math.log(Math.max(v, 1e-9)) - l0) / (l1 - l0)) * eqH;
 
   let ddMin = 0;
-  for (let i = 0; i < n; i++) ddMin = Math.min(ddMin, drawdown[i], benchmark.drawdown[i]);
+  for (let i = 0; i < n; i++) ddMin = Math.min(ddMin, drawdown[i], Number.isNaN(benchmark.drawdown[i]) ? 0 : benchmark.drawdown[i]);
   ddMin = Math.min(ddMin, -0.01);
   const yDd = (v: number) => ddTop + (v / ddMin) * ddH;
 
@@ -312,10 +317,13 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
 
   // About two points per pixel is all a line can show.
   const stride = Math.max(1, Math.floor(n / (plotW * 2)));
+  // A line starts at its first known value.
   const path = (values: number[], y: (v: number) => number) => {
+    let first = 0;
+    while (first < n && !Number.isFinite(values[first])) first++;
     let d = '';
-    for (let i = 0; i < n; i += stride) d += `${d ? 'L' : 'M'}${x(t[i]).toFixed(1)},${y(values[i]).toFixed(1)}`;
-    if ((n - 1) % stride !== 0) d += `L${x(t[n - 1]).toFixed(1)},${y(values[n - 1]).toFixed(1)}`;
+    for (let i = first; i < n; i += stride) d += `${d ? 'L' : 'M'}${x(t[i]).toFixed(1)},${y(values[i]).toFixed(1)}`;
+    if (first < n && (n - 1 - first) % stride !== 0) d += `L${x(t[n - 1]).toFixed(1)},${y(values[n - 1]).toFixed(1)}`;
     return d;
   };
   const ddPath = path(drawdown, yDd);
@@ -353,6 +361,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
     dotB.setAttribute('cx', String(px));
     dotB.setAttribute('cy', String(yEq(benchmark.equity[i])));
     for (const el of [cross, dotB, dotS]) el.setAttribute('visibility', 'visible');
+    if (!Number.isFinite(benchmark.equity[i])) dotB.setAttribute('visibility', 'hidden');
 
     tip.replaceChildren();
     h(tip, 'div', 'bt-tip-date', stamp(t[i], intraday));
@@ -360,7 +369,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
       const r = h(tip, 'div', 'bt-tip-row');
       h(r, 'span', `bt-swatch ${cls}`);
       h(r, 'span', 'bt-tip-label', label);
-      h(r, 'span', 'bt-tip-value', money(value));
+      h(r, 'span', 'bt-tip-value', Number.isFinite(value) ? money(value) : '–');
       h(r, 'span', 'bt-tip-dd', pct(dd));
     };
     row('bt-swatch-strategy', 'Strategy', run.equity[i], drawdown[i]);

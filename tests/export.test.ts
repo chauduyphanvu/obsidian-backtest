@@ -93,6 +93,7 @@ function result(opts: { states?: AssetState[]; trades?: Trade[]; segments?: Segm
     interest: 0,
     cashRateNote: 'Cash earns nothing',
     segments: opts.segments ?? null,
+    notes: [],
   };
 }
 

@@ -22,7 +22,7 @@ export function renderDeepStats(parent: HTMLElement, input: DeepStatsInput): () 
 function build(body: HTMLElement, input: DeepStatsInput): ResizeObserver {
   comparison(body, input);
   const years = periodReturns(input.t, input.strategy, 'year');
-  // Same dates as the strategy, so the benchmark's years line up one for one.
+  // Same dates as the strategy, but a benchmark whose prices start later has fewer years.
   const benchYears = periodReturns(input.t, input.benchmark, 'year');
   const observer = yearsChart(body, input.benchmarkLabel, years, benchYears);
   monthsTable(body, periodReturns(input.t, input.strategy, 'month'), years);
@@ -140,6 +140,7 @@ function drawYears(chart: HTMLElement, tip: HTMLElement, width: number, benchmar
   const plotW = width - left - right;
   const groupW = plotW / n;
 
+  const benchBy = new Map(bench.map((p) => [p.key, p]));
   const returns = [...mine, ...bench].map((p) => p.ret);
   const lo = Math.min(0, ...returns);
   const hi = Math.max(0, ...returns);
@@ -163,7 +164,8 @@ function drawYears(chart: HTMLElement, tip: HTMLElement, width: number, benchmar
     const x = left + i * groupW + (groupW - (2 * barW + 2)) / 2;
     const partial = p.partial ? ' bt-stats-partial' : '';
     bar(svg, x, barW, y0, y(p.ret), `bt-stats-bar-strategy${partial}`);
-    bar(svg, x + barW + 2, barW, y0, y(bench[i].ret), `bt-stats-bar-benchmark${partial}`);
+    const b = benchBy.get(p.key);
+    if (b) bar(svg, x + barW + 2, barW, y0, y(b.ret), `bt-stats-bar-benchmark${p.partial || b.partial ? ' bt-stats-partial' : ''}`);
     if (Number(p.key) % labelEvery === 0) {
       s(svg, 'text', { x: left + (i + 0.5) * groupW, y: top + plotH + 16, class: 'bt-axis', 'text-anchor': 'middle' }, p.key);
     }
@@ -178,11 +180,11 @@ function drawYears(chart: HTMLElement, tip: HTMLElement, width: number, benchmar
     hl.setAttribute('visibility', 'visible');
     tip.replaceChildren();
     h(tip, 'div', 'bt-tip-date', mine[i].key);
-    for (const [cls, label, p] of [['bt-swatch-strategy', 'Strategy', mine[i]], ['bt-swatch-benchmark', benchmarkLabel, bench[i]]] as const) {
+    for (const [cls, label, p] of [['bt-swatch-strategy', 'Strategy', mine[i]], ['bt-swatch-benchmark', benchmarkLabel, benchBy.get(mine[i].key)]] as const) {
       const row = h(tip, 'div', 'bt-tip-row');
       h(row, 'span', `bt-swatch bt-stats-swatch ${cls}`);
       h(row, 'span', 'bt-tip-label', label);
-      h(row, 'span', 'bt-tip-value', signedPct(p.ret));
+      h(row, 'span', 'bt-tip-value', p ? signedPct(p.ret) : '–');
     }
     if (mine[i].partial) h(tip, 'div', 'bt-tip-foot', 'The data covers part of this year');
     tip.hidden = false;

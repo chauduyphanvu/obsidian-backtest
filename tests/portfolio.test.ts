@@ -156,6 +156,23 @@ test('test from splits the one run into two parts, each measured from its own st
   assert.equal(run('universe: A\nbuy when true', { A }).segments, null);
 });
 
+test('a benchmark that starts later is measured over its own dates and has no value before them', () => {
+  // Quarters of 91 days from 1 January 2020; B's prices start at the third, 1 July.
+  const step = 91 * DAY;
+  const X = bars([100, 100, 100, 100, 100], { step });
+  const B = bars([100, 100, 121], { start: T0 + 2 * step, step });
+  const r = run('universe: X\ncapital: 1000\nbenchmark: B\nbuy when true', { X, B });
+  // B buys at the open of its second bar at 100 and gains 21% on its third.
+  assert.deepEqual(r.benchmark.equity, [NaN, NaN, 1000, 1000, 1210]);
+  assert.deepEqual(r.benchmark.drawdown, [NaN, NaN, 0, 0, 0]);
+  assert.ok(near(r.benchmark.stats.totalReturn, 0.21));
+  // 21% over its own 182 days, not over the strategy's 364.
+  assert.ok(near(r.benchmark.stats.cagr, 1.21 ** (365.25 / 182) - 1));
+  assert.deepEqual(r.notes, ["B has prices only from 2020-07-01, so its figures cover a shorter period than the strategy's."]);
+  // A benchmark with prices from the start has no note.
+  assert.deepEqual(run('universe: X\nbenchmark: X\nbuy when true', { X }).notes, []);
+});
+
 test('the result carries the spec, the prices and a note on the cash rate', () => {
   const { spec } = parseSpec('universe: A\nbuy when true');
   const data = new Map([['A', bars([1, 2, 3])]]);
