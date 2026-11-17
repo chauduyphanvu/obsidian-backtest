@@ -24,7 +24,8 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
   }
 }
 
-export function renderTrades(root: HTMLElement, all: Trade[], intraday: boolean): void {
+export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean): void {
+  const all: Trade[] = bt.run.trades;
   if (all.length === 0) return;
   const d = h(root, 'details', 'bt-details');
   h(d, 'summary', undefined, `Trades (${all.length})`);

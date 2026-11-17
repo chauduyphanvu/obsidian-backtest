@@ -192,7 +192,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
 
   segments(root, bt);
   renderPositions(root, bt, intraday);
-  renderTrades(root, run.trades, intraday);
+  renderTrades(root, bt, intraday);
   cleanups.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: benchmark.equity, benchmarkLabel: benchmark.label, cashReturn: run.cashReturn }));
   for (const section of view.sections ?? []) {
     const stop = section(root);
