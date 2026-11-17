@@ -1,4 +1,5 @@
-// The entry of the worker that runs sweeps and luck checks. esbuild bundles it on its own and main.js carries it as text.
+// The entry of the workers that run backtests, sweeps and luck checks. esbuild bundles it on its own and main.js carries it
+// as text.
 
 import { serve, type FromWorker, type ToWorker } from './jobs.ts';
 

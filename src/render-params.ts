@@ -20,6 +20,8 @@ export interface ParamsHook {
   rerun(values: Record<string, number>, settled: boolean): Promise<RunOutput | null>;
   /** Present only where the block can be edited. Rejects with a message fit to show when nothing was written. */
   apply?: (values: Record<string, number>) => Promise<void>;
+  /** False when a run would hold up the window if it were done on every frame of a drag: the block then runs only when the slider is let go. */
+  followsDrag?: () => boolean;
 }
 
 const clean = (x: number) => Number(x.toPrecision(12));
@@ -125,34 +127,61 @@ export interface RequesterHandlers {
 }
 
 /**
- * Asks the hook for runs as the sliders move. Only the latest request is answered: an older answer that arrives after a
- * newer request was made is dropped, so of several releases only the last one is used.
+ * Asks the hook for runs as the sliders move, one at a time: a request made while a run is out waits for it, and replaces
+ * any request already waiting, so a slow block never builds up a queue. The latest request is the one answered. An older
+ * answer is dropped, except a run of a drag that the drag has moved past while it ran: that one is shown while the slider
+ * is still moving, so a block slower than a frame still follows it.
  */
 export function createRequester(hook: Pick<ParamsHook, 'rerun'>, on: RequesterHandlers): { request(values: Record<string, number>, settled: boolean): void; cancel(): void } {
   let latest = 0;
+  let latestSettled = false;
   let waiting = false;
+  let busy = false;
+  let queued: { values: Record<string, number>; settled: boolean; seq: number } | null = null;
+
+  const send = (asked: Record<string, number>, settled: boolean, seq: number): void => {
+    busy = true;
+    // A failure while drawing an answer is reported like one while asking, so it is never left unhandled.
+    hook
+      .rerun(asked, settled)
+      .then((out) => {
+        if (seq !== latest) {
+          if (out !== null && !settled && !latestSettled) {
+            waiting = false;
+            on.shown(out, asked, false);
+          }
+          return;
+        }
+        waiting = out === null;
+        if (out === null) on.waiting();
+        else on.shown(out, asked, settled);
+      })
+      .catch((e: unknown) => {
+        if (seq !== latest) return;
+        waiting = false;
+        on.failed(e, settled);
+      })
+      .finally(() => {
+        busy = false;
+        const after = queued;
+        queued = null;
+        if (after) send(after.values, after.settled, after.seq);
+      });
+  };
+
   return {
     request(values, settled) {
       const asked = { ...values };
       const seq = ++latest;
+      latestSettled = settled;
       if (settled && waiting) on.loading();
-      // A failure while drawing an answer is reported like one while asking, so it is never left unhandled.
-      hook
-        .rerun(asked, settled)
-        .then((out) => {
-          if (seq !== latest) return;
-          waiting = out === null;
-          if (out === null) on.waiting();
-          else on.shown(out, asked, settled);
-        })
-        .catch((e: unknown) => {
-          if (seq !== latest) return;
-          waiting = false;
-          on.failed(e, settled);
-        });
+      if (busy) queued = { values: asked, settled, seq };
+      else send(asked, settled, seq);
     },
     cancel() {
       latest++;
+      latestSettled = true;
+      queued = null;
     },
   };
 }
@@ -164,6 +193,7 @@ const sentence = (e: unknown) => `${(e instanceof Error ? e.message : String(e))
 
 const WAITING = 'This value needs more price history than is loaded. The result stays as it was, and the history loads when you let go of the slider.';
 const LOADING = 'Loading more price history…';
+const ON_RELEASE = 'This strategy takes too long to run again at every step of a drag. It runs when you let go of the slider.';
 
 /** The "Parameters" bar. The bar is built once and never redrawn, so the slider under a finger survives. Returns a cleanup function. */
 export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () => void {
@@ -264,7 +294,8 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     };
     slider.addEventListener('input', () => {
       read();
-      schedule();
+      if (hook.followsDrag?.() === false) say(ON_RELEASE, true);
+      else schedule();
     });
     slider.addEventListener('change', () => {
       read();

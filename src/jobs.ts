@@ -1,5 +1,5 @@
-// The sweep and the luck checks as jobs: plain data in, progress and plain data out, so the same functions run in a
-// worker (see worker.ts and worker-client.ts) or, when no worker can start, on the main thread.
+// Single backtests, the sweep and the luck checks as jobs: plain data in, progress and plain data out, so the same
+// functions run in a worker (see worker.ts and worker-client.ts) or, when no worker can start, on the main thread.
 
 import { runBacktest, type Backtest } from './backtest.ts';
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
@@ -61,6 +61,22 @@ export function benchFor(block: Block, data: Map<string, Bars>): Bench {
   return benchWith(block.source, (overrides) => parseSpec(block.source, { defaults: block.defaults, overrides }), data, block.overrides);
 }
 
+/** A backtest without the strategy and the prices it ran on: whoever asked for it holds both, so they are not sent back. */
+export type Ran = Omit<Backtest, 'spec' | 'data'>;
+
+/** One backtest of a block's text, read with its defaults and values as the note reads it, on its prices. */
+export function runBlock(block: Block, data: Map<string, Bars>): Ran {
+  const { spec, errors } = parseSpec(block.source, { defaults: block.defaults, overrides: block.overrides });
+  if (!spec) throw new Error(`Line ${errors[0].line}: ${errors[0].message}`);
+  const { spec: _spec, data: _data, ...ran } = runBacktest(spec, data);
+  return ran;
+}
+
+/** A result put back together with the strategy and prices it ran on: the same object runBacktest(spec, data) returns. */
+export function withInputs(ran: Ran, spec: Spec, data: Map<string, Bars>): Backtest {
+  return { spec, data, ...ran };
+}
+
 export interface Hooks {
   /** After each step; `sofar` is the sweep's or random entries' result so far, which grows as the job runs. */
   onProgress?: (done: number, total: number, sofar?: SweepResult | RandomEntriesResult) => void;
@@ -110,7 +126,8 @@ export function stoppedResult<K extends Kind>(kind: K, bench: Bench, sofar: Sofa
 export type ToWorker =
   | { type: 'data'; id: number; data: Map<string, Bars> }
   | { type: 'drop'; id: number }
-  | { type: 'job'; id: number; data: number; block: Block; job: Job };
+  | { type: 'job'; id: number; data: number; block: Block; job: Job }
+  | { type: 'run'; id: number; data: number; block: Block };
 
 export interface Progress {
   type: 'progress';
@@ -123,7 +140,12 @@ export interface Progress {
   random?: RandomEntriesResult;
 }
 
-export type FromWorker = { type: 'ready' } | Progress | { type: 'done'; id: number; result: Results[Kind] } | { type: 'error'; id: number; message: string };
+export type FromWorker =
+  | { type: 'ready' }
+  | Progress
+  | { type: 'done'; id: number; result: Results[Kind] }
+  | { type: 'ran'; id: number; result: Ran }
+  | { type: 'error'; id: number; message: string };
 
 /** At most one progress message this often, so a fast job does not flood the main thread. */
 const PROGRESS_MS = 50;
@@ -133,17 +155,28 @@ const BENCHES = 4;
 /** A worker stops by being ended, so its jobs never need to let anything in. */
 const free = () => Promise.resolve();
 
+const failure = (id: number, e: unknown): FromWorker => ({ type: 'error', id, message: e instanceof Error ? e.message : String(e) });
+
 /**
  * Handles the messages a worker receives. Prices arrive once per block (`data`) and stay until dropped; each job
  * names the prices it reads. Every job runs to the end in one go: the main thread stops one by ending the worker.
- * Progress goes out at most once every `every` milliseconds.
+ * Progress goes out at most once every `every` milliseconds. A single run (`run`) is not kept: its result is sent and
+ * forgotten, so a slider's many values do not pile up here.
  */
 export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: ToWorker) => Promise<void> {
   const sets = new Map<number, { data: Map<string, Bars>; benches: Map<string, Bench> }>();
   return async (m) => {
     if (m.type === 'data') sets.set(m.id, { data: m.data, benches: new Map() });
     else if (m.type === 'drop') sets.delete(m.id);
-    else {
+    else if (m.type === 'run') {
+      let reply: FromWorker;
+      try {
+        reply = { type: 'ran', id: m.id, result: runBlock(m.block, sets.get(m.data)!.data) };
+      } catch (e) {
+        reply = failure(m.id, e);
+      }
+      post(reply);
+    } else {
       const set = sets.get(m.data)!;
       const key = JSON.stringify(m.block);
       let bench = set.benches.get(key);
@@ -167,7 +200,7 @@ export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: T
       try {
         post({ type: 'done', id: m.id, result: await runJob(m.job, bench, { onProgress, pause: free }) });
       } catch (e) {
-        post({ type: 'error', id: m.id, message: e instanceof Error ? e.message : String(e) });
+        post(failure(m.id, e));
       }
     }
   };
