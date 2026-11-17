@@ -1,0 +1,74 @@
+/* The Parameters bar: a slider for each parameter, and what to do when the result on screen differs from the block. */
+
+.bt-params {
+  container-type: inline-size;
+  margin-top: 10px;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+.bt-params-title {
+  font-weight: var(--font-semibold);
+  margin-bottom: 2px;
+}
+
+.bt-param {
+  display: grid;
+  grid-template-columns: minmax(4.5em, max-content) minmax(0, 1fr) 4.5em;
+  align-items: center;
+  gap: 0 12px;
+  padding: 3px 0;
+}
+.bt-param-name {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+.bt-param-slider {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+.bt-param-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-param-diff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-param-diff-buttons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bt-param-problem {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--bt-critical);
+  background: var(--background-secondary);
+}
+
+/* A narrow card: each parameter is its name and value over a full-width slider. */
+@container (max-width: 440px) {
+  .bt-param {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    padding: 5px 0;
+  }
+  .bt-param-value {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .bt-param-slider {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
