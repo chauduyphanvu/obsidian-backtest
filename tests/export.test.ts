@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { runBacktest, type Backtest, type Segment, type Stats, type TradeStats } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { AssetState, Trade } from '../src/engine.ts';
-import { equityCsv, resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
+import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
 import { bars, DAY, T0 } from './helpers.ts';
 
 const utc = (y: number, m: number, d: number, hh = 0, mm = 0) => Date.UTC(y, m - 1, d, hh, mm);
@@ -115,16 +115,41 @@ test('result properties: keys, rounding and the held tickers', () => {
   assert.equal(resultProperties(result({ states: [state('SPY', false), state('TLT', false)] }), NOW).bt_position, 'cash');
 });
 
-test('result properties: a name prefixes every key only when the note holds several strategies', () => {
+test('result properties: an id goes between bt_ and the rest of every key', () => {
   const bt = result();
   const plain = Object.keys(resultProperties(bt, NOW));
-  assert.deepEqual(Object.keys(resultProperties(bt, NOW, { name: 'Trend following', multiple: false })), plain);
-  assert.deepEqual(Object.keys(resultProperties(bt, NOW, { name: null, multiple: true })), plain);
-  const keys = Object.keys(resultProperties(bt, NOW, { name: 'Trend following', multiple: true }));
+  assert.deepEqual(Object.keys(resultProperties(bt, NOW, '')), plain);
+  const keys = Object.keys(resultProperties(bt, NOW, 'trend_following'));
   assert.deepEqual(keys, plain.map((k) => `bt_trend_following_${k.slice(3)}`));
   assert.equal(keys[0], 'bt_trend_following_return_per_year');
-  assert.equal(resultProperties(bt, NOW, { name: 'Trend / momentum (v2)!', multiple: true }).bt_trend_momentum_v2_sharpe, 0.88);
-  assert.ok('bt_日本株_sharpe' in resultProperties(bt, NOW, { name: '日本株', multiple: true }));
+  assert.equal(resultProperties(bt, NOW, '2').bt_2_sharpe, 0.88);
+});
+
+test('property ids: a note with one strategy keeps plain keys, named or not', () => {
+  assert.deepEqual(propertyIds([]), []);
+  assert.deepEqual(propertyIds(['Trend following']), ['']);
+  assert.deepEqual(propertyIds([null]), ['']);
+});
+
+test('property ids: with several strategies a name gives its slug and an unnamed one its position', () => {
+  assert.deepEqual(propertyIds(['Trend following', null, 'Trend / momentum (v2)!', '日本株']), ['trend_following', '2', 'trend_momentum_v2', '日本株']);
+});
+
+test('property ids: two unnamed strategies, or equal slugs, never share a key', () => {
+  assert.deepEqual(propertyIds([null, null]), ['1', '2']);
+  // "Trend A" and "Trend-A" both read as trend_a: the second falls back to its position.
+  assert.deepEqual(propertyIds(['Trend A', 'Trend-A', 'trend a']), ['trend_a', '2', '3']);
+  // A name with no letters or digits has no slug.
+  assert.deepEqual(propertyIds(['📈', '---']), ['1', '2']);
+});
+
+test('property ids: a position never takes a key that a name already uses', () => {
+  assert.deepEqual(propertyIds(['2', null, null]), ['2', '2_2', '3']);
+  // "x" with "benchmark_return_per_year" and "x_benchmark" with "return_per_year" make the same key.
+  const ids = propertyIds(['x', 'x benchmark', 'x']);
+  assert.deepEqual(ids, ['x', '2', '3']);
+  const keys = ids.flatMap((id) => Object.keys(resultProperties(result(), NOW, id)));
+  assert.equal(new Set(keys).size, keys.length);
 });
 
 test('result properties: a figure that cannot be worked out is left empty', () => {
@@ -236,4 +261,67 @@ test('snapshot: only the latest 30 trades, a fence that outgrows backticks in th
   const piped = snapshotMarkdown({ name: 'p', source: 'x', backtest: result({ trades: [trade({ asset: 'A|B' })] }), now: NOW });
   assert.ok(piped.includes('| A\\|B |'));
   assert.ok(snapshotMarkdown({ name: 'p', source: 'x', backtest: result({ trades: [] }), now: NOW }).includes('## Latest trades\n\nNo trades.\n'));
+});
+
+// --- What to write to a note's front matter ------------------------------------------------------------------------
+
+const figures = (id: string, o: Record<string, string | number> = {}): Record<string, string | number> => ({ ...resultProperties(result(), NOW, id), ...o });
+
+test('a note with no properties yet gets every figure', () => {
+  const produced = figures('');
+  assert.deepEqual(planProperties(undefined, produced, true), { set: produced, remove: [] });
+  assert.deepEqual(planProperties({ title: 'x' }, produced, true), { set: produced, remove: [] });
+});
+
+test('figures that did not change give nothing to write, and the last-run date stays as it was', () => {
+  const produced = figures('');
+  const before = { ...produced, bt_last_run: '2026-11-10', title: 'x' };
+  assert.deepEqual(planProperties(before, produced, true), { set: {}, remove: [] });
+  assert.deepEqual(planProperties(before, produced, false), { set: {}, remove: [] });
+});
+
+test('when a figure changes, it is written together with the last-run date', () => {
+  const produced = figures('', { bt_sharpe: 1.1 });
+  const before = { ...figures(''), bt_last_run: '2026-11-10' };
+  assert.deepEqual(planProperties(before, produced, true), { set: { bt_sharpe: 1.1, bt_last_run: '2026-11-17' }, remove: [] });
+});
+
+test('a missing last-run date is written even when nothing else changed', () => {
+  const produced = figures('');
+  const { bt_last_run: _, ...before } = produced;
+  assert.deepEqual(planProperties(before, produced, true), { set: { bt_last_run: '2026-11-17' }, remove: [] });
+});
+
+test('with several strategies each has its own last-run key, and all follow a change in any', () => {
+  const produced = { ...figures('trend'), ...figures('2', { bt_2_sharpe: 9 }) };
+  const before = { ...figures('trend'), ...figures('2'), bt_trend_last_run: '2026-11-10', bt_2_last_run: '2026-11-10' };
+  assert.deepEqual(planProperties(before, produced, true), { set: { bt_2_sharpe: 9, bt_trend_last_run: '2026-11-17', bt_2_last_run: '2026-11-17' }, remove: [] });
+});
+
+test('when every strategy ran, bt_ keys that none produces any more are removed, and other properties stay', () => {
+  const produced = figures('');
+  const old = figures('trend_following');
+  const before = { ...produced, ...old, bt_last_run: '2026-11-10', status: 'draft', btx: 1, 'Bt_other': 2 };
+  const plan = planProperties(before, produced, true);
+  assert.deepEqual(plan.remove.sort(), Object.keys(old).sort());
+  // Removing something counts as a change, so the date moves.
+  assert.deepEqual(plan.set, { bt_last_run: '2026-11-17' });
+});
+
+test('when a strategy did not run, old keys are left alone', () => {
+  const produced = figures('trend');
+  const before = { ...figures('momentum'), ...produced };
+  assert.deepEqual(planProperties(before, produced, false), { set: {}, remove: [] });
+});
+
+test('a note that produced nothing is left alone', () => {
+  assert.deepEqual(planProperties({ ...figures('') }, {}, true), { set: {}, remove: [] });
+});
+
+test('going from several strategies to one removes the keys of the others', () => {
+  const before = { ...figures('trend'), ...figures('2') };
+  const produced = figures('');
+  const plan = planProperties(before, produced, true);
+  assert.equal(plan.remove.length, Object.keys(before).length);
+  assert.deepEqual(Object.keys(plan.set).sort(), Object.keys(produced).sort());
 });

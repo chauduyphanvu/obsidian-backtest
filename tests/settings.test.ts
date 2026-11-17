@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
-import { CACHE_HOURS_MAX, CACHE_HOURS_MIN, DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, validateSetting } from '../src/settings-core.ts';
+import { DEFAULT_MODEL, draftStrategy } from '../src/llm.ts';
+import { CACHE_HOURS_MAX, CACHE_HOURS_MIN, DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, providerText, validateSetting } from '../src/settings-core.ts';
 
 test('the defaults are the documented ones', () => {
   assert.deepEqual(DEFAULT_SETTINGS, {
@@ -161,4 +162,40 @@ test('the parser uses what the settings imply', () => {
   // Whatever was saved, the defaults never make a strategy fail to read.
   const messy = defaultsFrom(normalizeSettings({ costs: 'x', slippage: 'y', cashRate: 'z z', capital: -1, dataSource: 'q' }));
   assert.deepEqual(parseSpec('universe: SPY\nbuy when close > sma(20)', { defaults: messy }).errors, []);
+});
+
+test('provider text: Anthropic may leave the address and model empty, and needs a key', () => {
+  const t = providerText('anthropic');
+  assert.match(t.address.desc, /^Leave empty/);
+  assert.match(t.model.desc, /^Leave empty to use claude-opus-5-5\./);
+  assert.equal(t.address.placeholder, 'https://api.anthropic.com');
+  assert.equal(t.model.placeholder, DEFAULT_MODEL.anthropic);
+  assert.match(t.key, /^Required\./);
+});
+
+test('provider text: an OpenAI-compatible server needs an address and a model, and may go without a key', () => {
+  const t = providerText('openai');
+  assert.match(t.address.desc, /^Required\./);
+  assert.match(t.model.desc, /^Required\./);
+  assert.doesNotMatch(t.address.desc + t.model.desc, /Leave empty/);
+  assert.equal(t.address.placeholder, 'http://localhost:8000/v1');
+  assert.match(t.key, /Leave it empty for a server that needs no key/);
+});
+
+test('provider text agrees with the request code about what may be left empty', async () => {
+  let posted = 0;
+  const post = async () => {
+    posted++;
+    return { status: 200, text: JSON.stringify({ choices: [{ message: { content: '```strategy\nuniverse: SPY\nbuy when true\n```' } }], content: [{ type: 'text', text: '```strategy\nuniverse: SPY\nbuy when true\n```' }] }) };
+  };
+  const open = { provider: 'openai' as const, baseUrl: 'http://localhost:8000/v1', model: 'm', apiKey: '' };
+  // What the text calls required is refused when empty; a key the text lets go empty is accepted.
+  await assert.rejects(draftStrategy('x', { ...open, baseUrl: '' }, post), /address/);
+  await assert.rejects(draftStrategy('x', { ...open, model: '' }, post), /model name/);
+  assert.equal(posted, 0);
+  await draftStrategy('x', open, post);
+  // What the text lets go empty is accepted for Anthropic.
+  await draftStrategy('x', { provider: 'anthropic', baseUrl: '', model: '', apiKey: 'sk-test' }, post);
+  await assert.rejects(draftStrategy('x', { provider: 'anthropic', baseUrl: '', model: '', apiKey: '' }, post), /API key/);
+  assert.equal(posted, 2);
 });

@@ -1,4 +1,4 @@
-import { DAY, isoDate, money, price, signedPct } from './dom.ts';
+import { DAY, isoDate, money, price, signedPct, stamp } from './dom.ts';
 import type { RunOutput } from './runner.ts';
 
 export interface OrderRow {
@@ -30,17 +30,40 @@ export interface StrategyStatus {
   strategy: string;
   /** Time of the last bar the decision is based on. */
   asOf: number;
+  /** The strategy's bar size, such as "1d" or "5m". */
+  interval: string;
   orders: OrderRow[];
   /** Positions kept: held and not being sold. */
   holdings: HoldingRow[];
   equity: number;
   warnings: string[];
   error: string | null;
-  /** asOf is more than `staleDays` calendar days before now: prices are probably out of date. */
+  /** Prices are probably out of date: more than `staleDays` calendar days old for daily bars, more than 3 bars old for shorter ones. */
   stale: boolean;
 }
 
 const STALE_DAYS = 4;
+const STALE_BARS = 3;
+const STEP_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w: 7 * DAY };
+
+/** The length of a bar such as "5m" or "1d"; a day for anything unrecognised. */
+function barMs(interval: string): number {
+  const m = interval.match(/^(\d+)([mhdw])$/);
+  return m ? Number(m[1]) * STEP_MS[m[2]] : DAY;
+}
+
+const isIntraday = (interval: string) => barMs(interval) < DAY;
+
+/** A time of one of the strategy's bars: the date, with the time of day in UTC (as everywhere in the plugin) for intraday bars. */
+export function barTime(s: Pick<StrategyStatus, 'interval'>, t: number): string {
+  return isIntraday(s.interval) ? `${stamp(t, true)} UTC` : isoDate(t);
+}
+
+/** Which bar a decision rests on, such as "close of 2026-11-13". */
+export function barLabel(s: Pick<StrategyStatus, 'asOf' | 'interval'>): string {
+  if (isIntraday(s.interval)) return `${s.interval} bar starting ${barTime(s, s.asOf)}`;
+  return s.interval.endsWith('w') ? `weekly bar starting ${barTime(s, s.asOf)}` : `close of ${barTime(s, s.asOf)}`;
+}
 
 const compare = (a: string, b: string) => a.localeCompare(b, 'en');
 const rank = (o: OrderRow) => (o.action === 'sell' ? 0 : 1);
@@ -58,6 +81,7 @@ function localDate(t: number): string {
 
 export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS): StrategyStatus {
   const { run } = out.backtest;
+  const { interval } = out.spec;
   const asOf = run.t[run.t.length - 1];
   const equity = run.equity[run.equity.length - 1];
   const orders: OrderRow[] = [];
@@ -77,17 +101,18 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
     note,
     strategy,
     asOf,
+    interval,
     orders,
     holdings,
     equity,
     warnings: out.warnings,
     error: null,
-    stale: localDay(now) - Math.floor(asOf / DAY) > staleDays,
+    stale: isIntraday(interval) ? now - asOf > STALE_BARS * barMs(interval) : localDay(now) - Math.floor(asOf / DAY) > staleDays,
   };
 }
 
 export function failedStatus(note: string, strategy: string, message: string): StrategyStatus {
-  return { note, strategy, asOf: 0, orders: [], holdings: [], equity: 0, warnings: [], error: message, stale: false };
+  return { note, strategy, asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: message, stale: false };
 }
 
 /** Strategies with orders first, those with a sell ahead of buy-only ones; then the rest. Each group by note, then name. */
@@ -110,10 +135,28 @@ export function todoRows(list: StrategyStatus[]): TodoRow[] {
     .sort((a, b) => rank(a.order) - rank(b.order) || compare(a.status.note, b.status.note) || compare(a.status.strategy, b.status.strategy) || compare(a.order.ticker, b.order.ticker));
 }
 
-/** The date of the latest prices behind any strategy that ran; null when none did. */
-export function latestAsOf(list: StrategyStatus[]): number | null {
-  const times = list.filter((s) => s.error === null).map((s) => s.asOf);
-  return times.length ? Math.max(...times) : null;
+export interface Basis {
+  /** Which bar the orders are based on, such as "Based on the close of 2026-11-13". */
+  text: string;
+  /** Said when the strategies' last bars differ: that `text` is the oldest. */
+  note: string | null;
+}
+
+/**
+ * The bar the list as a whole rests on. When the strategies with orders end on different bars, the oldest is named,
+ * because that is the one to doubt; with no orders anywhere, the oldest of the strategies that ran. Null when none ran.
+ */
+export function basisOf(list: StrategyStatus[]): Basis | null {
+  const ran = list.filter((s) => s.error === null);
+  const withOrders = ran.filter((s) => s.orders.length > 0);
+  const pool = withOrders.length > 0 ? withOrders : ran;
+  if (pool.length === 0) return null;
+  const oldest = pool.reduce((a, s) => (s.asOf < a.asOf ? s : a));
+  const differ = pool.some((s) => s.asOf !== oldest.asOf);
+  return {
+    text: `Based on the ${barLabel(oldest)}`,
+    note: differ ? (withOrders.length > 0 ? 'This is the oldest among the orders. Each order shows its own.' : 'This is the oldest among the strategies checked.') : null,
+  };
 }
 
 /** A share of a strategy's money as a percentage, such as "20%" or "33.3%". */
@@ -131,7 +174,7 @@ export function orderSize(o: OrderRow): string {
 export function problemsOf(s: StrategyStatus): string[] {
   const out: string[] = [];
   if (s.error !== null) out.push(`Couldn't run. ${s.error}`);
-  if (s.stale) out.push(`Prices end on ${isoDate(s.asOf)}, so this may be out of date.`);
+  if (s.stale) out.push(`Prices end ${isIntraday(s.interval) ? 'at' : 'on'} ${barTime(s, s.asOf)}, so this may be out of date.`);
   out.push(...s.warnings);
   return out;
 }
@@ -145,23 +188,57 @@ function link(s: StrategyStatus, inTable: boolean): string {
   return `[[${target}${inTable ? '\\|' : '|'}${name}]]`;
 }
 
+/** The first line of the generated note: how the plugin knows, before it rewrites the note, that it made it. */
+export const ORDERS_MARKER = 'backtest_orders';
+
+const FRONT_MATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+const MARKER_LINE = new RegExp(`^${ORDERS_MARKER}:[ \\t]*true[ \\t]*$`);
+
+/** What saving today's orders does to the configured note, given its current text (null when it does not exist). */
+export function ordersSavePlan(existing: string | null): 'create' | 'replace' | 'refuse' {
+  if (existing === null) return 'create';
+  const front = existing.match(FRONT_MATTER);
+  const ours = front !== null && front[1].split(/\r?\n/).some((line) => MARKER_LINE.test(line));
+  return ours ? 'replace' : 'refuse';
+}
+
+export const notOurNoteMessage = (path: string): string => `${path} already exists and was not made by Backtest Blocks. Choose another note in settings.`;
+
+/** What saving did: wrote the note, left an existing note of the reader's alone, or had no note to write. */
+export type SaveOutcome = { kind: 'saved' | 'refused'; path: string } | { kind: 'none' };
+
+/** Runs `fn` over the items, at most `limit` at a time; results come back in the order of the items. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 /** A note body for today's orders; the date is the reader's today. */
 export function ordersMarkdown(list: StrategyStatus[], now: number): string {
-  const lines = [`# Today's orders, ${localDate(now)}`, ''];
+  const lines = ['---', `${ORDERS_MARKER}: true`, '---', '', `# Today's orders, ${localDate(now)}`, ''];
   if (list.length === 0) return [...lines, 'No strategy blocks found.', ''].join('\n');
 
   const sorted = sortStatuses(list);
-  const through = latestAsOf(sorted);
-  if (through !== null) lines.push(`Based on prices through ${isoDate(through)}. From backtests of your rules on the latest prices. Nothing here places an order.`, '');
+  const basis = basisOf(sorted);
+  if (basis !== null) lines.push(`${basis.text}. ${basis.note ? `${basis.note} ` : ''}From backtests of your rules on the latest prices. Nothing here places an order.`, '');
 
   lines.push('## To do at the next open', '');
   const todo = todoRows(sorted);
   if (todo.length === 0) {
     lines.push('No strategy has an order for the next open.', '');
   } else {
-    lines.push('| Strategy | Action | Ticker | Size | Last close |', '| --- | --- | --- | --- | ---: |');
+    lines.push('| Strategy | Action | Ticker | Size | Last close | Based on |', '| --- | --- | --- | --- | ---: | --- |');
     for (const { status, order } of todo) {
-      lines.push(`| ${link(status, true)} | ${order.action === 'buy' ? 'Buy' : 'Sell'} | ${order.ticker} | ${orderSize(order)} | ${price(order.lastClose)} |`);
+      const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
+      lines.push(`| ${link(status, true)} | ${order.action === 'buy' ? 'Buy' : 'Sell'} | ${order.ticker} | ${orderSize(order)} | ${price(order.lastClose)} | ${basisCell} |`);
     }
     lines.push('');
   }

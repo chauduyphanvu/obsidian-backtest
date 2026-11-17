@@ -5,6 +5,7 @@ import { runBacktest } from '../src/backtest.ts';
 import { parseCompare } from '../src/compare.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, parseSpec } from '../src/dsl.ts';
 import { resultProperties } from '../src/export.ts';
+import { notOurNoteMessage, ORDERS_MARKER } from '../src/orders.ts';
 import { bars } from './helpers.ts';
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -74,6 +75,21 @@ test('the README names every property a result writes', () => {
   const keys = Object.keys(resultProperties(runBacktest(spec, data), Date.UTC(2026, 0, 1)));
   assert.ok(keys.length > 0);
   assert.deepEqual(keys.filter((k) => !readme.includes(`\`${k}\``)), []);
+});
+
+test('the README says what the orders note carries, what refuses a save, and who owns the bt_ properties', () => {
+  assert.ok(readme.includes(`\`${ORDERS_MARKER}: true\``));
+  assert.ok(readme.includes(notOurNoteMessage('<path>')));
+  assert.match(readme, /The plugin owns every property that starts with `bt_`/);
+});
+
+test('the README lists the source files by name', () => {
+  const layout = readme.slice(readme.indexOf('Layout of `src/`'));
+  for (const file of ['sweep.ts', 'luck.ts', 'rng.ts', 'render-sweep.ts', 'render-luck.ts', 'render-compare.ts']) assert.ok(layout.includes(`\`${file}\``), file);
+});
+
+test('the README holds no path from anyone\'s own machine', () => {
+  assert.doesNotMatch(readme, /\/Users\/|\/home\/[a-z]|[A-Z]:\\Users/);
 });
 
 test('the README has no images and no promises of later features', () => {

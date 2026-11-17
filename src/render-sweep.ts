@@ -200,7 +200,9 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
   // The two parameters with the most values make the heatmap; the one with more goes down the side,
   // where a narrow note has room for it.
   const [down, across] = params.map((_, i) => i).sort((a, b) => params[b].values.length - params[a].values.length || a - b);
-  const view: View = { metric: 'cagr', period: 'all', down, across: across ?? 0 };
+  // With a test date, the view starts on the part before it: values chosen on the whole run have seen the test period.
+  const view: View = { metric: 'cagr', period: segments ? 'before' : 'all', down, across: across ?? 0 };
+  const testDay = segments ? segments[1].label.replace(/^From /, '') : null;
 
   if (result.stopped) h(results, 'div', 'bt-warning', `Stopped after ${result.tried} of ${plural(result.total, 'variant')}: what follows covers those only.`);
   const pickers = h(results, 'div', 'bt-pickers');
@@ -213,7 +215,7 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
     for (const o of life.observers.splice(0)) o.disconnect();
     explain.textContent = `${METRICS[view.metric].label}: ${METRICS[view.metric].explain}.`;
     splitBox.replaceChildren();
-    if (segments) splitCallout(splitBox, result, view.metric, segments[1].label.replace(/^From /, ''));
+    if (segments) splitCallout(splitBox, result, view.metric, testDay!);
     content.replaceChildren();
     const bench = view.period === 'all' ? input.backtest.benchmark.stats : segments![view.period === 'before' ? 0 : 1].benchmarkStats;
     const summary = summarize(result, view.metric, { period: view.period, benchmark: bench });
@@ -224,7 +226,7 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
     reading(content, result, summary, input.backtest.benchmark.label, bench);
     if (params.length === 1) dotLine(content, life, result, summary);
     else heatmapSection(content, life, result, summary, view, draw);
-    bestValues(content, params, summary);
+    bestValues(content, params, summary, view.period, testDay);
     if (params.length >= 3) bestTable(content, result, summary);
   };
 
@@ -234,9 +236,9 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
   });
   if (segments) {
     const periods: [Period, string][] = [
-      ['all', 'Whole run'],
       ['before', segments[0].label],
       ['after', segments[1].label],
+      ['all', 'Whole run'],
     ];
     select(periodRow, 'Show', periods, view.period, (p) => {
       view.period = p;
@@ -320,14 +322,30 @@ function reading(el: HTMLElement, result: SweepResult, sum: SweepSummary, benchL
   }
 }
 
-function bestValues(el: HTMLElement, params: SweepParam[], sum: SweepSummary): void {
+/**
+ * What the line under a sweep's reading says about its best values: which part of the run chose them, and whether to try them.
+ * `testDay` is the day `test from` sets, or null when the block has none. Values chosen on any view that includes the test
+ * period are not offered, because their later result would not be a fair test.
+ */
+export function bestWords(period: Period, testDay: string | null): { label: string; advice: string } {
+  const tryIt = 'To try it, change those lines in the block; the note stays the record of what you chose.';
+  if (testDay === null) return { label: 'Best variant here: ', advice: tryIt };
+  if (period === 'before') return { label: `Best before ${testDay}: `, advice: tryIt };
+  return {
+    label: period === 'after' ? `Best from ${testDay} on: ` : 'Best on the whole run: ',
+    advice: 'Values picked on this view have seen the test period, so their later result is not a fair test.',
+  };
+}
+
+function bestValues(el: HTMLElement, params: SweepParam[], sum: SweepSummary, period: Period, testDay: string | null): void {
+  const words = bestWords(period, testDay);
   const row = h(el, 'div', 'bt-sweep-best');
-  h(row, 'span', undefined, 'Best variant here: ');
+  h(row, 'span', undefined, words.label);
   params.forEach((p, i) => {
-    if (i > 0) row.append(' ');
+    if (i > 0) row.append(', ');
     h(row, 'code', undefined, `${p.name} = ${paramText(p, sum.best.values[p.name])}`);
   });
-  row.append('. To try it, change those lines in the block; the note stays the record of what you chose.');
+  row.append(`. ${words.advice}`);
 }
 
 // ---------------------------------------------------------------- one parameter: dots on a line
@@ -493,6 +511,7 @@ function heatmapSection(el: HTMLElement, life: Life, result: SweepResult, sum: S
   const scroll = h(chart, 'div', 'bt-sweep-scroll');
   const tip = h(chart, 'div', 'bt-tip');
   tip.hidden = true;
+  scroll.addEventListener('scroll', () => (tip.hidden = true));
   const key = h(el, 'div', 'bt-sweep-key');
   observe(life, chart, (width) => drawHeatmap(scroll, tip, key, width, result, sum, view, fixed));
 }
@@ -588,15 +607,18 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
   outline(declared[0], declared[1], 'bt-sweep-declared-outline');
 
   const hl = s(svg, 'rect', { width: cellW - 1, height: cellH - 1, rx: 2, class: 'bt-sweep-hover', visibility: 'hidden' });
-  svg.addEventListener('pointermove', (e) => {
+  const hide = () => {
+    tip.hidden = true;
+    hl.setAttribute('visibility', 'hidden');
+  };
+  const show = (e: Event) => {
     const box = svg.getBoundingClientRect();
     const px = (e as PointerEvent).clientX - box.left;
     const py = (e as PointerEvent).clientY - box.top;
     const c = Math.floor((px - labelW) / cellW);
     const r = Math.floor((py - top) / cellH);
     if (c < 0 || c >= cols || r < 0 || r >= rowP.values.length) {
-      tip.hidden = true;
-      hl.setAttribute('visibility', 'hidden');
+      hide();
       return;
     }
     hl.setAttribute('x', String(labelW + c * cellW + 0.5));
@@ -609,10 +631,12 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
     if (q) tipRows(tip, q, m);
     else h(tip, 'div', 'bt-tip-foot', 'Not run');
     placeTip(tip, labelW + (c + 1) * cellW - scroll.scrollLeft, top + (r + 1) * cellH, scroll.clientWidth);
-  });
-  svg.addEventListener('pointerleave', () => {
-    tip.hidden = true;
-    hl.setAttribute('visibility', 'hidden');
+  };
+  svg.addEventListener('pointermove', show);
+  svg.addEventListener('pointerdown', show);
+  // A finger that has lifted has left too, so a touch does not close the tooltip; tapping elsewhere does, and so does scrolling.
+  svg.addEventListener('pointerleave', (e) => {
+    if ((e as PointerEvent).pointerType !== 'touch') hide();
   });
 
   key.replaceChildren();

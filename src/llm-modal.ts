@@ -1,7 +1,7 @@
 import { Modal, type App } from 'obsidian';
 import { h } from './dom.ts';
 import { tokenizeBlock } from './highlight.ts';
-import type { Draft } from './llm.ts';
+import { DRAFT_PRIVACY, type Draft } from './llm.ts';
 
 export interface DraftHost {
   /** False when no provider is usable yet (no key or address). */
@@ -46,7 +46,7 @@ export class DraftModal extends Modal {
     this.titleEl.textContent = 'Draft a strategy from a description';
     const root = h(this.contentEl, 'div', 'bt-llm-root');
     if (!this.host.configured()) {
-      h(root, 'p', 'bt-llm-hint', 'Choose a model in the plugin settings first, by adding an API key or the address of a model server.');
+      h(root, 'p', 'bt-llm-hint', 'Set up a model in the plugin settings first: an API key for Anthropic, or the address and model name of an OpenAI-compatible server.');
       h(h(root, 'div', 'bt-llm-actions'), 'button', 'mod-cta', 'Open settings').addEventListener('click', () => {
         this.close();
         this.host.openSettings();
@@ -63,7 +63,7 @@ export class DraftModal extends Modal {
         this.submit();
       }
     });
-    h(root, 'p', 'bt-llm-privacy', 'Only this description is sent to the model you chose in settings.');
+    h(root, 'p', 'bt-llm-privacy', DRAFT_PRIVACY);
     this.input = input;
     this.panel = h(root, 'div', 'bt-llm-panel');
     this.idle();

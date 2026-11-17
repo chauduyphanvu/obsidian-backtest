@@ -29,6 +29,10 @@ export interface Draft {
   attempts: number;
 }
 
+/** What the reader is told about what leaves the vault when a strategy is drafted. */
+export const DRAFT_PRIVACY =
+  'Nothing from your notes or vault is sent. What is sent to the service you chose is your description, the plugin’s built-in guide to the language and, when a draft has problems, that draft and the problems found.';
+
 const FENCE = '```';
 
 interface Example {
@@ -50,15 +54,16 @@ sell when close < sma(200)`,
   },
   {
     description:
-      'Hold 60% SPY and 40% TLT from 2010, rebalanced every quarter. Keep SPY always, with a 15% stop loss. Hold the bonds only while TLT is above its 100-day average, with an 8% stop. Cash earns 4%.',
-    source: `name: 60/40 with a bond trend filter
+      'Hold 60% SPY and 40% TLT from 2010, rebalanced every quarter. Hold SPY only while it is above its 200-day average, with a 15% stop loss. Hold the bonds only while TLT is above its 100-day average, with an 8% stop. Cash earns 4%.',
+    source: `name: 60/40 with trend filters
 universe: SPY 60%, TLT 40%
 from: 2010-01-01
 rebalance: quarterly
 cash rate: 4%
 stop loss: 15%
 
-buy when true
+buy when close > sma(200)
+sell when close < sma(200)
 
 for TLT:
   buy when close > sma(100)
@@ -227,6 +232,7 @@ A parameter is a named number on its own line: fast = 50. Use its name wherever 
 - Do not leave a blank line inside a rule, or put prose in the fence. A # comment line is fine.
 - Do not give universe weights when you use hold, and do not use weights together with size.
 - Do not combine risk per trade with weighting, or with a rebalance other than never.
+- Do not use "buy when true" (or "buy when always") together with stop loss, trailing stop or take profit. After a stop or target closes a position, the buy rule must be false at one close before the ticker can be bought again, and "buy when true" never is, so the ticker would never be held again. Use a condition that can turn false, such as a trend filter: buy when close > sma(200).
 - Do not add settings the description did not ask for, other than name. Do not invent dates, costs or capital: leave them out unless the description gives them or the strategy needs one, and then say so in a NOTE.
 - Do not leave out universe, or the buy rule (except with hold).
 
@@ -258,12 +264,20 @@ export function repairMessage(draft: string, errors: Diagnostic[]): string {
   ].join('\n');
 }
 
-const NOTE_LINE = /^\s*(?:[-*•]\s+)?(?:\*\*)?NOTE(?::\*\*|\*\*:|:)\s*(.*\S)\s*$/i;
+// Only the start of a line is matched; the rest is trimmed, so a long run of spaces costs nothing extra.
+const NOTE_HEAD = /^\s*(?:[-*•]\s+)?(?:\*\*)?NOTE(?::\*\*|\*\*:|:)/i;
+/** A model reply is a few hundred characters; this keeps a runaway one from taking long to read. */
+const MAX_REPLY_CHARS = 20_000;
+
+function noteIn(line: string): string | null {
+  const head = line.match(NOTE_HEAD);
+  return head ? line.slice(head[0].length).trim() || null : null;
+}
 
 /** Pulls the strategy text and the notes out of a model reply; tolerant of code fences and stray prose. Null when there is no strategy. */
 export function parseReply(reply: string): { source: string; notes: string[] } | null {
   // Local reasoning models can print their thinking in the reply, and it may hold a draft of its own.
-  const lines = reply.replace(/<think>[\s\S]*?<\/think>/gi, '').split(/\r?\n/);
+  const lines = reply.slice(0, MAX_REPLY_CHARS).replace(/<think>[\s\S]*?<\/think>/gi, '').split(/\r?\n/);
 
   const blocks: { lang: string; from: number; to: number }[] = [];
   let lang: string | null = null;
@@ -304,8 +318,8 @@ export function parseReply(reply: string): { source: string; notes: string[] } |
   const notes: string[] = [];
   const kept: string[] = [];
   lines.forEach((line, i) => {
-    const note = line.match(NOTE_LINE);
-    if (note) notes.push(note[1]);
+    const note = noteIn(line);
+    if (note !== null) notes.push(note);
     else if (i >= from && i < to) kept.push(line);
   });
   const source = kept.join('\n').trim();

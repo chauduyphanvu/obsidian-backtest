@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, parseSpec } from '../src/dsl.ts';
 import {
   DEFAULT_MODEL,
+  DRAFT_PRIVACY,
   PROMPT_EXAMPLES,
   SYSTEM_PROMPT,
   draftStrategy,
@@ -294,4 +295,51 @@ test('the requests hold only the prompt, the description, the model\'s own draft
     }
     assert.ok(!Object.values(calls[0].headers).join(' ').includes('http'));
   }
+});
+
+test('no example buys when true while it has a stop or a target, because such a ticker could never be bought again', () => {
+  for (const source of PROMPT_EXAMPLES) {
+    if (/^\s*(stop loss|trailing stop|take profit):/m.test(source)) assert.doesNotMatch(source, /buy when (true|always)\b/, source);
+  }
+  const mix = PROMPT_EXAMPLES.find((e) => e.startsWith('name: 60/40'))!;
+  assert.match(mix, /^buy when close > sma\(200\)$/m);
+  assert.match(mix, /^stop loss: 15%$/m);
+});
+
+test('the prompt tells the model not to combine buy when true with a stop or target, and why', () => {
+  assert.match(SYSTEM_PROMPT, /Do not use "buy when true" \(or "buy when always"\) together with stop loss, trailing stop or take profit/);
+  assert.match(SYSTEM_PROMPT, /never is, so the ticker would never be held again/);
+});
+
+test('what the dialog and settings say is sent matches what is sent', () => {
+  assert.equal(
+    DRAFT_PRIVACY,
+    'Nothing from your notes or vault is sent. What is sent to the service you chose is your description, the plugin’s built-in guide to the language and, when a draft has problems, that draft and the problems found.',
+  );
+  assert.doesNotMatch(DRAFT_PRIVACY, /only/i);
+});
+
+test('a note line is found whatever its markup, with the text trimmed', () => {
+  const text = `${FENCE}strategy\n${GOOD}\n${FENCE}\n  NOTE:   spaced out   \n* **NOTE:** starred\nNOTE:\n   `;
+  assert.deepEqual(parseReply(text), { source: GOOD, notes: ['spaced out', 'starred'] });
+});
+
+test('reading a reply takes linear time: 200k characters in well under 200 ms', () => {
+  const big = 200_000;
+  const t0 = performance.now();
+  parseReply(`${FENCE}strategy\nuniverse: SPY\n${FENCE}\nNOTE:${' '.repeat(big)}`);
+  parseReply('NOTE:'.concat(' '.repeat(big), 'x'));
+  parseReply('<think>'.repeat(big / 7));
+  parseReply('**NOTE'.repeat(big / 6));
+  parseReply('- '.repeat(big / 2) + 'NOTE:');
+  parseReply(`${FENCE}${' '.repeat(big)}`);
+  parseReply(`${GOOD}\n`.repeat(big / 80));
+  assert.ok(performance.now() - t0 < 200, `${performance.now() - t0} ms`);
+});
+
+test('only the first 20,000 characters of a reply are read', () => {
+  const long = `${FENCE}strategy\n${GOOD}\n${FENCE}\n${'x'.repeat(20_000)}\nNOTE: too late`;
+  assert.deepEqual(parseReply(long), { source: GOOD, notes: [] });
+  const early = `${FENCE}strategy\n${GOOD}\n${FENCE}\nNOTE: early\n${'x'.repeat(30_000)}`;
+  assert.deepEqual(parseReply(early)?.notes, ['early']);
 });

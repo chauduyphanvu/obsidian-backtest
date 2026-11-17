@@ -1,4 +1,5 @@
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
+import { DEFAULT_MODEL } from './llm.ts';
 
 export interface Settings {
   /** Starting money for a run that does not set `capital`. */
@@ -44,6 +45,23 @@ export const DEFAULT_SETTINGS: Settings = {
   llmModel: '',
   llmSecret: '',
 };
+
+/** What each provider's three connection fields say, matching what the request code requires of them. */
+export function providerText(provider: Settings['llmProvider']): { address: { desc: string; placeholder: string }; model: { desc: string; placeholder: string }; key: string } {
+  const stored = 'Choose or add a secret in Obsidian’s keychain. Only the secret’s name is saved here.';
+  if (provider === 'anthropic') {
+    return {
+      address: { desc: 'Leave empty to use Anthropic’s own address. Enter another only to go through a proxy.', placeholder: 'https://api.anthropic.com' },
+      model: { desc: `Leave empty to use ${DEFAULT_MODEL.anthropic}.`, placeholder: DEFAULT_MODEL.anthropic },
+      key: `Required. ${stored}`,
+    };
+  }
+  return {
+    address: { desc: 'Required. The address of your server, such as http://localhost:8000/v1.', placeholder: 'http://localhost:8000/v1' },
+    model: { desc: 'Required. The name of the model on your server.', placeholder: 'Model name' },
+    key: `${stored} Leave it empty for a server that needs no key.`,
+  };
+}
 
 type TextKey = 'costs' | 'slippage' | 'cashRate';
 

@@ -156,25 +156,32 @@ function blockFor(bt: Backtest): number {
   return Math.max(1, Math.min(Math.max(month, typical), Math.floor((bt.run.t.length - 1) / 10)));
 }
 
-function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult): void {
-  const sec = check(el, 'Reshuffled history');
-  if (bt.run.trades.length === 0) {
-    h(sec, 'p', 'bt-luck-verdict', 'The strategy made no trades, so there is nothing to reshuffle.');
-    return;
-  }
-  const lost = r.lossShare === 0 ? `None of the ${plural(r.runs, 'reshuffled version')} of this run lost money.` : `${pct(r.lossShare, r.lossShare < 0.01 ? 1 : 0)} of ${plural(r.runs, 'reshuffled version')} of this run lost money.`;
+/**
+ * What the reshuffled history shows, and what it does not. Every version is built from the run's own returns, so it says
+ * how much the path and the drawdown depended on the order, not whether the return itself was luck.
+ */
+export function reshuffleVerdict(r: BootstrapResult): string {
+  const lost = r.lossShare === 0 ? '' : ` ${pct(r.lossShare, r.lossShare < 0.01 ? 1 : 0)} of the reshuffled versions ended below the starting value.`;
   const milder =
     r.actual.maxDrawdown > r.maxDrawdown.median
       ? ' This run’s worst drawdown was milder than in most of them: expect deeper falls than the backtest shows.'
       : r.actual.maxDrawdown < r.maxDrawdown.lo
         ? ' This run’s worst drawdown was deeper than in almost all of them: its losses came in a long streak that the reshuffling breaks up, so the reshuffled drawdowns understate the risk.'
         : '';
-  h(
-    sec,
-    'p',
-    'bt-luck-verdict',
-    `${lost} The middle 90% made between ${pct(r.cagr.lo)} and ${pct(r.cagr.hi)} a year (this run: ${pct(r.actual.cagr)}), with worst drawdowns between ${pct(r.maxDrawdown.lo)} and ${pct(r.maxDrawdown.hi)} (this run: ${pct(r.actual.maxDrawdown)}).${milder}`,
+  return (
+    'This shows how much the path and the drawdown depended on the order of the returns. ' +
+    `In ${plural(r.runs, 'reshuffle')} of this run’s own returns, the middle 90% made between ${pct(r.cagr.lo)} and ${pct(r.cagr.hi)} a year (this run: ${pct(r.actual.cagr)}), with worst drawdowns between ${pct(r.maxDrawdown.lo)} and ${pct(r.maxDrawdown.hi)} (this run: ${pct(r.actual.maxDrawdown)}).` +
+    `${milder}${lost} It says nothing about whether the average return will persist, because every version is made from this run’s own returns.`
   );
+}
+
+function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult): void {
+  const sec = check(el, 'Reshuffled history');
+  if (bt.run.trades.length === 0) {
+    h(sec, 'p', 'bt-luck-verdict', 'The strategy made no trades, so there is nothing to reshuffle.');
+    return;
+  }
+  h(sec, 'p', 'bt-luck-verdict', reshuffleVerdict(r));
   legend(sec, [
     ['bt-luck-swatch-sim', 'Reshuffled versions'],
     ['bt-luck-swatch-band', 'Middle 90%'],

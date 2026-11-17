@@ -1,14 +1,14 @@
 import { Modal, Notice, setIcon, type App } from 'obsidian';
-import { h, isoDate, price, signedPct } from './dom.ts';
-import { latestAsOf, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoRows, type StrategyStatus, type TodoRow } from './orders.ts';
+import { h, price, signedPct } from './dom.ts';
+import { barLabel, barTime, basisOf, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoRows, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
 
 export interface OrdersHost {
-  /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches prices. */
+  /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches every price once. */
   scan(force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]>;
   /** Opens a note. */
   openNote(path: string): void;
-  /** Writes the Markdown to the configured note; resolves with the path written, or null when no note is configured. */
-  save(markdown: string): Promise<string | null>;
+  /** Writes the Markdown to the configured note, unless that note exists and this plugin did not make it. */
+  save(markdown: string): Promise<SaveOutcome>;
   now(): number;
 }
 
@@ -78,9 +78,10 @@ export class OrdersModal extends Modal {
   }
 
   private header(root: HTMLElement, list: StrategyStatus[]): void {
-    const through = latestAsOf(list);
+    const basis = basisOf(list);
     const head = h(root, 'div', 'bt-orders-head');
-    h(head, 'div', 'bt-orders-asof', through === null ? 'No prices were loaded' : `Based on prices through ${isoDate(through)}`);
+    const asof = h(head, 'div', 'bt-orders-asof', basis === null ? 'No prices were loaded' : basis.text);
+    if (basis?.note) h(asof, 'div', 'bt-orders-muted', basis.note);
     const actions = h(head, 'div', 'bt-orders-actions');
     const button = (icon: string, label: string) => {
       const b = h(actions, 'button', 'bt-orders-button');
@@ -96,8 +97,14 @@ export class OrdersModal extends Modal {
   private async save(button: HTMLButtonElement, list: StrategyStatus[]): Promise<void> {
     button.disabled = true;
     try {
-      const path = await this.host.save(ordersMarkdown(list, this.host.now()));
-      new Notice(path === null ? "Choose a note for today's orders in the plugin's settings" : `Saved today's orders to ${path}`);
+      const outcome = await this.host.save(ordersMarkdown(list, this.host.now()));
+      new Notice(
+        outcome.kind === 'none'
+          ? "Choose a note for today's orders in the plugin's settings"
+          : outcome.kind === 'refused'
+            ? notOurNoteMessage(outcome.path)
+            : `Saved today's orders to ${outcome.path}`,
+      );
     } catch (e) {
       new Notice(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -136,7 +143,8 @@ export class OrdersModal extends Modal {
       const detail = h(row, 'div', 'bt-orders-detail');
       this.link(detail, status);
       h(detail, 'span', undefined, `Last close ${price(order.lastClose)}`);
-      if (order.since !== null) h(detail, 'span', undefined, `Held since ${isoDate(order.since)}`);
+      h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
+      if (order.since !== null) h(detail, 'span', undefined, `Held since ${barTime(status, order.since)}`);
     }
   }
 
@@ -158,7 +166,7 @@ export class OrdersModal extends Modal {
       for (const p of s.holdings) {
         const item = h(items, 'li');
         h(item, 'span', 'bt-orders-ticker', p.ticker);
-        const since = `since ${isoDate(p.since)}`;
+        const since = `since ${barTime(s, p.since)}`;
         h(item, 'span', 'bt-orders-muted', `${share(p.weight)} of the strategy, ${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`);
       }
     }
