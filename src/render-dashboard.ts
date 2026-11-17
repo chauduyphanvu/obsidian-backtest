@@ -52,7 +52,6 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
   const body = h(root, 'div', 'bt-dash-body');
   const foot = h(root, 'div', 'bt-dash-foot');
   const summary = h(foot, 'span', 'bt-dash-summary');
-  summary.setAttribute('role', 'status');
   const again = h(foot, 'button', 'bt-button', 'Run again');
   again.addEventListener('click', () => start(true));
 
@@ -64,12 +63,11 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
   let heads: { key: SortKey; th: HTMLElement }[] = [];
   let tbody: HTMLElement | null = null;
 
-  const message = (text: string, retry = false): void => {
+  const message = (text: string): void => {
     body.replaceChildren();
     heads = [];
     tbody = null;
-    const note = h(body, 'div', 'bt-note', text);
-    if (retry) h(note, 'button', 'bt-button bt-dash-retry', 'Try again').addEventListener('click', () => start(false));
+    h(body, 'div', 'bt-note', text);
   };
 
   const markSort = (): void => {
@@ -179,7 +177,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
         summary.textContent = summaryText(rows, finishedAt);
       },
       (e: unknown) => {
-        if (current() && !listed) message(`Couldn't list the strategies. ${e instanceof Error ? e.message : String(e)}`, true);
+        if (current() && !listed) message(`Couldn't list the strategies. ${e instanceof Error ? e.message : String(e)}`);
       },
     );
   };
