@@ -187,7 +187,7 @@ buy when <condition>      opens a position when the condition holds and the tick
 sell when <condition>     closes it when the condition holds
 add when <condition>      with entries: 3, adds the next entry to a position held when the condition holds, until there are 3; write it only with an entries line
 A rule that holds at a close fills at the next open, or with fill: close at that same close. At most one buy rule and one sell rule per scope. A buy rule is optional only when hold is set (then every ticker is eligible).
-Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
+Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, add when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
 
 ## Conditions and values
 

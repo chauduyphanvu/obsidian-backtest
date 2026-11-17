@@ -16,6 +16,13 @@ const CONSTANTS = ['true', 'false', 'always', 'never'];
 const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
 /** Words that read like series: calendar values and the one-word spellings of position values. */
 const VALUES: string[] = [...CALENDAR, ...Object.keys(POSITION)];
+/** The words that must follow the first word of a position value written in several words. */
+const PAIRS = new Map<string, RegExp>([
+  ['bars', /^\s+held\b/i],
+  ['entry', /^\s+price\b/i],
+  ['entries', /^\s+made\b/i],
+  ['last', /^\s+entry\s+price\b/i],
+]);
 const TICKER_SETTINGS = ['universe', 'symbol', 'benchmark', 'cash rate'];
 /** Settings whose values are numbers, percentages and atr(n), where parameters can stand in. */
 const NUMERIC_SETTINGS = ['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold'];
@@ -55,7 +62,7 @@ export function lineKind(line: string, inRule: boolean): LineKind {
   const text = code(line);
   if (!text) return 'blank';
   if (/^for\s+.+:$/i.test(text)) return 'for';
-  if (/^(buy|sell)\s+when\b/i.test(text)) return 'rule';
+  if (/^(buy|sell|add)\s+when\b/i.test(text)) return 'rule';
   if (settingKey(text)) return 'setting';
   if (paramName(text)) return 'param';
   return inRule ? 'continuation' : 'other';
@@ -70,7 +77,7 @@ function expression(line: string, from: number, to: number, params: Set<string>,
     else if (m[3]) out.push({ from: start, to: end, kind: 'operator' });
     else {
       const word = m[2].toLowerCase();
-      const pair = (word === 'bars' || word === 'entry') && line.slice(end, to).match(word === 'bars' ? /^\s+held\b/i : /^\s+price\b/i);
+      const pair = PAIRS.has(word) ? line.slice(end, to).match(PAIRS.get(word)!) : null;
       if (pair) {
         out.push({ from: start, to: end + pair[0].length, kind: 'series' });
         re.lastIndex = end + pair[0].length;
@@ -121,7 +128,10 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
     const at = m[1].length + 3 + m[3].length;
     out.push({ from: at, to: at + m[4].length, kind: m[4].toLowerCase() === 'all' ? 'keyword' : 'ticker' });
   } else if (kind === 'rule' || kind === 'continuation') {
-    expression(line, 0, end, names, out);
+    // "add" is not a reserved word, so it is coloured only as the head of a rule.
+    const head = kind === 'rule' ? line.match(/^(\s*)add\b/i) : null;
+    if (head) out.push({ from: head[1].length, to: head[0].length, kind: 'keyword' });
+    expression(line, head ? head[0].length : 0, end, names, out);
   } else if (kind === 'param') {
     const lead = line.length - line.trimStart().length;
     const name = paramName(line)!;
