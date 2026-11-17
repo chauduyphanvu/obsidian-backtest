@@ -104,6 +104,14 @@ test('take profit fills at the target; with both in one bar the stop wins', () =
   assert.equal(r.run.trades[0].reason, 'stop loss');
 });
 
+test('a bar that opens beyond the target takes the target at the open, even when it later trades through the stop', () => {
+  // Entry at 100 on day 1: stop 90, target 110. Day 2 opens at 115, then falls to 85: the open came first.
+  const A = bars([100, 100, 95, 95], { opens: [100, 100, 115, 95], highs: [100, 100, 118, 95], lows: [100, 100, 85, 95] });
+  const r = run('universe: A\ncapital: 1000\ntake profit: 10%\nstop loss: 10%\nbuy when true', { A });
+  assert.deepEqual(r.run.trades.map((t) => [t.exitT, t.exitPrice, t.reason]), [[day(2), 115, 'take profit']]);
+  assert.equal(r.run.equity[2], 1150);
+});
+
 test('assets on different calendars: the run starts when all have data, and missing days carry the last close', () => {
   // W trades every day, S skips days 2-3 (a weekend) and starts a day later.
   const W = bars([10, 10, 10, 20, 20, 20]);
