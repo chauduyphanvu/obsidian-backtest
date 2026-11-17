@@ -5,7 +5,7 @@ import { extractBlocks } from './blocks.ts';
 import { cashIndex, parseCompare, type Curve } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
-import type { DataDeps } from './data.ts';
+import { csvColumnNames, type DataDeps } from './data.ts';
 import { DAY, isoDate } from './dom.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
@@ -94,6 +94,8 @@ export default class BacktestBlocks extends Plugin {
   private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
   private ordersBadge: OrdersBadge | null = null;
   private symbolLookup: SymbolLookup | null = null;
+  /** Column names of the CSV files read so far, for completion after `column(`. */
+  private csvColumns = new Map<string, string[]>();
 
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
@@ -125,6 +127,7 @@ export default class BacktestBlocks extends Plugin {
       new StrategySuggest(this.app, {
         defaults: () => defaultsFrom(this.settings),
         lookup: () => this.lookup(),
+        csvColumns: (path) => this.csvColumns.get(normalizePath(path)),
         csvPaths: () => this.app.vault.getFiles().filter((f) => f.extension.toLowerCase() === 'csv').map((f) => f.path),
       }),
     );
@@ -242,7 +245,10 @@ export default class BacktestBlocks extends Plugin {
       },
       readVaultFile: async (path) => {
         const p = normalizePath(path);
-        return (await adapter.exists(p)) ? adapter.read(p) : null;
+        if (!(await adapter.exists(p))) return null;
+        const text = await adapter.read(p);
+        if (p.toLowerCase().endsWith('.csv')) this.csvColumns.set(p, csvColumnNames(text));
+        return text;
       },
       cacheRead: async (key) => {
         const hit = this.memory.get(key);

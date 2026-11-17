@@ -174,7 +174,7 @@ function pick(ctx: Context, word: string, candidates: readonly string[], build: 
   return fix(good[0].edit, word);
 }
 
-const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
+const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'column'];
 const NAMES = [...SERIES, ...CALENDAR, ...Object.keys(POSITION), 'true', 'false', 'always', 'never'];
 /** Words that can follow a finished value in a condition. */
 const CONNECTIVES = ['and', 'or', 'crosses', 'above', 'below', 'is'];

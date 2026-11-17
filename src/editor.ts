@@ -376,6 +376,8 @@ export interface SuggestOptions {
   lookup?: () => SymbolLookup | null;
   /** The vault's CSV file paths, from the root. */
   csvPaths?: () => string[];
+  /** The column names of a CSV file the plugin has read; undefined for one it has not. */
+  csvColumns?: (path: string) => readonly string[] | undefined;
 }
 
 /** A ticker being typed, and what the lookup is asked for it. */
@@ -406,7 +408,7 @@ export class StrategySuggest extends EditorSuggest<Completion> {
     if (!around) return null;
     const line = editor.getLine(cursor.line);
     const before = line.slice(0, cursor.ch);
-    const result = complete(around.block, around.above, before);
+    const result = complete(around.block, around.above, before, this.options.csvColumns);
     if (result) {
       this.items = result.items;
       return { start: { line: cursor.line, ch: result.from }, end: cursor, query: '' };
