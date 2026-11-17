@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 mkdirSync('dist', { recursive: true });
 await build({
@@ -11,4 +11,5 @@ await build({
   outfile: 'dist/main.js',
 });
 copyFileSync('manifest.json', 'dist/manifest.json');
-copyFileSync('styles.css', 'dist/styles.css');
+// styles/*.css are joined in name order into the one stylesheet Obsidian loads.
+writeFileSync('dist/styles.css', readdirSync('styles').filter((f) => f.endsWith('.css')).sort().map((f) => readFileSync(`styles/${f}`, 'utf8')).join('\n'));

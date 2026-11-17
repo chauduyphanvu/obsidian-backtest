@@ -1,10 +1,9 @@
 import { MarkdownRenderChild, Notice, Plugin, normalizePath, requestUrl } from 'obsidian';
-import { runBacktest } from './backtest.ts';
-import { loadBars, type DataDeps } from './data.ts';
-import { parseSpec, type Spec } from './dsl.ts';
+import type { DataDeps } from './data.ts';
+import { parseSpec } from './dsl.ts';
 import { StrategySuggest, strategyHighlighter } from './editor.ts';
 import { renderErrors, renderFailure, renderLoading, renderResult } from './render.ts';
-import type { AssetRef, Bars } from './types.ts';
+import { Runner } from './runner.ts';
 
 const TEMPLATE = `\`\`\`strategy
 name: Trend following
@@ -16,10 +15,6 @@ buy  when close > sma(200)
 sell when close < sma(200)
 \`\`\`
 `;
-
-const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 };
-/** Bars fetched before "from" so indicators are warm when the run starts. */
-const LOOKBACK_BARS = 500;
 
 export default class BacktestBlocks extends Plugin {
   private memory = new Map<string, string>();
@@ -86,21 +81,6 @@ export default class BacktestBlocks extends Plugin {
     };
   }
 
-  private async loadPrices(spec: Spec, force: boolean): Promise<{ data: Map<string, Bars>; warnings: string[] }> {
-    const refs = new Map<string, AssetRef>();
-    for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : [])]) {
-      if (!refs.has(r.name)) refs.set(r.name, r);
-    }
-    const step = Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)];
-    const since = spec.from === null ? 0 : spec.from - LOOKBACK_BARS * step;
-    const deps = this.deps();
-    const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, ...(await loadBars(r, spec.interval, since, deps, force)) })));
-    return {
-      data: new Map(loaded.map((l) => [l.name, l.bars])),
-      warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
-    };
-  }
-
   private async run(source: string, el: HTMLElement, child: MarkdownRenderChild, force: boolean): Promise<void> {
     const { spec, errors } = parseSpec(source);
     if (!spec) {
@@ -110,8 +90,8 @@ export default class BacktestBlocks extends Plugin {
     const retry = (refetch: boolean) => () => void this.run(source, el, child, refetch);
     renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
     try {
-      const { data, warnings } = await this.loadPrices(spec, force);
-      const stop = renderResult(el, spec, runBacktest(spec, data), warnings, source, retry(true));
+      const out = await new Runner(this.deps()).run(spec, force);
+      const stop = renderResult(el, spec, out.backtest, out.warnings, source, retry(true));
       child.register(stop);
     } catch (e) {
       renderFailure(el, e instanceof Error ? e.message : String(e), source, retry(false));
