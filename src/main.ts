@@ -1,12 +1,14 @@
-import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type MarkdownPostProcessorContext } from 'obsidian';
+import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { runBacktest } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
 import { cashIndex, parseCompare, type Curve } from './compare.ts';
+import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE } from './dashboard.ts';
 import type { DataDeps } from './data.ts';
 import { DAY, isoDate } from './dom.ts';
 import { StrategySuggest, strategyEditor } from './editor.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from './export.ts';
+import { GalleryModal } from './gallery-modal.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { LiveView, VIEW_TYPE_LIVE, liveEditorExtension, openLivePanel, pokeLiveViews, type LiveHost } from './live-view.ts';
@@ -26,16 +28,11 @@ import { findBlock, setParamValues, setParamValuesInNote } from './rewrite.ts';
 import { Runner, lookbackBars, type RunOutput } from './runner.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
 
-const TEMPLATE = `\`\`\`strategy
-name: Trend following
-universe: SPY
-from: 2005-01-01
-costs: 5 bps
-
-buy  when close > sma(200)
-sell when close < sma(200)
-\`\`\`
-`;
+/** Puts text at the cursor; a block starts on its own line. */
+function place(editor: Editor, text: string): void {
+  const atLineStart = editor.getCursor('from').ch === 0;
+  editor.replaceSelection(text.startsWith('```') && !atLineStart ? `\n${text}` : text);
+}
 
 const HOUR = 3_600_000;
 const KEPT_RESULTS = 40;
@@ -108,8 +105,9 @@ export default class BacktestBlocks extends Plugin {
     this.addCommand({
       id: 'insert-strategy',
       name: 'Insert strategy block',
-      editorCallback: (editor) => editor.replaceSelection(TEMPLATE),
+      editorCallback: (editor) => new GalleryModal(this.app, { insert: (block) => place(editor, block) }).open(),
     });
+    this.addCommand({ id: 'use-csv-file', name: 'Use a CSV file in a strategy', callback: () => this.openCsv() });
     this.addCommand({
       id: 'draft-strategy',
       name: 'Draft a strategy from a description',
@@ -556,6 +554,27 @@ export default class BacktestBlocks extends Plugin {
         if (existing instanceof TFile) await this.app.vault.modify(existing, markdown);
         else await this.app.vault.create(path, markdown);
         return { kind: 'saved', path };
+      },
+    }).open();
+  }
+
+  private openCsv(): void {
+    const vault = this.app.vault;
+    new CsvModal(this.app, {
+      files: () => vault.getFiles().filter((f) => f.extension.toLowerCase() === 'csv').map((f) => f.path),
+      read: (path) => vault.adapter.read(normalizePath(path)),
+      create: async (path, text) => {
+        const dot = path.lastIndexOf('.');
+        let free = path;
+        for (let n = 2; await vault.adapter.exists(free); n++) free = `${path.slice(0, dot)}-${n}${path.slice(dot)}`;
+        await vault.create(free, text);
+        return free;
+      },
+      insert: (text) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || view.getMode() !== 'source') return false;
+        place(view.editor, text);
+        return true;
       },
     }).open();
   }
