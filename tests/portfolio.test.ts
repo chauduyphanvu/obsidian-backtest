@@ -155,7 +155,7 @@ test('inverse volatility does not buy until each ticker\'s volatility is known',
   assert.deepEqual(r.notes, ['2 buy signals were not acted on while the 2-bar volatility for inverse volatility weighting was still unknown: A 1, B 1.']);
 });
 
-test('test from splits the one run into two parts, each measured from its own start', () => {
+test('test from splits the one run into two parts, the second measured from the last close before it', () => {
   const A = bars([100, 100, 110, 99, 121, 121]);
   const r = run('universe: A\ncapital: 1000\ntest from: 2020-01-04\nbuy when true\nsell when close > 115', { A });
   assert.deepEqual(r.run.equity, [1000, 1000, 1100, 990, 1210, 1210]);
@@ -163,9 +163,13 @@ test('test from splits the one run into two parts, each measured from its own st
   assert.deepEqual([before.label, before.from, before.to], ['Before 2020-01-04', day(0), day(2)]);
   assert.deepEqual([after.label, after.from, after.to], ['From 2020-01-04', day(3), day(5)]);
   assert.ok(near(before.stats.totalReturn, 0.1));
-  assert.ok(near(after.stats.totalReturn, 1210 / 990 - 1));
-  assert.ok(near(after.stats.maxDrawdown, 0));
-  assert.ok(near(after.benchmarkStats.totalReturn, 1210 / 990 - 1));
+  // The fall from 1100 to 990 on 4 January belongs to the second part.
+  assert.ok(near(after.stats.totalReturn, 1210 / 1100 - 1));
+  assert.ok(near(after.stats.maxDrawdown, 990 / 1100 - 1));
+  assert.ok(near(after.benchmarkStats.totalReturn, 1210 / 1100 - 1));
+  // So the two parts' growth multiplies to the whole run's.
+  assert.ok(near((1 + before.stats.totalReturn) * (1 + after.stats.totalReturn), 1 + r.stats.totalReturn));
+  assert.ok(near((1 + before.benchmarkStats.totalReturn) * (1 + after.benchmarkStats.totalReturn), 1 + r.benchmark.stats.totalReturn));
   // The one trade was entered on day 1, so it belongs to the first part though it closed in the second.
   assert.deepEqual([before.tradeStats.count, after.tradeStats.count], [1, 0]);
   assert.equal(run('universe: A\nbuy when true', { A }).segments, null);
