@@ -91,6 +91,14 @@ export function defaultsMatter(source: string, drawn: Partial<Defaults>, now: Pa
   return read(drawn) !== read(now);
 }
 
+/**
+ * When a kept result's prices were current: the oldest time among them that each was fetched. A price that a failed download
+ * left on its saved copy counts from `keptAt`, when the download was tried, so a result made offline is kept as long as any.
+ */
+export function pricesAsOf(prices: readonly { fetched: number; stale: boolean }[], keptAt: number): number {
+  return Math.min(keptAt, ...prices.map((p) => (p.stale ? keptAt : p.fetched)));
+}
+
 /** The vault paths of the CSV files a strategy reads, each once, in order. */
 export function csvPaths(spec: Pick<Spec, 'universe' | 'extras' | 'benchmark' | 'cash'>): string[] {
   const refs = [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...(spec.cash.k === 'ticker' ? [spec.cash.ref] : [])];

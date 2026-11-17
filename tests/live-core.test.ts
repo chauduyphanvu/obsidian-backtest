@@ -322,6 +322,17 @@ test('what loading a block needs changes with its tickers, dates, interval and r
   assert.notEqual(needs('data: binance\ninterval: 1h\nuniverse: BTCUSDT\nmagnify: 5m\nbuy when close > sma(50)'), needs('data: binance\ninterval: 1h\nuniverse: BTCUSDT\nbuy when close > sma(50)'));
 });
 
+test('an answer worked out while a price file was written is not kept', () => {
+  const memo = new ReadyMemo(() => 1000);
+  const turn = memo.turn();
+  // The answer was being worked out from the files as they were; a download then wrote one.
+  memo.changed();
+  memo.set('a', false, Infinity, turn);
+  assert.equal(memo.get('a'), undefined);
+  memo.set('a', true, 2000, memo.turn());
+  assert.equal(memo.get('a'), true);
+});
+
 test('an answer is kept until it runs out or a price file changes, and a no stays until a file changes', () => {
   let now = 1000;
   const memo = new ReadyMemo(() => now, 2);

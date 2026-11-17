@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
-import { cacheKey, csvPaths, csvVersions, debounce, defaultsMatter, ResultCache } from '../src/result-cache.ts';
+import { cacheKey, csvPaths, csvVersions, debounce, defaultsMatter, pricesAsOf, ResultCache } from '../src/result-cache.ts';
 import { defaultsFrom, normalizeSettings } from '../src/settings-core.ts';
 
 const clock = () => {
@@ -275,4 +275,18 @@ test('defaults that change a result make it out of date; a block that says every
   assert.equal(defaultsMatter(partly, drawn, changed({ costs: '5 bps' })), true);
   // A block that does not read has no result on screen to be out of date, and says the same either way.
   assert.equal(defaultsMatter('universe: SPY', drawn, changed({ capital: 50_000 })), false);
+});
+
+test('a kept result is as old as the oldest prices it was made from', () => {
+  const fresh = (fetched: number) => ({ fetched, stale: false });
+  assert.equal(pricesAsOf([fresh(500), fresh(200), fresh(800)], 1000), 200);
+  // A CSV file is read when the block runs, so it counts from then.
+  assert.equal(pricesAsOf([fresh(990)], 1000), 990);
+  assert.equal(pricesAsOf([], 1000), 1000);
+});
+
+test('prices a failed download left on their saved copy count from when the result was kept', () => {
+  // The download was tried then: a result made offline is kept as long as any, not run again at every drawing.
+  assert.equal(pricesAsOf([{ fetched: 100, stale: true }], 1000), 1000);
+  assert.equal(pricesAsOf([{ fetched: 100, stale: true }, { fetched: 600, stale: false }], 1000), 600);
 });

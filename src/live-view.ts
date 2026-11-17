@@ -224,6 +224,8 @@ export class LiveView extends ItemView {
       if (this.pending === selected) this.pending = null;
       return;
     }
+    // What runs is what is pending, also for "Try again" while a newer edit waits: that edit's run claims it back.
+    this.pending = selected;
     const id = ++this.runId;
     const signal = this.latest.start();
     const errors = this.host.errors(selected.text);
@@ -247,7 +249,7 @@ export class LiveView extends ItemView {
       if (id !== this.runId) return drop();
     } catch (e) {
       el.remove();
-      if (id === this.runId) this.showProblem(reading, selected, { kind: 'failed', message: e instanceof Error ? e.message : String(e), retry: () => void this.retry(reading, selected) });
+      if (id === this.runId) this.showProblem(reading, selected, { kind: 'failed', message: e instanceof Error ? e.message : String(e), retry: () => void this.run(reading, selected) });
       return;
     }
     const scroll = this.sameBlock(selected) ? this.body.scrollTop : 0;
@@ -257,11 +259,6 @@ export class LiveView extends ItemView {
     this.problem = null;
     this.arrived(reading, selected);
     this.body.scrollTop = scroll;
-  }
-
-  private async retry(reading: BlockReading, selected: Shown): Promise<void> {
-    this.pending = selected;
-    await this.run(reading, selected);
   }
 
   private showProblem(reading: BlockReading, selected: Shown, problem: Problem): void {

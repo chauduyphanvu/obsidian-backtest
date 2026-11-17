@@ -156,6 +156,8 @@ export class ReadyMemo {
   private known = new Map<string, { ready: boolean; until: number }>();
   private now: () => number;
   private most: number;
+  /** Counts `changed`, so an answer worked out before a change is not kept after it. */
+  private turns = 0;
 
   constructor(now: () => number = Date.now, most = 100) {
     this.now = now;
@@ -173,8 +175,17 @@ export class ReadyMemo {
     return hit.ready;
   }
 
-  /** `until` is when a yes stops being true: when the oldest saved file stops being fresh. */
-  set(needs: string, ready: boolean, until: number): void {
+  /** Taken before working an answer out, and given to `set` with it. */
+  turn(): number {
+    return this.turns;
+  }
+
+  /**
+   * `until` is when a yes stops being true: when the oldest saved file stops being fresh. An answer from a `turn` that a
+   * change has since ended is dropped: a file written while it was worked out may have changed it.
+   */
+  set(needs: string, ready: boolean, until: number, turn = this.turns): void {
+    if (turn !== this.turns) return;
     this.known.delete(needs);
     this.known.set(needs, { ready, until });
     if (this.known.size > this.most) this.known.delete(this.known.keys().next().value!);
@@ -182,6 +193,7 @@ export class ReadyMemo {
 
   /** A price file was written or removed, or the settings that decide freshness changed. */
   changed(): void {
+    this.turns++;
     this.known.clear();
   }
 }

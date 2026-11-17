@@ -18,8 +18,10 @@ declare const WORKER_CODE: string;
 
 /** A worker left idle this long is ended; the next job starts a fresh one and sends it prices again. */
 const IDLE_MS = 60_000;
-/** A worker that has not said it is ready by then is taken as unable to start. */
+/** A worker that has not said it is ready by then is ended, and its task runs on the main thread. */
 const START_MS = 5_000;
+/** Slow starts in a row, in one lane, after which workers are taken as unable to start. */
+const SLOW_STARTS = 2;
 
 export interface WorkerPort {
   post(m: ToWorker): void;
@@ -106,6 +108,8 @@ interface Lane {
   sent: Set<number>;
   queue: Task[];
   current: Task | null;
+  /** Workers in a row that did not say they were ready in time. */
+  slowStarts: number;
 }
 
 interface Common {
@@ -162,7 +166,7 @@ const BACKGROUND = 1;
 export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number; startMs?: number }): JobClient {
   const idleMs = opts.idleMs ?? IDLE_MS;
   const startMs = opts.startMs ?? START_MS;
-  const lane = (): Lane => ({ worker: null, ready: false, sent: new Set(), queue: [], current: null });
+  const lane = (): Lane => ({ worker: null, ready: false, sent: new Set(), queue: [], current: null, slowStarts: 0 });
   const short = lane();
   const long = lane();
   /** Set for good once a worker fails to start: every job then runs here. */
@@ -279,7 +283,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
       return false;
     }
     l.ready = false;
-    l.startTimer = setTimeout(() => onError(l, 'The worker did not start'), startMs);
+    l.startTimer = setTimeout(() => onSlowStart(l), startMs);
     return true;
   }
 
@@ -351,6 +355,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
   function onMessage(l: Lane, m: FromWorker): void {
     if (m.type === 'ready') {
       l.ready = true;
+      l.slowStarts = 0;
       clearTimeout(l.startTimer);
       return;
     }
@@ -371,23 +376,34 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
   }
 
   function onError(l: Lane, message: string): void {
-    const task = l.current && !l.current.here ? l.current : null;
-    const started = l.ready;
-    kill(l);
-    if (!started) {
+    if (!l.ready) {
       // A content-security policy or an old web view: a worker won't start next time either.
       noWorker = true;
-      if (task) {
-        if (task.type === 'job') task.sofar = { points: [], random: null };
-        if (refused(task, 'here')) next(l);
-        else runHere(task);
-      }
+      moveHere(l);
       return;
     }
+    const task = l.current && !l.current.here ? l.current : null;
+    kill(l);
     if (task) {
       settle(task, null, new Error(`The run stopped unexpectedly: ${message}`));
       next(l);
     }
+  }
+
+  /** A worker slow to start, as at a busy start-up, may start next time: only a second slow start in a row gives up on workers. */
+  function onSlowStart(l: Lane): void {
+    if (++l.slowStarts >= SLOW_STARTS) noWorker = true;
+    moveHere(l);
+  }
+
+  /** Ends a lane's worker that never started, and runs its task on the main thread instead. */
+  function moveHere(l: Lane): void {
+    const task = l.current && !l.current.here ? l.current : null;
+    kill(l);
+    if (!task) return;
+    if (task.type === 'job') task.sofar = { points: [], random: null };
+    if (refused(task, 'here')) next(l);
+    else runHere(task);
   }
 
   function stop(task: Task): void {
@@ -614,6 +630,8 @@ export interface Sliders {
 export class BlockDrawing {
   readonly source: string;
   readonly defaults: Defaults;
+  /** How old saved prices may be for this drawing, and so the prices of a result it reuses. */
+  readonly freshForMs: number;
   /** Whether runs have no size limits. A result that was run that way turns it on for whoever shows it again (`follow`). */
   anyway: boolean;
   private runner: Runner;
@@ -623,6 +641,7 @@ export class BlockDrawing {
   constructor(o: DrawingOptions) {
     this.source = o.source;
     this.defaults = o.defaults;
+    this.freshForMs = o.freshForMs;
     this.anyway = o.anyway ?? false;
     this.background = o.background ?? false;
     this.runs = o.runs;

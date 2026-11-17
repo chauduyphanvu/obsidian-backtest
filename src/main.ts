@@ -26,7 +26,7 @@ import { renderPriceCharts } from './render-price.ts';
 import { renderLuck } from './render-luck.ts';
 import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type Section } from './render.ts';
 import { renderSweep } from './render-sweep.ts';
-import { ResultCache, cacheKey, csvPaths, csvVersions, debounce, defaultsMatter } from './result-cache.ts';
+import { ResultCache, cacheKey, csvPaths, csvVersions, debounce, defaultsMatter, pricesAsOf } from './result-cache.ts';
 import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
 import { Runner, type RunOutput } from './runner.ts';
 import { SymbolLookup } from './symbols.ts';
@@ -57,6 +57,12 @@ const KEPT_PRICE_FILES = 200;
 const DEFAULTS_CHECK_MS = 400;
 
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+
+/** A result kept in memory, with when its prices were current (pricesAsOf). */
+interface Kept {
+  out: RunOutput;
+  asOf: number;
+}
 
 /** What a caller of `renderStrategy` says about where the block is. */
 interface StrategyOptions {
@@ -308,17 +314,27 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** Results kept in memory, up to a count and a total size (limits.ts). */
-  private keptResults(maxAgeMs: number): WeighedCache<RunOutput> {
-    return new WeighedCache<RunOutput>({ maxEntries: LIMITS.keptResults, maxAgeMs, weigh: resultBytes, maxWeight: LIMITS.keptBytes });
+  private keptResults(maxAgeMs: number): WeighedCache<Kept> {
+    return new WeighedCache<Kept>({ maxEntries: LIMITS.keptResults, maxAgeMs, weigh: (k) => resultBytes(k.out), maxWeight: LIMITS.keptBytes });
+  }
+
+  /**
+   * The kept result for `key` when its prices are no older than `freshForMs`, the age the caller takes saved prices at. A
+   * forced round passes the time since it began, so a run that started before it, and finished after it dropped the kept
+   * results, is not reused.
+   */
+  private kept(key: string, freshForMs: number): RunOutput | undefined {
+    const hit = this.results.get(key);
+    return hit && Date.now() - hit.asOf < freshForMs ? hit.out : undefined;
   }
 
   private async runSpec(drawing: BlockDrawing, spec: Spec, key: string, force = false): Promise<RunOutput | null> {
     if (!force) {
-      const hit = this.results.get(key);
+      const hit = this.kept(key, drawing.freshForMs);
       if (hit) return hit;
     }
     const out = await drawing.run(spec, { force });
-    if (out) this.results.set(key, out);
+    if (out) this.results.set(key, { out, asOf: pricesAsOf(out.prices, Date.now()) });
     return out;
   }
 
@@ -335,7 +351,7 @@ export default class BacktestBlocks extends Plugin {
       if (!spec) throw new Error(`Line ${errors[0].line}: ${errors[0].message}`);
       const key = await this.resultKey(spec, source, drawing.defaults);
       if (opts.cachedOnly) {
-        const hit = this.results.get(key);
+        const hit = this.kept(key, drawing.freshForMs);
         if (!hit) throw new Error('This strategy has not run yet.');
         return hit;
       }
@@ -369,7 +385,9 @@ export default class BacktestBlocks extends Plugin {
     this.dispose(child);
     // The block's runs: drawing it again or its going away stops them, and the worker then forgets its prices.
     const runs = blockRuns();
-    this.disposers.set(child, () => runs.close());
+    // While this is the child's disposer, this drawing is the block's latest and the block is still there.
+    const stop = () => runs.close();
+    this.disposers.set(child, stop);
     // Everything this drawing parses, runs and hands to its sections is made with the defaults it reads here, once.
     const drawing = this.drawing(source, runs, { anyway: opts.anyway });
     const force = opts.force ?? false;
@@ -387,10 +405,11 @@ export default class BacktestBlocks extends Plugin {
         return;
       }
       const key = await this.resultKey(spec, source, drawing.defaults);
-      if (force || this.results.get(key) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
+      if (this.disposers.get(child) !== stop) return;
+      if (force || this.kept(key, drawing.freshForMs) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
       const out = await this.runSpec(drawing, spec, key, force);
-      // Stopped: the block was drawn again or went away.
-      if (!out) return;
+      // Stopped, or a kept result came back after the block was drawn again or went away.
+      if (!out || this.disposers.get(child) !== stop) return;
       // A result that was run without the size limits is shown with its sliders without them too.
       drawing.follow(out);
       const sections = (shown: RunOutput): Section[] => {
@@ -448,6 +467,8 @@ export default class BacktestBlocks extends Plugin {
         if (file instanceof TFile) this.scheduleProperties(file);
       }
     } catch (e) {
+      // A drawing that was replaced or went away while it ran leaves the block to whatever replaced it.
+      if (this.disposers.get(child) !== stop) return;
       // A limit is shown in the panel too, since only the block can offer to run it anyway.
       if (e instanceof LimitError) renderLimit(el, e, source, () => redraw({ force: false, anyway: true }));
       else if (opts.panel) throw e;
@@ -480,6 +501,7 @@ export default class BacktestBlocks extends Plugin {
     const needs = loadNeeds(spec);
     const known = this.ready.get(needs);
     if (known !== undefined) return known;
+    const turn = this.ready.turn();
     const freshForMs = this.settings.cacheHours * HOUR;
     const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
     try {
@@ -487,7 +509,7 @@ export default class BacktestBlocks extends Plugin {
       // Loading prices warns only when a download failed and a saved copy, or nothing for a ticker's smaller bars, stood in.
       // So a warning means this block needs a download, whatever else it says.
       const ready = prices.every((p) => !p.stale) && warnings.length === 0;
-      this.ready.set(needs, ready, ready ? Math.min(...prices.map((p) => p.fetched)) + freshForMs : Infinity);
+      this.ready.set(needs, ready, ready ? Math.min(...prices.map((p) => p.fetched)) + freshForMs : Infinity, turn);
       return ready;
     } catch {
       return false;

@@ -213,10 +213,11 @@ export class OrdersBadge {
   }
 
   private answered(state: BadgeState): BadgeView {
-    this.lastTry = this.now();
-    this.lastFailed = state.kind === 'failed';
-    this.shown = true;
     const view = badgeView(state);
+    this.lastTry = this.now();
+    // "Couldn't check orders", whether the check failed or every strategy did, is tried again soon.
+    this.lastFailed = view.mark === 'error';
+    this.shown = true;
     this.paint(view);
     return view;
   }
