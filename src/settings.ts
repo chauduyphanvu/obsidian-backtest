@@ -1,5 +1,6 @@
 import { Notice, PluginSettingTab, SecretComponent, Setting, type App, type Plugin } from 'obsidian';
-import { CACHE_HOURS_MAX, CACHE_HOURS_MIN, validateSetting, type Settings } from './settings-core.ts';
+import { DRAFT_PRIVACY } from './llm.ts';
+import { CACHE_HOURS_MAX, CACHE_HOURS_MIN, providerText, validateSetting, type Settings } from './settings-core.ts';
 
 export { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, validateSetting, type Settings } from './settings-core.ts';
 
@@ -9,12 +10,6 @@ export interface SettingsHost {
   /** Removes the saved price files. */
   clearPrices(): Promise<void>;
 }
-
-/** What each provider uses when the server address is left empty. */
-const DEFAULT_ADDRESS: Record<Settings['llmProvider'], string> = {
-  anthropic: 'https://api.anthropic.com',
-  openai: 'https://api.openai.com/v1',
-};
 
 export class BacktestSettingTab extends PluginSettingTab {
   private host: Plugin & SettingsHost;
@@ -109,7 +104,7 @@ export class BacktestSettingTab extends PluginSettingTab {
     );
     this.field('Folder for saved results', 'Vault folder where saved results go.', settings.snapshotFolder, 'Backtests', () => null, (v) => (settings.snapshotFolder = v.trim() || 'Backtests'));
 
-    new Setting(containerEl).setName('Drafting from plain English').setDesc('Only the description you type is sent to this service.').setHeading();
+    new Setting(containerEl).setName('Drafting from plain English').setDesc(DRAFT_PRIVACY).setHeading();
     new Setting(containerEl)
       .setName('Provider')
       .setDesc('The service that turns your description into a strategy.')
@@ -123,18 +118,12 @@ export class BacktestSettingTab extends PluginSettingTab {
             this.display();
           }),
       );
-    this.field(
-      'Server address',
-      'Leave empty for the provider’s own address, or enter your server, such as http://localhost:8000/v1.',
-      settings.llmBaseUrl,
-      DEFAULT_ADDRESS[settings.llmProvider],
-      () => null,
-      (v) => (settings.llmBaseUrl = v.trim()),
-    );
-    this.field('Model', 'Leave empty to use the provider’s default model.', settings.llmModel, 'Provider default', () => null, (v) => (settings.llmModel = v.trim()));
+    const text = providerText(settings.llmProvider);
+    this.field('Server address', text.address.desc, settings.llmBaseUrl, text.address.placeholder, () => null, (v) => (settings.llmBaseUrl = v.trim()));
+    this.field('Model', text.model.desc, settings.llmModel, text.model.placeholder, () => null, (v) => (settings.llmModel = v.trim()));
     new Setting(containerEl)
       .setName('API key')
-      .setDesc('Choose or add a secret in Obsidian’s keychain. Only the secret’s name is saved here.')
+      .setDesc(text.key)
       .addComponent((el) =>
         new SecretComponent(this.app, el).setValue(settings.llmSecret).onChange(async (name) => {
           settings.llmSecret = name ?? '';
