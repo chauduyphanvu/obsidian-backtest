@@ -409,6 +409,10 @@ test('a file with no prices cannot be traded, compared with or used for a cash r
   assert.throws(() => run('universe: A\nbuy when close of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so its close can't be read\. Read a column with column\(name\) of sig\./);
   assert.throws(() => run('universe: A\nbuy when sma(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so its close can't be read/);
   assert.throws(() => run('universe: A\nbuy when atr(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so atr\(\) can't be worked out for it/);
+  // A Keltner channel of a column still reads the file's own average true range.
+  for (const fn of ['keltner_upper', 'keltner_lower']) {
+    assert.throws(() => run(`universe: A\nbuy when ${fn}(column(score), 2, 2, 2) of csv:Data/sig.csv > 0`, { A, sig }), new RegExp(`^Error: sig has no prices, only columns, so ${fn}\\(\\) can't be worked out for it`));
+  }
   // What is not a price is allowed: the column itself, and a calendar value or a window of the column.
   assert.equal(run('universe: A\nbuy when sma(column(score), 2) of csv:Data/sig.csv > 1 and month == 1', { A, sig }).run.t.length, 5);
 });

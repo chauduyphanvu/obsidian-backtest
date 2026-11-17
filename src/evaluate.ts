@@ -36,6 +36,9 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
 /** When each row of a series is known: a bar of prices when it ends, a row of a file of dated values by ind.valueEnds. */
 const rowEnds = (b: Bars): number[] => (b.unpriced ? ind.valueEnds(b.t) : ind.barEnds(b.t));
 
+/** Functions given a series that still read the ticker's own prices: its closes, or its average true range. */
+const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];
+
 /** Functions that weigh bars by volume, and so mean nothing on prices that have none. */
 const NEEDS_VOLUME = ['mfi', 'obv', 'vwap'];
 
@@ -419,7 +422,7 @@ export class Evaluator {
 
   private indicator(e: Extract<Expr, { k: 'ind' }>, asset: string, bars: Bars): number[] {
     // `sma(column(x), 5) of file` reads only the column; anything that reads the file's own prices has none to read.
-    if (bars.unpriced && (e.src === null || e.fn === 'correl')) {
+    if (bars.unpriced && (e.src === null || OWN_PRICES.includes(e.fn))) {
       throw new Error(`${asset} has no prices, only columns, so ${e.fn}() can't be worked out for it. Read a column with column(name) of ${asset}.`);
     }
     const src = e.src ? this.eval(e.src, asset) : bars.c;

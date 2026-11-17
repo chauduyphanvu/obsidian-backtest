@@ -210,6 +210,21 @@ test('a cleaned copy leaves out a column that would clash, one that reads as a p
   assert.deepEqual(clash.columns, ['news_sentiment']);
   assert.equal(clash.text.split('\n')[0], 'date,open,high,low,close,volume,News Sentiment');
   assert.ok(clash.notes.includes('The column "news-sentiment" was left out: a rule would call it news_sentiment, as it does "News Sentiment".'));
+  // The original file can read neither of the two; the copy keeps the first, so its column reads.
+  assert.deepEqual(parseCsv('Date,Open,High,Low,Close,News Sentiment,news-sentiment\n2024-01-02,1,1,1,1,2,3\n').unread!.map((u) => u.name), ['news_sentiment']);
+  assert.deepEqual(parseCsv(clash.text).columns!.map((c) => [c.name, c.v[0]]), [['news_sentiment', 2]]);
+  assert.equal(parseCsv(clash.text).unread, undefined);
+  // Whatever headers a file has, every column the copy keeps reads back by its name, and none is left unread.
+  const heads = ['Score', 'score', 'SCORE', 'News Sentiment', 'news-sentiment', 'x"y', 'a,b', '10Y', 'Señal', 'Senal', 'Close*', 'Vol.', 'Adj-Close', 'Open Int', 'Notes', 'Rate, 10Y', 'rate_10y'];
+  for (let k = 0; k < 200; k++) {
+    const extra = Array.from({ length: 2 + (k % 5) }, (_, j) => heads[(k * 7 + j * 5) % heads.length]);
+    const quote = (h: string) => (/[",]/.test(h) ? `"${h.replace(/"/g, '""')}"` : h);
+    const text = `Date,Price,${extra.map(quote).join(',')}\n2024-01-02,1,${extra.map((_, j) => j + 1).join(',')}\n2024-01-03,2,${extra.map((_, j) => j + 2).join(',')}\n`;
+    const copy = cleaned(remapCsv(text, { date: 0, close: 1, open: null, high: null, low: null, volume: null, adjClose: null, dateOrder: null }));
+    const back = parseCsv(copy.text);
+    assert.deepEqual(back.columns?.map((c) => c.name) ?? [], copy.columns, text);
+    assert.equal(back.unread, undefined, text);
+  }
   const many = Array.from({ length: MAX_COLUMNS + 3 }, (_, i) => `k${i}`);
   const wide = cleaned(remapCsv(`Date,Close,${many.join(',')}\n2024-01-02,1,${many.map((_, i) => i).join(',')}\n`, { date: 0, close: 1, open: null, high: null, low: null, volume: null, adjClose: null, dateOrder: null }));
   assert.equal(wide.columns.length, MAX_COLUMNS);
