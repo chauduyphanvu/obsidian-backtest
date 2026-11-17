@@ -3,13 +3,14 @@
 import { computeStats, maxDrawdown, type Backtest, type Stats } from './backtest.ts';
 import { parseSpec } from './dsl.ts';
 import { simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
-import { Evaluator, type BarRule } from './evaluate.ts';
+import { specEvaluator, type BarRule } from './evaluate.ts';
 import { makeRng, shuffle, type Rng } from './rng.ts';
 import { baseSpec, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
 import type { Bars } from './types.ts';
 
 const YEAR = 365.25 * 86_400_000;
 const BATCH = 4;
+const tidy = (x: number) => Number(x.toPrecision(12));
 
 export interface Spread {
   /** 5th percentile, median and 95th percentile: lo..hi holds the middle 90%. */
@@ -200,7 +201,7 @@ export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Ho
 export type PickRules = Map<string, { buy: number[]; sell: BarRule | null }>;
 
 export function pickRules(bt: Backtest): PickRules {
-  const ev = new Evaluator(bt.data);
+  const ev = specEvaluator(bt.spec, bt.data);
   return new Map(
     bt.spec.universe.map((a) => {
       const rule = bt.spec.rules[a.name];
@@ -423,7 +424,7 @@ export interface WalkWindow {
   trainScore: number;
   /** Total return of the chosen variant over the test stretch. */
   testReturn: number;
-  /** Total return of the values in the note over the same stretch. */
+  /** Total return of the run being checked (the values in the note, or those a slider set) over the same stretch. */
   declaredReturn: number;
 }
 
@@ -447,7 +448,7 @@ export interface WalkForwardResult {
   /** The test stretches stitched together, starting at the strategy's capital. */
   equity: number[];
   stats: Stats;
-  /** The values in the note, over the same dates. */
+  /** The run being checked, over the same dates: the values in the note, or those a slider set (see jobs.ts jobOverrides). */
   declared: WalkLine;
   /** The variant that did best over the whole run, picked with hindsight, over the same dates. */
   hindsight: WalkLine & { values: Record<string, number> };
@@ -479,14 +480,16 @@ export async function walkForward(
   const wait = opts.pause ?? pause;
   const metric = opts.metric ?? 'cagr';
   const spec = baseSpec(parse);
-  const params = sweepParams(spec);
+  // The run being checked uses each parameter's value, which a slider may have set off the step grid: tried too.
+  const value = (name: string) => tidy(spec.params.find((p) => p.name === name)!.value);
+  const params = sweepParams(spec).map((p) => (p.values.includes(value(p.name)) ? p : { ...p, values: [...p.values, value(p.name)].sort((a, b) => a - b) }));
   if (params.length === 0) throw new Error('Walk-forward needs a parameter with a range to choose from, such as fast = 50 in 20..100 step 10.');
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
 
   const key = (index: number[]) => index.join(',');
-  const declaredIndex = params.map((p) => p.values.indexOf(p.declared));
+  const declaredIndex = params.map((p) => p.values.indexOf(value(p.name)));
   const declared = runVariant(parse, data, valuesAt(params, declaredIndex), declaredIndex);
   if (!declared.backtest) throw new Error(declared.point.error ?? 'The values in the note did not run');
   const t = declared.backtest.run.t;

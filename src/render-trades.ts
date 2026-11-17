@@ -2,6 +2,7 @@ import type { Backtest } from './backtest.ts';
 import { h, minus, money, pct, price, signedPct, stamp } from './dom.ts';
 import type { Trade } from './engine.ts';
 import { explainTrade, type Explanation, type Outcome } from './explain.ts';
+import { positionOrder } from './orders.ts';
 
 const MAX_TRADE_ROWS = 500;
 const COLUMNS = 9;
@@ -21,12 +22,8 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     h(row, 'td', undefined, st.name);
     h(row, 'td', 'bt-num', pct(st.weight, 0));
     const now = st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash';
-    const order = st.pending
-      ? `, ${st.pending === 'buy' ? 'buys' : 'sells'} at the ${bt.spec.fill === 'close' ? 'next close' : 'next open'}`
-      : st.filled
-        ? `, ${st.filled.side === 'buy' ? 'bought' : 'sold'} at the last close`
-        : '';
-    h(row, 'td', undefined, now + order);
+    const order = positionOrder(st, bt.spec.fill);
+    h(row, 'td', undefined, order ? `${now}, ${order}` : now);
     h(row, 'td', 'bt-num', String(closed.length));
     h(row, 'td', 'bt-num', closed.length ? pct(closed.filter((t) => t.ret > 0).length / closed.length, 0) : '–');
     h(row, 'td', 'bt-num', closed.length ? signedPct(closed.reduce((a, t) => a + t.ret, 0) / closed.length) : '–');

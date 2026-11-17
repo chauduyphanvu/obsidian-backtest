@@ -3,7 +3,7 @@
 
 import type { Backtest } from './backtest.ts';
 import type { Defaults } from './dsl.ts';
-import { runJob, stoppedResult, type Bench, type FromWorker, type Job, type JobOf, type Kind, type Results, type Sofar, type ToWorker } from './jobs.ts';
+import { benchWith, jobOverrides, runJob, stoppedResult, type Bench, type FromWorker, type Job, type JobOf, type Kind, type Results, type Sofar, type ToWorker } from './jobs.ts';
 import { pause, type Parse } from './sweep.ts';
 import type { Bars } from './types.ts';
 
@@ -23,7 +23,11 @@ export interface WorkerPort {
 /** Starts a worker that reports to `on`. Throws when none can be made. */
 export type MakeWorker = (on: { message: (m: FromWorker) => void; error: (message: string) => void }) => WorkerPort;
 
-/** What a section knows of its block (a `SweepInput` fits). Without `defaults` the text can't be parsed elsewhere, so its jobs run here. */
+/**
+ * What a section knows of its block (a `SweepInput` fits): its text, how to parse it, and the run on screen, whose prices
+ * the jobs use and whose parameter values the luck checks use (jobOverrides). Without `defaults` the text can't be parsed
+ * elsewhere, so its jobs run here.
+ */
 export interface JobInput {
   source: string;
   defaults?: Partial<Defaults>;
@@ -71,6 +75,8 @@ interface Task {
   reject: (e: Error) => void;
   /** The section's open tasks, this one among them until it settles. */
   mine: Set<Task>;
+  /** The section's benches on the main thread, by the values they run with. */
+  benches: Map<string, Bench>;
 }
 
 /**
@@ -96,7 +102,15 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
   let lastData = 0;
   let lastTask = 0;
 
-  const benchOf = (input: JobInput): Bench => ({ source: input.source, parse: input.parse, data: input.backtest.data, backtest: () => input.backtest });
+  /** The values a task runs with: the same here and in the worker. */
+  const overridesOf = (task: Task) => jobOverrides(task.job.kind, task.input.backtest.spec);
+  const benchOf = (task: Task): Bench => {
+    const overrides = overridesOf(task);
+    const key = JSON.stringify(overrides);
+    let bench = task.benches.get(key);
+    if (!bench) task.benches.set(key, (bench = benchWith(task.input.source, task.input.parse, task.input.backtest.data, overrides)));
+    return bench;
+  };
 
   function settle(task: Task, result: Results[Kind] | null, error?: Error): void {
     if (task.settled) return;
@@ -163,12 +177,12 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
       w.post({ type: 'data', id: task.data, data: task.input.backtest.data });
       sent.add(task.data);
     }
-    w.post({ type: 'job', id: task.id, data: task.data, block: { source: task.input.source, defaults: task.input.defaults! }, job: task.job });
+    w.post({ type: 'job', id: task.id, data: task.data, block: { source: task.input.source, defaults: task.input.defaults!, overrides: overridesOf(task) }, job: task.job });
   }
 
   function runHere(task: Task): void {
     task.here = true;
-    const bench = benchOf(task.input);
+    const bench = benchOf(task);
     // A turn later, so the section paints its progress bar first and `run` never calls back before it returns.
     pause()
       .then(() =>
@@ -234,10 +248,10 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     const at = queue.indexOf(task);
     if (at >= 0) {
       queue.splice(at, 1);
-      settle(task, stoppedResult(task.job.kind, benchOf(task.input), task.sofar));
+      settle(task, stoppedResult(task.job.kind, benchOf(task), task.sofar));
     } else if (task === current && !task.here) {
       kill();
-      settle(task, stoppedResult(task.job.kind, benchOf(task.input), task.sofar));
+      settle(task, stoppedResult(task.job.kind, benchOf(task), task.sofar));
       next();
     }
     // On the main thread the job sees the stop at its next step and returns what it finished.
@@ -250,6 +264,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     const dataId = id;
     users.set(dataId, (users.get(dataId) ?? 0) + 1);
     const mine = new Set<Task>();
+    const benches = new Map<string, Bench>();
     let closed = false;
     return {
       run<K extends Kind>(job: JobOf<K>, o: RunOptions = {}): Running<Results[K]> {
@@ -259,7 +274,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
           resolve = res;
           reject = rej;
         });
-        const task: Task = { id: ++lastTask, data: dataId, input, job, opts: o, sofar: { points: [], random: null }, here: false, waited: false, stopped: false, settled: false, resolve, reject, mine };
+        const task: Task = { id: ++lastTask, data: dataId, input, job, opts: o, sofar: { points: [], random: null }, here: false, waited: false, stopped: false, settled: false, resolve, reject, mine, benches };
         mine.add(task);
         queue.push(task);
         if (current) {

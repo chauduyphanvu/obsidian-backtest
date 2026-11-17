@@ -6,7 +6,7 @@ import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { DAY, minus, price, stamp } from './dom.ts';
 import { findPos, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import type { ExitReason, ExitWhy, RankPlace, Trade, TradeWhy } from './engine.ts';
-import { Evaluator, type PosState } from './evaluate.ts';
+import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
 
@@ -62,7 +62,7 @@ const evaluators = new WeakMap<Backtest, Evaluator>();
 
 function evaluatorFor(bt: Backtest): Evaluator {
   let ev = evaluators.get(bt);
-  if (!ev) evaluators.set(bt, (ev = new Evaluator(bt.data)));
+  if (!ev) evaluators.set(bt, (ev = specEvaluator(bt.spec, bt.data)));
   return ev;
 }
 
@@ -99,6 +99,15 @@ function fixed(x: number, d: number): string {
 function places(x: number): number {
   const a = Math.abs(x);
   return a >= 1 || a === 0 ? 2 : a >= 0.01 ? 4 : 6;
+}
+
+/** Scores with enough decimals that different ones never print the same: each its usual places, plus what it takes. */
+function scoreTexts(scores: number[]): string[] {
+  const finite = scores.filter(Number.isFinite);
+  let extra = 0;
+  const key = (x: number) => x.toFixed(Math.min(20, places(x) + extra));
+  while (extra < 10 && finite.some((x, i) => finite.some((y, j) => j < i && x !== y && key(x) === key(y)))) extra++;
+  return scores.map((x) => fixed(x, places(x) + extra));
 }
 
 /** Two values side by side, with enough decimals that different numbers never print the same. */
@@ -232,38 +241,43 @@ class Explainer {
     const d = r.decision;
     const by = this.bt.spec.written?.rank?.text ?? 'the score';
     const rows: Row[] = [];
+    const table = d.table ?? [];
+    const texts = scoreTexts(table.map((x) => x.score));
+    const mine = table.findIndex((x) => x.asset === this.trade.asset);
+    const myScore = mine >= 0 ? texts[mine] : scoreTexts([r.score])[0];
     if (r.place >= 0) {
       const held = d.top === 1 ? 'Only the best is held' : `The best ${d.top} are held`;
       const verdict = r.place < d.top ? held : `${held}, so it was sold`;
-      rows.push(row(`Ranked ${ordinal(r.place + 1)} of ${d.eligible} by ${by}. ${verdict}.`, `${by} ${this.score(r.score)}`));
+      rows.push(row(`Ranked ${ordinal(r.place + 1)} of ${d.eligible} by ${by}. ${verdict}.`, `${by} ${myScore}`));
     } else {
-      rows.push(row(`At this ranking it could not be chosen: ${this.ineligible(d.t)}.`, `${by} ${this.score(r.score)}`));
+      rows.push(row(`At this ranking it could not be chosen: ${this.ineligible(this.trade.asset, r.t)}.`, `${by} ${myScore}`));
     }
     if (d.table) {
       rows.push(row(`The ranking at ${this.closeOf(d.t)}, by ${by}:`));
       let n = 0;
-      for (const x of d.table) {
+      d.table.forEach((x, k) => {
         const me = x.asset === this.trade.asset ? ' (this one)' : '';
+        // With fill: close on mixed clocks a decision can read a ticker's bar before its own (see simulate).
+        const bar = x.t === d.t || Number.isNaN(x.t) ? '' : `, its bar of ${this.date(x.t)}`;
         if (x.eligible) {
           n++;
-          rows.push(row(`${n}. ${x.asset}${me}`, this.score(x.score), 1, n <= d.top ? 'yes' : 'no'));
+          const tied = d.table!.filter((y) => y.eligible && y !== x && y.score === x.score).map((y) => y.asset);
+          const tie = tied.length ? `, tied with ${tied.join(' and ')}: the ticker listed first in the universe ranks higher` : '';
+          rows.push(row(`${n}. ${x.asset}${me}`, `${texts[k]}${bar}${tie}`, 1, n <= d.top ? 'yes' : 'no'));
         } else {
-          rows.push(row(`${x.asset}${me}`, `could not be chosen: ${this.ineligible(d.t, x.asset)}`, 1, 'no'));
+          rows.push(row(`${x.asset}${me}`, `could not be chosen: ${this.ineligible(x.asset, x.t)}${bar}`, 1, 'no'));
         }
-      }
+      });
     }
     return rows;
   }
 
-  private score(x: number): string {
-    return fixed(x, places(x));
-  }
-
-  /** Why a ticker was not eligible at the decision at `t`: the same three tests the engine makes. */
-  private ineligible(t: number, asset = this.trade.asset): string {
+  /** Why a ticker was not eligible at a decision that read its bar at `t`: the same tests the engine makes. */
+  private ineligible(asset: string, t: number): string {
     const bars = this.bt.data.get(asset)!;
     const i = barAt(bars.t, t);
     const rank = this.bt.spec.rank;
+    if (i < 0) return 'it had no bar to read yet';
     if (this.ev.eval(this.bt.spec.rules[asset].buy, asset)[i] !== 1) return 'its buy rule did not hold';
     if (rank && !Number.isFinite(this.ev.eval(rank.by, asset)[i])) return 'its score was unknown';
     return 'its sell rule held';
@@ -404,12 +418,17 @@ class Explainer {
     rows.push(row('Money put in', `${money(why.spent)}${fee > 0 ? ` plus ${money(fee)} costs` : ''}, for ${shareCount(why.shares)} shares`));
 
     if (this.atClose) {
-      rows.push(row(`Filled at ${this.closeOf(trade.entryT)}, the close the rule read`, this.slipped(px, fill, 'plus')));
+      rows.push(row(`Filled at ${this.closeOf(trade.entryT)}${this.readAt(why.buyT, trade.entryT, why.rank ? 'ranking' : 'rule')}`, this.slipped(px, fill, 'plus')));
     } else {
       const before = fillAt > 0 && this.bars.t[fillAt - 1] === why.buyT ? `; the close the rule read was ${price(this.bars.c[fillAt - 1])}` : '';
       rows.push(row(`Filled at ${this.openOf(trade.entryT)}`, `${this.slipped(px, fill, 'plus')}${before}`));
     }
     return rows;
+  }
+
+  /** After a close fill at `filled`: that it is the close the decision read at `read`, or which close it read instead. */
+  private readAt(read: number, filled: number, by: 'rule' | 'ranking'): string {
+    return read === filled ? `, the close the ${by} read` : `; the ${by} read ${this.closeOf(read)}`;
   }
 
   private slipped(px: number, fill: number, way: 'plus' | 'less'): string {
@@ -442,7 +461,7 @@ class Explainer {
     }
     const px = this.atClose ? this.bars.c[j] : this.bars.o[j];
     this.exitAt(px * (1 - this.slip));
-    const at = this.atClose ? `Sold at ${this.closeOf(trade.exitT)}, the close the rule read` : `Sold at ${this.openOf(trade.exitT)}`;
+    const at = this.atClose ? `Sold at ${this.closeOf(trade.exitT)}${this.readAt(exit.t, trade.exitT, exit.k === 'rank' ? 'ranking' : 'rule')}` : `Sold at ${this.openOf(trade.exitT)}`;
     rows.push(row(at, this.slipped(px, px * (1 - this.slip), 'less')));
     return rows;
   }

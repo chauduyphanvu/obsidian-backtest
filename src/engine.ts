@@ -32,8 +32,8 @@ export interface RankDecision {
   eligible: number;
   /** Held tickers it sold, which its buys waited for. */
   sold: string[];
-  /** Every ticker at the decision, the eligible ones first and best first; null when the universe has more than 12. */
-  table: { asset: string; score: number; eligible: boolean }[] | null;
+  /** Every ticker at the decision, the eligible ones first and best first, with the time of its bar the decision read (NaN when it had none); null when the universe has more than 12. */
+  table: { asset: string; score: number; eligible: boolean; t: number }[] | null;
 }
 
 /** One ticker's place in a ranking decision. */
@@ -42,6 +42,8 @@ export interface RankPlace {
   /** Among the eligible, 0 for the best; -1 when the ticker could not be chosen. */
   place: number;
   score: number;
+  /** The ticker's bar the decision read: its bar at the decision, or with `fill: close` on mixed clocks maybe the one before (see simulate); NaN when it had none. */
+  t: number;
 }
 
 /** Why a position was closed. */
@@ -219,6 +221,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       order,
       weight: a.weight,
       bars,
+      source: a.source,
       sig: signals.get(a.name)!,
       stops: p.stops[a.name] ?? NO_STOPS,
       i: -1, // index of the latest bar at or before the current time
@@ -296,6 +299,16 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   };
 
   const decisions = !p.rank ? null : p.rebalance === 'never' ? timeline.map(() => 1) : ind.periodEnds(timeline, (x) => periodKey(x, p.rebalance));
+  // A ranking compares tickers' closes, and with close fills trades at them. When the ranked tickers keep different clocks
+  // (ind.clockOf), the closes of one period come hours apart, so a decision may read a ticker's bar of that period only
+  // when every ticker trading at that time is on its clock. Otherwise it reads each ticker's latest bar that had ended by
+  // the time the decision's bar began: on a day when stocks and crypto both trade, both their previous days; on a day only
+  // crypto trades, crypto's own day against the stocks' last one. That is the rule evaluate.ts's clocksApart applies to
+  // `of`, made one decision for every ticker, since each order the decision fills must not rest on a later close. A ticker
+  // read a bar early is still sold by its own sell rule at its close, and not bought at a close where that rule holds.
+  const clocks = atClose && p.rank ? assets.map((a) => ind.clockOf(a.source, a.bars.t)) : null;
+  const mixed = clocks !== null && new Set(clocks).size > 1;
+  const endedAt = mixed ? assets.map((a) => ind.endedBy(a.bars.t, timeline)) : null;
   /** Whether the asset's current bar is the one its rebalance fills at: its first bar of a period (at the open), or its last (at the close). */
   const rebalances = (a: A) =>
     atClose
@@ -583,10 +596,17 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     // Ranking: on a decision bar hold the top scores among the eligible; in between, sell rules
     // and stops can still exit, and a freed slot waits for the next decision.
     if (p.rank && decisions![k] === 1) {
-      const score = (a: A) => a.sig.score![a.i];
-      const eligible = assets.filter((a) => a.i >= 0 && a.sig.buy[a.i] === 1 && !sells(a) && Number.isFinite(score(a)));
+      const lag = mixed && new Set(live.map((a) => clocks![a.order])).size > 1;
+      /** The bar of each ticker this decision reads. */
+      const at = assets.map((a) => (!mixed || (isLive.has(a) && !lag) ? a.i : endedAt![a.order][k]));
+      const read = (a: A) => at[a.order];
+      const readT = (a: A) => (read(a) < 0 ? NaN : a.bars.t[read(a)]);
+      const score = (a: A) => (read(a) < 0 ? NaN : a.sig.score![read(a)]);
+      const sellsAt = (a: A, j: number) => a.sig.sell !== null && a.sig.sell(j, position(a)) === 1;
+      const eligible = assets.filter((a) => read(a) >= 0 && a.sig.buy[read(a)] === 1 && !sellsAt(a, read(a)) && Number.isFinite(score(a)));
       eligible.sort((x, y) => score(y) - score(x) || x.order - y.order);
       const chosen = new Set(eligible.slice(0, p.rank.top));
+      const keeps = (a: A) => chosen.has(a) && !(read(a) !== a.i && isLive.has(a) && sells(a));
       for (const a of assets) a.rankPos = Infinity;
       eligible.forEach((a, n) => (a.rankPos = n));
       // A sell that can never fill (the ticker has no later bar in the run) is not waited for.
@@ -601,22 +621,22 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
           table:
             assets.length > TABLE_MAX
               ? null
-              : [...eligible, ...assets.filter((x) => !Number.isFinite(x.rankPos))].map((x) => ({ asset: x.name, score: x.i >= 0 ? score(x) : NaN, eligible: Number.isFinite(x.rankPos) })),
+              : [...eligible, ...assets.filter((x) => !Number.isFinite(x.rankPos))].map((x) => ({ asset: x.name, score: score(x), eligible: Number.isFinite(x.rankPos), t: readT(x) })),
         };
-        return { decision, place: Number.isFinite(a.rankPos) ? a.rankPos : -1, score: a.i >= 0 ? score(a) : NaN };
+        return { decision, place: Number.isFinite(a.rankPos) ? a.rankPos : -1, score: score(a), t: readT(a) };
       };
       waiting = new Set();
       for (const a of assets) {
-        if (chosen.has(a)) {
+        if (keeps(a)) {
           a.pending = a.shares === 0 && ready(a) ? 'buy' : null;
           if (a.pending === 'buy') {
-            a.buyWhy = { buyT: a.bars.t[a.i], rank: placeOf(a), warmup: a.warm, rearm: null };
+            a.buyWhy = { buyT: readT(a), rank: placeOf(a), warmup: a.warm, rearm: null };
             a.waited = false;
           }
         } else if (a.shares > 0) {
           a.pending = 'sell';
           const rank = placeOf(a);
-          a.sellWhy = sells(a) ? { k: 'rule', t: a.bars.t[a.i] } : { k: 'rank', t: a.bars.t[a.i], rank };
+          a.sellWhy = sells(a) ? { k: 'rule', t: a.bars.t[a.i] } : { k: 'rank', t: readT(a), rank };
           if (fills(a)) {
             waiting.add(a);
             rank.decision.sold.push(a.name);
@@ -624,7 +644,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         } else {
           a.pending = null;
         }
-        if (!chosen.has(a) || a.shares > 0) a.heldBack = false;
+        if (!keeps(a) || a.shares > 0) a.heldBack = false;
       }
     }
 

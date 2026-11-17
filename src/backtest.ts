@@ -1,7 +1,7 @@
 import { DAY, stamp } from './dom.ts';
 import type { Spec } from './dsl.ts';
 import { simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
-import { Evaluator } from './evaluate.ts';
+import { clocksApart, ofReads, specEvaluator } from './evaluate.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -184,12 +184,55 @@ function cashRateNote(spec: Spec): string {
   return spec.cash.rate === 0 ? 'Cash earns nothing' : `Cash earns ${Number((spec.cash.rate * 100).toFixed(2))}% a year`;
 }
 
+/**
+ * With `fill: close`, what the fills rest on from other tickers: bars read one early because the tickers keep different
+ * hours (evaluate.ts clocksApart, and the ranking in engine.ts), and closes of the same date the result takes as known at
+ * the fill because the prices cannot show that the markets close apart. Binance tickers on one bar size close together.
+ */
+function closeReadNotes(spec: Spec, data: Map<string, Bars>, intraday: boolean): string[] {
+  const apart = clocksApart(spec, data);
+  if (!apart) return [];
+  const refs = [...spec.universe, ...spec.extras];
+  const binance = (name: string) => refs.find((r) => r.name === name)?.source === 'binance';
+  const together = (a: string, b: string) => !apart(a, b) && binance(a) && binance(b);
+  const when = intraday ? 'time' : 'date';
+  const names = spec.universe.map((a) => a.name);
+  const pairs = names.flatMap((a, i) => names.slice(i + 1).map((b) => [a, b]));
+  const reads = ofReads(spec);
+  const notes: string[] = [];
+  const early = reads.filter(([reader, read]) => apart(read, reader));
+  if (early.length) {
+    notes.push(
+      `With fill: close, a rule reads the previous bar of a ticker that keeps other hours than the one it trades (another source, other days of the week or another bar size), because that ticker's bar of the same ${when} can close after the fill: ${early.map(([reader, read]) => `${read} for ${reader}`).join(', ')}.`,
+    );
+  }
+  const ranked = spec.rank !== null && names.length > 1;
+  if (ranked && pairs.some(([a, b]) => apart(a, b))) {
+    notes.push(
+      `With fill: close, the ranked tickers keep different hours (another source, other days of the week or another bar size), so at a time when tickers on different hours both trade, the ranking reads every ticker's previous bar: a close of the same ${when} can come after the fill.`,
+    );
+  }
+  const same = reads.filter(([reader, read]) => !apart(read, reader) && !together(read, reader));
+  const sameRank = ranked && pairs.some(([a, b]) => !apart(a, b) && !together(a, b));
+  if (same.length || sameRank) {
+    const what = [
+      same.length ? `a rule reads another ticker's close of the same ${when} (${same.map(([reader, read]) => `${read} for ${reader}`).join(', ')})` : '',
+      sameRank ? `the ranking compares the tickers' closes of the same ${when}` : '',
+    ].filter(Boolean);
+    const one = same.length === 1 && !sameRank;
+    notes.push(
+      `With fill: close, ${what.join(', and ')}. The result assumes ${one ? 'that close is' : 'those closes are'} known at the moment of the fill, which is not true for a market that closes later.`,
+    );
+  }
+  return notes;
+}
+
 export const CLOSE_FILL_NOTE =
   'Orders fill at the same close the rules were read at (fill: close). The result assumes you can trade at that closing price, which a real order can only come near by being placed just before the close.';
 
 /** Runs the spec and a buy-and-hold benchmark over the same dates. `data` is keyed by asset name. */
 export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
-  const evaluator = new Evaluator(data);
+  const evaluator = specEvaluator(spec, data);
   const signals = new Map<string, Signals>();
   for (const a of spec.universe) {
     const r = spec.rules[a.name];
@@ -247,7 +290,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
 
   const intraday = run.t.some((t) => t % DAY !== 0);
   const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped)];
-  if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE);
+  if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
     notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
   }

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { CSV_HEADERS, parseCsv } from '../src/data.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { cleanedPath, csvStrategy, csvTicker, dateOrderIsAmbiguous, inspectCsv, remapCsv, type CsvCleaned, type CsvMapping, type CsvRead, type CsvUnread } from '../src/csv-import.ts';
+import { cleanedPath, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, type CsvCleaned, type CsvMapping, type CsvRead, type CsvUnread } from '../src/csv-import.ts';
 import { DAY } from './helpers.ts';
 
 const d = (y: number, m: number, day: number) => Date.UTC(y, m - 1, day);
@@ -524,4 +525,57 @@ test('month names are read as plain UTC days whatever the computer\'s time zone,
   assert.equal(c.dropped, 0);
   // A day that does not exist is not rolled over to the next month.
   assert.equal(remapCsv('Date,Close\n"Feb 30, 2024",2\n', map({ date: 0, close: 1 })).ok, false);
+});
+
+/** The review's file: every day of the first quarter of 2024, written DD-MM-YYYY. */
+const dashedQuarter = () => {
+  const lines = ['Date,Open,High,Low,Close'];
+  for (let t = d(2024, 1, 1); t <= d(2024, 3, 31); t += DAY) {
+    const x = new Date(t);
+    lines.push(`${String(x.getUTCDate()).padStart(2, '0')}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-2024,10,11,9,10.5`);
+  }
+  return `${lines.join('\n')}\n`;
+};
+
+test('dates written DD-MM-YYYY are read day first when the file proves it, every row, as plain days', () => {
+  const r = read(dashedQuarter());
+  assert.deepEqual([r.rows, r.first, r.last], [91, '2024-01-01', '2024-03-31']);
+  assert.equal(r.ambiguousDates, false);
+  assert.deepEqual(r.doubts, ['The file has no volume column, so volume is 0 on every bar and a rule that reads volume cannot work.', 'Only 91 rows. The trend rule in the starter strategy uses a 100-bar average and would never act on this file.']);
+  const c = cleaned(remapCsv(dashedQuarter(), r.columns));
+  assert.deepEqual(c.text.split('\n').slice(1, 4), ['2024-01-01,10,11,9,10.5,0', '2024-01-02,10,11,9,10.5,0', '2024-01-03,10,11,9,10.5,0']);
+  assert.equal(c.rows, 91);
+});
+
+test('dashed dates that could be day first or month first get the same question and choice as slashed ones', () => {
+  const ambiguous = 'Date,Open,High,Low,Close,Volume\n02-01-2024,1,2,1,2,5\n03-01-2024,1,2,1,2,5\n04-01-2024,1,2,1,2,5\n';
+  const a = read(ambiguous);
+  assert.equal(a.ambiguousDates, true);
+  assert.equal(dateOrderIsAmbiguous(ambiguous, 0), true);
+  // The question about the order shows dates the way the file writes them.
+  assert.equal(dateSeparator(ambiguous, 0), '-');
+  assert.equal(dateSeparator(ambiguous.replace(/-/g, '/'), 0), '/');
+  assert.ok(a.doubts.includes('The dates could be read two ways: 02-01-2024 is 2024-02-01 month first, or 2024-01-02 day first. They were read month first. If the file is day first, say so below.'), a.doubts.join('\n'));
+  const dayFirst = cleaned(remapCsv(ambiguous, { ...a.columns, dateOrder: 'day-first' }));
+  assert.deepEqual(dayFirst.text.split('\n').slice(1, 4).map((l) => l.split(',')[0]), ['2024-01-02', '2024-01-03', '2024-01-04']);
+  assert.ok(dayFirst.notes.includes('Dates such as 02-01-2024 were read day first.'));
+  const monthFirst = cleaned(remapCsv(ambiguous, { ...a.columns, dateOrder: 'month-first' }));
+  assert.deepEqual(parseCsv(monthFirst.text).t, [d(2024, 2, 1), d(2024, 3, 1), d(2024, 4, 1)]);
+  // Mixed orders are noted as with slashes.
+  const mixed = read('Date,Open,High,Low,Close,Volume\n31-01-2024,1,2,1,2,5\n01-31-2024,1,2,1,2,5\n02-05-2024,1,2,1,2,5\n');
+  assert.ok(mixed.doubts.includes('The dates mix day first and month first, so the ones that cannot be read as month first were skipped.'));
+});
+
+test('the dashed file reads and cleans the same in every time zone', () => {
+  const script = `
+    import { inspectCsv, remapCsv } from ${JSON.stringify(new URL('../src/csv-import.ts', import.meta.url).href)};
+    const text = process.argv[1];
+    const r = inspectCsv(text);
+    const c = remapCsv(text, { ...r.columns, dateOrder: 'day-first' });
+    console.log(JSON.stringify([r.read && r.first, r.read && r.last, r.read && r.doubts, c.ok && c.text]));`;
+  const answers = ['UTC', 'America/New_York', 'Europe/Berlin', 'Asia/Ho_Chi_Minh'].map((TZ) =>
+    execFileSync(process.execPath, ['--input-type=module', '-e', script, dashedQuarter()], { env: { ...process.env, TZ }, encoding: 'utf8' }),
+  );
+  assert.equal(JSON.parse(answers[0])[0], '2024-01-01');
+  for (const a of answers) assert.equal(a, answers[0]);
 });

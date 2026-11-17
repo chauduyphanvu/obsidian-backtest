@@ -372,6 +372,19 @@ test('csv: DD/MM/YYYY when the file proves it, MM/DD/YYYY when it is ambiguous',
   assert.deepEqual(parseCsv('Date,Open,High,Low,Close\n02/30/2024,1,2,1,2\n01/02/2024,1,2,1,2').t, [Date.UTC(2024, 0, 2)]);
 });
 
+test('csv: dates with dashes, DD-MM-YYYY or MM-DD-YYYY, are read like slashed ones, never with the year as a time zone', () => {
+  // Day first when some first number is above 12 and no second one is, as with slashes; month first otherwise.
+  const dayFirst = parseCsv('Date,Open,High,Low,Close\n02-01-2024,1,2,1,2\n31-01-2024,1,2,1,2');
+  assert.deepEqual(dayFirst.t, [jan[0], jan[2]]);
+  const monthFirst = parseCsv('Date,Open,High,Low,Close\n01-02-2024,1,2,1,2\n01-31-2024,1,2,1,2');
+  assert.deepEqual(monthFirst.t, [jan[0], jan[2]]);
+  const ambiguous = parseCsv('Date,Open,High,Low,Close\n02-01-2024,1,2,1,2\n03-01-2024,1,2,1,2');
+  assert.deepEqual(ambiguous.t, [Date.UTC(2024, 1, 1), Date.UTC(2024, 2, 1)]);
+  assert.deepEqual(parseCsv('Date,Open,High,Low,Close\n31-01-2024 14:30,1,2,1,2').t, [Date.UTC(2024, 0, 31, 14, 30)]);
+  // An offset counts only after a time of day.
+  assert.deepEqual(parseCsv('Date,Open,High,Low,Close\n2024-01-31T14:30:00-05:00,1,2,1,2\n2024-02-01 09:00+0100,1,2,1,2').t, [Date.UTC(2024, 0, 31, 19, 30), Date.UTC(2024, 1, 1, 8)]);
+});
+
 test('csv: errors name the column that is the problem', () => {
   assert.throws(() => parseCsv('Day,Open,High,Close\n2024-01-02,1,2,2'), /no date, low column/);
   assert.throws(() => parseCsv('Day,Open,High,Low,Close\n2024-01-02,1,2,1,2'), /no date column/);
