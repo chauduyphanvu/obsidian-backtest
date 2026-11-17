@@ -55,6 +55,21 @@ sell when rsi(2) > 70
   or bars held >= 10`,
   },
   {
+    title: 'Adding to a winner',
+    description:
+      'Opens a third of a QQQ position when it is above its 100-day average, then adds a third at the next open after each close 3% above the latest entry, up to three entries. The 8% stop moves with the average entry price. It tends to struggle when a rise reverses soon after the last add.',
+    text: `name: Adding to a winner
+universe: QQQ
+from: 2010-01-01
+costs: 5 bps
+entries: 3
+stop loss: 8%
+
+buy  when close > sma(100)
+add  when close > last entry price * 1.03
+sell when close < sma(100)`,
+  },
+  {
     title: 'Bitcoin breakout',
     description:
       'Buys Bitcoin from Binance when it closes above its highest price of the last 55 days. The only exit is a trailing stop 3 average true ranges below the highest price since entry. It tends to struggle when breakouts fail and reverse, and it gives back part of each gain before the stop is hit.',

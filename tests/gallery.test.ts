@@ -107,6 +107,18 @@ test('together the starters show the main parts of the language', () => {
   assert.match(text, /bars held/);
   assert.match(text, /\brsi\(/);
   assert.match(text, /\bmonth\b/);
+  assert.match(text, /^add +when .*last entry price/m);
+});
+
+test('the starter that builds a position in entries really does, with one, two and three entries', () => {
+  const adding = STARTERS.find((s) => s.title === 'Adding to a winner')!;
+  const { spec } = parseSpec(adding.text);
+  assert.equal(spec!.entries, 3);
+  assert.ok(spec!.rules.QQQ.add);
+  const bt = run(adding);
+  const counts = bt.run.trades.map((t) => t.entries!.length);
+  assert.ok(counts.includes(1) && counts.includes(2) && counts.includes(3), `entries per trade: ${[...new Set(counts)].sort()}`);
+  assert.match(adding.description, /three entries/);
 });
 
 test('a starter becomes a fenced block that the editor finds again', () => {
