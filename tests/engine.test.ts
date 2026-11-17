@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { runBacktest } from '../src/backtest.ts';
+import { computeStats, runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, near, DAY, T0 } from './helpers.ts';
@@ -119,7 +119,7 @@ test('a pending order on the last bar is reported, not filled', () => {
   const A = bars([10, 10, 12]);
   const r = run('universe: A\nbuy when close > 11', { A });
   assert.equal(r.run.trades.length, 0);
-  assert.deepEqual(r.run.states, [{ name: 'A', weight: 1, long: false, since: null, pending: 'buy' }]);
+  assert.deepEqual(r.run.states, [{ name: 'A', weight: 1, long: false, since: null, pending: 'buy', shares: 0, lastClose: 12, value: 0, targetWeight: 1 }]);
 });
 
 test('from and to bound the run, with earlier bars feeding the lookback', () => {
@@ -143,4 +143,131 @@ test('statistics', () => {
   assert.ok(near(r.benchmark.stats.cagr, 0.21, 1e-9));
   assert.equal(r.tradeStats.count, 0);
   assert.equal(r.tradeStats.open, 1);
+});
+
+test('slippage worsens every fill, and costs are charged on the slipped value', () => {
+  const A = bars([10, 10, 20, 20], { opens: [10, 10, 20, 20] });
+  let r = run('universe: A\ncapital: 1000\nslippage: 1%\nbuy when true\nsell when close > 15', { A });
+  // Bought at 10 * 1.01 on day 1, sold at 20 * 0.99 on day 3.
+  let t = r.run.trades[0];
+  assert.deepEqual([t.entryT, t.exitT, t.reason, t.bars], [day(1), day(3), 'signal', 2]);
+  assert.ok(near(t.entryPrice, 10.1) && near(t.exitPrice, 19.8));
+  const shares = 1000 / 10.1;
+  assert.ok(near(r.run.equity[2], shares * 20));
+  assert.ok(near(r.run.equity[3], shares * 19.8));
+  assert.ok(near(t.pnl, shares * 19.8 - 1000));
+
+  r = run('universe: A\ncapital: 1000\nslippage: 1%\ncosts: 100 bps\nbuy when true\nsell when close > 15', { A });
+  const spent = 1000 / 1.01;
+  const proceeds = (spent / 10.1) * 19.8;
+  assert.ok(near(r.run.equity[3], proceeds * 0.99));
+  assert.ok(near(r.run.costs, spent * 0.01 + proceeds * 0.01));
+  t = r.run.trades[0];
+  assert.ok(near(t.ret, (19.8 * 0.99) / (10.1 * 1.01) - 1));
+  assert.ok(near(t.pnl, proceeds * 0.99 - 1000));
+
+  // The stop sits 10% under the 101 fill, at 90.9, and fills 1% worse than that.
+  const inside = bars([100, 100, 88, 88], { opens: [100, 100, 100, 88], lows: [100, 100, 85, 88] });
+  r = run('universe: A\ncapital: 1000\nslippage: 1%\nstop loss: 10%\nbuy when true', { A: inside });
+  assert.ok(near(r.run.trades[0].exitPrice, 90.9 * 0.99));
+  assert.ok(near(r.run.equity[2], 891));
+});
+
+test('rebalancing trades are slipped too', () => {
+  const start = Date.UTC(2020, 0, 30);
+  const A = bars([10, 20, 20, 20], { opens: [10, 10, 20, 20], start });
+  const B = bars([10, 10, 10, 10], { opens: [10, 10, 10, 10], start });
+  const r = run('universe: A 50%, B 50%\ncapital: 1000\nslippage: 1%\nrebalance: monthly\nbuy when true', { A, B });
+  // s shares each at 10.1. On 1 Feb A is worth 20s and B 10s: A sells 5s of value at 19.8 a share,
+  // and the cash buys B at 10.1.
+  const s = 500 / 10.1;
+  assert.ok(near(r.run.equity[2], s * 15 + (s * 10 + ((s / 4) * 19.8 * 10) / 10.1)));
+});
+
+test('cash earns the cash rate for the calendar days of each step, and so does the benchmark', () => {
+  // Wednesday 1, Thursday 2, then Monday 6 January: steps of 1 and 4 days at 36.5% a year.
+  const A: Bars = { t: [day(0), day(1), day(5)], o: [10, 10, 10], h: [10, 10, 10], l: [10, 10, 10], c: [10, 10, 10], v: [1, 1, 1] };
+  const r = run('universe: A\ncapital: 1000\ncash rate: 36.5%\nbuy when close > 10', { A });
+  assert.ok(near(r.run.equity[1], 1001));
+  assert.ok(near(r.run.equity[2], 1001 * 1.004));
+  assert.ok(near(r.interest, 1001 * 1.004 - 1000));
+  assert.ok(near(r.run.cashReturn[2], 0.004));
+  assert.equal(r.cashRateNote, 'Cash earns 36.5% a year');
+  // The benchmark earns a day of interest, then buys at the open with all of it.
+  assert.ok(near(r.benchmark.equity[1], 1001) && near(r.benchmark.equity[2], 1001));
+});
+
+test('a cash rate ticker pays its close at the previous bar, as a yearly percentage', () => {
+  const A = bars([10, 10, 10, 10]);
+  const R = bars([36.5, 73], { start: day(1) });
+  const r = run('universe: A\ncapital: 1000\ncash rate: R\nbuy when close > 10', { A, R });
+  // Day 0 has no rate yet (0), day 1 pays 36.5% for a day, day 2 pays 73%.
+  assert.ok(near(r.run.equity[1], 1000));
+  assert.ok(near(r.run.equity[2], 1001));
+  assert.ok(near(r.run.equity[3], 1001 * 1.002));
+  assert.ok(near(r.interest, 1001 * 1.002 - 1000));
+  assert.equal(r.cashRateNote, 'Cash earns the R rate');
+});
+
+test('Sharpe and Sortino measure returns above the cash rate', () => {
+  const t = [day(0), day(1), day(2)];
+  // Returns +10% and -10% against 1% a step from cash: excess +9% and -11%.
+  const s = computeStats(t, [100, 110, 99], 100, [1, 1, 1], [0, 0.01, 0.01]);
+  const perYear = Math.sqrt(365.25);
+  assert.ok(near(s.sharpe, (-0.01 / 0.1) * perYear));
+  assert.ok(near(s.sortino, (-0.01 / Math.sqrt(0.11 ** 2 / 2)) * perYear));
+  // With no cash rate the mean return here is 0.
+  assert.ok(near(computeStats(t, [100, 110, 99], 100, [1, 1, 1]).sharpe, 0));
+});
+
+test('bars held counts completed bars since the entry fill', () => {
+  const A = bars([10, 10, 10, 10, 10, 10, 10]);
+  const r = run('universe: A\nbuy when true\nsell when bars held >= 2', { A });
+  // In on day 1 (0 bars held at that close), 2 at day 3's close, out at day 4's open; back in on day 5.
+  assert.deepEqual(r.run.trades.map((t) => [t.entryT, t.exitT, t.reason, t.bars]), [[day(1), day(4), 'signal', 3], [day(5), day(6), 'open', 1]]);
+});
+
+test('entry price is the fill price, slippage included', () => {
+  const A = bars([100, 100, 95.5, 95.5, 95.5]);
+  const rule = 'universe: A\nbuy when true\nsell when close < entry price * 0.95';
+  // Filled at 100: 95.5 stays above 95. Filled at 101: 95.5 is below 95.95, so it sells on day 3.
+  assert.equal(run(rule, { A }).run.trades[0].reason, 'open');
+  const t = run(rule + '\nslippage: 1%', { A }).run.trades[0];
+  assert.deepEqual([t.reason, t.exitT], ['signal', day(3)]);
+});
+
+// Every bar's true range is 2, so ATR(2) is 2 from bar 1 until bar 3 moves.
+const atrBars = (bar3: { o: number; h: number; l: number; c: number }) =>
+  bars([100, 100, 100, bar3.c, bar3.c], { opens: [100, 100, 100, bar3.o, bar3.c], highs: [101, 101, 101, bar3.h, bar3.c], lows: [99, 99, 99, bar3.l, bar3.c] });
+
+test('ATR stops use the ATR at the signal bar and keep it for the position', () => {
+  // Signal at bar 1 (ATR 2), filled at 100 on bar 2: stop at 96, target at 104.
+  const stop = run('universe: A\nstop loss: 2 atr(2)\nbuy when atr(2) > 0', { A: atrBars({ o: 100, h: 101, l: 95, c: 97 }) });
+  assert.deepEqual(stop.run.trades.map((t) => [t.entryT, t.exitT, t.exitPrice, t.reason]), [[day(2), day(3), 96, 'stop loss']]);
+  const target = run('universe: A\ntake profit: 2 atr(2)\nbuy when atr(2) > 0', { A: atrBars({ o: 100, h: 105, l: 99, c: 103 }) });
+  assert.deepEqual(target.run.trades.map((t) => [t.exitPrice, t.reason]), [[104, 'take profit']]);
+  // The trailing level is the highest completed high (101 after bar 2) minus 2.
+  const trail = run('universe: A\ntrailing stop: 1 atr(2)\nbuy when atr(2) > 0', { A: atrBars({ o: 100, h: 100.5, l: 98.5, c: 99 }) });
+  assert.deepEqual(trail.run.trades.map((t) => [t.exitPrice, t.reason]), [[99, 'trailing stop']]);
+  // Bought on bar 1 after a signal at bar 0, where ATR(2) is unknown: no stop at all.
+  const none = run('universe: A\nstop loss: 2 atr(2)\nbuy when true', { A: atrBars({ o: 100, h: 101, l: 50, c: 97 }) });
+  assert.deepEqual(none.run.trades.map((t) => t.reason), ['open']);
+});
+
+test('a stop set in a for section applies to that ticker only', () => {
+  const drop = () => bars([100, 100, 88, 88], { opens: [100, 100, 100, 88], lows: [100, 100, 85, 88] });
+  const r = run('universe: A 50%, B 50%\ncapital: 1000\nstop loss: 10%\nbuy when true\nfor B:\n  stop loss: 20%', { A: drop(), B: drop() });
+  assert.deepEqual(r.run.trades.map((t) => [t.asset, t.exitPrice, t.reason]), [['A', 90, 'stop loss'], ['B', 88, 'open']]);
+});
+
+test('trade profits, interest and capital add up to the final equity', () => {
+  const start = Date.UTC(2020, 0, 28);
+  const A = bars([10, 12, 20, 18, 9, 15, 16], { start });
+  const B = bars([50, 50, 60, 40, 40, 50, 70], { start });
+  const r = run('universe: A 50%, B 30%\ncapital: 1000\ncosts: 10 bps\nslippage: 5 bps\ncash rate: 5%\nrebalance: weekly\nbuy when close > close[1] or true\nsell when close < 10', { A, B });
+  assert.ok(r.run.trades.length >= 3);
+  const pnl = r.run.trades.reduce((s, t) => s + t.pnl, 0);
+  assert.ok(near(r.run.equity[r.run.equity.length - 1], 1000 + pnl + r.interest, 1e-9));
+  const open = r.run.states.filter((s) => s.long);
+  assert.ok(open.every((s) => near(s.value, s.shares * s.lastClose)));
 });

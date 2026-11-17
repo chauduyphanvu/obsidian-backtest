@@ -108,3 +108,42 @@ export function macd(src: number[], fast: number, slow: number): number[] {
 export function lag(src: number[], n: number): number[] {
   return src.map((_, i) => (i >= n ? src[i - n] : NaN));
 }
+
+/** One-bar change as a fraction; NaN on the first bar. */
+export function returns(src: number[]): number[] {
+  return src.map((x, i) => (i > 0 ? x / src[i - 1] - 1 : NaN));
+}
+
+const DAY = 86_400_000;
+
+function isWeekend(t: number): boolean {
+  const d = new Date(t).getUTCDay();
+  return d === 0 || d === 6;
+}
+
+export function monthKey(t: number): number {
+  const d = new Date(t);
+  return d.getUTCFullYear() * 12 + d.getUTCMonth();
+}
+
+/**
+ * 1 on the last bar of each period: the next bar falls in another one. Past the final bar the next
+ * bar is one step on (the smallest gap in the series), skipping weekends unless the series has
+ * weekend bars, so the final bar of a month is known to end it on its own calendar.
+ */
+export function periodEnds(t: number[], key: (t: number) => number): number[] {
+  let step = Infinity;
+  for (let i = 1; i < t.length; i++) step = Math.min(step, t[i] - t[i - 1]);
+  if (!Number.isFinite(step)) step = DAY;
+  const weekends = t.some(isWeekend);
+  return t.map((x, i) => {
+    let next = i + 1 < t.length ? t[i + 1] : x + step;
+    if (i + 1 === t.length) while (!weekends && isWeekend(next)) next += DAY;
+    return key(next) !== key(x) ? 1 : 0;
+  });
+}
+
+/** 1 on the first bar of each period; unknown on the series' first bar, whose period may have begun earlier. */
+export function periodStarts(t: number[], key: (t: number) => number): number[] {
+  return t.map((x, i) => (i === 0 ? NaN : key(x) !== key(t[i - 1]) ? 1 : 0));
+}

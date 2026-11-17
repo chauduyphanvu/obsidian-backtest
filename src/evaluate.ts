@@ -1,6 +1,74 @@
-import type { Expr } from './dsl.ts';
+import { findPos, type CalName, type CmpOp, type Expr } from './dsl.ts';
 import type { Bars } from './types.ts';
 import * as ind from './indicators.ts';
+
+/** The open position a sell rule reads: where it was bought, as an index into the asset's bars, and at what fill price. */
+export interface PosState {
+  entryIdx: number;
+  entryPrice: number;
+}
+
+/** A rule evaluated one bar at a time: 1, 0 or NaN at bar `i`, given the open position (null when flat). */
+export type BarRule = (i: number, pos: PosState | null) => number;
+
+function arith(op: '+' | '-' | '*' | '/', a: number, b: number): number {
+  switch (op) {
+    case '+':
+      return a + b;
+    case '-':
+      return a - b;
+    case '*':
+      return a * b;
+    case '/':
+      return b === 0 ? NaN : a / b;
+  }
+}
+
+/** A comparison at one bar; `pa` and `pb` are the previous bar's values, which only crosses read. */
+function compare(op: CmpOp, a: number, b: number, pa: number, pb: number): number {
+  if (Number.isNaN(a) || Number.isNaN(b)) return NaN;
+  switch (op) {
+    case '>':
+      return a > b ? 1 : 0;
+    case '<':
+      return a < b ? 1 : 0;
+    case '>=':
+      return a >= b ? 1 : 0;
+    case '<=':
+      return a <= b ? 1 : 0;
+    case '==':
+      return a === b ? 1 : 0;
+    case '!=':
+      return a !== b ? 1 : 0;
+    case 'xup':
+      return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : a > b && pa <= pb ? 1 : 0;
+    case 'xdn':
+      return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : a < b && pa >= pb ? 1 : 0;
+  }
+}
+
+function logic(op: 'and' | 'or', a: number, b: number): number {
+  if (op === 'and') return a === 0 || b === 0 ? 0 : a === 1 && b === 1 ? 1 : NaN;
+  return a === 1 || b === 1 ? 1 : a === 0 && b === 0 ? 0 : NaN;
+}
+
+function calendar(name: CalName, t: number[]): number[] {
+  const each = (fn: (d: Date) => number) => t.map((x) => fn(new Date(x)));
+  switch (name) {
+    case 'month':
+      return each((d) => d.getUTCMonth() + 1);
+    case 'day':
+      return each((d) => d.getUTCDate());
+    case 'weekday':
+      return each((d) => ((d.getUTCDay() + 6) % 7) + 1);
+    case 'year':
+      return each((d) => d.getUTCFullYear());
+    case 'month_start':
+      return ind.periodStarts(t, ind.monthKey);
+    case 'month_end':
+      return ind.periodEnds(t, ind.monthKey);
+  }
+}
 
 /**
  * Evaluates expressions over an asset's bars. Numbers and conditions are both number arrays; a
@@ -23,6 +91,52 @@ export class Evaluator {
       this.memo.set(key, out);
     }
     return out;
+  }
+
+  /**
+   * A rule that may read the open position. Parts that do not are still evaluated once over the
+   * whole series; only the rest is worked out bar by bar.
+   */
+  compile(e: Expr, asset: string): BarRule {
+    if (!findPos(e)) {
+      const values = this.eval(e, asset);
+      return (i) => values[i];
+    }
+    switch (e.k) {
+      case 'pos':
+        if (e.name === 'bars_held') return (i, p) => (p ? i - p.entryIdx : NaN);
+        return (_, p) => (p ? p.entryPrice : NaN);
+      case 'math': {
+        const a = this.compile(e.args[0], asset);
+        if (e.fn === 'abs') return (i, p) => Math.abs(a(i, p));
+        const b = this.compile(e.args[1], asset);
+        return e.fn === 'min' ? (i, p) => Math.min(a(i, p), b(i, p)) : (i, p) => Math.max(a(i, p), b(i, p));
+      }
+      case 'bin': {
+        const [a, b, op] = [this.compile(e.a, asset), this.compile(e.b, asset), e.op];
+        return (i, p) => arith(op, a(i, p), b(i, p));
+      }
+      case 'neg': {
+        const a = this.compile(e.a, asset);
+        return (i, p) => -a(i, p);
+      }
+      case 'cmp': {
+        const [a, b, op] = [this.compile(e.a, asset), this.compile(e.b, asset), e.op];
+        // A cross reads the previous bar with the same position, so "bars held" is one less there.
+        const crosses = op === 'xup' || op === 'xdn';
+        return (i, p) => compare(op, a(i, p), b(i, p), crosses && i > 0 ? a(i - 1, p) : NaN, crosses && i > 0 ? b(i - 1, p) : NaN);
+      }
+      case 'logic': {
+        const [a, b, op] = [this.compile(e.a, asset), this.compile(e.b, asset), e.op];
+        return (i, p) => logic(op, a(i, p), b(i, p));
+      }
+      case 'not': {
+        const a = this.compile(e.a, asset);
+        return (i, p) => 1 - a(i, p);
+      }
+    }
+    // The parser keeps position values out of lags, "of" and indicator inputs.
+    throw new Error(`Position values can't be used inside ${e.k}`);
   }
 
   private bars(asset: string): Bars {
@@ -48,6 +162,10 @@ export class Evaluator {
         return { open: bars.o, high: bars.h, low: bars.l, close: bars.c, volume: bars.v }[e.name];
       case 'ind':
         return this.indicator(e, asset, bars);
+      case 'cal':
+        return calendar(e.name, bars.t);
+      case 'pos':
+        throw new Error('Position values need a position: use compile()');
       case 'math': {
         const a = this.eval(e.args[0], asset);
         if (e.fn === 'abs') return each((i) => Math.abs(a[i]));
@@ -58,17 +176,7 @@ export class Evaluator {
       case 'bin': {
         const a = this.eval(e.a, asset);
         const b = this.eval(e.b, asset);
-        switch (e.op) {
-          case '+':
-            return each((i) => a[i] + b[i]);
-          case '-':
-            return each((i) => a[i] - b[i]);
-          case '*':
-            return each((i) => a[i] * b[i]);
-          case '/':
-            return each((i) => (b[i] === 0 ? NaN : a[i] / b[i]));
-        }
-        break;
+        return each((i) => arith(e.op, a[i], b[i]));
       }
       case 'neg': {
         const a = this.eval(e.a, asset);
@@ -77,33 +185,12 @@ export class Evaluator {
       case 'cmp': {
         const a = this.eval(e.a, asset);
         const b = this.eval(e.b, asset);
-        const known = (i: number) => !Number.isNaN(a[i]) && !Number.isNaN(b[i]);
-        const bool = (i: number, v: boolean) => (known(i) ? (v ? 1 : 0) : NaN);
-        switch (e.op) {
-          case '>':
-            return each((i) => bool(i, a[i] > b[i]));
-          case '<':
-            return each((i) => bool(i, a[i] < b[i]));
-          case '>=':
-            return each((i) => bool(i, a[i] >= b[i]));
-          case '<=':
-            return each((i) => bool(i, a[i] <= b[i]));
-          case '==':
-            return each((i) => bool(i, a[i] === b[i]));
-          case '!=':
-            return each((i) => bool(i, a[i] !== b[i]));
-          case 'xup':
-            return each((i) => (i > 0 && known(i) && known(i - 1) ? (a[i] > b[i] && a[i - 1] <= b[i - 1] ? 1 : 0) : NaN));
-          case 'xdn':
-            return each((i) => (i > 0 && known(i) && known(i - 1) ? (a[i] < b[i] && a[i - 1] >= b[i - 1] ? 1 : 0) : NaN));
-        }
-        break;
+        return each((i) => compare(e.op, a[i], b[i], i > 0 ? a[i - 1] : NaN, i > 0 ? b[i - 1] : NaN));
       }
       case 'logic': {
         const a = this.eval(e.a, asset);
         const b = this.eval(e.b, asset);
-        if (e.op === 'and') return each((i) => (a[i] === 0 || b[i] === 0 ? 0 : a[i] === 1 && b[i] === 1 ? 1 : NaN));
-        return each((i) => (a[i] === 1 || b[i] === 1 ? 1 : a[i] === 0 && b[i] === 0 ? 0 : NaN));
+        return each((i) => logic(e.op, a[i], b[i]));
       }
       case 'not': {
         const a = this.eval(e.a, asset);
@@ -123,7 +210,6 @@ export class Evaluator {
         });
       }
     }
-    throw new Error('Unhandled expression');
   }
 
   private indicator(e: Extract<Expr, { k: 'ind' }>, asset: string, bars: Bars): number[] {

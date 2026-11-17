@@ -76,3 +76,56 @@ test('"of" reads another ticker as of each bar, never ahead', () => {
   const ev = new Evaluator(data);
   assert.deepEqual(round(ev.eval(spec!.rules.A.buy, 'A')), [null, 0, 0, 1, 1]);
 });
+
+const sellRule = (text: string): Expr => {
+  const { spec, errors } = parseSpec(`universe: A\nbuy when true\nsell when ${text}`);
+  assert.deepEqual(errors, []);
+  return spec!.rules.A.sell!;
+};
+const at = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d);
+const onDays = (days: number[]) => ({ t: days, o: days.map(() => 1), h: days.map(() => 1), l: days.map(() => 1), c: days.map(() => 1), v: days.map(() => 1) });
+
+test('calendar values come from the UTC date of each bar', () => {
+  // Thursday 30 January to Monday 3 February 2020, weekend included.
+  const ev = new Evaluator(new Map([['A', bars([1, 1, 1, 1, 1], { start: at(2020, 1, 30) })]]));
+  const num = (name: string) => ev.eval({ k: 'cal', name } as Expr, 'A');
+  assert.deepEqual(num('month'), [1, 1, 2, 2, 2]);
+  assert.deepEqual(num('day'), [30, 31, 1, 2, 3]);
+  assert.deepEqual(num('weekday'), [4, 5, 6, 7, 1]);
+  assert.deepEqual(num('year'), [2020, 2020, 2020, 2020, 2020]);
+  // The first bar's month may have started before the data does.
+  assert.deepEqual(round(num('month_start')), [null, 0, 1, 0, 0]);
+  assert.deepEqual(num('month_end'), [0, 1, 0, 0, 0]);
+});
+
+test('month_end on the last bar looks at the next weekday, or the next day when the series trades on weekends', () => {
+  // 2020 is a leap year: Friday 28 February is followed by Saturday the 29th.
+  const weekdays = new Evaluator(new Map([['A', onDays([at(2020, 2, 26), at(2020, 2, 27), at(2020, 2, 28)])]]));
+  assert.deepEqual(weekdays.eval(cond('month_end'), 'A'), [0, 0, 1]);
+  const everyDay = new Evaluator(new Map([['A', bars([1, 1, 1, 1, 1, 1, 1], { start: at(2020, 2, 22) })]]));
+  assert.deepEqual(everyDay.eval(cond('month_end'), 'A'), [0, 0, 0, 0, 0, 0, 0]);
+  // Weekly bars step a week past the last one.
+  const weekly = new Evaluator(new Map([['A', onDays([at(2024, 1, 15), at(2024, 1, 22), at(2024, 1, 29)])]]));
+  assert.deepEqual(weekly.eval(cond('month_end'), 'A'), [0, 0, 1]);
+});
+
+test('a sell rule with position values is worked out bar by bar with the open position', () => {
+  const ev = new Evaluator(new Map([['A', bars([12, 11, 9, 9.5, 8])]]));
+  const rule = ev.compile(sellRule('bars held >= 2 or close < entry price * 0.9'), 'A');
+  const pos = { entryIdx: 1, entryPrice: 10 };
+  // bars held: -1, 0, 1, 2, 3; entry price * 0.9 = 9.
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => rule(i, pos)), [0, 0, 0, 1, 1]);
+  // Flat, position values are unknown and never trigger a rule.
+  assert.deepEqual([0, 1, 2].map((i) => rule(i, null)), [NaN, NaN, NaN]);
+  const either = ev.compile(sellRule('close > 11.5 or bars held > 0'), 'A');
+  assert.deepEqual([0, 1].map((i) => either(i, null)), [1, NaN]);
+  const both = ev.compile(sellRule('close > 11.5 and bars held > 0'), 'A');
+  assert.deepEqual([0, 1].map((i) => both(i, null)), [NaN, 0]);
+  // A cross reads the previous bar with the same position.
+  const cross = ev.compile(sellRule('close crosses below entry price'), 'A');
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => cross(i, pos)), [NaN, 0, 1, 0, 0]);
+  const math = ev.compile(sellRule('max(bars held, 1) * 2 - -entry_price / 10 == 3 and not abs(bars held) > 1'), 'A');
+  assert.deepEqual([1, 2, 3].map((i) => math(i, pos)), [1, 1, 0]);
+  // A rule without position values reads the precomputed series.
+  assert.deepEqual([0, 4].map((i) => ev.compile(sellRule('close < 10'), 'A')(i, pos)), [0, 1]);
+});

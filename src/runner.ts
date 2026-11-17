@@ -1,6 +1,6 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { loadBars, type DataDeps } from './data.ts';
-import type { Spec } from './dsl.ts';
+import { parseSpec, type Defaults, type ParseResult, type Spec } from './dsl.ts';
 import type { AssetRef, Bars } from './types.ts';
 
 const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 };
@@ -18,14 +18,23 @@ export interface RunOutput {
 /** Loads a spec's prices and runs it. Knows nothing about Obsidian: everything outside comes through `deps`. */
 export class Runner {
   private deps: DataDeps;
+  private defaults: Partial<Defaults>;
 
-  constructor(deps: DataDeps) {
+  /** `defaults` fill in what a block leaves out, such as the capital or the cash rate. */
+  constructor(deps: DataDeps, defaults: Partial<Defaults> = {}) {
     this.deps = deps;
+    this.defaults = defaults;
+  }
+
+  /** Parses a block with this runner's defaults; `overrides` replace declared parameter values. */
+  parse(source: string, overrides?: Record<string, number>): ParseResult {
+    return parseSpec(source, { defaults: this.defaults, overrides });
   }
 
   async loadPrices(spec: Spec, force = false): Promise<{ data: Map<string, Bars>; warnings: string[] }> {
     const refs = new Map<string, AssetRef>();
-    for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : [])]) {
+    const cash = spec.cash.k === 'ticker' ? [spec.cash.ref] : [];
+    for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...cash]) {
       if (!refs.has(r.name)) refs.set(r.name, r);
     }
     const step = Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)];
