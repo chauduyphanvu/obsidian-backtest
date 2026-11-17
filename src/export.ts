@@ -118,6 +118,7 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
           ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
           ['Trades', tradesText(tradeStats), '–'],
           ['Share won', pct(tradeStats.winRate, 0), '–'],
+          ...(run.commission === undefined ? [] : [['Costs paid', `${money(run.costs)}, of which ${money(run.commission)} commission`, '–']]),
         ],
         'lrr',
       ),

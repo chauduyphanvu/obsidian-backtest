@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest, type Segment, type Stats, type TradeStats } from '../src/backtest.ts';
+import { money } from '../src/dom.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { AssetState, Trade } from '../src/engine.ts';
 import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
@@ -230,6 +231,23 @@ test('snapshot: front matter, a text fence, figures, positions and trades, newes
   const md = snapshotMarkdown({ name: 'Trend following', source: '\nuniverse: SPY, TLT\nbuy when close > sma(200)\n', backtest: bt, now: NOW });
   assert.equal(md, SNAPSHOT);
   assert.ok(!md.includes('```strategy'));
+});
+
+test('snapshot: a strategy with a commission says what it paid, and one built in entries says so in its positions and trades', () => {
+  const closes = [100, 100, 100, 100, 100, 104, 105, 109, 110, 114, 113, 118, 112, 111, 120, 121, 122];
+  const run = (src: string) => runBacktest(parseSpec(src).spec!, new Map([['A', bars(closes, { start: T0, step: DAY })]]));
+  const src = 'universe: A\ncapital: 10000\ncosts: 5 bps\ncommission: 1\nentries: 3\nbuy when close > sma(5)\nadd when close > last entry price * 1.03\nsell when close < 50';
+  const bt = run(src);
+  assert.ok(bt.run.commission! > 0 && bt.run.costs > bt.run.commission!);
+  const md = snapshotMarkdown({ name: 'Adds', source: src, backtest: bt, now: NOW });
+  assert.ok(md.includes(`| Costs paid | ${money(bt.run.costs)}, of which ${money(bt.run.commission!)} commission | – |\n`), md);
+  assert.ok(md.includes('| A | 100% | Long since 2020-01-07, 3 of 3 entries |'), md);
+  assert.ok(md.includes('| A | 2020-01-07, 3 entries | '), md);
+  // Without a commission the figures have no such row, as before.
+  const plain = snapshotMarkdown({ name: 'Adds', source: src, backtest: run(src.replace('commission: 1\n', '')), now: NOW });
+  assert.ok(!plain.includes('Costs paid'));
+  // The properties written to a note have no figure for commission, so a note's figures do not change with one.
+  assert.deepEqual(Object.keys(resultProperties(bt, NOW)), Object.keys(resultProperties(run(src.replace('commission: 1\n', '')), NOW)));
 });
 
 test('snapshot: positions say when an order fills, in the words of the positions table', () => {
