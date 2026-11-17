@@ -7,6 +7,9 @@ import { parseDashboard } from '../src/dashboard.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, parseSpec } from '../src/dsl.ts';
 import { resultProperties } from '../src/export.ts';
 import { notOurNoteMessage, ORDERS_MARKER } from '../src/orders.ts';
+import { valuesUsed } from '../src/render-luck.ts';
+import { WRITTEN } from '../src/render-sweep.ts';
+import { NOTE_CHANGED } from '../src/rewrite.ts';
 import { bars } from './helpers.ts';
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -91,6 +94,26 @@ test('the README says what the orders note carries, what refuses a save, and who
   assert.ok(readme.includes(`\`${ORDERS_MARKER}: true\``));
   assert.ok(readme.includes(notOurNoteMessage('<path>')));
   assert.match(readme, /The plugin owns every property that starts with `bt_`/);
+});
+
+test('the README quotes the messages about writing values, sliders and luck checks as the plugin words them', () => {
+  assert.ok(readme.includes(`"${WRITTEN}"`));
+  assert.ok(readme.includes(`"Couldn't write the values to the block. ${NOTE_CHANGED}"`));
+  assert.ok(read('src/render-params.ts').includes("`Couldn't write the values to the block. ${sentence(e)}`"));
+  assert.ok(readme.includes('"Loading more price history…"') && read('src/render-params.ts').includes("'Loading more price history…'"));
+  const block = 'universe: SPY\nfast = 10 in 5..25 step 5\nbuy when sma(fast) > sma(50)';
+  const used = valuesUsed(parseSpec(block, { overrides: { fast: 25 } }).spec!.params);
+  assert.ok(used !== null && readme.includes(`"${used}"`));
+  assert.ok(readme.includes('"Values shown"') && readme.includes('"Values in the note"'));
+  assert.ok(read('src/render-luck.ts').includes("'Values shown'") && read('src/render-luck.ts').includes("'Values in the note'"));
+});
+
+test('the README keeps its engine rules numbered one after another, and every "rule N" points at one', () => {
+  const start = readme.indexOf('## How the simulation works');
+  const section = readme.slice(start, readme.indexOf('\n## ', start + 1));
+  const numbers = [...section.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+  assert.deepEqual(numbers, numbers.map((_, i) => i + 1));
+  for (const m of readme.matchAll(/\brules? (\d+)\b/g)) assert.ok(Number(m[1]) <= numbers.length, `"${m[0]}" points past the last rule`);
 });
 
 test('the README lists the source files by name', () => {
