@@ -5,6 +5,7 @@ import { runBacktest } from '../src/backtest.ts';
 import { parseSpec, type Defaults } from '../src/dsl.ts';
 import { runBlock, runJob, serve, type Bench, type FromWorker, type Ran, type ToWorker } from '../src/jobs.ts';
 import { LIMITS, LimitError, runSize } from '../src/limits.ts';
+import { Latest, drawHeld } from '../src/live-core.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from '../src/luck.ts';
 import { makeRng } from '../src/rng.ts';
 import { runSweep, type Parse, type SweepResult } from '../src/sweep.ts';
@@ -581,4 +582,140 @@ test('prices used by a block\'s runs and by a section are dropped from both work
   assert.ok(!w.log.includes('drop 1'));
   section.close();
   assert.deepEqual(w.log, ['data 1', 'run {}', 'data 1', 'job reshuffle', 'drop 1', 'drop 1']);
+});
+
+// ---------------------------------------------------------------- nothing runs on the main thread while a worker exists
+
+/** Prices that count every read: a backtest on them cannot run without reading them. */
+function counted(prices: Map<string, Bars>): { prices: Map<string, Bars>; reads: () => number; reset: () => void } {
+  let reads = 0;
+  const seen = new Map(prices);
+  const bump = <T>(f: () => T): T => (reads++, f());
+  const map = new (class extends Map<string, Bars> {
+    override get = (k: string) => bump(() => seen.get(k));
+    override has = (k: string) => bump(() => seen.has(k));
+    override keys = () => bump(() => seen.keys());
+    override values = () => bump(() => seen.values());
+    override entries = () => bump(() => seen.entries());
+    override [Symbol.iterator] = () => bump(() => seen[Symbol.iterator]());
+    override forEach = (f: (v: Bars, k: string, m: Map<string, Bars>) => void) => bump(() => seen.forEach(f));
+  })();
+  return { prices: map, reads: () => reads, reset: () => (reads = 0) };
+}
+
+/** A block whose own run has been made, with prices that count reads. */
+function watched(source = SRC): { block: JobInput; reads: () => number } {
+  const base = input(source);
+  const c = counted(base.backtest.data);
+  c.reset();
+  return { block: { ...base, backtest: { ...base.backtest, data: c.prices } }, reads: c.reads };
+}
+
+test('stopping a sweep, closing its section, drawing the block again and unloading never run a backtest on the main thread', async (t) => {
+  for (const how of ['stop', 'close', 'queued', 'shutdown'] as const) {
+    const w = byHand();
+    const client = track(t, { makeWorker: w.make });
+    const { block, reads } = watched();
+    const section = client.forBlock(block);
+    const running = section.run({ kind: 'sweep' });
+    // Another section's job waits behind it, as the next slider position's sections do.
+    const waiting = client.forBlock(block).run({ kind: 'sweep' });
+    w.workers[0].on.message({ type: 'ready' });
+    if (how === 'stop') running.stop();
+    else if (how === 'close') section.close();
+    else if (how === 'queued') waiting.stop();
+    else client.shutdown();
+    const first = how === 'queued' ? null : await running.done;
+    const second = how === 'close' || how === 'stop' ? null : await waiting.done;
+    for (const result of [first, second]) {
+      if (result) assert.deepEqual([result.stopped, result.tried, result.total], [true, 0, 15], how);
+    }
+    assert.equal(reads(), 0, `${how}: a backtest ran on the main thread`);
+    client.shutdown();
+  }
+});
+
+// ---------------------------------------------------------------- the preview panel's runs
+
+/** What the plugin does to show a block in the preview panel: one set of runs for each draw, let go of when the draw is ended or fails. */
+function panelShow(client: ReturnType<typeof createJobClient>, latest: Latest, block: JobInput, overrides: Record<string, number> = {}, after: () => Promise<void> = async () => {}) {
+  const runs = client.runs();
+  const signal = latest.start();
+  return drawHeld(
+    async () => {
+      if ((await runs.run(request(block, overrides))) === null) return;
+      await after();
+    },
+    () => runs.close(),
+    signal,
+  );
+}
+
+test('a burst of edits leaves one panel run going: each newer one stops the older, so none waits behind it, and closing the panel stops the last', async (t) => {
+  const w = byHand();
+  const client = track(t, { makeWorker: w.make });
+  const latest = new Latest();
+  const block = input();
+  const alive = () => w.workers.filter((x) => x.alive);
+  const edits = [1, 2, 3, 4].map((fast) => {
+    const shown = panelShow(client, latest, block, { fast: fast * 5 });
+    // At every step the only run out is the newest one.
+    assert.equal(alive().length, 1);
+    assert.deepEqual(w.workers.at(-1)!.posts.flatMap((m) => (m.type === 'run' ? [JSON.stringify(m.block.overrides)] : [])), [`{"fast":${fast * 5}}`]);
+    return shown;
+  });
+  // The older draws ended without a result; the newest is still waiting for its answer.
+  await Promise.all(edits.slice(0, -1));
+  w.answer(w.workers.length - 1);
+  const shown = await edits[3];
+  assert.equal(alive().length, 1);
+  // Nothing queued behind: the one run was answered and the worker is idle.
+  latest.stop();
+  shown();
+  assert.equal(w.workers.length, 4);
+});
+
+test('closing the panel while a run is out ends it and lets the prices go', async (t) => {
+  const w = byHand();
+  const client = track(t, { makeWorker: w.make });
+  const latest = new Latest();
+  const shown = panelShow(client, latest, input());
+  latest.stop();
+  await shown;
+  assert.equal(w.workers[0].alive, false);
+});
+
+test('a result on screen is not touched by a newer edit starting; its prices go when it is let go', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  const latest = new Latest();
+  const one = input(SRC, 1);
+  const two = input(SRC, 2);
+  const release = await panelShow(client, latest, one);
+  void panelShow(client, latest, two);
+  assert.ok(!w.log.includes('drop 1'));
+  release();
+  assert.ok(w.log.includes('drop 1'));
+});
+
+test('a draw that fails after its run lets its prices go instead of leaving them in the worker', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  const latest = new Latest();
+  await assert.rejects(
+    panelShow(client, latest, input(), {}, () => Promise.reject(new Error('The result could not be drawn'))),
+    /could not be drawn/,
+  );
+  assert.deepEqual(w.log, ['data 1', 'run {}', 'drop 1']);
+  // A run refused for its size never sent its prices, and its draw fails the same way.
+  const huge = input(SRC, 2);
+  await assert.rejects(
+    drawHeld(
+      async () => void (await client.runs().run(request(huge, {}, { size: { bars: 2_000_000, tickers: 40, ruleWork: 0, windowWork: 0 } }))),
+      () => {},
+      latest.start(),
+    ),
+    (e: unknown) => e instanceof LimitError,
+  );
+  assert.ok(!w.log.includes('data 2'));
 });

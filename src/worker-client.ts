@@ -1,12 +1,15 @@
 // The main thread's side of the background workers. There are two, each taking its jobs in turn: one for single
 // backtests (a block, a slider, a scan), so these never wait behind a sweep, and one for sweeps and luck checks. Each
 // block's prices are sent to a worker once and dropped when no block uses them, every job has a time budget, and the
-// same jobs run on the main thread instead when no worker can start.
+// same jobs run on the main thread instead when no worker can start. At the end, `BlockDrawing` holds what one drawing
+// of a block runs with.
 
 import type { Backtest } from './backtest.ts';
-import type { Defaults } from './dsl.ts';
-import { benchWith, jobOverrides, runBlock, runJob, stoppedResult, type Bench, type Block, type FromWorker, type Job, type JobOf, type Kind, type Ran, type Results, type Sofar, type ToWorker } from './jobs.ts';
-import { LIMITS, LimitError, sizeRefusal, timeMessage, type RunSize } from './limits.ts';
+import type { DataDeps } from './data.ts';
+import { parseSpec, type Defaults, type ParseResult, type Spec } from './dsl.ts';
+import { benchWith, jobOverrides, runBlock, runJob, stoppedResult, withInputs, type Bench, type Block, type FromWorker, type Job, type JobOf, type Kind, type Ran, type Results, type Sofar, type ToWorker } from './jobs.ts';
+import { LIMITS, LimitError, runSize, sizeRefusal, timeMessage, type RunSize } from './limits.ts';
+import { lookbackBars, Runner, type RunOutput } from './runner.ts';
 import { pause, type Parse } from './sweep.ts';
 import type { Bars } from './types.ts';
 
@@ -578,4 +581,114 @@ export function runsInForeground(): boolean {
 export function shutdownWorkers(): void {
   shared?.shutdown();
   shared = null;
+}
+
+// ---------------------------------------------------------------- one drawing of a block
+
+/** How long each backtest run on the main thread took, for whether a slider drag may redo it there. */
+const hereMs = new WeakMap<Backtest, number>();
+/** Results that were run without the size limits because the reader asked for it. Kept here, not on the result, which is shared. */
+const ranAnyway = new WeakSet<RunOutput>();
+
+export interface DrawingOptions {
+  source: string;
+  /** What the plugin's settings imply, read once by whoever draws the block. */
+  defaults: Defaults;
+  deps: DataDeps;
+  freshForMs: number;
+  /** The block's runs: drawing it again or its going away stops them. */
+  runs: BlockRuns;
+  /** Run without the size limits and with the longer time limit (limits.ts). */
+  anyway?: boolean;
+  /** A scan of the vault, whose runs wait for those of the blocks on screen. */
+  background?: boolean;
+}
+
+/** What the sliders of a drawing need: redoing the run with other values, whether a drag may do that at every step, and which values read. */
+export interface Sliders {
+  rerun(values: Record<string, number>, settled: boolean): Promise<RunOutput | null>;
+  followsDrag(): boolean;
+  accepts(values: Record<string, number>): boolean;
+}
+
+export class BlockDrawing {
+  readonly source: string;
+  readonly defaults: Defaults;
+  /** Whether runs have no size limits. A result that was run that way turns it on for whoever shows it again (`follow`). */
+  anyway: boolean;
+  private runner: Runner;
+  private runs: BlockRuns;
+  private background: boolean;
+
+  constructor(o: DrawingOptions) {
+    this.source = o.source;
+    this.defaults = o.defaults;
+    this.anyway = o.anyway ?? false;
+    this.background = o.background ?? false;
+    this.runs = o.runs;
+    this.runner = new Runner(o.deps, o.defaults, { freshForMs: o.freshForMs });
+  }
+
+  /** The block's text read with these defaults, and `overrides` in place of its parameters' values. */
+  parse = (overrides?: Record<string, number>): ParseResult => parseSpec(this.source, { defaults: this.defaults, overrides });
+
+  /** Takes up what a kept result carries: that it was run without the size limits. */
+  follow(out: RunOutput): void {
+    if (ranAnyway.has(out)) this.anyway = true;
+  }
+
+  /**
+   * One backtest of the block's text with `overrides`, on prices loaded here. It runs in a background worker, where it can
+   * be stopped, or on the main thread when none can start. Null when the runs were closed first; rejects with a
+   * LimitError when it is too large or takes too long.
+   */
+  async backtest(spec: Spec, data: RunOutput['data'], overrides: Record<string, number> = {}): Promise<Backtest | null> {
+    const ran = await this.runs.run({
+      block: { source: this.source, defaults: this.defaults, overrides },
+      prices: data,
+      size: runSize(spec, data),
+      background: this.background,
+      anyway: this.anyway,
+    });
+    if (!ran) return null;
+    const backtest = withInputs(ran.backtest, spec, data);
+    if (ran.hereMs !== null) hereMs.set(backtest, ran.hereMs);
+    return backtest;
+  }
+
+  /** Loads the prices of `spec`, the block's text read with `overrides`, and runs it. Null when the runs were closed first. */
+  async run(spec: Spec, o: { force?: boolean; overrides?: Record<string, number> } = {}): Promise<RunOutput | null> {
+    const { data, warnings, prices } = await this.runner.loadPrices(spec, o.force ?? false);
+    const backtest = await this.backtest(spec, data, o.overrides);
+    if (!backtest) return null;
+    const out = { spec, backtest, data, warnings, prices };
+    if (this.anyway) ranAnyway.add(out);
+    return out;
+  }
+
+  /**
+   * The sliders of the result `first`, the block as written. Other parameter values run on the prices already loaded; ones
+   * that need more history than that fetch it only once the slider is released, since a drag passes through many values and
+   * each would start its own download.
+   */
+  sliders(first: RunOutput): Sliders {
+    let lastMs = hereMs.get(first.backtest) ?? Infinity;
+    return {
+      rerun: async (values, settled) => {
+        const parsed = this.parse(values);
+        if (!parsed.spec) throw new Error(`Line ${parsed.errors[0].line}: ${parsed.errors[0].message}`);
+        let next: RunOutput | null;
+        if (lookbackBars(parsed.spec) <= lookbackBars(first.spec)) {
+          const backtest = await this.backtest(parsed.spec, first.data, values);
+          next = backtest && { ...first, spec: parsed.spec, backtest };
+        } else if (settled) next = await this.run(parsed.spec, { overrides: values });
+        else return null;
+        if (next) lastMs = hereMs.get(next.backtest) ?? lastMs;
+        return next;
+      },
+      // Where runs happen on the main thread, a drag redoes only a block that runs within a frame.
+      followsDrag: () => !runsInForeground() || lastMs <= LIMITS.dragMs,
+      accepts: (values) => this.parse(values).spec !== null,
+    };
+  }
 }

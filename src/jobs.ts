@@ -109,11 +109,12 @@ export interface Sofar {
 
 /**
  * The result of a job ended from outside (its worker stopped), from what it had sent: the same as the job returns
- * when it notices a stop itself at that point. Null when there is nothing to show.
+ * when it notices a stop itself at that point. Null when there is nothing to show. It reads the block's text and
+ * nothing else: this runs on the main thread, where a backtest of a block that only a worker may run would freeze the window.
  */
 export function stoppedResult<K extends Kind>(kind: K, bench: Bench, sofar: Sofar): Results[K] | null {
   if (kind === 'sweep') {
-    const spec = bench.backtest().spec;
+    const spec = baseSpec(bench.parse);
     const result: SweepResult = { params: sweepParams(spec), points: sofar.points, tried: sofar.points.length, total: sweepSize(spec), stopped: true };
     return result as Results[K];
   }
