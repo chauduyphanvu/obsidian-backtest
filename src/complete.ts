@@ -110,12 +110,12 @@ export function complete(block: string[], above: string[], before: string): Comp
   // Read the lines above the way the parser does: whether a rule is open, which side it is, and
   // which "for" section the cursor sits in.
   let inRule = false;
-  let sell = false;
+  let sellOrAdd = false;
   let section: string | null = null;
   for (const line of above) {
     const kind = lineKind(line, inRule);
     inRule = kind === 'rule' || kind === 'continuation';
-    if (kind === 'rule') sell = /^\s*sell/i.test(line);
+    if (kind === 'rule') sellOrAdd = /^\s*(sell|add)/i.test(line);
     if (kind === 'for') {
       const name = line.match(/^\s*for\s+(.+?)\s*:/i)![1];
       section = name.toLowerCase() === 'all' ? null : name;
@@ -169,7 +169,7 @@ export function complete(block: string[], above: string[], before: string): Comp
 
   const kind = lineKind(before, inRule);
   if (kind !== 'rule' && kind !== 'continuation') return null;
-  return expression(kind === 'rule' ? /^\s*(sell|add)/i.test(before) : sell);
+  return expression(kind === 'rule' ? /^\s*(sell|add)/i.test(before) : sellOrAdd);
 }
 
 /** Where the cursor is when a ticker is being written on a `universe`, `symbol`, `benchmark` or `cash rate` line. */
