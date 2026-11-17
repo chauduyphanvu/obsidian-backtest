@@ -1,0 +1,186 @@
+/* Try other parameter values: run controls, the before/after callout, the reading, the dot-line chart and the heatmap. */
+
+.bt-root {
+  --bt-sweep-gain: #2a78d6;
+  --bt-sweep-loss: #e34948;
+}
+.theme-dark .bt-root {
+  --bt-sweep-gain: #3987e5;
+  --bt-sweep-loss: #e66767;
+}
+
+/* Shared with the luck checks: a run button, its progress and pickers. */
+.bt-run-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0;
+}
+.bt-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bt-progress[hidden] {
+  display: none;
+}
+.bt-progress progress {
+  width: 110px;
+}
+.bt-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 10px 0 4px;
+}
+.bt-pickers:empty {
+  display: none;
+}
+.bt-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bt-picker-label {
+  color: var(--text-muted);
+}
+.bt-picker select {
+  font-size: var(--font-ui-small);
+  max-width: 220px;
+}
+
+.bt-sweep-body,
+.bt-luck-body {
+  margin-top: 4px;
+}
+.bt-sweep-intro,
+.bt-luck-intro {
+  margin: 8px 0;
+}
+.bt-sweep-explain {
+  margin-top: 2px;
+}
+
+.bt-sweep-split {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+.bt-sweep-split-title {
+  font-weight: var(--font-semibold);
+}
+.bt-sweep-split-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+.bt-sweep-split-text {
+  margin: 6px 0 0;
+}
+
+.bt-root ul.bt-sweep-reading {
+  margin: 8px 0 10px;
+  padding-left: 18px;
+}
+.bt-sweep-reading li {
+  margin: 3px 0;
+}
+
+.bt-sweep-mark {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.bt-sweep-ring {
+  fill: none;
+  stroke: var(--text-normal);
+  stroke-width: 1.5;
+}
+
+.bt-sweep-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.bt-sweep-cell-text {
+  fill: var(--text-normal);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.bt-sweep-cell-best {
+  font-weight: 700;
+}
+.bt-sweep-cell-none {
+  fill: var(--text-faint);
+}
+.bt-sweep-declared-outline {
+  fill: none;
+  stroke: var(--text-normal);
+  stroke-width: 2;
+  pointer-events: none;
+}
+.bt-sweep-best-outline {
+  fill: none;
+  stroke: var(--text-normal);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  pointer-events: none;
+}
+.bt-sweep-hover {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.bt-sweep-key {
+  margin-top: 6px;
+}
+.bt-sweep-key .bt-note {
+  margin: 4px 0;
+}
+.bt-sweep-swatch {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 16px;
+  height: 12px;
+  border-radius: 2px;
+  flex: none;
+}
+.bt-sweep-swatch-declared {
+  border: 2px solid var(--text-normal);
+}
+.bt-sweep-swatch-best {
+  border: 1.5px dashed var(--text-normal);
+}
+.bt-sweep-ramp {
+  display: inline-block;
+  width: 64px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.bt-sweep-tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+.bt-sweep-tip-error {
+  color: var(--text-muted);
+  white-space: normal;
+  max-width: 220px;
+}
+
+.bt-sweep-best {
+  margin: 10px 0;
+}
+.bt-sweep-best code {
+  white-space: nowrap;
+}
+.bt-root .bt-table tr.bt-sweep-row-declared td {
+  font-weight: var(--font-semibold);
+}

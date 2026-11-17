@@ -1,0 +1,118 @@
+/* Was it luck?: reshuffled history, random entries and walk-forward. */
+
+.bt-root {
+  --bt-luck-sim: #b6b4ab;
+  --bt-luck-walk: #1baf7a;
+  --bt-luck-hindsight: #898781;
+  --bt-luck-band: color-mix(in srgb, var(--text-normal) 7%, transparent);
+}
+.theme-dark .bt-root {
+  --bt-luck-sim: #6b6a64;
+  --bt-luck-walk: #199e70;
+}
+
+.bt-luck-seed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--text-muted);
+}
+.bt-luck-seed[hidden] {
+  display: none;
+}
+
+.bt-luck-check {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-luck-heading {
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+.bt-luck-verdict {
+  margin: 6px 0 8px;
+}
+.bt-luck-how {
+  margin-top: 8px;
+}
+.bt-luck-how strong {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.bt-luck-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 4px 20px;
+}
+.bt-luck-pair.bt-luck-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.bt-luck-hist {
+  min-width: 0;
+}
+.bt-luck-hist-title {
+  margin-top: 8px;
+  color: var(--text-muted);
+}
+
+.bt-luck-bar {
+  fill: var(--bt-luck-sim);
+}
+.bt-luck-band {
+  fill: var(--bt-luck-band);
+}
+.bt-luck-mark {
+  stroke: var(--bt-strategy);
+  stroke-width: 2;
+}
+.bt-luck-hl {
+  fill: var(--background-modifier-hover);
+  pointer-events: none;
+}
+.bt-luck-boundary {
+  stroke: var(--background-modifier-border);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+.bt-luck-line-walk {
+  stroke: var(--bt-luck-walk);
+}
+.bt-luck-line-hindsight {
+  stroke: var(--bt-luck-hindsight);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.bt-luck-dot-walk {
+  fill: var(--bt-luck-walk);
+}
+.bt-luck-dot-hindsight {
+  fill: var(--bt-luck-hindsight);
+}
+
+.bt-swatch.bt-luck-swatch-sim {
+  width: 10px;
+  height: 10px;
+  background: var(--bt-luck-sim);
+}
+.bt-swatch.bt-luck-swatch-band {
+  width: 14px;
+  height: 10px;
+  background: var(--bt-luck-band);
+  border-radius: 0;
+}
+.bt-swatch.bt-luck-swatch-walk {
+  background: var(--bt-luck-walk);
+}
+.bt-swatch.bt-luck-swatch-hindsight {
+  background: repeating-linear-gradient(to right, var(--bt-luck-hindsight) 0 5px, transparent 5px 8px);
+}
+.bt-luck-tip-row {
+  display: grid;
+  grid-template-columns: 14px auto auto;
+  align-items: center;
+  gap: 8px;
+}
