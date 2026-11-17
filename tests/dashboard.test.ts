@@ -95,6 +95,14 @@ test('a folder takes the notes under it, not a folder that only starts with the 
 
 // ---- one run as a row
 
+test('a block whose lines end in a carriage return reads as without it', () => {
+  const lines = ['# which ones', 'folder: Trading', 'sort: drawdown', 'sort: name', 'colour: red', ''];
+  const crlf = parseDashboard(lines.join('\r\n'));
+  assert.deepEqual(crlf, parseDashboard(lines.join('\n')));
+  assert.deepEqual(crlf.config, { folder: 'Trading', sort: 'drawdown' });
+  assert.deepEqual(crlf.errors.map((e) => e.line), [4, 5]);
+});
+
 test('a strategy that holds one ticker says "Long" and the ticker', () => {
   const row = rowFrom('Trading/Trend.md', 'Trend', run('universe: A\ncapital: 1000\nbuy when true', { A: bars([10, 10, 12, 15]) }), NOW);
   assert.equal(row.now, 'Long A');
@@ -134,6 +142,33 @@ test('the next orders are written in words, sells first, and a long list is cut'
   const many = rowFrom('n.md', 'S', run(`universe: ${names.join(', ')}\nbuy when close > 10`, Object.fromEntries(names.map((n) => [n, closes]))), NOW);
   assert.deepEqual(many.next, ['Buy A, B, C and 2 more']);
   assert.equal(many.orders, 5);
+});
+
+test('the next orders give a time unless it is the next open, and what filled at the last close is said in the past', () => {
+  const next = (src: string, data: Record<string, Bars>) => rowFrom('n.md', 'S', run(src, data), NOW);
+  // The usual order says no time; the column's hint says it is for the next open.
+  assert.deepEqual(next('universe: A\ncapital: 1000\nbuy when close > 11', { A: bars([10, 10, 12]) }).next, ['Buy A']);
+  const bought = next('universe: A\ncapital: 1000\nfill: close\nbuy when close > 11', { A: bars([10, 10, 12]) });
+  assert.deepEqual([bought.next, bought.orders, bought.now], [['Bought A at the last close'], 1, 'Long A']);
+  const swap = next('universe: A, Z\ncapital: 1000\nfill: close\nbuy when close > 9\nsell when close < 9', { A: bars([8, 8, 8, 10]), Z: bars([10, 10, 10, 8]) });
+  assert.deepEqual([swap.next, swap.orders], [['Sold Z at the last close', 'Bought A at the last close'], 2]);
+  const names = ['A', 'B', 'C', 'D', 'E'];
+  const many = next(`universe: ${names.join(', ')}\nfill: close\nbuy when close > 10`, Object.fromEntries(names.map((n) => [n, bars([5, 5, 20])])));
+  assert.deepEqual(many.next, ['Bought A, B, C and 2 more at the last close']);
+  assert.equal(next('universe: A\nfill: close\nbuy when true', { A: bars([10, 10, 12, 15]) }).next.length, 0);
+  assert.match(COLUMNS.find((c) => c.key === 'next')!.hint!, /next open.*another time.*Bought and Sold.*last close/);
+});
+
+test('an order a close-fill ranking could not fill yet is for the next close', () => {
+  const days = (weekdays: boolean) => {
+    const out: number[] = [];
+    for (let t = Date.UTC(2020, 0, 27); t <= Date.UTC(2020, 1, 29); t += DAY) if (!weekdays || ![0, 6].includes(new Date(t).getUTCDay())) out.push(t);
+    return out;
+  };
+  const [stkT, cryT] = [days(true), days(false)];
+  const data = { STK: bars(stkT.map(() => 100), { times: stkT }), CRY: bars(cryT.map((t) => (t < Date.UTC(2020, 1, 29) ? 50 : 150)), { times: cryT }) };
+  const row = rowFrom('n.md', 'S', run('universe: STK, CRY\ncapital: 1000\nfill: close\nrebalance: monthly\nhold: top 1 by close', data), local(2020, 3, 1));
+  assert.deepEqual(row.next, ['Sell STK at the next close', 'Buy CRY at the next close']);
 });
 
 test('the figures come from the run and the prices are called old after four days', () => {

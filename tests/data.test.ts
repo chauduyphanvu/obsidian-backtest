@@ -77,6 +77,16 @@ test('csv: header order, adjusted close, unsorted and bad rows', () => {
   assert.throws(() => parseCsv('a,b\n1,2'), /header row/);
 });
 
+test('csv: rows with an unreadable date are dropped and the rest keep their dates in order', () => {
+  const b = parseCsv('Date,Open,High,Low,Close\n2024-01-04,3,3,3,3\n2024-01-03,2,2,2,2\nsometime,9,9,9,9\n2024-01-02,1,1,1,1');
+  assert.deepEqual(b.t, [Date.UTC(2024, 0, 2), Date.UTC(2024, 0, 3), Date.UTC(2024, 0, 4)]);
+  assert.deepEqual(b.c, [1, 2, 3]);
+  // The bad row can come first, last or between, and more than one can be there.
+  const order = (rows: string[]) => parseCsv(`Date,Open,High,Low,Close\n${rows.join('\n')}`).c;
+  assert.deepEqual(order(['x,9,9,9,9', '2024-01-03,2,2,2,2', '2024-01-02,1,1,1,1', 'y,9,9,9,9']), [1, 2]);
+  assert.deepEqual(order(['2024-01-05,5,5,5,5', ',9,9,9,9', '2024-01-03,3,3,3,3', 'x,9,9,9,9', '2024-01-04,4,4,4,4']), [3, 4, 5]);
+});
+
 function deps(over: Partial<DataDeps>) {
   const cache = new Map<string, string>();
   const calls: string[] = [];

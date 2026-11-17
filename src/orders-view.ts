@@ -1,6 +1,6 @@
 import { Modal, Notice, setIcon, type App } from 'obsidian';
 import { h, price, signedPct } from './dom.ts';
-import { barLabel, barTime, basisOf, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoRows, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
+import { actionWord, barLabel, barTime, basisOf, CLOSE_FILL_NOTE, LAST_CLOSE_NOTE, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoGroups, todoRows, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
 
 export interface OrdersHost {
   /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches every price once. */
@@ -73,6 +73,7 @@ export class OrdersModal extends Modal {
     this.header(root, list);
     this.todo(root, todo);
     this.holding(root, list, todo.length > 0);
+    this.closeFills(root, list);
     this.problems(root, list);
     h(root, 'p', 'bt-orders-foot', 'From backtests of your rules on the latest prices. Nothing here places an order.');
   }
@@ -126,25 +127,32 @@ export class OrdersModal extends Modal {
     });
   }
 
+  /** One list for each timing that has an order: at the next open, at the next close, and what was already made at the last close. */
   private todo(root: HTMLElement, rows: TodoRow[]): void {
-    const section = h(root, 'section', 'bt-orders-section');
-    this.heading(section, 'To do at the next open');
-    if (rows.length === 0) {
-      h(section, 'p', 'bt-orders-none', 'Nothing to do. No strategy has an order for the next open.');
+    const groups = todoGroups(rows);
+    if (groups.length === 0) {
+      const section = h(root, 'section', 'bt-orders-section');
+      this.heading(section, 'To do');
+      h(section, 'p', 'bt-orders-none', 'Nothing to do. No strategy has an order.');
       return;
     }
-    const list = h(section, 'ul', 'bt-orders-list');
-    for (const { status, order } of rows) {
-      const row = h(list, 'li', 'bt-orders-row');
-      h(row, 'span', `bt-orders-action bt-orders-${order.action}`, order.action === 'buy' ? 'Buy' : 'Sell');
-      const what = h(row, 'div', 'bt-orders-what');
-      h(what, 'span', 'bt-orders-ticker', order.ticker);
-      h(what, 'span', undefined, orderSize(order));
-      const detail = h(row, 'div', 'bt-orders-detail');
-      this.link(detail, status);
-      h(detail, 'span', undefined, `Last close ${price(order.lastClose)}`);
-      h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
-      if (order.since !== null) h(detail, 'span', undefined, `Held since ${barTime(status, order.since)}`);
+    for (const { when, heading, rows: group } of groups) {
+      const section = h(root, 'section', 'bt-orders-section');
+      this.heading(section, heading);
+      if (when === 'last close') h(section, 'p', 'bt-orders-muted', LAST_CLOSE_NOTE);
+      const list = h(section, 'ul', when === 'last close' ? 'bt-orders-list bt-orders-done' : 'bt-orders-list');
+      for (const { status, order } of group) {
+        const row = h(list, 'li', 'bt-orders-row');
+        h(row, 'span', `bt-orders-action bt-orders-${order.action}`, actionWord(order));
+        const what = h(row, 'div', 'bt-orders-what');
+        h(what, 'span', 'bt-orders-ticker', order.ticker);
+        h(what, 'span', undefined, orderSize(order));
+        const detail = h(row, 'div', 'bt-orders-detail');
+        this.link(detail, status);
+        h(detail, 'span', undefined, `Last close ${price(order.lastClose)}`);
+        h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
+        if (order.since !== null) h(detail, 'span', undefined, `Held since ${barTime(status, order.since)}`);
+      }
     }
   }
 
@@ -170,6 +178,17 @@ export class OrdersModal extends Modal {
         h(item, 'span', 'bt-orders-muted', `${share(p.weight)} of the strategy, ${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`);
       }
     }
+  }
+
+  /** What a `fill: close` strategy's orders mean, once, with the strategies it applies to. */
+  private closeFills(root: HTMLElement, list: StrategyStatus[]): void {
+    const atClose = list.filter((s) => s.closeFill);
+    if (atClose.length === 0) return;
+    const section = h(root, 'section', 'bt-orders-section');
+    this.heading(section, 'Strategies that fill at the close');
+    h(section, 'p', 'bt-orders-muted', CLOSE_FILL_NOTE);
+    const items = h(section, 'ul', 'bt-orders-fills');
+    for (const s of atClose) this.link(h(items, 'li'), s);
   }
 
   private problems(root: HTMLElement, list: StrategyStatus[]): void {

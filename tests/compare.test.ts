@@ -20,6 +20,12 @@ test('parses wikilinks, bare paths, names and labels', () => {
   ]);
 });
 
+test('lines that end in a carriage return read as without it', () => {
+  const lines = ['# a comment', '[[Trend following]] 40%', '[[Pullbacks#QQQ RSI pullback|QQQ dips]] 60%', ''];
+  assert.deepEqual(parseCompare(lines.join('\r\n')), parseCompare(lines.join('\n')));
+  assert.deepEqual(parseCompare(lines.join('\r\n')).errors, []);
+});
+
 test('parses weights as fractions, in every form a line can take', () => {
   const { entries, errors } = parseCompare(
     ['[[Trend following]] 40%', '[[Pullbacks#QQQ RSI pullback]]   20 %', 'Research/Old.md#Second one 12.5%', 'Plain.md 5%'].join('\n'),

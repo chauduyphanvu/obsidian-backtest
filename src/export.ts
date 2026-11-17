@@ -3,6 +3,7 @@
 import { drawdowns, type Backtest, type Segment } from './backtest.ts';
 import { DAY, isoDate, minus, money, pct, price, signedPct, stamp } from './dom.ts';
 import type { Trade } from './engine.ts';
+import { positionOrder } from './orders.ts';
 
 const SNAPSHOT_TRADES = 30;
 
@@ -122,11 +123,10 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
     '## Positions now\n\n' +
       table(
         ['Ticker', 'Weight', 'Now'],
-        run.states.map((st) => [
-          st.name,
-          pct(st.weight, 0),
-          (st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash') + (st.pending ? `, ${st.pending === 'buy' ? 'buys' : 'sells'} at the next open` : ''),
-        ]),
+        run.states.map((st) => {
+          const order = positionOrder(st, spec.fill);
+          return [st.name, pct(st.weight, 0), (st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash') + (order ? `, ${order}` : '')];
+        }),
         'lrl',
       ),
   );

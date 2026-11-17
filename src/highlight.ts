@@ -110,8 +110,10 @@ function numericValue(line: string, from: number, to: number, params: Set<string
 /** Tokens to colour on one line of a strategy block. `params` are the names the block declares. */
 export function tokenize(line: string, kind: LineKind, params: string[] = []): Token[] {
   const out: Token[] = [];
+  // A line read from a file with Windows line endings still carries its "\r", which is not part of the text.
+  const length = line.endsWith('\r') ? line.length - 1 : line.length;
   const c = commentStart(line);
-  const end = c < 0 ? line.length : c;
+  const end = c < 0 ? length : c;
   const names = new Set(params.map((p) => p.toLowerCase()));
   if (kind === 'for') {
     const m = line.match(/^(\s*)(for)(\s+)(.+?)\s*:/i)!;
@@ -148,7 +150,7 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
       }
     }
   }
-  if (c >= 0) out.push({ from: c, to: line.length, kind: 'comment' });
+  if (c >= 0) out.push({ from: c, to: length, kind: 'comment' });
   return out;
 }
 

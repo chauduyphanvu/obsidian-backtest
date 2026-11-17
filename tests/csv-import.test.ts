@@ -299,13 +299,13 @@ test('a short file says the starter strategy would never act', () => {
   assert.deepEqual(read(yahooFile(5)).head.length + read(yahooFile(5)).tail.length, 5);
 });
 
-test('a row with no date among rows newest first loses rows in parseCsv, and the cleaned copy gets them back', () => {
+test('a row with no date among rows newest first costs only that row, in parseCsv and in the cleaned copy', () => {
   const lines = ['Date,Open,High,Low,Close,Volume', '2024-01-04,1,2,1,2,5', 'Total,,,,,', '2024-01-03,1,2,1,2,5', '2024-01-02,1,2,1,2,5'];
   const text = `${lines.join('\n')}\n`;
-  assert.equal(parseCsv(text).t.length, 1);
+  assert.deepEqual(parseCsv(text).t, [d(2024, 1, 2), d(2024, 1, 3), d(2024, 1, 4)]);
   const r = read(text);
-  assert.equal(r.rows, 1);
-  assert.ok(r.doubts.some((x) => /^2 usable rows were lost when the file was read, because a row with no date sits among rows that are not in date order\. Save a cleaned copy to get them back\.$/.test(x)), r.doubts.join('\n'));
+  assert.equal(r.rows, 3);
+  assert.ok(!r.doubts.some((x) => /lost when the file was read/.test(x)), r.doubts.join('\n'));
   const c = cleaned(remapCsv(text, r.columns));
   assert.equal(c.rows, 3);
   assert.equal(c.dropped, 1);

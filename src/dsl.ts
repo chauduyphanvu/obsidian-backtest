@@ -823,6 +823,8 @@ interface SettingLine {
 interface RawRule {
   side: 'buy' | 'sell';
   scope: string | null;
+  /** The ticker's name on the `for` line. */
+  scopeAt: At | null;
   line: number;
   head: At;
   toks: Tok[];
@@ -842,10 +844,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const errors: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
   const settings = new Map<string, SettingLine>();
-  const scoped: { scope: string; s: SettingLine }[] = [];
+  const scoped: { scope: string; scopeAt: At; s: SettingLine }[] = [];
   const paramLines: ParamLine[] = [];
   const rawRules: RawRule[] = [];
   let scope: string | null = null;
+  let scopeAt: At | null = null;
   let open: RawRule | null = null;
 
   const guard = (fn: () => void) => {
@@ -861,7 +864,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const plainLines: string[] = [];
   source.split('\n').forEach((rawLine, idx) => {
     const line = idx + 1;
-    const stripped = rawLine.replace(/(^|\s)(#|\/\/).*$/, '');
+    const stripped = rawLine.replace(/\r$/, '').replace(/(^|\s)(#|\/\/).*$/, '');
     plainLines.push(stripped);
     const text = stripped.trim();
     const lead = stripped.length - stripped.trimStart().length;
@@ -874,9 +877,12 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     if (forName) {
       open = null;
       scope = forName.toLowerCase() === 'all' ? null : forName;
+      const name = text.slice(3, -1);
+      const from = lead + 3 + name.length - name.trimStart().length;
+      scopeAt = scope === null ? null : { line, from, to: from + forName.length };
     } else if ((m = text.match(/^(buy|sell)\s+when\b(.*)$/i))) {
       const exprFrom = text.length - m[2].length;
-      const rule: RawRule = { side: m[1].toLowerCase() as 'buy' | 'sell', scope, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
+      const rule: RawRule = { side: m[1].toLowerCase() as 'buy' | 'sell', scope, scopeAt, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
       open = rule;
       rawRules.push(rule);
       guard(() => lex(m![2], line, lead + exprFrom, rule.toks));
@@ -887,7 +893,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const s: SettingLine = { key, value: m[2], line, keyAt, valueAt: { line, from: lead + text.length - m[2].length, to: lead + text.length } };
       if (!m[2]) errors.push(diag(keyAt, `"${key}" has no value`));
       else if (scope !== null) {
-        if (STOP_SETTINGS.includes(key)) scoped.push({ scope, s });
+        if (STOP_SETTINGS.includes(key)) scoped.push({ scope, scopeAt: scopeAt!, s });
         else errors.push(diag(keyAt, `"${key}" applies to the whole strategy. Put it above the first "for" line or after "for all:"`));
       } else if (settings.has(key)) errors.push(diag(keyAt, `"${key}" is set twice`));
       else settings.set(key, s);
@@ -1065,6 +1071,13 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     return last ? { ...last, t: 'end', s: '' } : { t: 'end', s: '', v: 0, line: fallback.line, from: fallback.from!, to: fallback.to! };
   };
 
+  /** A `for` line is reported once, however many rules and stops sit under it. */
+  const reported = new Set<number>();
+  const unknownScope = (name: string, at: At): void => {
+    if (reported.has(at.line)) return;
+    reported.add(at.line);
+    throw new SpecError(at, `"for ${name}:" names a ticker that is not in the universe`);
+  };
   const shared: { buy?: Expr; sell?: Expr } = {};
   const own = new Map<string, { buy?: Expr; sell?: Expr }>();
   const writtenOf = new Map<Expr, Written>();
@@ -1075,7 +1088,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       if (r.scope !== null) {
         const asset = findAsset(r.scope);
         if (!asset) {
-          if (universe.length) throw new SpecError({ line: r.line }, `"for ${r.scope}:" names a ticker that is not in the universe`);
+          if (universe.length) unknownScope(r.scope, r.scopeAt!);
           return;
         }
         if (!own.has(asset.name)) own.set(asset.name, {});
@@ -1180,11 +1193,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   const ownStops = new Map<string, Partial<Stops>>();
   const STOP_FIELD: Record<string, keyof Stops> = { 'stop loss': 'stopLoss', 'trailing stop': 'trailingStop', 'take profit': 'takeProfit' };
-  for (const { scope: name, s } of scoped) {
+  for (const { scope: name, scopeAt: at, s } of scoped) {
     guard(() => {
       const asset = findAsset(name);
       if (!asset) {
-        if (universe.length) throw new SpecError({ line: s.line }, `"for ${name}:" names a ticker that is not in the universe`);
+        if (universe.length) unknownScope(name, at);
         return;
       }
       const mine = ownStops.get(asset.name) ?? {};

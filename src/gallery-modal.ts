@@ -1,7 +1,6 @@
 import { Modal, type App } from 'obsidian';
-import { h } from './dom.ts';
+import { colourSource, h } from './dom.ts';
 import { blockOf, EMPTY, STARTERS, type Starter } from './gallery.ts';
-import { tokenizeBlock } from './highlight.ts';
 
 export interface GalleryHost {
   /** Inserts the block, fences and a final newline included, at the cursor of the note being edited. */
@@ -9,21 +8,6 @@ export interface GalleryHost {
 }
 
 const CHOICES: Starter[] = [...STARTERS, EMPTY];
-
-/** The text coloured the way a strategy block shows its source. */
-function colour(pre: HTMLElement, text: string): void {
-  const lines = text.split('\n');
-  tokenizeBlock(lines).forEach((tokens, i) => {
-    const line = lines[i];
-    let at = 0;
-    for (const t of tokens) {
-      if (t.from > at) pre.append(line.slice(at, t.from));
-      h(pre, 'span', `bt-tok bt-tok-${t.kind}`, line.slice(t.from, t.to));
-      at = t.to;
-    }
-    pre.append(line.slice(at) + (i < lines.length - 1 ? '\n' : ''));
-  });
-}
 
 export class GalleryModal extends Modal {
   private host: GalleryHost;
@@ -103,7 +87,7 @@ export class GalleryModal extends Modal {
     preview.replaceChildren();
     h(preview, 'div', 'bt-gallery-name', starter.title);
     h(preview, 'p', 'bt-gallery-desc', starter.description);
-    colour(h(preview, 'pre', 'bt-source'), starter.text);
+    colourSource(h(preview, 'pre', 'bt-source'), starter.text);
   }
 
   private insert(): void {

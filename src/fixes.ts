@@ -224,15 +224,11 @@ function settingValue(ctx: Context, options: string[]): Fix | null {
   return pick(ctx, typed, options, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
-/** The `for` line above a problem inside its section, when it names the ticker the message names. */
-function forTicker(ctx: Context, name: string): Fix | null {
-  for (let n = ctx.d.line; n >= 1; n--) {
-    const m = ctx.lines[n - 1].replace(/(^|\s)(#|\/\/).*$/, '').match(/^(\s*for\s+)(.+?)\s*:\s*$/i);
-    if (!m) continue;
-    if (m[2].toLowerCase() !== name.toLowerCase()) return null;
-    return pick(ctx, m[2], tickers(ctx.lines, ['universe', 'symbol']), (c) => ({ line: n, from: m[1].length, to: m[1].length + m[2].length, insert: c }));
-  }
-  return null;
+/** The ticker on a `for` line the parser says is not in the universe; the problem's range is the name as written. */
+function forTicker(ctx: Context): Fix | null {
+  const { d } = ctx;
+  if (d.from === undefined || d.to === undefined) return null;
+  return pick(ctx, textOf(ctx.lines, d.line, d.from, d.to), tickers(ctx.lines, ['universe', 'symbol']), (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
 /** `entry` or `bars` alone, with the second word missing or misspelt. */
@@ -299,7 +295,7 @@ export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Default
     const typed = d.from === undefined ? '' : textOf(lines, d.line, d.from, d.to ?? d.from).toLowerCase();
     return typed ? pick(ctx, typed, ['above', 'below'], (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : null;
   }
-  if ((found = m(/^"for (.+?):" names a ticker that is not in the universe$/))) return forTicker(ctx, found[1]);
+  if (m(/^"for .+?:" names a ticker that is not in the universe$/)) return forTicker(ctx);
   if ((found = m(/^"(entry|bars)" on its own is not a name\. Write "(?:entry|bars) (price|held)"$/))) return onItsOwn(ctx, found[1], found[2]);
   if (/^Not a setting or a rule/.test(d.message)) return notARule(ctx);
   const options = optionsOf(d.message);

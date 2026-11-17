@@ -130,9 +130,32 @@ test('errors carry the line they are on', () => {
   fails('buy when true', /Add a universe/);
   fails('universe: SPY\nfrom: 1/2/2020\nbuy when true', /not a date/, 2);
   fails('universe: SPY\ninterval: 1h\nbuy when true', /Yahoo data comes as 1d or 1w/, 2);
-  fails('universe: SPY\nfor TLT:\nbuy when true', /not in the universe/, 3);
+  fails('universe: SPY\nfor TLT:\nbuy when true', /not in the universe/, 2);
   fails('universe: SPY\nbuy when true\nbuy when false', /already a buy rule/, 3);
   fails('universe: SPY\nhello there', /Not a setting or a rule/, 2);
+});
+
+test('a ticker that is not in the universe is reported once, on its for line, at the name', () => {
+  const src = 'universe: SPY\nbuy when true\n  for   TLTT  :  # sleeve\n  buy when close > 1\n  sell when close < 1\n  stop loss: 5%\n  take profit: 9%';
+  const found = parseSpec(src).errors.filter((e) => /not in the universe/.test(e.message));
+  assert.deepEqual(found.map((e) => [e.line, e.from, e.to, e.message]), [[3, 8, 12, '"for TLTT:" names a ticker that is not in the universe']]);
+  // Two sections for the same missing ticker are two lines, so two problems.
+  const twice = parseSpec('universe: SPY\nbuy when true\nfor QQQ:\n  stop loss: 5%\nfor all:\n  costs: 1 bps\nfor QQQ:\n  take profit: 9%').errors;
+  assert.deepEqual(twice.filter((e) => /not in the universe/.test(e.message)).map((e) => [e.line, e.from, e.to]), [[3, 4, 7], [7, 4, 7]]);
+});
+
+test('lines that end in a carriage return read exactly as without it', () => {
+  const src = [
+    'name: Trend # note', 'universe: SPY  // tickers', 'fast = 50 # a parameter', 'buy when close > sma(fast) # why', '  and close > 1 // more',
+    'sell when close < 1', 'for SPY:', '  stop loss: 5% # tight', '',
+  ];
+  const plain = parseSpec(src.join('\n'));
+  assert.deepEqual(plain.errors, []);
+  assert.deepEqual(parseSpec(src.join('\r\n')), plain);
+  // Problems keep their lines and columns.
+  const bad = ['universe: SPY # u', 'buy when close > smaa(200) # why', 'for QQQ: # q', '  stop loss: 5%'];
+  assert.deepEqual(parseSpec(bad.join('\r\n')).errors, parseSpec(bad.join('\n')).errors);
+  assert.ok(parseSpec(bad.join('\n')).errors.length >= 2);
 });
 
 test('several errors are reported together', () => {

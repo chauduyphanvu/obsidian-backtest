@@ -139,14 +139,13 @@ test('a value that is a different choice, not a typo, gets no fix', () => {
 test('a ticker in a for line that is not in the universe but is close to one that is', () => {
   const lines = [HEAD, RULE, 'for TLTT:', '  buy when close > 1', '  stop loss: 5%'];
   const errors = errorsOf(lines);
-  assert.deepEqual(errors.map((e) => [e.line, e.from]), [[4, undefined], [5, undefined]], 'the parser gives the rule and the stop, not the for line');
+  assert.deepEqual(errors.map((e) => [e.line, e.from, e.to]), [[3, 4, 8]], 'one problem, on the for line, at the name');
   const f = fixFor(lines, errors[0])!;
   assert.deepEqual([f.line, f.from, f.to, f.insert, f.label], [3, 4, 8, 'TLT', 'Change to TLT']);
   assert.deepEqual(apply(lines, f)[2], 'for TLT:');
   assert.deepEqual(errorsOf(apply(lines, f)), []);
-  // The stop loss line leads to the same for line.
-  assert.deepEqual(fixFor(lines, errors[1]), f);
   assert.equal(fixedBlock([HEAD, RULE, 'for tlt2:', '  stop loss: 5%'])[2], 'for TLT:');
+  assert.equal(fixedBlock([HEAD, RULE, '  for   TLTT  :  # sleeve', '  stop loss: 5%'])[2], '  for   TLT  :  # sleeve');
   assert.equal(hintFor(lines, errors[0]), 'Did you mean TLT?');
 });
 

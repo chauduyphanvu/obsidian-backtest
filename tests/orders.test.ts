@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { barLabel, basisOf, failedStatus, mapLimit, notOurNoteMessage, orderSize, ordersMarkdown, ordersSavePlan, problemsOf, sortStatuses, statusFrom, todoRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
+import { actionWord, barLabel, basisOf, CLOSE_FILL_NOTE, failedStatus, LAST_CLOSE_NOTE, mapLimit, notOurNoteMessage, orderSize, ordersMarkdown, ordersSavePlan, positionOrder, problemsOf, sortStatuses, statusFrom, todoGroups, todoRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
+import type { AssetState } from '../src/engine.ts';
 import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY, T0 } from './helpers.ts';
@@ -26,11 +27,12 @@ test('a pending buy becomes a buy order sized at the target weight', () => {
     strategy: 'Trend',
     asOf: day(2),
     interval: '1d',
-    orders: [{ ticker: 'A', action: 'buy', weight: 1, value: 1000, lastClose: 12, since: null }],
+    orders: [{ ticker: 'A', action: 'buy', when: 'next open', weight: 1, value: 1000, lastClose: 12, since: null }],
     holdings: [],
     equity: 1000,
     warnings: [],
     error: null,
+    closeFill: false,
     stale: false,
   });
 });
@@ -39,7 +41,7 @@ test('a pending sell becomes a sell order for the whole position and is not a ho
   // Bought at day 1's open (10): 100 shares, 800 after the close at 8, when the sell rule fires.
   const out = run('universe: A\ncapital: 1000\nbuy when true\nsell when close < 9', { A: bars([10, 10, 10, 8]) });
   const s = statusFrom('n.md', 'S', out, NOW);
-  assert.deepEqual(s.orders, [{ ticker: 'A', action: 'sell', weight: 0, value: 800, lastClose: 8, since: day(1) }]);
+  assert.deepEqual(s.orders, [{ ticker: 'A', action: 'sell', when: 'next open', weight: 0, value: 800, lastClose: 8, since: day(1) }]);
   assert.deepEqual(s.holdings, []);
   assert.equal(s.equity, 800);
 });
@@ -67,7 +69,7 @@ test('with several tickers one can be held while another has an order', () => {
   // A is bought at day 2's open (20): 25 shares for half of 1000. B's rule first holds at the last close.
   const out = run('universe: A 50%, B 50%\ncapital: 1000\nbuy when close > 15', { A: bars([10, 20, 20, 20]), B: bars([10, 10, 10, 20]) });
   const s = statusFrom('n.md', 'S', out, NOW);
-  assert.deepEqual(s.orders, [{ ticker: 'B', action: 'buy', weight: 0.5, value: 500, lastClose: 20, since: null }]);
+  assert.deepEqual(s.orders, [{ ticker: 'B', action: 'buy', when: 'next open', weight: 0.5, value: 500, lastClose: 20, since: null }]);
   assert.deepEqual(s.holdings, [{ ticker: 'A', weight: 0.5, since: day(2), lastClose: 20, gain: 0 }]);
 });
 
@@ -99,17 +101,18 @@ test('warnings from loading the prices are kept', () => {
   assert.deepEqual(statusFrom('n.md', 'S', out, NOW).warnings, ["Couldn't refresh A (HTTP 500); using prices saved on 2020-01-02."]);
 });
 
-function status(note: string, strategy: string, orders: Array<[OrderRow['action'], string]> = [], more: Partial<StrategyStatus> = {}): StrategyStatus {
+function status(note: string, strategy: string, orders: Array<[OrderRow['action'], string, OrderRow['when']?]> = [], more: Partial<StrategyStatus> = {}): StrategyStatus {
   return {
     note,
     strategy,
     asOf: day(2),
     interval: '1d',
-    orders: orders.map(([action, ticker]) => ({ ticker, action, weight: action === 'buy' ? 0.5 : 0, value: 100, lastClose: 10, since: null })),
+    orders: orders.map(([action, ticker, when = 'next open']) => ({ ticker, action, when, weight: action === 'buy' ? 0.5 : 0, value: 100, lastClose: 10, since: null })),
     holdings: [],
     equity: 1000,
     warnings: [],
     error: null,
+    closeFill: false,
     stale: false,
     ...more,
   };
@@ -143,13 +146,13 @@ test('the to-do list puts every sell ahead of every buy', () => {
 
 test('a failed strategy has an error, no orders and no price date', () => {
   const f = failedStatus('n.md', 'S', "Couldn't load XYZ from yahoo: HTTP 404");
-  assert.deepEqual(f, { note: 'n.md', strategy: 'S', asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: "Couldn't load XYZ from yahoo: HTTP 404", stale: false });
+  assert.deepEqual(f, { note: 'n.md', strategy: 'S', asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: "Couldn't load XYZ from yahoo: HTTP 404", closeFill: false, stale: false });
   assert.deepEqual(problemsOf(f), ["Couldn't run. Couldn't load XYZ from yahoo: HTTP 404"]);
   assert.equal(basisOf([f]), null);
 });
 
 test('order sizes are a share of the strategy with dollars second', () => {
-  const order = (action: OrderRow['action'], weight: number, value: number): OrderRow => ({ ticker: 'A', action, weight, value, lastClose: 1, since: null });
+  const order = (action: OrderRow['action'], weight: number, value: number): OrderRow => ({ ticker: 'A', action, when: 'next open', weight, value, lastClose: 1, since: null });
   assert.equal(orderSize(order('buy', 0.2, 2100)), '20% of the strategy, about $2,100');
   assert.equal(orderSize(order('buy', 1 / 3, 33_333)), '33.3% of the strategy, about $33.3k');
   assert.equal(orderSize(order('sell', 0, 10_500)), 'Whole position, about $10.5k');
@@ -170,13 +173,13 @@ function sample(): StrategyStatus[] {
     }),
     status('Strategies/Rotation.md', 'Rotation', [['buy', 'QQQ']], {
       ...base,
-      orders: [{ ticker: 'QQQ', action: 'buy', weight: 0.2, value: 2100, lastClose: 380.1, since: null }],
+      orders: [{ ticker: 'QQQ', action: 'buy', when: 'next open', weight: 0.2, value: 2100, lastClose: 380.1, since: null }],
     }),
     failedStatus('Strategies/Broken.md', 'Broken', "Couldn't load XYZ from yahoo: HTTP 404"),
     status('Strategies/Old.md', 'Old one', [], { asOf: Date.UTC(2026, 10, 1), stale: true, warnings: ["Couldn't refresh SPY (HTTP 500); using prices saved on 2026-10-30."] }),
     status('Strategies/Trend.md', 'Trend following', [['sell', 'SPY']], {
       ...base,
-      orders: [{ ticker: 'SPY', action: 'sell', weight: 0, value: 10_500, lastClose: 412.34, since: Date.UTC(2026, 0, 5) }],
+      orders: [{ ticker: 'SPY', action: 'sell', when: 'next open', weight: 0, value: 10_500, lastClose: 412.34, since: Date.UTC(2026, 0, 5) }],
     }),
     status('Strategies/Idle.md', 'Strategy 2', [], base),
   ];
@@ -229,9 +232,9 @@ test('the Markdown with nothing to do, no problems, and no strategies', () => {
       '',
       'Based on the close of 2026-11-16. From backtests of your rules on the latest prices. Nothing here places an order.',
       '',
-      '## To do at the next open',
+      '## To do',
       '',
-      'No strategy has an order for the next open.',
+      'No strategy has an order.',
       '',
       '## Nothing to do',
       '',
@@ -248,6 +251,160 @@ test('the Markdown heading is the reader\'s date, and a name cannot break the li
   const odd = status('a.md', 'Odd [one] | two', [['buy', 'X']], { asOf: SAMPLE_ASOF });
   for (const now of [late, early]) assert.ok(ordersMarkdown([odd], now).includes("\n# Today's orders, 2026-11-17\n"));
   assert.ok(ordersMarkdown([odd], SAMPLE_NOW).includes('| [[a\\|Odd one two]] | Buy | X |'));
+});
+
+// --- fill: close --------------------------------------------------------------------------------------------------
+
+/** 27 January to 29 February 2020: CRY every day, STK on weekdays, so a ranking made on Saturday the 29th leaves STK no bar to trade at. */
+function weekendRanking(source: string): RunOutput {
+  const days = (weekdays: boolean) => {
+    const out: number[] = [];
+    for (let t = Date.UTC(2020, 0, 27); t <= Date.UTC(2020, 1, 29); t += DAY) if (!weekdays || ![0, 6].includes(new Date(t).getUTCDay())) out.push(t);
+    return out;
+  };
+  const [stkT, cryT] = [days(true), days(false)];
+  return run(source, { STK: bars(stkT.map(() => 100), { times: stkT }), CRY: bars(cryT.map((t) => (t < Date.UTC(2020, 1, 29) ? 50 : 150)), { times: cryT }) });
+}
+
+test('with fill: close a buy made at the last close is an order at the last close, and the strategy is marked', () => {
+  const out = run('universe: A\ncapital: 1000\nfill: close\nbuy when close > 11', { A: bars([10, 10, 12]) });
+  const s = statusFrom('n.md', 'S', out, NOW);
+  assert.equal(s.closeFill, true);
+  assert.deepEqual(s.orders, [{ ticker: 'A', action: 'buy', when: 'last close', weight: 1, value: 1000, lastClose: 12, since: null }]);
+  assert.deepEqual(s.holdings, [], 'the position is already covered by its order');
+  assert.equal(s.equity, 1000);
+});
+
+test('with fill: close a sell made at the last close is an order at the last close, with the day the position was opened', () => {
+  // Bought at day 0's close (10): 100 shares. Sold at day 3's close (8): 800.
+  const out = run('universe: A\ncapital: 1000\nfill: close\nbuy when true\nsell when close < 9', { A: bars([10, 10, 10, 8]) });
+  const s = statusFrom('n.md', 'S', out, NOW);
+  assert.deepEqual(s.orders, [{ ticker: 'A', action: 'sell', when: 'last close', weight: 0, value: 800, lastClose: 8, since: day(0) }]);
+  assert.deepEqual(s.holdings, []);
+});
+
+test('with fill: close a position with nothing decided at the last close is a holding, and no order is listed', () => {
+  const s = statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nfill: close\nbuy when true', { A: bars([10, 10, 12, 15]) }), NOW);
+  assert.deepEqual(s.orders, []);
+  assert.deepEqual(s.holdings, [{ ticker: 'A', weight: 1, since: day(0), lastClose: 15, gain: 0.5 }]);
+  assert.equal(s.closeFill, true);
+});
+
+test('with fill: close an order a ranking could not fill, for a ticker with no bar, is for the next close', () => {
+  const s = statusFrom('n.md', 'S', weekendRanking('universe: STK, CRY\ncapital: 1000\nfill: close\nrebalance: monthly\nhold: top 1 by close'), NOW);
+  assert.deepEqual(
+    s.orders.map((o) => [o.action, o.ticker, o.when]),
+    [['sell', 'STK', 'next close'], ['buy', 'CRY', 'next close']],
+  );
+  // Without fill: close the same ranking waits for the next open.
+  const open = statusFrom('n.md', 'S', weekendRanking('universe: STK, CRY\ncapital: 1000\nrebalance: monthly\nhold: top 1 by close'), NOW);
+  assert.ok(open.orders.length > 0 && open.orders.every((o) => o.when === 'next open'));
+  assert.equal(open.closeFill, false);
+});
+
+test('a failed strategy is not a close-fill one', () => {
+  assert.equal(failedStatus('n.md', 'S', 'x').closeFill, false);
+});
+
+test('the to-do list goes by timing first, then sells ahead of buys, and the groups carry their headings', () => {
+  const list = [
+    status('a.md', 'A', [['buy', 'X'], ['buy', 'M', 'last close']], { closeFill: true }),
+    status('b.md', 'B', [['sell', 'Y', 'next close'], ['buy', 'Z', 'next close'], ['sell', 'Q', 'last close']], { closeFill: true }),
+    status('c.md', 'C', [['sell', 'W']]),
+  ];
+  const rows = todoRows(list);
+  assert.deepEqual(rows.map((r) => [r.order.when, r.order.action, r.order.ticker]), [
+    ['next open', 'sell', 'W'],
+    ['next open', 'buy', 'X'],
+    ['next close', 'sell', 'Y'],
+    ['next close', 'buy', 'Z'],
+    ['last close', 'sell', 'Q'],
+    ['last close', 'buy', 'M'],
+  ]);
+  const groups = todoGroups(rows);
+  assert.deepEqual(groups.map((g) => [g.when, g.heading, g.rows.length]), [
+    ['next open', 'To do at the next open', 2],
+    ['next close', 'To do at the next close', 2],
+    ['last close', 'Traded at the last close', 2],
+  ]);
+  assert.deepEqual(todoGroups(rows.filter((r) => r.order.when === 'next close')).map((g) => g.when), ['next close']);
+  assert.deepEqual(todoGroups([]), []);
+});
+
+test('an order made at the last close is worded in the past, the others as something to do', () => {
+  const o = (action: OrderRow['action'], when: OrderRow['when']) => ({ action, when });
+  assert.deepEqual([actionWord(o('buy', 'next open')), actionWord(o('sell', 'next open')), actionWord(o('buy', 'next close')), actionWord(o('sell', 'next close'))], ['Buy', 'Sell', 'Buy', 'Sell']);
+  assert.deepEqual([actionWord(o('buy', 'last close')), actionWord(o('sell', 'last close'))], ['Bought', 'Sold']);
+});
+
+test('a position\'s order is worded as the positions table words it', () => {
+  const st = (o: Partial<AssetState>): AssetState => ({ name: 'A', weight: 1, long: false, since: null, pending: null, shares: 0, lastClose: 1, value: 0, targetWeight: 1, ...o });
+  assert.equal(positionOrder(st({}), undefined), '');
+  assert.equal(positionOrder(st({ pending: 'buy' }), undefined), 'buys at the next open');
+  assert.equal(positionOrder(st({ pending: 'sell' }), 'next open'), 'sells at the next open');
+  assert.equal(positionOrder(st({ pending: 'buy' }), 'close'), 'buys at the next close');
+  assert.equal(positionOrder(st({ filled: { side: 'buy', shares: 1, price: 1 } }), 'close'), 'bought at the last close');
+  assert.equal(positionOrder(st({ filled: { side: 'sell', shares: 1, price: 1 } }), 'close'), 'sold at the last close');
+  assert.equal(positionOrder(st({ filled: null }), 'close'), '');
+});
+
+test('the Markdown groups the orders by timing and says once what fill: close means', () => {
+  const list = [
+    status('Strategies/Trend.md', 'Trend following', [['sell', 'SPY']], { asOf: SAMPLE_ASOF }),
+    status('Strategies/Close.md', 'Close mover', [['buy', 'TLT', 'last close']], { asOf: SAMPLE_ASOF, closeFill: true }),
+    status('Strategies/Rank.md', 'Ranker', [['buy', 'CRY', 'next close']], { asOf: SAMPLE_ASOF, closeFill: true }),
+    status('Strategies/Quiet.md', 'Quiet close', [], { asOf: SAMPLE_ASOF, closeFill: true }),
+  ];
+  assert.equal(
+    ordersMarkdown(list, SAMPLE_NOW),
+    [
+      '---',
+      'backtest_orders: true',
+      '---',
+      '',
+      "# Today's orders, 2026-11-17",
+      '',
+      'Based on the close of 2026-11-16. From backtests of your rules on the latest prices. Nothing here places an order.',
+      '',
+      '## To do at the next open',
+      '',
+      '| Strategy | Action | Ticker | Size | Last close | Based on |',
+      '| --- | --- | --- | --- | ---: | --- |',
+      '| [[Strategies/Trend\\|Trend following]] | Sell | SPY | Whole position, about $100 | 10.00 | Close of 2026-11-16 |',
+      '',
+      '## To do at the next close',
+      '',
+      '| Strategy | Action | Ticker | Size | Last close | Based on |',
+      '| --- | --- | --- | --- | ---: | --- |',
+      '| [[Strategies/Rank\\|Ranker]] | Buy | CRY | 50% of the strategy, about $100 | 10.00 | Close of 2026-11-16 |',
+      '',
+      '## Traded at the last close',
+      '',
+      LAST_CLOSE_NOTE,
+      '',
+      '| Strategy | Action | Ticker | Size | Last close | Based on |',
+      '| --- | --- | --- | --- | ---: | --- |',
+      '| [[Strategies/Close\\|Close mover]] | Bought | TLT | 50% of the strategy, about $100 | 10.00 | Close of 2026-11-16 |',
+      '',
+      '## Nothing to do',
+      '',
+      '- [[Strategies/Quiet|Quiet close]]: In cash',
+      '',
+      '## Strategies that fill at the close',
+      '',
+      CLOSE_FILL_NOTE,
+      '',
+      '- [[Strategies/Close|Close mover]]',
+      '- [[Strategies/Rank|Ranker]]',
+      '- [[Strategies/Quiet|Quiet close]]',
+      '',
+    ].join('\n'),
+  );
+  assert.equal(ordersSavePlan(ordersMarkdown(list, SAMPLE_NOW)), 'replace');
+});
+
+test('the Markdown leaves out the close-fill section when no strategy fills at the close', () => {
+  assert.ok(!ordersMarkdown(sample(), SAMPLE_NOW).includes('fill at the close'));
 });
 
 // --- Intraday strategies -------------------------------------------------------------------------------------------

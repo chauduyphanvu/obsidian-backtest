@@ -183,7 +183,7 @@ Stops are checked on top of the sell rule. With no sell rule a position is held 
 
 buy when <condition>      opens a position when the condition holds and the ticker is not held
 sell when <condition>     closes it when the condition holds
-A rule that holds at a close fills at the next open. At most one buy rule and one sell rule per scope. A buy rule is optional only when hold is set (then every ticker is eligible).
+A rule that holds at a close fills at the next open, or with fill: close at that same close. At most one buy rule and one sell rule per scope. A buy rule is optional only when hold is set (then every ticker is eligible).
 Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
 
 ## Conditions and values
