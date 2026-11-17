@@ -110,6 +110,8 @@ export function bootstrap(t: number[], equity: number[], opts: { runs?: number; 
 export interface Holding {
   entry: number;
   exit: number;
+  /** With `entries`: how many bars after `entry` each later entry is made. */
+  adds?: number[];
 }
 
 /** Return per year over the worst drawdown's size. */
@@ -151,10 +153,13 @@ function sampleDistinct(n: number, k: number, rng: Rng): number[] {
  * Every arrangement of the holdings and the empty bars between them is equally likely.
  * A 0-bar holding (stopped out on its entry bar) becomes 1 bar: an exit by signal fills a bar later.
  * That can overfill a ticker that was in the market almost without a break; the longest holdings
- * then give back a bar each until they fit.
+ * then give back a bar each until they fit, and drop the entries that no longer fall inside them.
+ * `adds[k]` is how many bars after holding k's first entry each of its later entries is made; they move with the holding.
  */
-export function placeHoldings(lengths: number[], first: number, last: number, rng: Rng): Holding[] {
-  const order = shuffle(lengths.map((l) => Math.max(1, l)), rng);
+export function placeHoldings(lengths: number[], first: number, last: number, rng: Rng, adds?: number[][]): Holding[] {
+  // Shuffling the indices draws the same permutation as shuffling the lengths, and keeps each holding's entries with it.
+  const picks = shuffle(lengths.map((_, k) => k), rng);
+  const order = picks.map((k) => Math.max(1, lengths[k]));
   let free = last - first + 1 - order.reduce((s, l) => s + l + 1, 0);
   while (free < 0) {
     const k = order.indexOf(Math.max(...order));
@@ -167,45 +172,54 @@ export function placeHoldings(lengths: number[], first: number, last: number, rn
   return slots.map((slot, j) => {
     const entry = first + slot - j + used;
     used += order[j] + 1;
-    return { entry, exit: entry + order[j] };
+    const later = adds?.[picks[j]]?.filter((d) => d < order[j]);
+    return later?.length ? { entry, exit: entry + order[j], adds: later } : { entry, exit: entry + order[j] };
   });
 }
 
-/** Buy at the close before each entry and sell at the close before each exit, so both fill at the opens that follow, or at those closes with `fill: close`. */
+/** Buy at the close before each entry, add at the close before each later entry and sell at the close before each exit, so they fill at the opens that follow, or at those closes with `fill: close`. */
 function holdingSignals(bars: Bars, holdings: Holding[]): Signals {
   const buy = new Array<number>(bars.t.length).fill(0);
   const sell = new Array<number>(bars.t.length).fill(0);
+  const add = new Array<number>(bars.t.length).fill(0);
   for (const h of holdings) {
     buy[h.entry - 1] = 1;
     sell[h.exit - 1] = 1;
+    for (const d of h.adds ?? []) add[h.entry + d - 1] = 1;
   }
-  return { buy, sell: (i) => sell[i], score: null };
+  return { buy, sell: (i) => sell[i], score: null, add: (i) => add[i] };
 }
 
-/** Random timing: each ticker keeps its number of trades and their holding lengths, placed at random. */
+/**
+ * Random timing: each ticker keeps its number of trades and their holding lengths, placed at random. With `entries`, a
+ * position keeps its number of entries and the bars between them: its later entries move with it.
+ */
 export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Holding[]>; run: RunResult } {
   const holdings = new Map<string, Holding[]>();
   for (const a of bt.spec.universe) {
-    const { first, last } = barsInRun(bt.data.get(a.name)!, bt.run);
-    const lengths = bt.run.trades.filter((t) => t.asset === a.name).map((t) => t.bars);
-    holdings.set(a.name, placeHoldings(lengths, first + 1, last, rng));
+    const bars = bt.data.get(a.name)!;
+    const { first, last } = barsInRun(bars, bt.run);
+    const mine = bt.run.trades.filter((t) => t.asset === a.name);
+    const at = (t: number) => lowerBound(bars.t, t);
+    const adds = mine.some((t) => t.entries) ? mine.map((t) => (t.entries ?? []).slice(1).map((e) => at(e.t) - at(t.entryT))) : undefined;
+    holdings.set(a.name, placeHoldings(mine.map((t) => t.bars), first + 1, last, rng, adds));
   }
   const s = bt.spec;
   // The strategy's own setup with its stops off and no ranking: the placed holdings decide everything.
-  const params: SimParams = { assets: s.universe, from: s.from, to: s.to, capital: s.capital, costBps: s.costBps, slippageBps: s.slippageBps, rebalance: s.rebalance, stops: {}, cash: s.cash, sizing: s.sizing, rank: null, fill: s.fill };
+  const params: SimParams = { assets: s.universe, from: s.from, to: s.to, capital: s.capital, costBps: s.costBps, slippageBps: s.slippageBps, rebalance: s.rebalance, stops: {}, cash: s.cash, sizing: s.sizing, rank: null, fill: s.fill, commission: s.commission, entries: s.entries };
   const signals = new Map(s.universe.map((a) => [a.name, holdingSignals(bt.data.get(a.name)!, holdings.get(a.name)!)]));
   return { holdings, run: simulate(params, bt.data, signals) };
 }
 
 /** The ranking strategy's own buy and sell rules per ticker, which decide what it may hold. */
-export type PickRules = Map<string, { buy: number[]; sell: BarRule | null }>;
+export type PickRules = Map<string, { buy: number[]; sell: BarRule | null; add?: BarRule | null }>;
 
 export function pickRules(bt: Backtest): PickRules {
   const ev = specEvaluator(bt.spec, bt.data);
   return new Map(
     bt.spec.universe.map((a) => {
       const rule = bt.spec.rules[a.name];
-      return [a.name, { buy: ev.eval(rule.buy, a.name), sell: rule.sell ? ev.compile(rule.sell, a.name) : null }];
+      return [a.name, { buy: ev.eval(rule.buy, a.name), sell: rule.sell ? ev.compile(rule.sell, a.name) : null, add: rule.add ? ev.compile(rule.add, a.name) : null }];
     }),
   );
 }

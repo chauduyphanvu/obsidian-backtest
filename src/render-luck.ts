@@ -259,6 +259,21 @@ function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult
 
 // ---------------------------------------------------------------- random entries
 
+const andList = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+/** What a random-timing try keeps from the strategy; names the commission and the entries only when it has them. */
+export function randomTimingWorks(spec: Pick<Backtest['spec'], 'commission' | 'entries'>): string {
+  const same = andList(['weights', 'costs', ...(spec.commission ? ['commission'] : []), 'slippage', ...(spec.entries ? ['entries'] : []), 'cash rate']);
+  const later = spec.entries ? ' A position built in entries keeps how many it made and puts the later ones the same number of bars after its first.' : '';
+  return `each try keeps how many trades each ticker made and how long each was held, with the same ${same}, and places those holdings at random dates.${later} Stops are off: the holding lengths already include their exits.`;
+}
+
+/** What a random-picks try keeps from the strategy. */
+export function randomPicksWorks(spec: Pick<Backtest['spec'], 'commission' | 'entries'>, trades: string, against: number): string {
+  const same = andList(['rules', 'dates', 'number held', 'stops', 'costs', ...(spec.commission ? ['commission'] : []), ...(spec.entries ? ['entries'] : [])]);
+  return `each try runs the same ${same}, but ranks the tickers the rules allow at random instead of by the score. A random pick is kept for a while, so the tries trade about as often as the strategy (${trades} on average, against ${against}).`;
+}
+
 function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntriesResult | string, asked: number): void {
   const picks = bt.spec.rank !== null;
   const sec = check(el, picks ? 'Random picks' : 'Random entries');
@@ -305,13 +320,13 @@ function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntries
   if (picks) {
     how(
       sec,
-      `each try runs the same rules, dates, number held, stops and costs, but ranks the tickers the rules allow at random instead of by the score. A random pick is kept for a while, so the tries trade about as often as the strategy (${plural(avg, 'trade')} on average, against ${r.strategy.trades}).`,
+      randomPicksWorks(bt.spec, plural(avg, 'trade'), r.strategy.trades),
       'it tests the ranking only: when to be invested and which tickers are allowed come from your rules in both. Doing better than random picks in the past does not mean the ranking will keep doing it.',
     );
   } else {
     how(
       sec,
-      `each try keeps how many trades each ticker made and how long each was held, with the same weights, costs, slippage and cash rate, and places those holdings at random dates. Stops are off: the holding lengths already include their exits.`,
+      randomTimingWorks(bt.spec),
       'it tests when the rules buy and sell, not which tickers they hold, and beating random timing in the past does not mean the rules will keep doing it.',
     );
   }
