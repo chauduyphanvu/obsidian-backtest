@@ -9,6 +9,7 @@ import { children, findPos, walk, type CmpOp, type Expr, type Rebalance, type Wr
 import { SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import type { Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
+import { csvLine } from './export.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
 
@@ -987,11 +988,6 @@ export function rankingAt(bt: Backtest, t: number): string[] {
 
 // ---------------------------------------------------------------- CSV
 
-const csvField = (v: string | number): string => {
-  const x = String(v);
-  return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
-};
-const csvLine = (fields: (string | number)[]): string => fields.map(csvField).join(',') + '\n';
 const num = (x: number): string => (Number.isFinite(x) ? String(Number(x.toPrecision(12))) : '');
 
 /** The names of the fields a column makes in the CSV, with the user's own text in them. */
