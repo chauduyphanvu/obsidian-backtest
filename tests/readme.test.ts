@@ -100,7 +100,8 @@ test('the README has no images and no promises of later features', () => {
 test('the version files agree with the manifest', () => {
   const manifest = json('manifest.json');
   assert.equal(json('package.json').version, manifest.version);
-  assert.deepEqual(json('versions.json'), { [manifest.version]: manifest.minAppVersion });
+  // versions.json keeps one line per release, so only the current one is checked here.
+  assert.equal(json('versions.json')[manifest.version], manifest.minAppVersion);
 });
 
 test('the licence is MIT, 2026, held by the manifest author, and the description follows the guidance', () => {
