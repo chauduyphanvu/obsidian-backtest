@@ -90,14 +90,23 @@ export class BacktestSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Notes').setHeading();
     new Setting(containerEl)
       .setName('Write results to note properties')
-      .setDesc("After each run, save the main figures to the note's properties so a Base can list your strategies. This edits your notes.")
+      .setDesc(
+        "When a note's strategies have run, save their main figures to the note's properties so a Base can list them. Properties that start with bt_ belong to this plugin: it updates them, and removes ones that no strategy in the note produces any more. This edits your notes.",
+      )
       .addToggle((t) =>
         t.setValue(settings.writeProperties).onChange(async (v) => {
           settings.writeProperties = v;
           await this.host.saveSettings();
         }),
       );
-    this.field('Note for today’s orders', 'Vault path of the note to write them to, such as Trading/Orders.md. Leave empty for none.', settings.ordersNote, 'Trading/Orders.md', () => null, (v) => (settings.ordersNote = v.trim()));
+    this.field(
+      'Note for today’s orders',
+      'Vault path of the note to write them to, such as Trading/Orders.md. The note is rewritten each time you save. An existing note is replaced only if this plugin made it. Leave empty for none.',
+      settings.ordersNote,
+      'Trading/Orders.md',
+      () => null,
+      (v) => (settings.ordersNote = v.trim()),
+    );
     this.field('Folder for saved results', 'Vault folder where saved results go.', settings.snapshotFolder, 'Backtests', () => null, (v) => (settings.snapshotFolder = v.trim() || 'Backtests'));
 
     new Setting(containerEl).setName('Drafting from plain English').setDesc('Only the description you type is sent to this service.').setHeading();

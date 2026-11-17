@@ -1,3 +1,5 @@
+import type { Spec } from './dsl.ts';
+
 /**
  * Keeps the latest results so a block that re-renders (scrolling, switching views) does not run again.
  * Entries expire after `maxAgeMs` and the least recently used are dropped beyond `maxEntries`.
@@ -73,10 +75,22 @@ function hash(text: string): number {
   return 4294967296 * (2097151 & b) + (a >>> 0);
 }
 
-/** A short stable key for a strategy's text plus the defaults it was parsed with. */
-export function cacheKey(source: string, defaults: unknown): string {
-  const text = `${stable(defaults)}\u0000${source}`;
+/** A short stable key for a strategy's text plus the defaults it was parsed with, and `inputs` when it reads files that can change (see `csvVersions`). */
+export function cacheKey(source: string, defaults: unknown, inputs = ''): string {
+  const text = `${stable(defaults)}\u0000${source}${inputs ? `\u0000${inputs}` : ''}`;
   return `${hash(text).toString(36)}-${text.length.toString(36)}`;
+}
+
+/** The vault paths of the CSV files a strategy reads, each once, in order. */
+export function csvPaths(spec: Pick<Spec, 'universe' | 'extras' | 'benchmark' | 'cash'>): string[] {
+  const refs = [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...(spec.cash.k === 'ticker' ? [spec.cash.ref] : [])];
+  return [...new Set(refs.filter((r) => r.source === 'csv').map((r) => r.id))].sort();
+}
+
+/** Which version of each file a result was made from: its path and modified time, or "missing" when there is no such file. Empty when there are no files. */
+export async function csvVersions(paths: string[], modified: (path: string) => Promise<number | null>): Promise<string> {
+  const times = await Promise.all(paths.map(modified));
+  return paths.map((p, i) => `${p}=${times[i] ?? 'missing'}`).join('\n');
 }
 
 const REAL_TIMERS = {

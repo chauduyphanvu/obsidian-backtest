@@ -155,25 +155,70 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
 
 const round = (x: number, digits: number): number | string => (Number.isFinite(x) ? Number(x.toFixed(digits)) : '');
 
+const PROPERTY_FIELDS = ['return_per_year', 'worst_drawdown', 'sharpe', 'trades', 'invested', 'from', 'to', 'benchmark_return_per_year', 'last_run', 'position'];
+const propertyKey = (id: string, field: string) => (id ? `bt_${id}_${field}` : `bt_${field}`);
+const isLastRun = (key: string) => key.endsWith('_last_run');
+
 /**
- * Values to store in a note's properties so a Base can list strategies. With a `name` and `multiple`, every key takes the name
- * between `bt_` and the rest, such as `bt_trend_following_sharpe`, so several strategies fit in one note.
+ * What each strategy in a note puts between `bt_` and the rest of its keys, in the order given. A note with one
+ * strategy has no such part (`bt_sharpe`). With several, a named strategy uses its name in lower case (`bt_trend_following_sharpe`);
+ * one with no name, a name with no letters or digits, or a name that would give the same key as an earlier strategy uses its
+ * position in the note (`bt_2_sharpe`), so no two strategies ever share a key.
  */
-export function resultProperties(bt: Backtest, now: number, opts: { name?: string | null; multiple?: boolean } = {}): Record<string, string | number> {
-  const slug = opts.name && opts.multiple ? opts.name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') : '';
-  const key = (field: string) => (slug ? `bt_${slug}_${field}` : `bt_${field}`);
+export function propertyIds(names: (string | null)[]): string[] {
+  if (names.length <= 1) return names.map(() => '');
+  const taken = new Set<string>();
+  return names.map((name, i) => {
+    const slug = name ? name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') : '';
+    const free = (id: string) => PROPERTY_FIELDS.every((f) => !taken.has(propertyKey(id, f)));
+    let id = slug;
+    for (let n = 1; !id || !free(id); n++) id = n === 1 ? String(i + 1) : `${i + 1}_${n}`;
+    for (const f of PROPERTY_FIELDS) taken.add(propertyKey(id, f));
+    return id;
+  });
+}
+
+/** Values to store in a note's properties so a Base can list strategies. `id` is from `propertyIds`. */
+export function resultProperties(bt: Backtest, now: number, id = ''): Record<string, string | number> {
   const { run, stats, tradeStats, benchmark } = bt;
   const held = run.states.filter((s) => s.long).map((s) => s.name);
-  return {
-    [key('return_per_year')]: round(stats.cagr * 100, 1),
-    [key('worst_drawdown')]: round(stats.maxDrawdown * 100, 1),
-    [key('sharpe')]: round(stats.sharpe, 2),
-    [key('trades')]: tradeStats.count,
-    [key('invested')]: round(stats.exposure * 100, 0),
-    [key('from')]: isoDate(run.t[0]),
-    [key('to')]: isoDate(run.t[run.t.length - 1]),
-    [key('benchmark_return_per_year')]: round(benchmark.stats.cagr * 100, 1),
-    [key('last_run')]: isoDate(now),
-    [key('position')]: held.length ? held.join(', ') : 'cash',
+  const values: Record<string, string | number> = {
+    return_per_year: round(stats.cagr * 100, 1),
+    worst_drawdown: round(stats.maxDrawdown * 100, 1),
+    sharpe: round(stats.sharpe, 2),
+    trades: tradeStats.count,
+    invested: round(stats.exposure * 100, 0),
+    from: isoDate(run.t[0]),
+    to: isoDate(run.t[run.t.length - 1]),
+    benchmark_return_per_year: round(benchmark.stats.cagr * 100, 1),
+    last_run: isoDate(now),
+    position: held.length ? held.join(', ') : 'cash',
   };
+  return Object.fromEntries(PROPERTY_FIELDS.map((f) => [propertyKey(id, f), values[f]]));
+}
+
+/** What to change in a note's front matter. */
+export interface PropertyPlan {
+  set: Record<string, string | number>;
+  remove: string[];
+}
+
+/**
+ * Compares the figures the note's strategies give (`produced`) with its front matter. Only values that differ are set, and
+ * the last-run date is set only when something else changes (or it is missing), so opening a note on a new day does not
+ * rewrite it. When every strategy ran (`complete`), `bt_` keys that none of them produces any more are removed; when one
+ * did not, old keys are left alone, because the missing figures might still be wanted. Nothing is removed from a note
+ * that produced nothing.
+ */
+export function planProperties(existing: Record<string, unknown> | undefined, produced: Record<string, string | number>, complete: boolean): PropertyPlan {
+  const have = existing ?? {};
+  const keys = Object.keys(produced);
+  const remove = complete && keys.length > 0 ? Object.keys(have).filter((k) => k.startsWith('bt_') && !(k in produced)) : [];
+  const changed = keys.some((k) => !isLastRun(k) && have[k] !== produced[k]);
+  const dirty = changed || remove.length > 0;
+  const set: Record<string, string | number> = {};
+  for (const k of keys) {
+    if (isLastRun(k) ? dirty || !(k in have) : have[k] !== produced[k]) set[k] = produced[k];
+  }
+  return { set, remove };
 }

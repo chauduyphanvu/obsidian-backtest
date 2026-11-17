@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cacheKey, debounce, ResultCache } from '../src/result-cache.ts';
+import { parseSpec } from '../src/dsl.ts';
+import { cacheKey, csvPaths, csvVersions, debounce, ResultCache } from '../src/result-cache.ts';
 
 const clock = () => {
   const c = { t: 1000, now: () => c.t };
@@ -214,4 +215,43 @@ test('debounce with the real timers', async () => {
   cancelled.cancel();
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(calls, 1);
+});
+
+// --- CSV files in the key ------------------------------------------------------------------------------------------
+
+test('csvPaths: the CSV files a strategy reads, once each and sorted, whatever role they play', () => {
+  const src = [
+    'universe: csv:data/b.csv, csv:data/a.csv, SPY',
+    'benchmark: csv:data/c.csv',
+    'cash rate: csv:rates/irx.csv',
+    'buy when close > close of csv:data/a.csv and close of csv:data/d.csv > 1',
+  ].join('\n');
+  const { spec, errors } = parseSpec(src);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(csvPaths(spec!), ['data/a.csv', 'data/b.csv', 'data/c.csv', 'data/d.csv', 'rates/irx.csv']);
+});
+
+test('csvPaths: a strategy with no CSV files has none', () => {
+  assert.deepEqual(csvPaths(parseSpec('universe: SPY, binance:BTCUSDT\nbuy when true').spec!), []);
+});
+
+test('csvVersions: path and modified time for each file, and "missing" for one that is gone', async () => {
+  const times: Record<string, number | null> = { 'a.csv': 1700000000000, 'gone.csv': null };
+  const asked: string[] = [];
+  const text = await csvVersions(['a.csv', 'gone.csv'], async (p) => (asked.push(p), times[p]));
+  assert.equal(text, 'a.csv=1700000000000\ngone.csv=missing');
+  assert.deepEqual(asked, ['a.csv', 'gone.csv']);
+  assert.equal(await csvVersions([], async () => 1), '');
+});
+
+test('a changed or missing CSV file changes the key, and no files leaves the key as it was', async () => {
+  const base = { capital: 10000 };
+  const at = (n: number | null) => csvVersions(['a.csv'], async () => n);
+  const same = cacheKey('universe: csv:a.csv', base, await at(5));
+  assert.equal(same, cacheKey('universe: csv:a.csv', base, await at(5)));
+  assert.notEqual(same, cacheKey('universe: csv:a.csv', base, await at(6)));
+  assert.notEqual(same, cacheKey('universe: csv:a.csv', base, await at(null)));
+  assert.notEqual(cacheKey('universe: csv:a.csv', base, await at(null)), cacheKey('universe: csv:a.csv', base, await at(0)));
+  assert.equal(cacheKey('universe: SPY', base), cacheKey('universe: SPY', base, ''));
+  assert.notEqual(cacheKey('universe: SPY', base), cacheKey('universe: SPY', base, 'a.csv=1'));
 });
