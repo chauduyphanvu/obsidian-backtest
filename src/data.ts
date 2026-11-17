@@ -158,6 +158,17 @@ function detectSeparator(header: string): string {
 
 const num = (s: string | undefined): number => (s === undefined || s === '' ? NaN : Number(s));
 
+/** The header names parseCsv looks for, compared in lower case. */
+export const CSV_HEADERS = {
+  date: ['date', 'time', 'timestamp', 'datetime'],
+  open: ['open'],
+  high: ['high'],
+  low: ['low'],
+  close: ['close'],
+  volume: ['volume'],
+  adjClose: ['adj close', 'adj_close', 'adjclose'],
+} as const;
+
 /**
  * CSV with a header row naming a date or time column and open, high, low, close (volume optional).
  * Separators can be commas, semicolons or tabs; dates can be ISO, MM/DD/YYYY, DD/MM/YYYY (when some day is above 12) or DD.MM.YYYY.
@@ -169,9 +180,9 @@ export function parseCsv(text: string): Bars {
   const names = splitLine(lines[0], sep);
   const header = names.map((h) => h.toLowerCase());
   const col = (...wanted: string[]) => header.findIndex((h) => wanted.includes(h));
-  const ti = col('date', 'time', 'timestamp', 'datetime');
-  const [oi, hi, li, ci, vi] = [col('open'), col('high'), col('low'), col('close'), col('volume')];
-  const ai = col('adj close', 'adj_close', 'adjclose');
+  const ti = col(...CSV_HEADERS.date);
+  const [oi, hi, li, ci, vi] = [col(...CSV_HEADERS.open), col(...CSV_HEADERS.high), col(...CSV_HEADERS.low), col(...CSV_HEADERS.close), col(...CSV_HEADERS.volume)];
+  const ai = col(...CSV_HEADERS.adjClose);
   const missing = [ti < 0 && 'date', oi < 0 && 'open', hi < 0 && 'high', li < 0 && 'low', ci < 0 && 'close'].filter(Boolean);
   if (missing.length) throw new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
 
@@ -194,6 +205,9 @@ export function parseCsv(text: string): Bars {
   }
   throw new Error('The CSV has no usable rows: every row has a price at or below zero, or a high or low that does not contain the open and close');
 }
+
+/** The pieces parseCsv reads a file with, for code that has to agree with it exactly. */
+export { SLASHED as CSV_SLASHED_DATE, detectSeparator as detectCsvSeparator, parseTime as parseCsvTime, slashedDatesAreDayFirst, splitLine as splitCsvLine };
 
 async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Promise<Bars> {
   const path =

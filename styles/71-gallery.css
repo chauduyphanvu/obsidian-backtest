@@ -1,0 +1,106 @@
+.modal.bt-gallery-modal {
+  width: 880px;
+  max-width: 94vw;
+}
+
+.bt-gallery {
+  container: bt-gallery / inline-size;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+.bt-gallery-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 16px;
+  height: min(62vh, 520px);
+}
+
+.bt-gallery-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+.bt-gallery-list:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -1px;
+}
+.bt-gallery-item {
+  padding: 8px 10px;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+}
+.bt-gallery-item:last-child {
+  border-bottom: none;
+}
+.bt-gallery-item:hover {
+  background: var(--background-modifier-hover);
+}
+.bt-gallery-item[aria-selected='true'] {
+  background: var(--background-modifier-active-hover);
+  border-left-color: var(--interactive-accent);
+}
+.bt-gallery-title {
+  font-weight: var(--font-semibold);
+}
+.bt-gallery-text {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.bt-gallery-preview {
+  min-width: 0;
+  overflow-y: auto;
+}
+.bt-gallery-name {
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+.bt-gallery-desc {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+}
+.bt-gallery-preview .bt-source {
+  margin-top: 12px;
+}
+
+.bt-gallery-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 14px;
+}
+.bt-gallery-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-gallery-foot button {
+  flex: none;
+}
+
+/* Narrow: the list sits above the preview. */
+@container bt-gallery (max-width: 560px) {
+  .bt-gallery-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
+    height: min(70vh, 560px);
+    gap: 12px;
+  }
+  .bt-gallery-text {
+    -webkit-line-clamp: 2;
+  }
+  .bt-gallery-foot {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
