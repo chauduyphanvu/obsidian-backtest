@@ -122,8 +122,9 @@ test('a file of a date and columns, with no prices, is read as signals that cann
   assert.equal(b.c.length, 2);
   assert.ok(b.c.every(Number.isNaN) && b.o.every(Number.isNaN) && b.h.every(Number.isNaN) && b.l.every(Number.isNaN));
   assert.deepEqual(b.v, [0, 0]);
-  // With no price header, volume and adj close are columns like any other.
-  assert.deepEqual(parseCsv('date,volume,adj close\n2024-01-02,1,2').columns!.map((c) => c.name), ['volume', 'adj_close']);
+  // With no price header, volume is a column like any other; an adjusted close is a price, so that file is not one of signals.
+  assert.deepEqual(parseCsv('date,volume,score\n2024-01-02,1,2').columns!.map((c) => c.name), ['volume', 'score']);
+  assert.throws(() => parseCsv('date,volume,adj close\n2024-01-02,1,2'), /no open, high, low, close column/);
   // What this changes is only a file that could not be read before. These still cannot.
   assert.throws(() => parseCsv('date,notes\n2024-01-02,hello'), /header row with date, open, high, low and close columns, but has no open, high, low, close column/);
   assert.throws(() => parseCsv('a,b\n1,2'), /header row/);
@@ -311,20 +312,26 @@ function parseCond(rule: string): Expr {
   return parseSpec(`universe: csv:Data/A.csv\nbuy when ${rule}`).spec!.rules.A.buy;
 }
 
-test('through of, a column is read as a close would be: the latest row that had ended by the end of the bar', () => {
-  // The signal file is weekly, dated Mondays: a row is known from the next Monday on.
+test('through of, a row of a file of signals is known at the end of its own day, however far apart the rows are', () => {
+  // The signal file is weekly, dated Mondays: a row is known from the close of its own Monday on.
   const weekdays = days(30).filter((t) => ![0, 6].includes(new Date(t).getUTCDay()));
   const mondays = [Date.UTC(2020, 0, 6), Date.UTC(2020, 0, 13), Date.UTC(2020, 0, 20)];
   const data = new Map<string, Bars>([['A', bars(weekdays.map((_, i) => 10 + i), { times: weekdays })], ['sig', signals(mondays, { score: [1, 2, 3] })]]);
   const ev = new Evaluator(data);
   const read = ev.eval({ k: 'of', a: { k: 'column', name: 'score' }, asset: 'sig' }, 'A');
   const at = (d: number) => read[weekdays.indexOf(Date.UTC(2020, 0, d))];
-  assert.ok(Number.isNaN(at(3)) && Number.isNaN(at(10)));
-  // The row of Monday the 6th is known on Monday the 13th, not before, and the 13th's row on the 20th.
-  assert.equal(at(13), 1);
-  assert.equal(at(17), 1);
-  assert.equal(at(20), 2);
-  assert.equal(at(24), 2);
+  assert.ok(Number.isNaN(at(3)));
+  assert.equal(at(6), 1);
+  assert.equal(at(10), 1);
+  assert.equal(at(13), 2);
+  assert.equal(at(17), 2);
+  assert.equal(at(20), 3);
+  // A file with prices is a file of bars: its weekly bar dated Monday, and the columns on that row, are known once the week is over.
+  const priced = withColumns(bars([1, 2, 3], { times: mondays }), { score: [1, 2, 3] });
+  const bars7 = new Evaluator(new Map([['A', data.get('A')!], ['wk', priced]])).eval({ k: 'of', a: { k: 'column', name: 'score' }, asset: 'wk' }, 'A');
+  const at7 = (d: number) => bars7[weekdays.indexOf(Date.UTC(2020, 0, d))];
+  assert.ok(Number.isNaN(at7(6)) && Number.isNaN(at7(10)));
+  assert.deepEqual([at7(13), at7(17), at7(20)], [1, 1, 2]);
 });
 
 test('a window of the column worked out on its own file, or on the rule\'s ticker, are both allowed and use different calendars', () => {
@@ -332,10 +339,10 @@ test('a window of the column worked out on its own file, or on the rule\'s ticke
   const data = new Map<string, Bars>([['A', bars(t.map((_, i) => 10 + i))], ['sig', signals(t.filter((_, i) => i % 2 === 0), { score: [2, 4, 6, 8] })]]);
   const ev = new Evaluator(data);
   const col: Expr = { k: 'column', name: 'score' };
-  // Two rows averaged on the file's own rows, then read on A's bars: a row is known two days after its date, as its step is two days.
-  same(ev.eval({ k: 'of', a: { k: 'ind', fn: 'sma', src: col, args: [2] }, asset: 'sig' }, 'A'), [nan, nan, nan, 3, 3, 5, 5, 7]);
+  // Two rows averaged on the file's own rows, then read on A's bars from the end of each row's own day.
+  same(ev.eval({ k: 'of', a: { k: 'ind', fn: 'sma', src: col, args: [2] }, asset: 'sig' }, 'A'), [nan, nan, 3, 3, 5, 5, 7, 7]);
   // Two of A's bars averaged after the column was read on them.
-  same(ev.eval({ k: 'ind', fn: 'sma', src: { k: 'of', a: col, asset: 'sig' }, args: [2] }, 'A'), [nan, nan, 2, 3, 4, 5, 6, 7]);
+  same(ev.eval({ k: 'ind', fn: 'sma', src: { k: 'of', a: col, asset: 'sig' }, args: [2] }, 'A'), [nan, 2, 3, 4, 5, 6, 7, 8]);
 });
 
 test('with fill: close a column from another source is read one bar early, and the explanation says which row', () => {
@@ -355,7 +362,11 @@ test('with fill: close a column from another source is read one bar early, and t
     assert.match(code.label, /column\(score\) of csv:Data\/sig\.csv > 3$/);
     assert.match(code.value, /read from sig's row of 2020-01-06/);
   }
-  assert.ok(close.notes.some((n) => n.includes('sig for A')));
+  // One note says how sig is read, and the note on tickers read a bar early leaves it out.
+  assert.deepEqual(close.notes.filter((n) => n.includes('sig')), [
+    "A row of sig counts as known at the end of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future. With fill: close, a rule of A reads the latest row of sig that had ended when its own bar began, never the row of the same date, because the order fills at the close, before that row is known.",
+  ]);
+  assert.ok(!close.notes.some((n) => n.startsWith('With fill: close, a rule reads the previous bar')));
 });
 
 test('with fill: close a column of a file with the same source and days is read on the same day, like a close', () => {
@@ -398,6 +409,10 @@ test('a file with no prices cannot be traded, compared with or used for a cash r
   assert.throws(() => run('universe: A\nbuy when close of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so its close can't be read\. Read a column with column\(name\) of sig\./);
   assert.throws(() => run('universe: A\nbuy when sma(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so its close can't be read/);
   assert.throws(() => run('universe: A\nbuy when atr(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so atr\(\) can't be worked out for it/);
+  // A Keltner channel of a column still reads the file's own average true range.
+  for (const fn of ['keltner_upper', 'keltner_lower']) {
+    assert.throws(() => run(`universe: A\nbuy when ${fn}(column(score), 2, 2, 2) of csv:Data/sig.csv > 0`, { A, sig }), new RegExp(`^Error: sig has no prices, only columns, so ${fn}\\(\\) can't be worked out for it`));
+  }
   // What is not a price is allowed: the column itself, and a calendar value or a window of the column.
   assert.equal(run('universe: A\nbuy when sma(column(score), 2) of csv:Data/sig.csv > 1 and month == 1', { A, sig }).run.t.length, 5);
 });
@@ -451,7 +466,7 @@ test('the result notes which files a strategy reads columns of, and says how a r
   assert.deepEqual(columnNotes(spec('universe: SPY\nbuy when close > sma(5)')), []);
   const one = spec('universe: SPY\nbuy when column(score) of csv:Data/signals.csv > 0');
   assert.deepEqual(columnFiles(one), ['signals']);
-  assert.deepEqual(columnNotes(one), ['A row of signals counts as known at the close of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future.']);
+  assert.deepEqual(columnNotes(one), ['A row of signals counts as known at the end of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future.']);
   const many = spec('universe: csv:Data/a.csv, csv:Data/b.csv\nhold: top 1 by column(x)\nbuy when column(y) of csv:Data/c.csv > 0');
   assert.deepEqual(columnFiles(many), ['c', 'a', 'b']);
   assert.match(columnNotes(many)[0], /^A row of c, a and b counts as known/);

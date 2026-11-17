@@ -33,6 +33,12 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
   return (from, to) => clock(from) !== clock(to);
 }
 
+/** When each row of a series is known: a bar of prices when it ends, a row of a file of dated values by ind.valueEnds. */
+const rowEnds = (b: Bars): number[] => (b.unpriced ? ind.valueEnds(b.t) : ind.barEnds(b.t));
+
+/** Functions given a series that still read the ticker's own prices: its closes, or its average true range. */
+const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];
+
 /** Functions that weigh bars by volume, and so mean nothing on prices that have none. */
 const NEEDS_VOLUME = ['mfi', 'obv', 'vwap'];
 
@@ -68,15 +74,78 @@ export function columnFiles(spec: Spec): string[] {
   return [...out];
 }
 
-/** What the result says when a rule reads a column: how a row is dated, because a wrong date lets a rule see the future. */
-export function columnNotes(spec: Spec): string[] {
+const DAY = 86_400_000;
+
+/** A length of time in words: "15 minutes", "1 hour", "4 hours". */
+function span(ms: number): string {
+  const [n, unit] = ms % 3_600_000 === 0 ? [ms / 3_600_000, 'hour'] : ms % 60_000 === 0 ? [ms / 60_000, 'minute'] : [ms / 1000, 'second'];
+  return `${n} ${unit}${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * When a row of a CSV file counts as known, and how it must be dated for that, in words that follow "counts as known":
+ * a file of dated values at the end of the day it is dated, a file with prices when its bar ends, and either at its time
+ * plus the shortest gap between rows when they are less than a day apart. The same rule as Evaluator.aligned. Without the
+ * file's rows, a row of a day.
+ */
+export function rowDating(b?: Bars): { known: string; carry: string; daily: boolean } {
+  let step = Infinity;
+  const t = b?.t ?? [];
+  for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) step = Math.min(step, t[i] - t[i - 1]);
+  if (step < DAY) {
+    return { known: `at its time plus ${span(step)}, the shortest gap between its rows`, carry: 'so each row must carry the start of the interval its value was computed from', daily: false };
+  }
+  if (b && !b.unpriced && Number.isFinite(step) && step > DAY) {
+    const months = Math.max(1, Math.round(step / (30.4375 * DAY)));
+    const after = step < 20 * DAY ? `${Math.round(step / DAY)} days` : months === 1 ? 'a month' : `${months} months`;
+    return { known: `when its bar ends, ${after} after the day it is dated`, carry: "so a value in its columns must come from that bar's close or before", daily: false };
+  }
+  return { known: 'at the end of the day it is dated', carry: 'so each row must carry the day whose close its value was computed from', daily: true };
+}
+
+const LOOKAHEAD = 'a row dated earlier than the data behind it lets the rules see the future.';
+
+/**
+ * What the result says when a rule reads a column: when a row counts as known and so how it must be dated, because a wrong
+ * date lets a rule see the future. With `fill: close`, also which row an order at a close rests on (clocksApart), for every
+ * rule that reads the file, prices or columns, so the note on reading other tickers a bar early (backtest.ts) leaves these
+ * files to this one. Files that read alike share a note.
+ */
+export function columnNotes(spec: Spec, data?: Map<string, Bars>): string[] {
   const files = columnFiles(spec);
   if (files.length === 0) return [];
-  const names = files.length === 1 ? files[0] : `${files.slice(0, -1).join(', ')} and ${files[files.length - 1]}`;
-  return [
-    `A row of ${names} counts as known at the close of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future.`,
-  ];
+  const apart = data ? clocksApart(spec, data) : undefined;
+  const reads = ofReads(spec);
+  const groups = new Map<string, string[]>();
+  const tails = new Map<string, string>();
+  for (const file of files) {
+    const dating = rowDating(data?.get(file));
+    let tail = '';
+    if (apart) {
+      const when = dating.daily ? 'date' : 'time';
+      const readers = reads.filter(([, read]) => read === file).map(([reader]) => reader);
+      const early = readers.filter((r) => apart(file, r));
+      const same = readers.filter((r) => !apart(file, r));
+      if (early.length) {
+        tail += ` With fill: close, a rule of ${list(early)} reads the latest row of ${file} that had ended when its own bar began, never the row of the same ${when}, because the order fills at the close, before that row is known.`;
+      }
+      if (same.length) {
+        tail += ` With fill: close, a rule of ${list(same)} reads the row of ${file} of the same ${when}, and the result assumes that row is known at the moment of the fill, which is not true when it is worked out after that close.`;
+      }
+    }
+    const key = `${dating.known}\u0000${dating.carry}\u0000${tail}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(file);
+    tails.set(key, tail);
+  }
+  return [...groups].map(([key, names]) => {
+    const [known, carry] = key.split('\u0000');
+    return `A row of ${list(names)} counts as known ${known}, ${carry}: ${LOOKAHEAD}${tails.get(key)}`;
+  });
 }
+
+/** "A", "A and B", "A, B and C". */
+const list = (names: string[]): string => (names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 
 /** Every [reader, read] pair of tickers that a spec's rules and ranking score connect with `of`, nested ones included. */
 export function ofReads(spec: Spec): [string, string][] {
@@ -247,15 +316,24 @@ export class Evaluator {
     return other === asset ? i : this.aligned(other, asset)[i];
   }
 
-  /** Indices into `from`'s bars for each bar of `to`: see alignByEnd, and clocksApart for series read one bar early. */
+  /**
+   * Indices into `from`'s bars for each bar of `to`: the latest that had ended by the end of `to`'s bar (alignByEnd), or
+   * by its start for series read one bar early (clocksApart). A file of dated values ends its rows by valueEnds.
+   */
   private aligned(from: string, to: string): number[] {
     const key = `${from}\u0000${to}`;
     let at = this.alignments.get(key);
     if (!at) {
-      const [f, t] = [this.bars(from).t, this.bars(to).t];
-      this.alignments.set(key, (at = this.apart?.(from, to) ? ind.endedBy(f, t) : ind.alignByEnd(f, t)));
+      const [f, t] = [this.bars(from), this.bars(to)];
+      this.alignments.set(key, (at = ind.endedBy(f.t, this.apart?.(from, to) ? t.t : rowEnds(t), rowEnds(f))));
     }
     return at;
+  }
+
+  /** Whether `e`, worked out for `asset`, reads another series one bar early (clocksApart). */
+  private readsEarly(e: Expr, asset: string): boolean {
+    if (e.k === 'of') return e.asset !== asset && !!this.apart?.(e.asset, asset);
+    return children(e).some((c) => this.readsEarly(c, asset));
   }
 
   private bars(asset: string): Bars {
@@ -344,7 +422,7 @@ export class Evaluator {
 
   private indicator(e: Extract<Expr, { k: 'ind' }>, asset: string, bars: Bars): number[] {
     // `sma(column(x), 5) of file` reads only the column; anything that reads the file's own prices has none to read.
-    if (bars.unpriced && (e.src === null || e.fn === 'correl')) {
+    if (bars.unpriced && (e.src === null || OWN_PRICES.includes(e.fn))) {
       throw new Error(`${asset} has no prices, only columns, so ${e.fn}() can't be worked out for it. Read a column with column(name) of ${asset}.`);
     }
     const src = e.src ? this.eval(e.src, asset) : bars.c;
@@ -392,9 +470,11 @@ export class Evaluator {
         return ind.percentRank(src, a);
       case 'slope':
         return ind.slope(src, a);
-      // The other series was read through `of`, so it is already lined up with this ticker's bars.
+      // The other series was read through `of`, so it is already lined up with this ticker's bars. Read a bar early
+      // (clocksApart), its change at a bar is the one up to the start of that bar, so this ticker's closes are taken a bar
+      // early too: both changes then cover the same time, and are known at a fill at that bar's close.
       case 'correl':
-        return ind.correl(bars.c, src, a);
+        return ind.correl(this.readsEarly(e.src!, asset) ? ind.lag(bars.c, 1) : bars.c, src, a);
       case 'bars_since':
         return ind.barsSince(src);
       case 'stoch_k':

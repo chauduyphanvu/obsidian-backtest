@@ -591,8 +591,8 @@ class Explainer {
       this.facts.ret = (exitPrice * (1 - this.cost)) / (this.facts.entryPrice * (1 + this.cost)) - 1;
       return;
     }
-    const value = sold ? held * px * (1 - this.slip) : held * px;
-    const exitFee = commissionFee(c, value, held);
+    // What the exit paid, as the run recorded it: a sale pays no more than it brings in and the cash there was (rule 48).
+    const exitFee = this.why.commission!.exit;
     let entryFees = 0;
     let entryShares = 0;
     for (const e of entries && entries.length > 1 ? entries : [{ price: this.facts.entryPrice, shares: this.facts.shares }]) {

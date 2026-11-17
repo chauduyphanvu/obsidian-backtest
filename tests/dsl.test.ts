@@ -328,3 +328,15 @@ test('one name for two different price sources is an error, wherever the second 
   ok('universe: csv:Data/gold.csv\nbenchmark: csv:Data/gold.csv\nbuy when close of gold > 0 and close of csv:Data/gold.csv > 0');
   ok('universe: SPY\nbenchmark: yahoo:SPY\ncash rate: ^IRX\nbuy when close of yahoo:SPY > 0');
 });
+
+test('a # or // inside the quotes of column("...") is part of the header, not a comment', () => {
+  const rule = (r: string) => parseSpec(`universe: csv:Data/s.csv\nbuy when ${r}`);
+  for (const [r, name] of [['column("a # b") > 0', 'a_b'], ['column("a // b") > 0  # a comment', 'a_b'], ['column( "Score #2" ) > 0', 'score_2']] as const) {
+    const p = rule(r);
+    assert.deepEqual(p.errors, [], r);
+    assert.deepEqual(p.spec!.rules.s.buy, { k: 'cmp', op: '>', a: { k: 'column', name }, b: { k: 'num', v: 0 } }, r);
+  }
+  assert.equal(rule('column("a // b") > 0  # a comment').spec!.written!.rules.s!.buy!.text, 'column("a // b") > 0');
+  // Outside the quotes a mark still starts a comment, even one that quotes a column.
+  assert.deepEqual(rule('close > 1 # see column("a # b")').spec!.rules.s.buy, { k: 'cmp', op: '>', a: { k: 'series', name: 'close' }, b: { k: 'num', v: 1 } });
+});

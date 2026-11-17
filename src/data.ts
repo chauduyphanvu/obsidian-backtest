@@ -229,6 +229,27 @@ export const CSV_HEADERS = {
 
 const PRICE_HEADERS: readonly string[] = [...CSV_HEADERS.open, ...CSV_HEADERS.high, ...CSV_HEADERS.low, ...CSV_HEADERS.close];
 
+/** A header as the CSV helper compares it: capitals, angle brackets, underscores and dots do not matter. */
+export const tidyHeader = (name: string): string => name.toLowerCase().replace(/[<>_.]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** The headers the CSV helper takes for each part of a price file, best first, compared after tidyHeader. */
+export const CSV_GUESSES = {
+  open: [/^open$/, /^open\b/, /^opening\b/],
+  high: [/^high$/, /^high\b/, /^highest\b/],
+  low: [/^low$/, /^low\b/, /^lowest\b/],
+  close: [/^close$/, /^close\b/, /^closing\b/, /^(last|price|settle|value|nav)$/, /^(last|price)\b/],
+  volume: [/^volume$/, /^vol\b/, /^volume\b/],
+  adjClose: [/^adj close$/, /^adjusted close$/, /^adjclose$/],
+};
+
+const PRICE_GUESSES = [...CSV_GUESSES.open, ...CSV_GUESSES.high, ...CSV_GUESSES.low, ...CSV_GUESSES.close, ...CSV_GUESSES.adjClose];
+
+/**
+ * Whether a header looks like a price by the CSV helper's guesses, such as "Price", "Close Price", "Last" or "Adj Close".
+ * A file with one is a price file the reader cannot read as it is, which the helper can clean, never a file of signals.
+ */
+const looksLikePrice = (header: string): boolean => PRICE_GUESSES.some((p) => p.test(tidyHeader(header)));
+
 /**
  * The columns of a header line that can be columns a rule reads: every header with something in it that the reader does not
  * use as a date or a price. A file with no price header at all uses none of them as a price, so there `volume` and
@@ -305,7 +326,7 @@ export function parseCsv(text: string): Bars {
   const [oi, hi, li, ci, vi] = [col(...CSV_HEADERS.open), col(...CSV_HEADERS.high), col(...CSV_HEADERS.low), col(...CSV_HEADERS.close), col(...CSV_HEADERS.volume)];
   const ai = col(...CSV_HEADERS.adjClose);
   const missing = [ti < 0 && 'date', oi < 0 && 'open', hi < 0 && 'high', li < 0 && 'low', ci < 0 && 'close'].filter(Boolean);
-  const noPrices = ti >= 0 && [oi, hi, li, ci].every((i) => i < 0);
+  const noPrices = ti >= 0 && [oi, hi, li, ci].every((i) => i < 0) && !names.some((h, i) => i !== ti && looksLikePrice(h));
   const lackPrices = new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
   if (missing.length && !(noPrices && extraColumns(names).length > 0)) throw lackPrices;
 
@@ -442,14 +463,21 @@ const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
  * `since` is the earliest time the run needs, lookback included; sources that serve whole histories ignore it.
  * Calls that need the same download while one is running share it.
  */
-export async function loadBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number; keepFrom?: number }): Promise<Loaded> {
+export async function loadBars(
+  ref: AssetRef,
+  interval: string,
+  since: number,
+  deps: DataDeps,
+  force = false,
+  opts?: { freshForMs?: number; keepFrom?: number; key?: string },
+): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
     if (text === null) throw new Error(`No file at ${ref.id}`);
     return loaded('csv', parseCsv(text), deps.now());
   }
 
-  const key = `${ref.source}-${ref.id}-${interval}`.replace(/[^A-Za-z0-9._-]/g, '_');
+  const key = opts?.key ?? cacheKey(ref, interval);
   const raw = await deps.cacheRead(key);
   let saved: Cached | null = null;
   try {
@@ -473,6 +501,9 @@ export async function loadBars(ref: AssetRef, interval: string, since: number, d
   }
   return download;
 }
+
+/** The name a source's bars of one ticker and interval are saved under. */
+const cacheKey = (ref: AssetRef, interval: string): string => `${ref.source}-${ref.id}-${interval}`.replace(/[^A-Za-z0-9._-]/g, '_');
 
 /** The bars at or after `since`. */
 export function barsFrom(bars: Bars, since: number): Bars {
@@ -502,9 +533,15 @@ export function insideReach(source: AssetRef['source'], interval: string, now: n
 
 /**
  * The smaller bars `magnify` looks inside `ref`'s bars with, from `since`: loaded and saved like a ticker's own bars, under
- * their own interval, with Binance's kept to INSIDE_BARS (insideReach) as later refreshes add to them.
+ * their own interval, with Binance's kept to INSIDE_BARS (insideReach) as later refreshes add to them. Binance's are saved
+ * apart from a block's own bars of that interval, which cutting them would make too short for that block, and a file a
+ * block saved would be too long to cut here. Yahoo's are never cut, so its daily bars inside weekly ones share the daily
+ * file. A file of Binance's smaller bars saved under the shared name before they had their own is left to blocks of that
+ * interval, as any saved file is.
  */
 export function loadInsideBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number }): Promise<Loaded> {
-  const keepFrom = ref.source === 'binance' ? insideReach('binance', interval, deps.now()) : undefined;
-  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom });
+  const binance = ref.source === 'binance';
+  const keepFrom = binance ? insideReach('binance', interval, deps.now()) : undefined;
+  const key = binance ? `${cacheKey(ref, interval)}-inside` : undefined;
+  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom, key });
 }

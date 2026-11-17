@@ -120,7 +120,7 @@ test('the README has the subsection, its names and its dating rule, and the samp
   assert.ok(readme.includes('abs, column. Dates:'));
   assert.ok(readme.includes(`"${'This file has no prices. A strategy can read its columns but cannot trade it.'}"`));
   // The README's account of the dating is the helper window's.
-  assert.ok(SIGNAL_DATING.includes("A row counts as known at the close of the day it is dated."));
+  assert.ok(SIGNAL_DATING.includes("A row counts as known at the end of the day it is dated."));
 });
 
 // ------------------------------------------------------------------------------------------------ the helper
@@ -210,6 +210,21 @@ test('a cleaned copy leaves out a column that would clash, one that reads as a p
   assert.deepEqual(clash.columns, ['news_sentiment']);
   assert.equal(clash.text.split('\n')[0], 'date,open,high,low,close,volume,News Sentiment');
   assert.ok(clash.notes.includes('The column "news-sentiment" was left out: a rule would call it news_sentiment, as it does "News Sentiment".'));
+  // The original file can read neither of the two; the copy keeps the first, so its column reads.
+  assert.deepEqual(parseCsv('Date,Open,High,Low,Close,News Sentiment,news-sentiment\n2024-01-02,1,1,1,1,2,3\n').unread!.map((u) => u.name), ['news_sentiment']);
+  assert.deepEqual(parseCsv(clash.text).columns!.map((c) => [c.name, c.v[0]]), [['news_sentiment', 2]]);
+  assert.equal(parseCsv(clash.text).unread, undefined);
+  // Whatever headers a file has, every column the copy keeps reads back by its name, and none is left unread.
+  const heads = ['Score', 'score', 'SCORE', 'News Sentiment', 'news-sentiment', 'x"y', 'a,b', '10Y', 'Señal', 'Senal', 'Close*', 'Vol.', 'Adj-Close', 'Open Int', 'Notes', 'Rate, 10Y', 'rate_10y'];
+  for (let k = 0; k < 200; k++) {
+    const extra = Array.from({ length: 2 + (k % 5) }, (_, j) => heads[(k * 7 + j * 5) % heads.length]);
+    const quote = (h: string) => (/[",]/.test(h) ? `"${h.replace(/"/g, '""')}"` : h);
+    const text = `Date,Price,${extra.map(quote).join(',')}\n2024-01-02,1,${extra.map((_, j) => j + 1).join(',')}\n2024-01-03,2,${extra.map((_, j) => j + 2).join(',')}\n`;
+    const copy = cleaned(remapCsv(text, { date: 0, close: 1, open: null, high: null, low: null, volume: null, adjClose: null, dateOrder: null }));
+    const back = parseCsv(copy.text);
+    assert.deepEqual(back.columns?.map((c) => c.name) ?? [], copy.columns, text);
+    assert.equal(back.unread, undefined, text);
+  }
   const many = Array.from({ length: MAX_COLUMNS + 3 }, (_, i) => `k${i}`);
   const wide = cleaned(remapCsv(`Date,Close,${many.join(',')}\n2024-01-02,1,${many.map((_, i) => i).join(',')}\n`, { date: 0, close: 1, open: null, high: null, low: null, volume: null, adjClose: null, dateOrder: null }));
   assert.equal(wide.columns.length, MAX_COLUMNS);
@@ -228,4 +243,34 @@ test('what the window says about columns that no rule can read', () => {
   const wide = read(`Date,Open,High,Low,Close,${many.join(',')}\n${Array.from({ length: 3 }, (_, d) => `2024-01-0${d + 2},1,2,1,2,${many.map(() => 1).join(',')}`).join('\n')}\n`);
   assert.equal(wide.signals.length, MAX_COLUMNS);
   assert.deepEqual(wide.unreadable, [`Only the first ${MAX_COLUMNS} columns of a file can be read. These were left out: k${MAX_COLUMNS}, k${MAX_COLUMNS + 1}.`]);
+});
+
+test('a file whose headers look like prices to the helper is a price file to clean, not a file of signals', () => {
+  const days = (n: number) => Array.from({ length: n }, (_, i) => iso(Date.UTC(2023, 0, 2) + i * 86_400_000));
+  const closes = days(300).map((d, i) => `${d},${(100 + Math.sin(i / 9) * 5).toFixed(2)}`);
+  for (const head of ['Date,Price', 'Date,Last', 'Date,Settle', 'Date,NAV', 'Date,Adj Close', 'Date,Value']) {
+    const text = [head, ...closes].join('\n');
+    assert.throws(() => parseCsv(text), /The CSV needs a header row with date, open, high, low and close columns/, head);
+    const found = inspectCsv(text) as CsvUnread;
+    assert.equal(found.read, false, head);
+    // The window offers its form with the price column guessed, and a cleaned copy reads as a price file.
+    assert.equal(found.columns.close, 1, head);
+    const cleaned = remapCsv(text, { ...found.columns, dateOrder: null });
+    assert.ok(cleaned.ok, head);
+    if (cleaned.ok) assert.equal(parseCsv(cleaned.text).unpriced, undefined, head);
+    assert.ok(found.reason.endsWith(` If "${head.slice(5)}" holds something other than prices, give it another name, and the file is read as a file of signals.`), found.reason);
+  }
+  const ohlc = days(50).map((d, i) => `${d},${100 + i},${101 + i},${99 + i},${100.5 + i},1000`);
+  for (const head of ['Date,Open Price,High Price,Low Price,Close Price,Volume', 'Date,Opening,Highest,Lowest,Closing,Volume', 'Date,Open*,High*,Low*,Close*,Volume']) {
+    const text = [head, ...ohlc].join('\n');
+    const found = inspectCsv(text) as CsvUnread;
+    assert.equal(found.read, false, head);
+    assert.deepEqual([found.columns.open, found.columns.high, found.columns.low, found.columns.close, found.columns.volume], [1, 2, 3, 4, 5], head);
+    const cleaned = remapCsv(text, { ...found.columns, dateOrder: null });
+    assert.ok(cleaned.ok && parseCsv(cleaned.text).c.length === 50, head);
+  }
+  // A real file of signals still reads as one, with its columns.
+  const sig = inspectCsv(['date,score,news sentiment,volume', ...days(30).map((d, i) => `${d},${i / 10},${-i / 20},${i}`)].join('\n')) as CsvRead;
+  assert.equal(sig.read && sig.priced, false);
+  assert.deepEqual(sig.signals.map((s) => s.name), ['score', 'news_sentiment', 'volume']);
 });

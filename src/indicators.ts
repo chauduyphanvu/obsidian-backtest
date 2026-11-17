@@ -519,6 +519,18 @@ export function barEnds(t: number[]): number[] {
 }
 
 /**
+ * When each row of a file of dated values, a CSV file with no prices, is known: at the end of the day it is dated (UTC),
+ * however far apart the rows are, since a value dated a day was worked out from that day's close. In a file whose rows
+ * are less than a day apart, a row is known at its time plus the shortest gap between rows, as a bar of that length ends.
+ */
+export function valueEnds(t: number[]): number[] {
+  let step = Infinity;
+  for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) step = Math.min(step, t[i] - t[i - 1]);
+  if (step < DAY) return t.map((x) => x + step);
+  return t.map((x) => Math.floor(x / DAY) * DAY + DAY);
+}
+
+/**
  * For each bar of `to`, the index of the latest bar of `from` that had ended by the time that bar
  * ended, or -1 when none had. Reading another series through this never sees a bar still in progress.
  */
@@ -526,9 +538,11 @@ export function alignByEnd(from: number[], to: number[]): number[] {
   return endedBy(from, barEnds(to));
 }
 
-/** For each moment in `at` (ascending), the index of the latest bar of `from` that had ended by then, or -1 when none had. */
-export function endedBy(from: number[], at: number[]): number[] {
-  const fromEnd = barEnds(from);
+/**
+ * For each moment in `at` (ascending), the index of the latest bar of `from` that had ended by then, or -1 when none had.
+ * `fromEnd` is when each of `from`'s bars ends: barEnds unless given, as valueEnds is for a file of dated values.
+ */
+export function endedBy(from: number[], at: number[], fromEnd = barEnds(from)): number[] {
   let j = -1;
   return at.map((x) => {
     while (j + 1 < from.length && fromEnd[j + 1] <= x) j++;

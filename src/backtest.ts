@@ -2,7 +2,7 @@ import { INSIDE_BARS } from './data.ts';
 import { DAY, stamp } from './dom.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
 import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
-import { clocksApart, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
+import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -199,7 +199,9 @@ function closeReadNotes(spec: Spec, data: Map<string, Bars>, intraday: boolean):
   const when = intraday ? 'time' : 'date';
   const names = spec.universe.map((a) => a.name);
   const pairs = names.flatMap((a, i) => names.slice(i + 1).map((b) => [a, b]));
-  const reads = ofReads(spec);
+  // How a file whose columns are read is read, its prices included, is said in its own note (evaluate.ts columnNotes).
+  const columns = new Set(columnFiles(spec));
+  const reads = ofReads(spec).filter(([, read]) => !columns.has(read));
   const notes: string[] = [];
   const early = reads.filter(([reader, read]) => apart(read, reader));
   if (early.length) {
@@ -289,8 +291,8 @@ function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intrad
 export const CLOSE_FILL_NOTE =
   'Orders fill at the same close the rules were read at (fill: close). The result assumes you can trade at that closing price, which a real order can only come near by being placed just before the close.';
 
-/** Runs the spec and a buy-and-hold benchmark over the same dates. `data` is keyed by asset name. */
-export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
+/** What each ticker's rules say, as simulate reads them. */
+export function specSignals(spec: Spec, data: Map<string, Bars>): Map<string, Signals> {
   const evaluator = specEvaluator(spec, data);
   const signals = new Map<string, Signals>();
   for (const a of spec.universe) {
@@ -302,6 +304,12 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
       add: r.add ? evaluator.compile(r.add, a.name) : null,
     });
   }
+  return signals;
+}
+
+/** Runs the spec and a buy-and-hold benchmark over the same dates. `data` is keyed by asset name. */
+export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
+  const signals = specSignals(spec, data);
   const run = simulate({ ...spec, assets: spec.universe }, data, signals);
 
   // The benchmark holds the same weights (or the named ticker) throughout, with the same costs
@@ -350,7 +358,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   };
 
   const intraday = run.t.some((t) => t % DAY !== 0);
-  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec)];
+  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec, data)];
   if (run.smallTrades) {
     const n = run.smallTrades;
     notes.push(

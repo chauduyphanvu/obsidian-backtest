@@ -332,6 +332,19 @@ function lex(text: string, line: number, offset: number, out: Tok[]): void {
   }
 }
 
+/**
+ * Where a line's comment starts: at a `#` or `//` at the start of the line or after a space or tab, but not inside the
+ * quotes of `column("...")`, where a header may hold one. -1 when the line has none.
+ */
+export function commentAt(line: string): number {
+  const quoted = [...line.matchAll(/column\s*\(\s*"[^"]*"/gi)].map((m) => [m.index, m.index + m[0].length]);
+  for (const m of line.matchAll(/(^|\s)(#|\/\/)/g)) {
+    const at = m.index + m[1].length;
+    if (!quoted.some(([a, b]) => at > a && at < b)) return at;
+  }
+  return -1;
+}
+
 export function isBool(e: Expr): boolean {
   switch (e.k) {
     case 'bool':
@@ -1069,7 +1082,10 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const plainLines: string[] = [];
   source.split('\n').forEach((rawLine, idx) => {
     const line = idx + 1;
-    const stripped = rawLine.replace(/\r$/, '').replace(/(^|\s)(#|\/\/).*$/, '');
+    const raw = rawLine.replace(/\r$/, '');
+    const comment = commentAt(raw);
+    // The space or tab before the mark goes with the comment.
+    const stripped = comment < 0 ? raw : raw.slice(0, Math.max(0, comment - 1));
     plainLines.push(stripped);
     const text = stripped.trim();
     const lead = stripped.length - stripped.trimStart().length;

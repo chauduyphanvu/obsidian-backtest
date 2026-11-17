@@ -11,7 +11,7 @@ import type { Bars } from './types.ts';
 export interface SizeLimits {
   /** Bars across every ticker the run loads. */
   bars: number;
-  /** Each part of each ticker's rules (buy, sell, ranking score) times that ticker's bars: one value worked out per part and bar. */
+  /** Each part of each ticker's rules (buy, sell, add, ranking score) times that ticker's bars: one value worked out per part and bar. */
   ruleWork: number;
   /** The periods of every function in each ticker's rules, added up, times that ticker's bars: the prices the functions read. */
   windowWork: number;
@@ -59,18 +59,24 @@ export interface RunSize {
   tickers: number;
   ruleWork: number;
   windowWork: number;
+  /** Of `bars`, the smaller bars of `magnify`; absent when there are none. */
+  inside?: number;
 }
 
 /**
  * The size of a run of `spec` on `data`, its prices. The smaller bars `magnify` looks inside with count as bars, since they
- * are held and walked like any, but not as tickers; no rule reads them.
+ * are held and walked like any, but not as tickers; no rule reads them. The columns of a CSV file are left out: they add
+ * memory (8 bytes a value, so 50 columns weigh about six times the prices) and time to send them to the worker, but none to
+ * the run, and the file is read and parsed before this is counted, which is where a file with many columns costs most.
  */
 export function runSize(spec: Spec, data: Map<string, Bars>): RunSize {
   let bars = 0;
   let tickers = 0;
+  let inside = 0;
   for (const [name, b] of data) {
     bars += b.t.length;
     if (!isInsideKey(name)) tickers++;
+    else inside += b.t.length;
   }
   let ruleWork = 0;
   let windowWork = 0;
@@ -79,7 +85,7 @@ export function runSize(spec: Spec, data: Map<string, Bars>): RunSize {
     const rules = spec.rules[a.name];
     let parts = 0;
     let periods = 0;
-    for (const e of [rules.buy, rules.sell, spec.rank?.by]) {
+    for (const e of [rules.buy, rules.sell, rules.add, spec.rank?.by]) {
       if (!e) continue;
       walk(e, (x) => {
         parts++;
@@ -89,7 +95,7 @@ export function runSize(spec: Spec, data: Map<string, Bars>): RunSize {
     ruleWork += parts * n;
     windowWork += periods * n;
   }
-  return { bars, tickers, ruleWork, windowWork };
+  return { bars, tickers, ruleWork, windowWork, ...(inside > 0 ? { inside } : {}) };
 }
 
 /** `n` in words: digits with commas below a million, "2.1 million" or "3 billion" above, never reading the same as `other`. */
@@ -112,6 +118,8 @@ export function duration(ms: number): string {
 }
 
 const SMALLER = 'A later "from" date, a longer "interval" or fewer tickers make it smaller.';
+/** A longer interval leaves the smaller bars as many as they were, so it helps little when they are most of the bars. */
+const SMALLER_INSIDE = 'Most of them are the smaller bars of "magnify", so a longer "magnify" size, a later "from" date or fewer tickers make it smaller.';
 const FOREGROUND = 'Backtests run in the foreground here, so Obsidian does not respond while one runs.';
 
 /** Why a run of this size is not started where `where` says, or null when it fits. */
@@ -120,7 +128,8 @@ export function sizeRefusal(size: RunSize, where: 'worker' | 'here'): string | n
   const lead = where === 'here' ? `${FOREGROUND} ` : '';
   const limit = where === 'here' ? 'the limit here is' : 'the limit is';
   if (size.bars > limits.bars) {
-    return `${lead}This run has ${amount(size.bars, limits.bars)} bars across ${tickers(size.tickers)}; ${limit} ${amount(limits.bars, size.bars)}. ${SMALLER}`;
+    const smaller = 2 * (size.inside ?? 0) > size.bars ? SMALLER_INSIDE : SMALLER;
+    return `${lead}This run has ${amount(size.bars, limits.bars)} bars across ${tickers(size.tickers)}; ${limit} ${amount(limits.bars, size.bars)}. ${smaller}`;
   }
   if (size.ruleWork > limits.ruleWork) {
     return `${lead}Its rules work out ${amount(size.ruleWork, limits.ruleWork)} values, one for each part of a ticker's rules on each of its bars; ${limit} ${amount(limits.ruleWork, size.ruleWork)}. Shorter rules, a later "from" date, a longer "interval" or fewer tickers make it smaller.`;

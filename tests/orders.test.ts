@@ -573,3 +573,31 @@ test('the orders window words a later entry as Add, in the list, its grouping an
   assert.deepEqual(close.rows.map(({ order }) => [actionWord(order), order.ticker]), [['Added', 'A'], ['Bought', 'B']]);
   assert.match(ordersMarkdown([close.status], NOW), /\| Added \| A \| Step 3 of 3: /);
 });
+
+test('an add the position has no room for is not an order, and one only the cash stands in the way of still is', () => {
+  // AAA triples after its first entry, so it is worth more than its whole weight when the add rule holds at the last close.
+  const closes = [100, 100, 100, 150, 200, 250, 300, 300];
+  const src = `universe: AAA 50%, BBB 50%\nentries: 2\nfor AAA:\n  buy when true\n  add when bars held >= 5\nfor BBB:\n  buy when false\n  add when false`;
+  const full = run(src, { AAA: bars(closes), BBB: bars(closes.map(() => 50)) });
+  const st = full.backtest.run.states[0];
+  assert.equal(st.entries, 1);
+  assert.equal(st.pending, null);
+  const status = statusFrom('n', 's', full, NOW);
+  assert.deepEqual(status.orders, []);
+  assert.deepEqual(status.holdings.map((h) => h.ticker), ['AAA']);
+  // One bar later the engine makes no add either.
+  const later = run(src, { AAA: bars([...closes, 300]), BBB: bars([...closes, 300].map(() => 50)) });
+  assert.equal(later.backtest.run.trades[0].entries!.length, 1);
+
+  // An add with room is listed at what keeps the position within its weight, like a buy, even when the cash at the last
+  // close covers only part of it: the sales and trims of the next open are paid out before it.
+  const costly = `universe: AAA 50%, BBB 50%\ncosts: 900 bps\nentries: 2\nfor AAA:\n  buy when true\n  add when bars held >= 6\nfor BBB:\n  buy when true\n  add when true`;
+  const out = run(costly, { AAA: bars(closes.map(() => 100)), BBB: bars(closes.map(() => 50)) });
+  const aaa = out.backtest.run.states[0];
+  const equity = out.backtest.run.equity.at(-1)!;
+  const cash = equity - out.backtest.run.states.reduce((s, x) => s + x.value, 0);
+  assert.equal(aaa.pending, 'add');
+  assert.ok(cash > 0 && cash < aaa.targetWeight * equity, `${cash} in cash`);
+  assert.ok(Math.abs(aaa.targetWeight - (0.5 - aaa.value / equity)) < 1e-12);
+  assert.deepEqual(statusFrom('n', 's', out, NOW).orders.map((o) => [o.action, o.ticker, o.step]), [['buy', 'AAA', { k: 2, n: 2 }]]);
+});

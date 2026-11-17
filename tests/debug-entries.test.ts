@@ -158,12 +158,13 @@ test('an add that was not made says why it may not have been: no cash, a positio
   assert.deepEqual(nothing.run.trades.map((t) => t.entries!.length), [1]);
   const rows = rowsOf(nothing);
   const undone = rows.filter((r) => kinds(r).includes('add-undone'));
-  assert.deepEqual(undone.map((r) => r.index), [4, 5, 6]);
+  assert.deepEqual(undone.map((r) => r.index), [4, 5, 6, 7]);
   assert.equal(undone[0].what, 'Add rule held, but no entry was made: no cash was free, or the position was already as large as its weight allows.');
   const addC = colOf(nothing, 'close > 250');
-  assert.ok(rows.slice(4, 7).every((r) => r.cells[addC].outcome === 'yes' && r.entries === 1));
-  // At the last bar the add is only an order for the next open, whatever it would find there.
-  assert.equal(rows[7].what, 'Order pending: add at the next open.');
+  assert.ok(rows.slice(4, 8).every((r) => r.cells[addC].outcome === 'yes' && r.entries === 1));
+  // At the last bar the position has no room left at that close, so no add is left pending for the next open either.
+  assert.equal(nothing.run.states[0].pending, null);
+  assert.equal(rows[7].what, undone[0].what);
 
   // A commission that makes the add too small to be worth it, in a run that left such a trade undone, is named too.
   const dear = run(`universe: A\ncapital: 1000\ncommission: 60\n${rule}`, { A: bars([100, 100, 100, 100, 300, 300, 300, 300]) });
