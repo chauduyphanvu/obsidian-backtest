@@ -4,12 +4,12 @@
 // bar where the run made no trade is explained by reading the rules at that bar, never by simulating again.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { children, findPos, walk, type CmpOp, type Expr, type Rebalance, type Written } from './dsl.ts';
-import { SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
-import type { Outcome } from './explain.ts';
+import { children, findPos, walk, type Expr, type Written } from './dsl.ts';
+import { barAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
+import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
 import { csvLine } from './export.ts';
-import { DAY, isIntraday, minus, price, stamp } from './format.ts';
+import { fixed, isIntraday, pair, places, price, shareCount, stamp, ungroupedOrdinal } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
 
@@ -125,73 +125,15 @@ export interface TradeStop {
   fill: number;
 }
 
-const OPS: Record<Exclude<CmpOp, 'xup' | 'xdn'>, string> = { '>': '>', '<': '<', '>=': '≥', '<=': '≤', '==': '=', '!=': '≠' };
 const SHORT = 22;
+/** The decimals of an unknown value in the table: see places. */
+const UNKNOWN_PLACES = 2;
 
-// ---------------------------------------------------------------- small helpers, as explain.ts has them
-
-const outcome = (v: number): Outcome => (v === 1 ? 'yes' : v === 0 ? 'no' : 'unknown');
-
-function ordinal(n: number): string {
-  const tens = n % 100;
-  const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
-  return `${n}${suffix}`;
-}
-
-function fixed(x: number, d: number): string {
-  if (Number.isNaN(x)) return 'unknown';
-  if (!Number.isFinite(x)) return x > 0 ? 'infinity' : '−infinity';
-  const digits = Number.isInteger(x) ? 0 : d;
-  return minus(x.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }));
-}
-
-function places(x: number): number {
-  const a = Math.abs(x);
-  return a >= 1 || a === 0 || !Number.isFinite(a) ? 2 : a >= 0.01 ? 4 : 6;
-}
-
-/** Two values side by side, with enough decimals that different numbers never print the same. */
-function pair(a: number, b: number, percent: boolean): [string, string] {
-  const f = (x: number, d: number) => (percent && Number.isFinite(x) ? `${fixed(Number((x * 100).toPrecision(12)), d)}%` : fixed(x, d));
-  let d = Math.max(places(percent ? a * 100 : a), places(percent ? b * 100 : b));
-  while (d < 10 && a !== b && f(a, d) === f(b, d)) d++;
-  return [f(a, d), f(b, d)];
-}
-
-const shareCount = (x: number) => minus(x.toLocaleString('en-US', { maximumFractionDigits: 4 }));
-
-/** A bar index: the latest bar at or before `at`, or -1. */
-function barAt(t: number[], at: number): number {
-  let a = 0;
-  let b = t.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (t[m] <= at) a = m + 1;
-    else b = m;
-  }
-  return a - 1;
-}
+// ---------------------------------------------------------------- small helpers
 
 /** The first bar at or after `at`, or t.length. */
 function barFrom(t: number[], at: number): number {
   return barAt(t, at - 1) + 1;
-}
-
-/** The same rhythm as engine.ts uses to find the bars where a ranking decides. */
-function periodKey(t: number, mode: Rebalance): number {
-  const d = new Date(t);
-  switch (mode) {
-    case 'weekly':
-      return Math.floor((Math.floor(t / DAY) + 3) / 7);
-    case 'monthly':
-      return d.getUTCFullYear() * 12 + d.getUTCMonth();
-    case 'quarterly':
-      return d.getUTCFullYear() * 4 + Math.floor(d.getUTCMonth() / 3);
-    case 'yearly':
-      return d.getUTCFullYear();
-    case 'never':
-      return 0;
-  }
 }
 
 const isLevelExit = (t: Trade) => t.reason === 'stop loss' || t.reason === 'trailing stop' || t.reason === 'take profit';
@@ -912,7 +854,7 @@ function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j:
 // ---------------------------------------------------------------- what happened, in words
 
 /** "2nd of 5". */
-const placeWords = (place: number, eligible: number) => `${ordinal(place + 1)} of ${eligible}`;
+const placeWords = (place: number, eligible: number) => `${ungroupedOrdinal(place + 1)} of ${eligible}`;
 
 function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
   const when = (t: number) => stamp(t, cx.intraday);
@@ -1020,22 +962,19 @@ export function positionWords(row: DebugRow): string {
   return row.resized ? `${long}, bought ${shareCount(row.shares)} shares` : `${long}, ${shareCount(row.shares)} shares`;
 }
 
-/** The marks that say a part held, did not, or is unknown, in words as well as symbols. */
-export const MARK: Record<Outcome, string> = { yes: '✓ yes', no: '✗ no', unknown: '? unknown' };
-
 /** The text of one cell: the values compared and, for a cross or an unknown, a second line. */
 export function cellText(col: DebugColumn, cell: DebugCell): { main: string; detail: string } {
-  if (col.kind === 'score') return { main: fixed(cell.a, places(cell.a)), detail: '' };
-  if (col.kind === 'place') return { main: Number.isNaN(cell.a) ? '–' : cell.a < 0 ? 'not eligible' : `${ordinal(cell.a + 1)} of ${cell.b}`, detail: '' };
+  if (col.kind === 'score') return { main: fixed(cell.a, places(cell.a, UNKNOWN_PLACES)), detail: '' };
+  if (col.kind === 'place') return { main: Number.isNaN(cell.a) ? '–' : cell.a < 0 ? 'not eligible' : `${ungroupedOrdinal(cell.a + 1)} of ${cell.b}`, detail: '' };
   if (cell.outcome === null) return { main: '–', detail: '' };
   const note = cell.outcome === 'unknown' ? cell.note : '';
   if (col.kind === 'test') {
-    const [a, b] = pair(cell.a, cell.b, col.percent);
+    const [a, b] = pair(cell.a, cell.b, col.percent, UNKNOWN_PLACES);
     return { main: `${a} ${col.op} ${b}`, detail: note };
   }
   if (col.kind === 'cross') {
-    const [a, b] = pair(cell.a, cell.b, col.percent);
-    const [pa, pb] = pair(cell.pa, cell.pb, col.percent);
+    const [a, b] = pair(cell.a, cell.b, col.percent, UNKNOWN_PLACES);
+    const [pa, pb] = pair(cell.pa, cell.pb, col.percent, UNKNOWN_PLACES);
     return { main: `${a} vs ${b}`, detail: [`before ${pa} vs ${pb}`, note].filter(Boolean).join('; ') };
   }
   return { main: '', detail: note };

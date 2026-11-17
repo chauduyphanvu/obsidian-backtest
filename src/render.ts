@@ -1,5 +1,5 @@
 import type { Backtest, Segment } from './backtest.ts';
-import type { Commission, Diagnostic, Spec, StopLevel } from './dsl.ts';
+import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
 import { colourSource, h, s } from './dom.ts';
 import { hintFor } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, moneyTicks, niceStep, pct, signedPct, stamp, timeTicks } from './format.ts';
@@ -75,8 +75,6 @@ export function renderDefaultsChanged(el: HTMLElement, onRun: () => void): (chan
     note.hidden = !changed;
   };
 }
-
-const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 
 /** The parameters (in lower case) that a stop setting takes as its whole level, as in `stop loss: stop`. */
 function stopParams(source: string): Set<string> {

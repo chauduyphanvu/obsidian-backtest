@@ -23,9 +23,10 @@ const PAIRS = new Map<string, RegExp>([
   ['entries', /^\s+made\b/i],
   ['last', /^\s+entry\s+price\b/i],
 ]);
-const TICKER_SETTINGS = ['universe', 'symbol', 'benchmark', 'cash rate'];
+/** Settings whose values are tickers. */
+export const TICKER_SETTINGS = ['universe', 'symbol', 'benchmark', 'cash rate'];
 /** Settings whose values are numbers, percentages and atr(n), where parameters can stand in. */
-const NUMERIC_SETTINGS = ['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold', 'entries'];
+export const NUMERIC_SETTINGS = ['stop loss', 'trailing stop', 'take profit', 'risk per trade', 'weighting', 'hold', 'entries'];
 /** Settings whose value is a bar size such as `1h` or `15m`, one word whatever its digits. */
 const SIZE_SETTINGS = ['interval', 'magnify'];
 

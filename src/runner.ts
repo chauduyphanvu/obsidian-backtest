@@ -1,7 +1,7 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { barsFrom, insideReach, loadBars, loadInsideBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
-import { paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
+import { MAX_PERIOD, paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
@@ -13,8 +13,6 @@ const SETTLE = 5;
 const BARS_SINCE_REACH = 250;
 /** Daily and longer bars skip weekends and holidays, so a run of trading bars spans more calendar time. */
 const NON_TRADING = 1.6;
-/** The parser refuses longer periods, so a range reaching past this needs no more history. */
-const MAX_PERIOD = 10_000;
 
 /** The value a period or lag is looked back with: the largest its parameter can take up to `max`, when it is one. */
 type Widest = (value: number, param: string | null | undefined, max?: number) => number;

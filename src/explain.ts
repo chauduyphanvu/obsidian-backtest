@@ -4,9 +4,9 @@
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { findPos, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
-import { commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
+import { barAt, commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
-import { isIntraday, minus, price, stamp } from './format.ts';
+import { fixed, isIntraday, minus, pair, places, price, shareCount, stamp, ungroupedOrdinal, ungroupedPlural } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Bars } from './types.ts';
 
@@ -69,56 +69,20 @@ function evaluatorFor(bt: Backtest): Evaluator {
   return ev;
 }
 
-/** Index of the bar at time `t`, or of the latest bar before it. */
-function barAt(t: number[], at: number): number {
-  let a = 0;
-  let b = t.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (t[m] <= at) a = m + 1;
-    else b = m;
-  }
-  return a - 1;
-}
-
-const outcome = (v: number): Outcome => (v === 1 ? 'yes' : v === 0 ? 'no' : 'unknown');
+export const outcome = (v: number): Outcome => (v === 1 ? 'yes' : v === 0 ? 'no' : 'unknown');
+/** The marks that say a part held, did not, or is unknown, in words as well as symbols. */
+export const MARK: Record<Outcome, string> = { yes: '✓ yes', no: '✗ no', unknown: '? unknown' };
 const row = (label: string, value = '', depth = 0, result: Outcome | null = null, code = false): Row => ({ label, value, outcome: result, depth, code });
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-function ordinal(n: number): string {
-  const tens = n % 100;
-  const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
-  return `${n}${suffix}`;
-}
-
-/** A number with `d` decimals, or none when it is whole. */
-function fixed(x: number, d: number): string {
-  if (Number.isNaN(x)) return 'unknown';
-  if (!Number.isFinite(x)) return x > 0 ? 'infinity' : '−infinity';
-  const digits = Number.isInteger(x) ? 0 : d;
-  return minus(x.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }));
-}
-
-function places(x: number): number {
-  const a = Math.abs(x);
-  return a >= 1 || a === 0 ? 2 : a >= 0.01 ? 4 : 6;
-}
+/** The decimals of an unknown value here: see places. */
+const UNKNOWN_PLACES = 6;
 
 /** Scores with enough decimals that different ones never print the same: each its usual places, plus what it takes. */
 function scoreTexts(scores: number[]): string[] {
   const finite = scores.filter(Number.isFinite);
   let extra = 0;
-  const key = (x: number) => x.toFixed(Math.min(20, places(x) + extra));
+  const key = (x: number) => x.toFixed(Math.min(20, places(x, UNKNOWN_PLACES) + extra));
   while (extra < 10 && finite.some((x, i) => finite.some((y, j) => j < i && x !== y && key(x) === key(y)))) extra++;
-  return scores.map((x) => fixed(x, places(x) + extra));
-}
-
-/** Two values side by side, with enough decimals that different numbers never print the same. */
-function pair(a: number, b: number, percent: boolean): [string, string] {
-  const f = (x: number, d: number) => (percent && Number.isFinite(x) ? `${fixed(Number((x * 100).toPrecision(12)), d)}%` : fixed(x, d));
-  let d = Math.max(places(percent ? a * 100 : a), places(percent ? b * 100 : b));
-  while (d < 10 && a !== b && f(a, d) === f(b, d)) d++;
-  return [f(a, d), f(b, d)];
+  return scores.map((x) => fixed(x, places(x, UNKNOWN_PLACES) + extra));
 }
 
 const money = (x: number) => minus(`${x < 0 ? '-' : ''}$${Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -126,9 +90,8 @@ const money = (x: number) => minus(`${x < 0 ? '-' : ''}$${Math.abs(x).toLocaleSt
 const share = (x: number) => `${minus(Number((x * 100).toPrecision(10)).toLocaleString('en-US', { maximumFractionDigits: 2 }))}%`;
 /** A return or a rate, always with two decimals: +6.00%. */
 const percent = (x: number) => `${x > 0 ? '+' : ''}${minus((x * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}%`;
-const shareCount = (x: number) => minus(x.toLocaleString('en-US', { maximumFractionDigits: 4 }));
 
-const OPS: Record<Exclude<CmpOp, 'xup' | 'xdn'>, string> = { '>': '>', '<': '<', '>=': '≥', '<=': '≤', '==': '=', '!=': '≠' };
+export const OPS: Record<Exclude<CmpOp, 'xup' | 'xdn'>, string> = { '>': '>', '<': '<', '>=': '≥', '<=': '≤', '==': '=', '!=': '≠' };
 
 /** One trade's explanation, worked out on demand. */
 export function explainTrade(bt: Backtest, trade: Trade): Explanation {
@@ -260,7 +223,7 @@ class Explainer {
     if (r.place >= 0) {
       const held = d.top === 1 ? 'Only the best is held' : `The best ${d.top} are held`;
       const verdict = r.place < d.top ? held : `${held}, so it was sold`;
-      rows.push(row(`Ranked ${ordinal(r.place + 1)} of ${d.eligible} by ${by}. ${verdict}.`, `${by} ${myScore}`));
+      rows.push(row(`Ranked ${ungroupedOrdinal(r.place + 1)} of ${d.eligible} by ${by}. ${verdict}.`, `${by} ${myScore}`));
     } else {
       rows.push(row(`At this ranking it could not be chosen: ${this.ineligible(this.trade.asset, r.t)}.`, `${by} ${myScore}`));
     }
@@ -313,12 +276,12 @@ class Explainer {
     const value = (x: Expr): string => {
       if (x.k === 'cmp') {
         const pct = percentText(text(x.a)) || percentText(text(x.b));
-        const [a, b] = pair(at(x.a, i), at(x.b, i), pct);
+        const [a, b] = pair(at(x.a, i), at(x.b, i), pct, UNKNOWN_PLACES);
         let out: string;
         if (x.op === 'xup' || x.op === 'xdn') {
           const up = x.op === 'xup';
           const [va, vb, pa, pb] = [at(x.a, i), at(x.b, i), at(x.a, i - 1), at(x.b, i - 1)];
-          const [fa, fb] = pair(pa, pb, pct);
+          const [fa, fb] = pair(pa, pb, pct, UNKNOWN_PLACES);
           const now = Number.isNaN(va) || Number.isNaN(vb) ? 'is unknown against' : (up ? va > vb : va < vb) ? (up ? 'is above' : 'is below') : up ? 'is not above' : 'is not below';
           const then = Number.isNaN(pa) || Number.isNaN(pb) ? 'unknown' : (up ? pa <= pb : pa >= pb) ? (up ? 'at or below' : 'at or above') : up ? 'above' : 'below';
           out = `${side(x.a, a)} ${now} ${side(x.b, b)}; the bar before it was ${fa}, ${then} ${fb}`;
@@ -328,7 +291,7 @@ class Explainer {
         const reads = this.reads(x, asset, i);
         return reads ? `${out}; ${reads}` : out;
       }
-      if (x.k === 'lag') return `${plural(x.n, 'bar')} earlier${i - x.n >= 0 ? `, on ${this.date(this.bars.t[i - x.n])}` : ''}`;
+      if (x.k === 'lag') return `${ungroupedPlural(x.n, 'bar')} earlier${i - x.n >= 0 ? `, on ${this.date(this.bars.t[i - x.n])}` : ''}`;
       if (x.k === 'ind' && x.fn === 'supertrend_up') {
         const trend = at(x, i);
         return Number.isNaN(trend) ? '' : `${trend === 1 ? 'uptrend' : 'downtrend'}, the line is at ${fixed(at({ ...x, fn: 'supertrend' }, i), 2)}`;
@@ -716,7 +679,7 @@ class Explainer {
     const open = trade.reason === 'open';
     rows.push(row(open ? 'Return so far, after costs' : 'Return after costs', percent(trade.ret)));
     rows.push(row(open ? 'Profit so far' : 'Profit', `${trade.pnl > 0 ? '+' : ''}${money(trade.pnl)}`));
-    rows.push(row('Held', `${plural(trade.bars, 'bar')}, from ${this.date(trade.entryT)} to ${this.date(trade.exitT)}`));
+    rows.push(row('Held', `${ungroupedPlural(trade.bars, 'bar')}, from ${this.date(trade.entryT)} to ${this.date(trade.exitT)}`));
     if (this.entries.length > 1) rows.push(row(`Bought in ${this.entries.length} entries of the ${this.bt.spec.entries} allowed`, `at ${price(trade.entryPrice)} on average`));
     if (why.fees > 0) {
       const toSell = open ? `; selling at the last close would cost ${money(trade.exitPrice * this.sharesHeld() * this.cost + (why.commission?.exit ?? 0))} more` : '';

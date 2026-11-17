@@ -1,7 +1,7 @@
 import type { Backtest } from './backtest.ts';
 import { h } from './dom.ts';
 import type { Trade } from './engine.ts';
-import { explainTrade, type Explanation, type Outcome } from './explain.ts';
+import { explainTrade, MARK, type Explanation } from './explain.ts';
 import { boughtText } from './export.ts';
 import { minus, money, pct, price, signedPct, stamp } from './format.ts';
 import { positionOrder } from './orders.ts';
@@ -100,8 +100,6 @@ function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest
     button.setAttribute('aria-expanded', 'true');
   });
 }
-
-const MARK: Record<Outcome, string> = { yes: '✓ yes', no: '✗ no', unknown: '? unknown' };
 
 /** Draws an explanation: a title, then each section's rows, the parts of a rule indented under it. */
 export function renderExplanation(el: HTMLElement, ex: Explanation): void {

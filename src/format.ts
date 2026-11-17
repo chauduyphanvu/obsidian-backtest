@@ -86,3 +86,60 @@ export function timeTicks(t0: number, t1: number, width: number): { t: number; l
   }
   return out;
 }
+
+/** A number to 12 significant digits, which drops the floating-point tail of a sum such as 0.1 + 0.2. */
+export const tidy = (x: number) => Number(x.toPrecision(12));
+
+/** A count and its word: "1 run", "1,000 runs"; `many` for a word whose plural is not an added "s". */
+export const plural = (n: number, word: string, many = `${word}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? word : many}`;
+/** As plural, but the count has no thousands separators: "1000 bars". */
+export const ungroupedPlural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** 1st, 2nd, 11th, 1,001st. */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
+  return `${n.toLocaleString('en-US')}${suffix}`;
+}
+/** As ordinal, but without thousands separators: 1001st. */
+export function ungroupedOrdinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
+  return `${n}${suffix}`;
+}
+
+/** A number with `d` decimals, or none when it is whole. */
+export function fixed(x: number, d: number): string {
+  if (Number.isNaN(x)) return 'unknown';
+  if (!Number.isFinite(x)) return x > 0 ? 'infinity' : '−infinity';
+  const digits = Number.isInteger(x) ? 0 : d;
+  return minus(x.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }));
+}
+
+/**
+ * The decimals a value is shown with: 2 from 1 up and for 0, 4 from 0.01, else 6. `unknown` is the count for NaN, where the
+ * trade explanations and the rule table differ: explanations take 6 and the table 2, which decides how many decimals the
+ * other value of a pair gets (see pair).
+ */
+export function places(x: number, unknown: number): number {
+  const a = Math.abs(x);
+  if (Number.isNaN(a)) return unknown;
+  return a >= 1 || a === 0 ? 2 : a >= 0.01 ? 4 : 6;
+}
+
+/** Two values side by side, with enough decimals that different numbers never print the same. `unknown`: see places. */
+export function pair(a: number, b: number, percent: boolean, unknown: number): [string, string] {
+  const f = (x: number, d: number) => (percent && Number.isFinite(x) ? `${fixed(Number((x * 100).toPrecision(12)), d)}%` : fixed(x, d));
+  let d = Math.max(places(percent ? a * 100 : a, unknown), places(percent ? b * 100 : b, unknown));
+  while (d < 10 && a !== b && f(a, d) === f(b, d)) d++;
+  return [f(a, d), f(b, d)];
+}
+
+/** A number of shares, to 4 decimals. */
+export const shareCount = (x: number) => minus(x.toLocaleString('en-US', { maximumFractionDigits: 4 }));
+
+/** A field of a comma-separated line, in quotes when it holds a comma, a quote or a line break. */
+export const csvField = (v: string | number): string => {
+  const x = String(v);
+  return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
+};

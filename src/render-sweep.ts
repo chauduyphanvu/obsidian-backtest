@@ -4,7 +4,7 @@
 import type { Backtest, Stats } from './backtest.ts';
 import { h, s } from './dom.ts';
 import type { Defaults } from './dsl.ts';
-import { minus, niceStep, pct } from './format.ts';
+import { minus, niceStep, ordinal, pct, plural, tidy } from './format.ts';
 import {
   METRICS,
   isDeclared,
@@ -70,21 +70,13 @@ const TINT_MAX = 62;
 /** Cells stop growing here, so a grid with few columns stays a grid. */
 const MAX_CELL = 96;
 /** Rough width of a character of the 11px chart text. */
-const CHAR = 6.6;
+export const CHAR = 6.6;
 
 // ---------------------------------------------------------------- words and numbers
 
-const tidy = (x: number) => Number(x.toPrecision(12));
 const paramText = (p: { percent: boolean }, v: number) => (p.percent ? `${tidy(v * 100)}%` : String(tidy(v)));
 export const valuesText = (params: SweepParam[], values: Record<string, number>) => params.map((p) => `${p.name} ${paramText(p, values[p.name])}`).join(', ');
 const fmtMetric = (m: Metric, v: number) => (METRICS[m].percent ? pct(v) : Number.isFinite(v) ? minus(v.toFixed(2)) : '–');
-export const plural = (n: number, word: string, many = `${word}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? word : many}`;
-
-function ordinal(n: number): string {
-  const tens = n % 100;
-  const suffix = tens >= 11 && tens <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
-  return `${n.toLocaleString('en-US')}${suffix}`;
-}
 
 /** "made 8.1% a year", "had a Sharpe ratio of 0.62": a result in words. */
 export function did(m: Metric, v: number): string {

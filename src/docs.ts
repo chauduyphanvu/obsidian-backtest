@@ -1,4 +1,4 @@
-import { BINANCE_INTERVALS, CALENDAR, INDICATORS, POSITION, REBALANCE, SERIES } from './dsl.ts';
+import { BINANCE_INTERVALS, CALENDAR, INDICATORS, NUM, POSITION, REBALANCE, SERIES } from './dsl.ts';
 import { commentStart, declaredParams, lineKinds, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
 
 export type DocKind = 'setting' | 'value' | 'function' | 'series' | 'calendar' | 'position' | 'word' | 'unit' | 'parameter';
@@ -574,7 +574,6 @@ export interface HelpTarget {
   doc: Doc;
 }
 
-const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
 const PARAM_DECL = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(${NUM})(?:\s+step\s+(${NUM}))?)?$`);
 
 function parameterDoc(name: string, written: string): Doc {

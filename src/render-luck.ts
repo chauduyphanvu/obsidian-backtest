@@ -3,18 +3,17 @@
 import type { Backtest } from './backtest.ts';
 import type { Param } from './dsl.ts';
 import { h, s } from './dom.ts';
-import { isoDate, money, moneyTicks, niceStep, pct, timeTicks } from './format.ts';
+import { isoDate, money, moneyTicks, niceStep, pct, plural, tidy, timeTicks } from './format.ts';
 import type { JobOf, Kind, Results } from './jobs.ts';
 import { monthOfBars, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { formatParam } from './render-params.ts';
-import { observe, placeTip, plural, progressBar, valuesText, did, WAITING, type Life, type SweepInput } from './render-sweep.ts';
+import { CHAR, observe, placeTip, progressBar, valuesText, did, WAITING, type Life, type SweepInput } from './render-sweep.ts';
 import { METRICS, sweepParams } from './sweep.ts';
 import { blockJobs, type BlockJobs } from './worker-client.ts';
 
 const DEFAULT_SEED = 1;
 const RANDOM_RUNS = 200;
 const RESHUFFLES = 1000;
-const CHAR = 6.6;
 
 /** Appends a collapsed "Was it luck?" section. Returns a cleanup function. */
 export function renderLuck(parent: HTMLElement, input: SweepInput): () => void {
@@ -33,7 +32,6 @@ export function renderLuck(parent: HTMLElement, input: SweepInput): () => void {
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const clean = (x: number) => Number(x.toPrecision(12));
 
 /** How the values a slider set are named in the walk-forward, where they stand in for the note's. */
 interface Ours {
@@ -49,7 +47,7 @@ const SHOWN: Ours = { noun: 'the values shown', label: 'Values shown', column: '
  * slider moved): the checks test that run (jobs.ts jobOverrides). Null when it is the block as written.
  */
 export function valuesUsed(params: Param[]): string | null {
-  const moved = params.filter((p) => clean(p.value) !== clean(p.declared));
+  const moved = params.filter((p) => tidy(p.value) !== tidy(p.declared));
   if (moved.length === 0) return null;
   const list = (value: (p: Param) => number) => moved.map((p) => `${p.name} ${formatParam(p, value(p))}`).join(', ');
   return `These checks test the run shown, with ${list((p) => p.value)}. The block says ${list((p) => p.declared)}.`;

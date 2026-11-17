@@ -1,6 +1,6 @@
 import { docFor, shortOf, valueId, FIXED_VALUES } from './docs.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
-import { commentStart, declaredParams, lineKind, settingKey } from './highlight.ts';
+import { commentStart, declaredParams, lineKind, settingKey, TICKER_SETTINGS } from './highlight.ts';
 import type { Suggestion } from './symbols.ts';
 
 export interface Completion {
@@ -55,7 +55,8 @@ const VALUE_HINTS: Record<string, Completion[]> = {
   ],
 };
 
-const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'column'];
+/** Every function a rule can call. */
+export const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'column'];
 
 /** A function's signature and what it does, as one line. */
 const functionDetail = (f: string) => `${docFor(f)!.signature} \u00b7 ${shortOf(f)}`;
@@ -239,15 +240,13 @@ export interface TickerPosition {
   word: string;
 }
 
-const TICKER_LINES = ['universe', 'symbol', 'benchmark', 'cash rate'];
-
 /**
  * The ticker being typed, or null when the cursor is somewhere else on the line: after a weight
  * (`SPY 60`), in a number, or in a comment. Only the ticker word counts, so weights are left alone.
  */
 export function tickerPosition(before: string): TickerPosition | null {
   const key = settingKey(before);
-  if (!key || !TICKER_LINES.includes(key) || /(^|\s)(#|\/\/)/.test(before)) return null;
+  if (!key || !TICKER_SETTINGS.includes(key) || /(^|\s)(#|\/\/)/.test(before)) return null;
   const rest = before.slice(before.indexOf(':') + 1);
   const part = rest.slice(rest.lastIndexOf(',') + 1).trimStart();
   if (!/^[A-Za-z0-9^:/._=-]*$/.test(part) || /^[\d.]+$/.test(part)) return null;
