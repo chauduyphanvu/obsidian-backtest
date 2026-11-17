@@ -122,8 +122,9 @@ test('a file of a date and columns, with no prices, is read as signals that cann
   assert.equal(b.c.length, 2);
   assert.ok(b.c.every(Number.isNaN) && b.o.every(Number.isNaN) && b.h.every(Number.isNaN) && b.l.every(Number.isNaN));
   assert.deepEqual(b.v, [0, 0]);
-  // With no price header, volume and adj close are columns like any other.
-  assert.deepEqual(parseCsv('date,volume,adj close\n2024-01-02,1,2').columns!.map((c) => c.name), ['volume', 'adj_close']);
+  // With no price header, volume is a column like any other; an adjusted close is a price, so that file is not one of signals.
+  assert.deepEqual(parseCsv('date,volume,score\n2024-01-02,1,2').columns!.map((c) => c.name), ['volume', 'score']);
+  assert.throws(() => parseCsv('date,volume,adj close\n2024-01-02,1,2'), /no open, high, low, close column/);
   // What this changes is only a file that could not be read before. These still cannot.
   assert.throws(() => parseCsv('date,notes\n2024-01-02,hello'), /header row with date, open, high, low and close columns, but has no open, high, low, close column/);
   assert.throws(() => parseCsv('a,b\n1,2'), /header row/);

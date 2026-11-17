@@ -229,3 +229,33 @@ test('what the window says about columns that no rule can read', () => {
   assert.equal(wide.signals.length, MAX_COLUMNS);
   assert.deepEqual(wide.unreadable, [`Only the first ${MAX_COLUMNS} columns of a file can be read. These were left out: k${MAX_COLUMNS}, k${MAX_COLUMNS + 1}.`]);
 });
+
+test('a file whose headers look like prices to the helper is a price file to clean, not a file of signals', () => {
+  const days = (n: number) => Array.from({ length: n }, (_, i) => iso(Date.UTC(2023, 0, 2) + i * 86_400_000));
+  const closes = days(300).map((d, i) => `${d},${(100 + Math.sin(i / 9) * 5).toFixed(2)}`);
+  for (const head of ['Date,Price', 'Date,Last', 'Date,Settle', 'Date,NAV', 'Date,Adj Close', 'Date,Value']) {
+    const text = [head, ...closes].join('\n');
+    assert.throws(() => parseCsv(text), /The CSV needs a header row with date, open, high, low and close columns/, head);
+    const found = inspectCsv(text) as CsvUnread;
+    assert.equal(found.read, false, head);
+    // The window offers its form with the price column guessed, and a cleaned copy reads as a price file.
+    assert.equal(found.columns.close, 1, head);
+    const cleaned = remapCsv(text, { ...found.columns, dateOrder: null });
+    assert.ok(cleaned.ok, head);
+    if (cleaned.ok) assert.equal(parseCsv(cleaned.text).unpriced, undefined, head);
+    assert.ok(found.reason.endsWith(` If "${head.slice(5)}" holds something other than prices, give it another name, and the file is read as a file of signals.`), found.reason);
+  }
+  const ohlc = days(50).map((d, i) => `${d},${100 + i},${101 + i},${99 + i},${100.5 + i},1000`);
+  for (const head of ['Date,Open Price,High Price,Low Price,Close Price,Volume', 'Date,Opening,Highest,Lowest,Closing,Volume', 'Date,Open*,High*,Low*,Close*,Volume']) {
+    const text = [head, ...ohlc].join('\n');
+    const found = inspectCsv(text) as CsvUnread;
+    assert.equal(found.read, false, head);
+    assert.deepEqual([found.columns.open, found.columns.high, found.columns.low, found.columns.close, found.columns.volume], [1, 2, 3, 4, 5], head);
+    const cleaned = remapCsv(text, { ...found.columns, dateOrder: null });
+    assert.ok(cleaned.ok && parseCsv(cleaned.text).c.length === 50, head);
+  }
+  // A real file of signals still reads as one, with its columns.
+  const sig = inspectCsv(['date,score,news sentiment,volume', ...days(30).map((d, i) => `${d},${i / 10},${-i / 20},${i}`)].join('\n')) as CsvRead;
+  assert.equal(sig.read && sig.priced, false);
+  assert.deepEqual(sig.signals.map((s) => s.name), ['score', 'news_sentiment', 'volume']);
+});

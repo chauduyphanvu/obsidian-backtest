@@ -1,5 +1,5 @@
 // Reading a price file the way the plugin does, so a person can see what it will make of it, and cleaning one it cannot read.
-import { CSV_HEADERS, CSV_SLASHED_DATE, detectCsvSeparator, parseCsv, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
+import { CSV_GUESSES, CSV_HEADERS, CSV_SLASHED_DATE, detectCsvSeparator, tidyHeader as tidy, parseCsv, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
 import { parseSpec } from './dsl.ts';
 import { rowDating } from './evaluate.ts';
 import { columnName, MAX_COLUMNS, type Bars } from './types.ts';
@@ -171,17 +171,7 @@ function namedColumns(header: string[]): CsvMapping {
   };
 }
 
-/** Names that are close enough to read as a column: capitals, angle brackets and underscores do not matter. */
-const tidy = (name: string): string => name.toLowerCase().replace(/[<>_.]/g, ' ').replace(/\s+/g, ' ').trim();
-
-const GUESSES: Record<Exclude<CsvRole, 'date'> | 'adjClose', RegExp[]> = {
-  open: [/^open$/, /^open\b/, /^opening\b/],
-  high: [/^high$/, /^high\b/, /^highest\b/],
-  low: [/^low$/, /^low\b/, /^lowest\b/],
-  close: [/^close$/, /^close\b/, /^closing\b/, /^(last|price|settle|value)$/, /^(last|price)\b/],
-  volume: [/^volume$/, /^vol\b/, /^volume\b/],
-  adjClose: [/^adj close$/, /^adjusted close$/, /^adjclose$/],
-};
+const GUESSES = CSV_GUESSES;
 const DATE_GUESSES = [/^date$/, /^(datetime|timestamp)$/, /^time$/, /^day$/, /^datum$/, /\b(date|datetime|timestamp)\b/, /\btime\b/];
 
 /** A date that can be told from a number by looking: it has separators or month names, or is eight digits. */
@@ -485,6 +475,10 @@ function doubtsOf(t: Table, cols: Cols, bars: { t: number[]; v: number[] }, tall
 
 const orList = (words: string[]): string => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`);
 
+/** The columns the guesses take for a price: open, high, low, close or an adjusted close. */
+const guessedPrices = (t: Table, guess: CsvMapping): number[] =>
+  [...new Set([guess.open, guess.high, guess.low, guess.close, guess.adjClose].filter((i): i is number => i !== null && i < t.header.length))];
+
 /** What was wrong with a file parseCsv could not read, in plain words. */
 function reasonFor(t: Table | null, named: CsvMapping, guess: CsvMapping, error: string): string {
   if (t === null) return 'The file is empty.';
@@ -496,9 +490,14 @@ function reasonFor(t: Table | null, named: CsvMapping, guess: CsvMapping, error:
       return `This does not look like a file of prices: no column looks like ${lacks}. A price file has one row for each day, with a date column and a close column at least.`;
     }
     const only = missing.every((m) => m === 'open' || m === 'high' || m === 'low');
+    // A file with a date and one column that looks like a price is read as a price file, which a file of signals with
+    // such a header would be too: say how to make it one.
+    const priceLike = guessedPrices(t, guess);
+    const signals = named.open === null && named.high === null && named.low === null && named.close === null && priceLike.length === 1;
     return (
       `The plugin reads columns named date, open, high, low and close. This file has no ${orList(missing)} column.` +
-      (only ? ' A file with only dates and closes can still be used: the open, high and low are filled from the close.' : ' Choose which column is which below.')
+      (only ? ' A file with only dates and closes can still be used: the open, high and low are filled from the close.' : ' Choose which column is which below.') +
+      (signals ? ` If "${t.header[priceLike[0]]}" holds something other than prices, give it another name, and the file is read as a file of signals.` : '')
     );
   }
   const cell = (i: number | null) => (i === null ? '' : (t.rows.find((r) => (r[i] ?? '') !== '')?.[i] ?? ''));

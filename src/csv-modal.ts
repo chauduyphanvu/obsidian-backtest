@@ -195,6 +195,10 @@ export class CsvModal extends Modal {
       h(root, 'p', 'bt-csv-lead', 'This file has no prices. A strategy can read its columns but cannot trade it.');
       for (const doubt of found.doubts) h(root, 'div', 'bt-warning', doubt);
       this.signals(root, file.path, found);
+      // Headers the reader does not know, such as o, h, l and c, can still be prices: the form makes a copy that has them.
+      const fix = h(root, 'details', 'bt-csv-fix');
+      h(fix, 'summary', undefined, 'Are some of these columns prices? Choose them yourself');
+      this.form(fix, file);
       return;
     }
     // A column that has the usual name needs no explanation.

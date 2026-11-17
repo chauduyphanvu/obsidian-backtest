@@ -229,6 +229,27 @@ export const CSV_HEADERS = {
 
 const PRICE_HEADERS: readonly string[] = [...CSV_HEADERS.open, ...CSV_HEADERS.high, ...CSV_HEADERS.low, ...CSV_HEADERS.close];
 
+/** A header as the CSV helper compares it: capitals, angle brackets, underscores and dots do not matter. */
+export const tidyHeader = (name: string): string => name.toLowerCase().replace(/[<>_.]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** The headers the CSV helper takes for each part of a price file, best first, compared after tidyHeader. */
+export const CSV_GUESSES = {
+  open: [/^open$/, /^open\b/, /^opening\b/],
+  high: [/^high$/, /^high\b/, /^highest\b/],
+  low: [/^low$/, /^low\b/, /^lowest\b/],
+  close: [/^close$/, /^close\b/, /^closing\b/, /^(last|price|settle|value|nav)$/, /^(last|price)\b/],
+  volume: [/^volume$/, /^vol\b/, /^volume\b/],
+  adjClose: [/^adj close$/, /^adjusted close$/, /^adjclose$/],
+};
+
+const PRICE_GUESSES = [...CSV_GUESSES.open, ...CSV_GUESSES.high, ...CSV_GUESSES.low, ...CSV_GUESSES.close, ...CSV_GUESSES.adjClose];
+
+/**
+ * Whether a header looks like a price by the CSV helper's guesses, such as "Price", "Close Price", "Last" or "Adj Close".
+ * A file with one is a price file the reader cannot read as it is, which the helper can clean, never a file of signals.
+ */
+const looksLikePrice = (header: string): boolean => PRICE_GUESSES.some((p) => p.test(tidyHeader(header)));
+
 /**
  * The columns of a header line that can be columns a rule reads: every header with something in it that the reader does not
  * use as a date or a price. A file with no price header at all uses none of them as a price, so there `volume` and
@@ -305,7 +326,7 @@ export function parseCsv(text: string): Bars {
   const [oi, hi, li, ci, vi] = [col(...CSV_HEADERS.open), col(...CSV_HEADERS.high), col(...CSV_HEADERS.low), col(...CSV_HEADERS.close), col(...CSV_HEADERS.volume)];
   const ai = col(...CSV_HEADERS.adjClose);
   const missing = [ti < 0 && 'date', oi < 0 && 'open', hi < 0 && 'high', li < 0 && 'low', ci < 0 && 'close'].filter(Boolean);
-  const noPrices = ti >= 0 && [oi, hi, li, ci].every((i) => i < 0);
+  const noPrices = ti >= 0 && [oi, hi, li, ci].every((i) => i < 0) && !names.some((h, i) => i !== ti && looksLikePrice(h));
   const lackPrices = new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
   if (missing.length && !(noPrices && extraColumns(names).length > 0)) throw lackPrices;
 
