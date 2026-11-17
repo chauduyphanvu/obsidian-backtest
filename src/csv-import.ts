@@ -1,6 +1,7 @@
 // Reading a price file the way the plugin does, so a person can see what it will make of it, and cleaning one it cannot read.
 import { CSV_HEADERS, CSV_SLASHED_DATE, detectCsvSeparator, parseCsv, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
 import { parseSpec } from './dsl.ts';
+import { rowDating } from './evaluate.ts';
 import { columnName, MAX_COLUMNS, type Bars } from './types.ts';
 
 const DAY = 86_400_000;
@@ -81,6 +82,8 @@ export interface CsvRead extends Shown {
   unreadable: string[];
   /** Plain sentences about anything that looks wrong. */
   doubts: string[];
+  /** When a row counts as known, and so how a row must be dated, in one or two sentences. */
+  dating: string;
 }
 
 export interface CsvUnread extends Shown {
@@ -112,9 +115,17 @@ export type CsvInsert = { ok: true; text: string; note: string | null } | { ok: 
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
-/** How a row of a column is dated, in the words the helper window uses. */
+/** How a row of a column is dated, in the words the helper window uses, for a file of days (see datingOf). */
 export const SIGNAL_DATING =
-  "A row counts as known at the close of the day it is dated. Date each row with the day whose close its value was computed from: a rule on Tuesday's close can use a row dated Tuesday, and its order fills at Wednesday's open.";
+  "A row counts as known at the end of the day it is dated. Date each row with the day whose close its value was computed from: a rule on Tuesday's close can use a row dated Tuesday, and its order fills at Wednesday's open.";
+
+/** How this file's rows are dated, by the rule the run reads them with (evaluate.ts rowDating). */
+function datingOf(bars: Bars): string {
+  const { known, carry, daily } = rowDating(bars);
+  if (daily) return bars.unpriced ? SIGNAL_DATING.replace('dated.', 'dated, however far apart the rows are.') : SIGNAL_DATING;
+  const said = carry.replace(/^so /, '');
+  return `A row counts as known ${known}. ${said[0].toUpperCase()}${said.slice(1)}.`;
+}
 
 interface Table {
   header: string[];
@@ -549,6 +560,7 @@ export function inspectCsv(text: string): CsvInspection {
       signals,
       unreadable,
       doubts: [...(skipped ? [skipped] : []), ...dateDoubts(t, named.date!, dates), ...timeDoubts(bars.t)],
+      dating: datingOf(bars),
     };
   }
 
@@ -575,6 +587,7 @@ export function inspectCsv(text: string): CsvInspection {
     signals,
     unreadable,
     doubts: doubtsOf(t, cols, bars, mine.tally, mine.dates),
+    dating: datingOf(bars),
   };
 }
 

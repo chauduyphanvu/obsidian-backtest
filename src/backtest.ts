@@ -2,7 +2,7 @@ import { INSIDE_BARS } from './data.ts';
 import { DAY, stamp } from './dom.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
 import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
-import { clocksApart, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
+import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
 import { alignByEnd } from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
@@ -199,7 +199,9 @@ function closeReadNotes(spec: Spec, data: Map<string, Bars>, intraday: boolean):
   const when = intraday ? 'time' : 'date';
   const names = spec.universe.map((a) => a.name);
   const pairs = names.flatMap((a, i) => names.slice(i + 1).map((b) => [a, b]));
-  const reads = ofReads(spec);
+  // How a file whose columns are read is read, its prices included, is said in its own note (evaluate.ts columnNotes).
+  const columns = new Set(columnFiles(spec));
+  const reads = ofReads(spec).filter(([, read]) => !columns.has(read));
   const notes: string[] = [];
   const early = reads.filter(([reader, read]) => apart(read, reader));
   if (early.length) {
@@ -356,7 +358,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   };
 
   const intraday = run.t.some((t) => t % DAY !== 0);
-  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec)];
+  const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec, data)];
   if (run.smallTrades) {
     const n = run.smallTrades;
     notes.push(

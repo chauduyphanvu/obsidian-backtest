@@ -120,7 +120,7 @@ test('the README has the subsection, its names and its dating rule, and the samp
   assert.ok(readme.includes('abs, column. Dates:'));
   assert.ok(readme.includes(`"${'This file has no prices. A strategy can read its columns but cannot trade it.'}"`));
   // The README's account of the dating is the helper window's.
-  assert.ok(SIGNAL_DATING.includes("A row counts as known at the close of the day it is dated."));
+  assert.ok(SIGNAL_DATING.includes("A row counts as known at the end of the day it is dated."));
 });
 
 // ------------------------------------------------------------------------------------------------ the helper

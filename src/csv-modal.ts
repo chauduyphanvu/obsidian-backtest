@@ -1,5 +1,5 @@
 import { Modal, type App } from 'obsidian';
-import { cleanedPath, csvColumn, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, SIGNAL_DATING, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvSignal, type CsvUnread, type DateOrder } from './csv-import.ts';
+import { cleanedPath, csvColumn, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvSignal, type CsvUnread, type DateOrder } from './csv-import.ts';
 import { h, price } from './dom.ts';
 
 export interface CsvHost {
@@ -286,7 +286,7 @@ export class CsvModal extends Modal {
     }
     if (reason) h(box, 'div', 'bt-warning', reason);
     if (note) h(box, 'div', NOTE, note);
-    h(box, 'div', NOTE, SIGNAL_DATING);
+    h(box, 'div', NOTE, found.dating);
   }
 
   /** Puts the text in the note, or shows it to copy when no note is open for editing. */
