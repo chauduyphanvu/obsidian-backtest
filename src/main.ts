@@ -4,10 +4,8 @@ import { compareCurves, parseCompare } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
-import { equityCsv, snapshotMarkdown, tradesCsv } from './export.ts';
-import { HOUR, isIntraday } from './format.ts';
+import { HOUR } from './format.ts';
 import { GalleryModal } from './gallery-modal.ts';
-import { LimitError } from './limits.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { drawHeld } from './live-core.ts';
@@ -16,24 +14,17 @@ import { ordersSavePlan, scanOrders, type ScanHost } from './orders.ts';
 import { OrdersBadge } from './orders-badge.ts';
 import { OrdersModal } from './orders-view.ts';
 import { PriceStore } from './price-store.ts';
-import { renderActions } from './render-actions.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
-import { renderDebug } from './render-debug.ts';
-import { renderPriceCharts } from './render-price.ts';
-import { renderLuck } from './render-luck.ts';
-import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type Section } from './render.ts';
-import { renderSweep } from './render-sweep.ts';
-import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
+import { blockStateKey } from './render.ts';
 import { Results } from './results.ts';
 import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
-import type { RunOutput } from './runner.ts';
+import { StrategyBlocks, type StrategyOptions } from './strategy-block.ts';
 import { SymbolLookup } from './symbols.ts';
 import { createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
-import { blockRuns, shutdownWorkers } from './worker-client.ts';
+import { shutdownWorkers } from './worker-client.ts';
 import { BacktestSettingTab } from './settings.ts';
 import { defaultsFrom, normalizeSettings, type Settings } from './settings-core.ts';
-import type { Defaults } from './dsl.ts';
 
 /** Puts text at the cursor; a block starts on its own line. */
 function place(editor: Editor, text: string): void {
@@ -41,29 +32,7 @@ function place(editor: Editor, text: string): void {
   editor.replaceSelection(text.startsWith('```') && !atLineStart ? `\n${text}` : text);
 }
 
-/** Blocks whose open or folded state is remembered for the session. */
-const KEPT_BLOCK_STATES = 500;
-/** After the last change to a setting, how long to wait before blocks on screen are told their defaults changed. */
-const DEFAULTS_CHECK_MS = 400;
-
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-
-/** What a caller of `renderStrategy` says about where the block is. */
-interface StrategyOptions {
-  notePath: string;
-  /** Run again and fetch prices again, instead of reusing a recent result. */
-  force?: boolean;
-  /** Writes parameter values (fractions for percentages) into the block's text. Absent where the block can't be edited. */
-  apply?: (values: Record<string, number>) => Promise<void>;
-  /** Keys the block's remembered open or folded state; without one it is not remembered. */
-  stateKey?: string;
-  /** Start folded or open, instead of following the setting. */
-  compact?: boolean;
-  /** Drawn in the preview panel: a failed run rejects instead of drawing its own message, and the note's properties are left alone. */
-  panel?: boolean;
-  /** Run without the size limits and with the longer time limit, after the reader asked for it (limits.ts). */
-  anyway?: boolean;
-}
 
 export default class BacktestBlocks extends Plugin {
   settings: Settings = normalizeSettings(null);
@@ -84,8 +53,6 @@ export default class BacktestBlocks extends Plugin {
     freshForMs: () => this.settings.cacheHours * HOUR,
     modified: async (path) => (await this.app.vault.adapter.stat(normalizePath(path)))?.mtime ?? null,
   });
-  /** What to run before a rendered block draws again or goes away. */
-  private disposers = new WeakMap<MarkdownRenderChild, () => void>();
   private properties = new NoteProperties<TFile>({
     read: (file) => this.app.vault.cachedRead(file),
     frontmatter: (file) => this.app.metadataCache.getFileCache(file)?.frontmatter,
@@ -93,23 +60,24 @@ export default class BacktestBlocks extends Plugin {
     runSource: (source, opts) => this.results.runSource(source, opts),
     notice: (text) => void new Notice(text),
   });
+  /** The strategy blocks on screen. */
+  private blocks = new StrategyBlocks({
+    results: this.results,
+    settings: () => this.settings,
+    saveFile: (title, ext, text) => this.saveFile(title, ext, text),
+    scheduleProperties: (notePath) => {
+      const file = this.app.vault.getAbstractFileByPath(notePath);
+      if (file instanceof TFile) this.properties.scheduleProperties(file);
+    },
+  });
   /** The scan of the vault for today's orders. */
   private orders: ScanHost = {
     clear: () => this.results.clear(),
     find: () => this.findStrategies(),
     run: (source, opts) => this.results.runSource(source, opts),
   };
-  /** Whether each block was left open (true) or folded (false), for blocks drawn again within a session. */
-  private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
   private ordersBadge: OrdersBadge | null = null;
   private symbolLookup: SymbolLookup | null = null;
-  /** The strategy blocks on screen with the defaults each was drawn with, so each can say when the settings have since changed. */
-  private onScreen = new Map<MarkdownRenderChild, { source: string; drawn: Defaults; say: (changed: boolean) => void }>();
-  private checkDefaults = debounce(() => {
-    const now = defaultsFrom(this.settings);
-    for (const block of this.onScreen.values()) block.say(defaultsMatter(block.source, block.drawn, now));
-  }, DEFAULTS_CHECK_MS);
-
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
     this.results.reset(this.settings.cacheHours * HOUR);
@@ -117,9 +85,9 @@ export default class BacktestBlocks extends Plugin {
 
     this.registerMarkdownCodeBlockProcessor('strategy', (source, el, ctx) => {
       const child = new MarkdownRenderChild(el);
-      child.register(() => this.dispose(child));
+      child.register(() => this.blocks.dispose(child));
       ctx.addChild(child);
-      void this.renderStrategy(source, el, child, { notePath: ctx.sourcePath, ...this.placeInNote(source, el, ctx) });
+      void this.blocks.renderStrategy(source, el, child, { notePath: ctx.sourcePath, ...this.placeInNote(source, el, ctx) });
     });
     this.registerMarkdownCodeBlockProcessor('compare', (source, el, ctx) => {
       const child = new MarkdownRenderChild(el);
@@ -211,7 +179,7 @@ export default class BacktestBlocks extends Plugin {
 
   onunload(): void {
     this.ordersBadge?.stop();
-    this.checkDefaults.cancel();
+    this.blocks.checkDefaults.cancel();
     shutdownWorkers();
     this.properties.cancel();
   }
@@ -222,7 +190,7 @@ export default class BacktestBlocks extends Plugin {
     this.results.reset(this.settings.cacheHours * HOUR);
     this.prices.ready.changed();
     // Blocks already on screen keep the defaults they were drawn with and say so; this runs once typing in a setting has paused.
-    this.checkDefaults();
+    this.blocks.checkDefaults();
   }
 
   setOrdersBadge(on: boolean): void {
@@ -244,11 +212,6 @@ export default class BacktestBlocks extends Plugin {
     return (this.symbolLookup ??= new SymbolLookup({ now: deps.now, fetchText: deps.fetchText, sleep: deps.sleep }));
   }
 
-  private dispose(child: MarkdownRenderChild): void {
-    this.disposers.get(child)?.();
-    this.disposers.delete(child);
-  }
-
   /** What a strategy block can do because of where it sits in its note: write values back into it, and have its open or folded state remembered. */
   private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'stateKey'> {
     const info = ctx.getSectionInfo(el);
@@ -262,107 +225,12 @@ export default class BacktestBlocks extends Plugin {
     return { stateKey, apply };
   }
 
-  private async renderStrategy(source: string, el: HTMLElement, child: MarkdownRenderChild, opts: StrategyOptions): Promise<void> {
-    this.dispose(child);
-    // The block's runs: drawing it again or its going away stops them, and the worker then forgets its prices.
-    const runs = blockRuns();
-    // While this is the child's disposer, this drawing is the block's latest and the block is still there.
-    const stop = () => runs.close();
-    this.disposers.set(child, stop);
-    // Everything this drawing parses, runs and hands to its sections is made with the defaults it reads here, once.
-    const drawing = this.results.drawing(source, runs, { anyway: opts.anyway });
-    const force = opts.force ?? false;
-    // In the panel a failed first run is for the panel to show, but a retry has nobody above it: it draws its own failure.
-    const redraw = (more: Pick<StrategyOptions, 'force' | 'anyway'>): void => {
-      // A block run without the size limits is drawn again without them, whether it was asked for now or by the result it came from.
-      this.renderStrategy(source, el, child, { ...opts, anyway: drawing.anyway, ...more }).catch(showFailure);
-    };
-    const showFailure = (e: unknown): void => renderFailure(el, e instanceof Error ? e.message : String(e), source, () => redraw({ force: false }));
-    const retry = (refetch: boolean) => () => redraw({ force: refetch });
-    try {
-      const { spec, errors, warnings } = drawing.parse();
-      if (!spec) {
-        renderErrors(el, errors, source);
-        return;
-      }
-      const key = await this.results.resultKey(spec, source, drawing.defaults);
-      if (this.disposers.get(child) !== stop) return;
-      if (force || this.results.kept(key, drawing.freshForMs) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
-      const out = await this.results.runSpec(drawing, spec, key, force);
-      // Stopped, or a kept result came back after the block was drawn again or went away.
-      if (!out || this.disposers.get(child) !== stop) return;
-      // A result that was run without the size limits is shown with its sliders without them too.
-      drawing.follow(out);
-      const sections = (shown: RunOutput): Section[] => {
-        const bt = shown.backtest;
-        const intraday = isIntraday(bt.run.t);
-        const name = shown.spec.name ?? 'Backtest';
-        // The sweep and the luck checks start from the block's own text and put values on top of it.
-        const tryValues = { source, backtest: bt, parse: drawing.parse, defaults: drawing.defaults, apply: opts.apply };
-        // A kept note carries the values that made its result.
-        const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
-        return [
-          (root) =>
-            renderPriceCharts(root, {
-              data: shown.data,
-              tickers: shown.spec.universe.map((a) => a.name),
-              trades: bt.run.trades,
-              from: bt.run.t[0],
-              to: bt.run.t[bt.run.t.length - 1],
-              intraday,
-            }),
-          (root) => renderDebug(root, { backtest: bt, intraday, save: (title, csv) => this.saveFile(title, 'csv', csv) }),
-          (root) => renderSweep(root, tryValues),
-          (root) => renderLuck(root, tryValues),
-          (root) =>
-            renderActions(root, [
-              { label: 'Save trades as CSV', run: () => this.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
-              { label: 'Save value history as CSV', run: () => this.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
-              { label: 'Keep this result as a note', run: () => this.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
-            ]),
-        ];
-      };
-      const sliders = drawing.sliders(out);
-      // The panel keeps its own view of a block, apart from the note's folded or open state.
-      const stateKey = opts.panel ? undefined : (opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined));
-      const drawn = renderResult(el, {
-        source,
-        out,
-        notes: warnings,
-        onRefresh: retry(true),
-        sections,
-        compact: opts.compact ?? this.settings.resultView === 'compact',
-        remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
-        params: spec.params.length > 0 ? { ...sliders, apply: opts.apply } : undefined,
-      });
-      this.onScreen.set(child, { source, drawn: drawing.defaults, say: renderDefaultsChanged(el, () => redraw({ force: false })) });
-      this.disposers.set(child, () => {
-        drawn();
-        runs.close();
-        this.onScreen.delete(child);
-      });
-      // The settings may have changed while the result was on its way.
-      this.checkDefaults();
-      if (this.settings.writeProperties && !opts.panel) {
-        const file = this.app.vault.getAbstractFileByPath(opts.notePath);
-        if (file instanceof TFile) this.properties.scheduleProperties(file);
-      }
-    } catch (e) {
-      // A drawing that was replaced or went away while it ran leaves the block to whatever replaced it.
-      if (this.disposers.get(child) !== stop) return;
-      // A limit is shown in the panel too, since only the block can offer to run it anyway.
-      if (e instanceof LimitError) renderLimit(el, e, source, () => redraw({ force: false, anyway: true }));
-      else if (opts.panel) throw e;
-      else showFailure(e);
-    }
-  }
-
   private liveHost(): LiveHost {
     return {
       // One drawing at a time: a newer edit or closing the panel aborts `signal`, which stops the run, and a draw that fails lets go of it too.
       show: (source, el, { notePath, apply, signal }) => {
         const child = new MarkdownRenderChild(el);
-        return drawHeld(() => this.renderStrategy(source, el, child, { notePath, apply, compact: false, panel: true }), () => this.dispose(child), signal);
+        return drawHeld(() => this.blocks.renderStrategy(source, el, child, { notePath, apply, compact: false, panel: true }), () => this.blocks.dispose(child), signal);
       },
       pricesReady: (source) => this.pricesReady(source),
       errors: (source) => this.results.runner().parse(source).errors,
