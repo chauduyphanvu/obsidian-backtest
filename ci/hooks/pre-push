@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs the whole check before a push leaves this machine. A push of tags alone is let through:
+# ci/release.sh has just checked the commit it tags.
+# Turn this on once per clone with: git config core.hooksPath ci/hooks
+only_tags=1
+while read -r local_ref _ _ _; do
+  case "$local_ref" in
+    refs/tags/*) ;;
+    *) only_tags=0 ;;
+  esac
+done
+[ "$only_tags" = 1 ] && exit 0
+exec sh "$(git rev-parse --show-toplevel)/ci/check.sh"

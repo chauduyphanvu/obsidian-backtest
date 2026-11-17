@@ -1183,6 +1183,7 @@ Also not checked:
 npm test           # unit tests, each .ts file run directly by Node
 npm run typecheck  # tsc --noEmit
 npm run build      # type check, then bundle into dist/
+npm run check      # everything a push or release must pass (ci/check.sh)
 node xcheck/run.ts # optional cross-check; needs the second backtester's command-line tool
 ```
 
@@ -1190,7 +1191,9 @@ Obsidian loads one script for a plugin, so the background workers are built into
 
 The cross-check runs 36 cases and 55 indicator expressions (`xcheck/README.md` lists them and the differences it explains). It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
 
-Pushing a tag equal to the `version` in `manifest.json` runs `.github/workflows/release.yml`. It runs the tests, builds, and creates a draft GitHub release with `main.js`, `manifest.json` and `styles.css` attached. `versions.json` maps each plugin version to the minimum Obsidian version.
+The checks run on your own machine; the repository has no hosted workflow. `sh ci/check.sh` (or `npm run check`) runs the tests, the type check and build, checks the built files and the version files against each other, and runs the cross-check when `rvw` is found; it stops at the first failure. A file `ci/local.env`, which is not in git, can set `RVW` for that machine. `git config core.hooksPath ci/hooks`, run once in a clone, makes every push run the check first.
+
+`sh ci/release.sh` releases the `version` in `manifest.json`. It refuses unless you are on `main` with nothing uncommitted and `main` matches the remote, the tag and the release do not exist yet, and the whole check passes with the cross-check. Then it tags the commit, pushes the tag and publishes a GitHub release with `main.js`, `manifest.json` and `styles.css`, using `ci/notes/<version>.md` as the notes when that file exists. `--dry-run` runs every check and changes nothing; `--draft` leaves the release as a draft. It needs the GitHub command-line tool, `gh`. `versions.json` maps each plugin version to the minimum Obsidian version.
 
 Layout of `src/`:
 
