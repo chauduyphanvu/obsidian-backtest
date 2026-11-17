@@ -28,8 +28,32 @@ export interface SweepInput {
   parse: Parse;
   /** The defaults `parse` applies, for parsing the same text somewhere `parse` can't go (a worker). */
   defaults?: Partial<Defaults>;
-  /** Writes parameter values back into the block (fractions for percentages); absent where the block can't be edited. */
-  apply?: (values: Record<string, number>) => void;
+  /**
+   * Writes parameter values back into the block (fractions for percentages); absent where the block can't be edited. It
+   * resolves once written; a rejection means nothing was written, and its message says why in words fit to show.
+   */
+  apply?: Apply;
+}
+
+export type Apply = (values: Record<string, number>) => Promise<void>;
+
+/** What the button next to a write shows: whether it waits for the write, and the words beside it. */
+export interface WriteState {
+  busy: boolean;
+  said: string;
+}
+
+export const WRITTEN = 'Done: the block now uses these values.';
+
+/** Writes `values` with `apply`, reporting the button's state as it goes: busy with nothing said, then done or why not. */
+export async function writeValues(apply: Apply, values: Record<string, number>, report: (state: WriteState) => void): Promise<void> {
+  report({ busy: true, said: '' });
+  try {
+    await apply(values);
+    report({ busy: false, said: WRITTEN });
+  } catch (e) {
+    report({ busy: false, said: e instanceof Error ? e.message : String(e) });
+  }
 }
 
 /** Shared by the parts of a section: observers to disconnect, and whether the section is gone. */
@@ -365,19 +389,17 @@ const valueCodes = (el: HTMLElement, params: SweepParam[], values: Record<string
     h(el, 'code', undefined, `${p.name} = ${paramText(p, values[p.name])}`);
   });
 
-/** A button that writes `values` into the block, and a word when it has. */
-function applyButton(parent: HTMLElement, values: Record<string, number>, apply: (values: Record<string, number>) => void): void {
+/** A button that writes `values` into the block, and a word once it has, or why it has not. */
+function applyButton(parent: HTMLElement, values: Record<string, number>, apply: Apply): void {
   const row = h(parent, 'div', 'bt-sweep-apply');
   const button = h(row, 'button', 'bt-button', 'Use these values in the block');
   const said = h(row, 'span', 'bt-sweep-applied');
-  button.addEventListener('click', () => {
-    try {
-      apply(values);
-      said.textContent = 'Done: the block now uses these values.';
-    } catch (e) {
-      said.textContent = e instanceof Error ? e.message : String(e);
-    }
-  });
+  button.addEventListener('click', () =>
+    void writeValues(apply, values, (state) => {
+      button.disabled = state.busy;
+      said.textContent = state.said;
+    }),
+  );
 }
 
 function bestValues(el: HTMLElement, params: SweepParam[], sum: SweepSummary, period: Period, testDay: string | null, apply: SweepInput['apply']): void {
@@ -399,7 +421,7 @@ interface Picking {
   marks: Map<string, (p: SweepPoint | null) => void>;
 }
 
-function picking(el: HTMLElement, result: SweepResult, apply: (values: Record<string, number>) => void): Picking {
+function picking(el: HTMLElement, result: SweepResult, apply: Apply): Picking {
   const params = result.params;
   const hint = params.length === 1 ? 'To try another value, click or tap it on the chart.' : `To try other values, click or tap a cell${params.length >= 3 ? ' or a row in the table' : ''}.`;
   const self: Picking = {

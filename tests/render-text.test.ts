@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { BootstrapResult } from '../src/luck.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { reshuffleVerdict, valuesUsed } from '../src/render-luck.ts';
-import { bestWords } from '../src/render-sweep.ts';
+import { bestWords, writeValues, WRITTEN, type WriteState } from '../src/render-sweep.ts';
 
 const TRY_IT = 'To try it, change those lines in the block; the note stays the record of what you chose.';
 const UNFAIR = 'Values picked on this view have seen the test period, so their later result is not a fair test.';
@@ -62,4 +62,29 @@ test('the luck checks say which values they used when a slider drew the run with
   assert.equal(valuesUsed(params({})), null);
   assert.equal(valuesUsed(params({ fast: 10 })), null);
   assert.equal(valuesUsed(params({ fast: 25, stop: 0.06 })), 'These checks test the run shown, with fast 25, stop 6%. The block says fast 10, stop 8%.');
+});
+
+test('"Use these values in the block" says Done only once the write has happened, and why not when it failed', async () => {
+  const states: WriteState[] = [];
+  let finish!: () => void;
+  const pending = writeValues(() => new Promise<void>((resolve) => (finish = resolve)), { fast: 20 }, (st) => states.push(st));
+  await new Promise((r) => setTimeout(r, 5));
+  // While the note is being written the button waits and says nothing.
+  assert.deepEqual(states, [{ busy: true, said: '' }]);
+  finish();
+  await pending;
+  assert.deepEqual(states.at(-1), { busy: false, said: WRITTEN });
+
+  const failed: WriteState[] = [];
+  const why = 'The note has changed since this result was drawn, so nothing was written. Try again.';
+  await writeValues(() => Promise.reject(new Error(why)), { fast: 20 }, (st) => failed.push(st));
+  assert.deepEqual(failed, [
+    { busy: true, said: '' },
+    { busy: false, said: why },
+  ]);
+  const thrown: WriteState[] = [];
+  await writeValues(() => {
+    throw new Error('No block here');
+  }, {}, (st) => thrown.push(st));
+  assert.deepEqual(thrown.at(-1), { busy: false, said: 'No block here' });
 });
