@@ -146,7 +146,12 @@ export function observe(life: Life, el: HTMLElement, draw: (width: number) => vo
   let drawn = 0;
   const observer = new ResizeObserver((entries) => {
     const width = Math.floor(entries[0].contentRect.width);
-    if (width > 0 && width !== drawn) draw((drawn = width));
+    // Drawn on the next frame: drawing in here would notify this observer again within the same frame.
+    if (width > 0 && width !== drawn) {
+      window.requestAnimationFrame(() => {
+        if (!life.gone) draw((drawn = width));
+      });
+    }
   });
   observer.observe(el);
   life.observers.push(observer);
