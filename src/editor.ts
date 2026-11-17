@@ -1,73 +1,150 @@
-import { RangeSetBuilder } from '@codemirror/state';
-import { Decoration, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from '@codemirror/view';
+import type { Extension, Range } from '@codemirror/state';
+import { Decoration, EditorView, ViewPlugin, hoverTooltip, type DecorationSet, type Tooltip, type ViewUpdate } from '@codemirror/view';
 import { EditorSuggest, type Editor, type EditorPosition, type EditorSuggestContext, type EditorSuggestTriggerInfo } from 'obsidian';
 import { complete, type Completion } from './complete.ts';
-import { lineKind, tokenize, type TokenKind } from './highlight.ts';
+import { analyzeBlock, closesFence, fenceOf, findBlocks, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
+import type { Defaults } from './dsl.ts';
+import type { TokenKind } from './highlight.ts';
+import { ResultCache } from './result-cache.ts';
 
-const OPEN = /^\s*(`{3,}|~{3,})\s*strategy\s*$/;
+const KINDS: Record<TokenKind, true> = { key: true, keyword: true, function: true, series: true, number: true, ticker: true, value: true, operator: true, comment: true, param: true };
+const TOKEN_MARKS = Object.fromEntries(Object.keys(KINDS).map((k) => [k, Decoration.mark({ class: `bt-tok bt-tok-${k}` })])) as Record<TokenKind, Decoration>;
 
-const MARKS = Object.fromEntries(
-  (['key', 'keyword', 'function', 'series', 'number', 'ticker', 'value', 'operator', 'comment'] as TokenKind[]).map((k) => [k, Decoration.mark({ class: `bt-tok bt-tok-${k}` })]),
-) as Record<TokenKind, Decoration>;
-
-function decorate(view: EditorView): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  const doc = view.state.doc;
-  const first = view.viewport.from;
-  const last = doc.lineAt(view.viewport.to).number;
-  let fence: string | null = null;
-  let inRule = false;
-  // Fences are found from the top; only lines on screen get marks.
-  for (let n = 1; n <= last; n++) {
-    const line = doc.line(n);
-    if (fence === null) {
-      const m = line.text.match(OPEN);
-      if (m) {
-        fence = m[1];
-        inRule = false;
-      }
-    } else if (line.text.trim().startsWith(fence)) {
-      fence = null;
-    } else {
-      const kind = lineKind(line.text, inRule);
-      inRule = kind === 'rule' || kind === 'continuation';
-      if (line.to >= first) for (const t of tokenize(line.text, kind)) builder.add(line.from + t.from, line.from + t.to, MARKS[t.kind]);
-    }
-  }
-  return builder.finish();
+/** A problem placed in the note, for the tooltip. */
+interface Problem {
+  from: number;
+  to: number;
+  severity: BlockDiagnostic['severity'];
+  message: string;
 }
 
-/** Colours strategy blocks while they are being edited. */
-export const strategyHighlighter = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    constructor(view: EditorView) {
-      this.decorations = decorate(view);
+const PREFIX = { error: 'Problem: ', warning: 'Note: ' };
+
+/** Blocks read at once on screen; older readings of a block fall out as it is edited. */
+const CACHED_BLOCKS = 64;
+
+class StrategyView {
+  tokens: DecorationSet = Decoration.none;
+  problems: DecorationSet = Decoration.none;
+  hits: Problem[] = [];
+  private cache: ResultCache<BlockAnalysis>;
+  private getDefaults: () => Partial<Defaults>;
+
+  constructor(view: EditorView, cache: ResultCache<BlockAnalysis>, getDefaults: () => Partial<Defaults>) {
+    this.cache = cache;
+    this.getDefaults = getDefaults;
+    this.build(view);
+  }
+
+  update(u: ViewUpdate): void {
+    if (u.docChanged || u.viewportChanged) this.build(u.view);
+  }
+
+  /**
+   * Colours and underlines for the strategy blocks on screen. A block is read again only when its
+   * text (or the defaults) changed. The marks are collected unsorted and sorted by the set, so
+   * neither the token order nor the order of blocks can break the "ascending from" rule.
+   */
+  private build(view: EditorView): void {
+    const doc = view.state.doc;
+    const firstShown = doc.lineAt(view.viewport.from).number - 1;
+    const lastShown = doc.lineAt(view.viewport.to).number - 1;
+    const defaults = this.getDefaults();
+    const salt = JSON.stringify(defaults) + '\n';
+    const tokens: Range<Decoration>[] = [];
+    const problems: Range<Decoration>[] = [];
+    const hits: Problem[] = [];
+
+    for (const block of findBlocks(doc.iterLines(), lastShown)) {
+      if (block.last < block.first || block.last < firstShown || block.first > lastShown) continue;
+      const lines = Array.from(doc.iterLines(block.first + 1, block.last + 2));
+      const key = salt + lines.join('\n');
+      let analysis = this.cache.get(key);
+      if (!analysis) {
+        analysis = analyzeBlock(lines, defaults);
+        this.cache.set(key, analysis);
+      }
+      const shownFrom = Math.max(block.first, firstShown);
+      const shownTo = Math.min(block.last, lastShown);
+      for (let n = shownFrom; n <= shownTo; n++) {
+        const start = doc.line(n + 1).from;
+        for (const t of analysis.tokens[n - block.first]) tokens.push(TOKEN_MARKS[t.kind].range(start + t.from, start + t.to));
+      }
+      for (const d of analysis.diagnostics) {
+        const n = block.first + d.line;
+        if (n < shownFrom || n > shownTo) continue;
+        const start = doc.line(n + 1).from;
+        const mark = Decoration.mark({ class: `bt-diag bt-diag-${d.severity}`, attributes: { title: PREFIX[d.severity] + d.message } });
+        problems.push(mark.range(start + d.from, start + d.to));
+        hits.push({ from: start + d.from, to: start + d.to, severity: d.severity, message: d.message });
+      }
     }
-    update(u: ViewUpdate): void {
-      if (u.docChanged || u.viewportChanged) this.decorations = decorate(u.view);
-    }
-  },
-  { decorations: (v) => v.decorations },
-);
+    this.tokens = Decoration.set(tokens, true);
+    this.problems = Decoration.set(problems, true);
+    this.hits = hits;
+  }
+}
+
+function tooltipFor(view: EditorView, hits: Problem[]): Tooltip {
+  return {
+    pos: Math.min(...hits.map((h) => h.from)),
+    end: Math.max(...hits.map((h) => h.to)),
+    above: true,
+    create() {
+      const doc = view.dom.ownerDocument;
+      const dom = doc.createElement('div');
+      dom.className = 'bt-diag-tip';
+      for (const h of hits) {
+        const row = doc.createElement('div');
+        row.className = `bt-diag-tip-row bt-diag-tip-${h.severity}`;
+        const kind = doc.createElement('span');
+        kind.className = 'bt-diag-tip-kind';
+        kind.textContent = PREFIX[h.severity];
+        row.append(kind, h.message);
+        dom.append(row);
+      }
+      return { dom };
+    },
+  };
+}
+
+/** Editor extensions for strategy blocks: token colours, and underlines for problems with the message on hover. `getDefaults` is read each time a block is parsed. */
+export function strategyEditor(getDefaults: () => Partial<Defaults>): Extension[] {
+  const cache = new ResultCache<BlockAnalysis>(CACHED_BLOCKS, Infinity);
+  const plugin = ViewPlugin.define((view) => new StrategyView(view, cache, getDefaults), {
+    decorations: (v) => v.tokens,
+    provide: (p) => EditorView.decorations.of((view) => view.plugin(p)?.problems ?? Decoration.none),
+  });
+  const hover = hoverTooltip(
+    (view, pos, side) => {
+      const hits = (view.plugin(plugin)?.hits ?? []).filter((h) => pos >= h.from && pos <= h.to && (pos > h.from || side > 0) && (pos < h.to || side < 0));
+      if (!hits.length) return null;
+      hits.sort((a, b) => (a.severity === b.severity ? a.from - b.from : a.severity === 'error' ? -1 : 1));
+      return tooltipFor(view, hits);
+    },
+    { hideOnChange: true },
+  );
+  return [plugin, hover];
+}
+
+/** Until `main.ts` passes its own defaults to `strategyEditor`: the same extensions with the built-in defaults. */
+export const strategyHighlighter: Extension[] = strategyEditor(() => ({}));
 
 /** The strategy block around a line: every line in it and those above the given line; null outside one. */
 function blockAround(editor: Editor, at: number): { block: string[]; above: string[] } | null {
   let start = -1;
   let fence = '';
   for (let n = at - 1; n >= 0; n--) {
-    const text = editor.getLine(n);
-    const m = text.match(OPEN);
-    if (m) {
-      start = n;
-      fence = m[1];
-      break;
-    }
-    if (/^\s*(`{3,}|~{3,})/.test(text)) return null;
+    const open = fenceOf(editor.getLine(n));
+    if (!open) continue;
+    if (open.info !== 'strategy') return null;
+    start = n;
+    fence = open.fence;
+    break;
   }
-  if (start < 0 || editor.getLine(at).trim().startsWith(fence)) return null;
+  if (start < 0 || closesFence(editor.getLine(at), fence)) return null;
   const block: string[] = [];
-  for (let n = start + 1; n < editor.lineCount() && !editor.getLine(n).trim().startsWith(fence); n++) block.push(editor.getLine(n));
+  for (let n = start + 1; n < editor.lineCount() && !closesFence(editor.getLine(n), fence); n++) block.push(editor.getLine(n));
   return { block, above: block.slice(0, at - start - 1) };
 }
 
