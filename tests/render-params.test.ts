@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec, type Param } from '../src/dsl.ts';
-import { differenceText, formatParam, sliderScale, sliderValues } from '../src/render-params.ts';
+import { createRequester, differenceText, formatParam, sliderScale, sliderValues, type RequesterHandlers } from '../src/render-params.ts';
+import type { RunOutput } from '../src/runner.ts';
 
 /** The parameter a line declares, as the parser reads it. */
 function param(line: string): Param {
@@ -101,4 +102,146 @@ test('the line under the bar names only the values that differ, and what the blo
   assert.equal(differenceText(params, { fast: 80, stop: 0.08 }), 'Showing fast 80. The block says fast 50.');
   assert.equal(differenceText(params, { fast: 80, stop: 0.065 }), 'Showing fast 80, stop 6.5%. The block says fast 50, stop 8%.');
   assert.equal(differenceText(params, { fast: 50, stop: 0.06 }), 'Showing stop 6%. The block says stop 8%.');
+});
+
+// ---- asking for a run while a slider moves
+
+type Answer = { out: RunOutput | null } | { error: unknown };
+const tag = (name: string) => ({ name }) as unknown as RunOutput;
+
+/** A hook whose answers are given by hand, and a log of what the bar was told. */
+function requesting() {
+  const asked: { values: Record<string, number>; settled: boolean; answer: (a: Answer) => void }[] = [];
+  const log: string[] = [];
+  const handlers: RequesterHandlers = {
+    shown: (out, values, settled) => log.push(`shown ${(out as unknown as { name: string }).name} ${JSON.stringify(values)} ${settled}`),
+    waiting: () => log.push('waiting'),
+    loading: () => log.push('loading'),
+    failed: (e, settled) => log.push(`failed ${e instanceof Error ? e.message : e} ${settled}`),
+  };
+  const requester = createRequester(
+    {
+      rerun: (values, settled) =>
+        new Promise((resolve, reject) => {
+          asked.push({ values, settled, answer: (a) => ('error' in a ? reject(a.error) : resolve(a.out)) });
+        }),
+    },
+    handlers,
+  );
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  return { asked, log, requester, flush };
+}
+
+test('a drag asks with settled false and a release with settled true, and each gets its own copy of the values', async () => {
+  const { asked, requester } = requesting();
+  const values = { n: 250 };
+  requester.request(values, false);
+  values.n = 300;
+  requester.request(values, true);
+  assert.deepEqual(asked.map((a) => [a.values.n, a.settled]), [[250, false], [300, true]]);
+});
+
+test('an answer is shown with the values it was asked for', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 250 }, false);
+  asked[0].answer({ out: tag('a') });
+  await flush();
+  assert.deepEqual(log, ['shown a {"n":250} false']);
+});
+
+test('a value that needs more history during a drag is not fetched: the bar is told to wait and nothing is redrawn', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 250 }, false);
+  asked[0].answer({ out: tag('a') });
+  await flush();
+  requester.request({ n: 400 }, false);
+  asked[1].answer({ out: null });
+  await flush();
+  assert.deepEqual(log, ['shown a {"n":250} false', 'waiting']);
+});
+
+test('on release the bar says it is loading, then shows the answer', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 400 }, false);
+  asked[0].answer({ out: null });
+  await flush();
+  requester.request({ n: 400 }, true);
+  assert.equal(asked[1].settled, true);
+  asked[1].answer({ out: tag('b') });
+  await flush();
+  assert.deepEqual(log, ['waiting', 'loading', 'shown b {"n":400} true']);
+});
+
+test('a release that was not preceded by a wait does not say it is loading', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 200 }, true);
+  asked[0].answer({ out: tag('a') });
+  await flush();
+  assert.deepEqual(log, ['shown a {"n":200} true']);
+});
+
+test('only the latest request is used: an older answer that arrives later is dropped, whether it succeeds or fails', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 300 }, true);
+  requester.request({ n: 350 }, true);
+  asked[1].answer({ out: tag('latest') });
+  await flush();
+  asked[0].answer({ out: tag('older') });
+  await flush();
+  assert.deepEqual(log, ['shown latest {"n":350} true']);
+
+  const second = requesting();
+  second.requester.request({ n: 300 }, true);
+  second.requester.request({ n: 350 }, true);
+  second.asked[0].answer({ error: new Error('older failed') });
+  second.asked[1].answer({ out: tag('latest') });
+  await second.flush();
+  assert.deepEqual(second.log, ['shown latest {"n":350} true']);
+});
+
+test('a failure of the latest request is reported with whether it was a release', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 400 }, true);
+  asked[0].answer({ error: new Error('No file at Data/x.csv') });
+  await flush();
+  requester.request({ n: 500 }, false);
+  asked[1].answer({ error: 'plain text' });
+  await flush();
+  assert.deepEqual(log, ['failed No file at Data/x.csv true', 'failed plain text false']);
+});
+
+test('a drag frame after a wait that finds values it can show clears the wait by showing them', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 400 }, false);
+  asked[0].answer({ out: null });
+  await flush();
+  requester.request({ n: 220 }, false);
+  asked[1].answer({ out: tag('c') });
+  await flush();
+  requester.request({ n: 230 }, true);
+  assert.deepEqual(log, ['waiting', 'shown c {"n":220} false']);
+});
+
+test('after cancel nothing is reported', async () => {
+  const { asked, log, requester, flush } = requesting();
+  requester.request({ n: 300 }, true);
+  requester.cancel();
+  asked[0].answer({ out: tag('a') });
+  await flush();
+  assert.deepEqual(log, []);
+});
+
+test('a failing hook never leaves an unhandled rejection', async () => {
+  const unhandled: unknown[] = [];
+  const on = (e: unknown) => unhandled.push(e);
+  process.on('unhandledRejection', on);
+  const { asked, requester, flush } = requesting();
+  requester.request({ n: 1 }, true);
+  requester.request({ n: 2 }, true);
+  asked[0].answer({ error: new Error('stale') });
+  asked[1].answer({ error: new Error('latest') });
+  await flush();
+  await flush();
+  process.off('unhandledRejection', on);
+  assert.deepEqual(unhandled, []);
 });

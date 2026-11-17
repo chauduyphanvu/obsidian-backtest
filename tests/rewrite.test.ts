@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
-import { findBlock, setParamValues, setParamValuesInNote } from '../src/rewrite.ts';
+import { NOTE_CHANGED, findBlock, setParamValues, setParamValuesInNote, writeValuesInNote } from '../src/rewrite.ts';
 
 const block = (...params: string[]) => ['universe: SPY', ...params, 'buy when rsi(2) < fast', 'sell when rsi(2) > fast'].join('\n');
 
@@ -217,4 +217,47 @@ test('a note with Windows line endings keeps them', () => {
 
 test('writing the values already in the note changes nothing', () => {
   assert.equal(setParamValuesInNote(NOTE, 2, 'universe: SPY\nfast = 50\nbuy when close > sma(fast)', { fast: 50 }), NOTE);
+});
+
+// ---- writing through the vault
+
+/** A note held in memory, edited the way `vault.process` edits one: the function gets the text and gives the new text. */
+function memoryNote(text: string) {
+  const note = { text, runs: 0 };
+  const process = async (edit: (text: string) => string) => {
+    note.runs++;
+    note.text = edit(note.text);
+    return note.text;
+  };
+  return { note, process };
+}
+
+const WRITE_SRC = 'universe: QQQ\nfast = 20 # keep\nbuy when close > sma(fast)';
+const WRITE_NOTE = `Intro\n\n\`\`\`strategy\n${WRITE_SRC}\n\`\`\`\n`;
+
+test('writeValuesInNote writes the values into the block and resolves', async () => {
+  const { note, process } = memoryNote(WRITE_NOTE);
+  await writeValuesInNote(process, 2, WRITE_SRC, { fast: 25 });
+  assert.equal(note.text, WRITE_NOTE.replace('fast = 20', 'fast = 25'));
+});
+
+test('writeValuesInNote rejects, with a message fit to show, when the block has changed', async () => {
+  const { note, process } = memoryNote(WRITE_NOTE.replace('fast = 20', 'fast = 21'));
+  await assert.rejects(writeValuesInNote(process, 2, WRITE_SRC, { fast: 25 }), (e: unknown) => e instanceof Error && e.message === NOTE_CHANGED);
+  assert.equal(note.text, WRITE_NOTE.replace('fast = 20', 'fast = 21'));
+  assert.equal(NOTE_CHANGED, 'The note has changed since this result was drawn, so nothing was written. Try again.');
+});
+
+test('writeValuesInNote rejects without touching the note when the block has no known place', async () => {
+  const { note, process } = memoryNote(WRITE_NOTE);
+  await assert.rejects(writeValuesInNote(process, undefined, WRITE_SRC, { fast: 25 }), (e: unknown) => e instanceof Error && e.message === NOTE_CHANGED);
+  assert.equal(note.runs, 0);
+  assert.equal(note.text, WRITE_NOTE);
+});
+
+test('writeValuesInNote rejects when the note cannot be written', async () => {
+  const failing = async () => {
+    throw new Error('The file is locked');
+  };
+  await assert.rejects(writeValuesInNote(failing, 2, WRITE_SRC, { fast: 25 }), /The file is locked/);
 });

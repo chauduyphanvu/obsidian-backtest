@@ -1,5 +1,6 @@
 // The `backtests` block: one table with every strategy in the vault. Pure; the host finds and runs the strategies.
 
+import { extractBlocks } from './blocks.ts';
 import { isoDate, minus, pct } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 import type { AssetState } from './engine.ts';
@@ -245,9 +246,9 @@ export function sortRows(rows: DashRow[], sort: SortState): DashRow[] {
 }
 
 export interface DashboardHost {
-  /** Every strategy block in the vault. */
-  find(): Promise<{ note: string; name: string; source: string }[]>;
-  /** Runs one strategy, reusing a recent result. `force` drops saved results first. */
+  /** Every strategy block in the vault. Called once when a round starts, with whether it is forced: the place to drop saved results. */
+  find(force: boolean): Promise<{ note: string; name: string; source: string }[]>;
+  /** Runs one strategy, reusing a recent result. `force` fetches its prices again. */
   run(source: string, force: boolean): Promise<RunOutput>;
   openNote(path: string): void;
   now(): number;
@@ -270,7 +271,7 @@ export interface Round {
  * becomes a row with its reason. Rejects only when the strategies cannot be listed.
  */
 export async function runRound(host: DashboardHost, config: DashboardConfig, force: boolean, round: Round): Promise<void> {
-  const found = await host.find();
+  const found = await host.find(force);
   if (!round.current()) return;
   const list = found.filter((f) => inFolder(f.note, config.folder));
   round.onList(
@@ -307,4 +308,46 @@ export function summaryText(rows: DashRow[], finishedAt: number | null): string 
 export function emptyText(config: DashboardConfig, inVault: number): string {
   if (inVault === 0) return 'No strategy blocks found in the vault. Add one with the command "Insert strategy block".';
   return `No strategy blocks found in the folder "${config.folder}". Check its name, or remove the folder line.`;
+}
+
+export interface FoundStrategy {
+  note: string;
+  name: string;
+  source: string;
+}
+
+/** Sections of a note that cannot hold a fenced block. Anything else, or a kind not listed, might. */
+const PLAIN_SECTIONS = ['heading', 'paragraph', 'thematicBreak', 'yaml', 'table', 'html', 'text', 'element'];
+
+/**
+ * Whether a note might hold a strategy block, from the kinds of section Obsidian found in it (null while it has not read the
+ * note yet). A block in a list, a callout or a quote has no section of its own, only that of the list, callout or quote.
+ */
+export function mayHoldStrategy(sections: readonly string[] | null): boolean {
+  return sections === null || sections.some((type) => !PLAIN_SECTIONS.includes(type));
+}
+
+/** Notes read between pauses that let the window redraw. */
+export const NOTES_PER_PAUSE = 50;
+
+export interface VaultNotes<N> {
+  /** The kinds of section the note has, from what Obsidian already knows; null when it does not know yet. */
+  sections(note: N): readonly string[] | null;
+  read(note: N): Promise<string>;
+  /** Gives the window a moment to redraw. */
+  pause(): Promise<void>;
+}
+
+/** Every strategy block in the notes. Notes that cannot hold one are not read, and the reading pauses now and then so a large vault does not freeze the window. */
+export async function findStrategies<N extends { path: string; basename: string }>(notes: readonly N[], vault: VaultNotes<N>): Promise<FoundStrategy[]> {
+  const found: FoundStrategy[] = [];
+  let read = 0;
+  for (const note of notes) {
+    if (!mayHoldStrategy(vault.sections(note))) continue;
+    if (++read % NOTES_PER_PAUSE === 0) await vault.pause();
+    const text = await vault.read(note);
+    if (!text.includes('strategy')) continue;
+    extractBlocks(text).forEach((b, i, all) => found.push({ note: note.path, name: b.name ?? (all.length > 1 ? `${note.basename} ${i + 1}` : note.basename), source: b.source }));
+  }
+  return found;
 }

@@ -12,9 +12,13 @@ export interface SliderScale {
 
 /** How a run is redone with other parameter values, and how those values are written into the block. */
 export interface ParamsHook {
-  /** Values are keyed by parameter name, as fractions for percentages. Rejects with a plain message when the block does not run with them. */
-  rerun(values: Record<string, number>): Promise<RunOutput>;
-  /** Present only where the block can be edited. */
+  /**
+   * Values are keyed by parameter name, as fractions for percentages. `settled` is false while a slider is still being dragged.
+   * Rejects with a plain message when the block does not run with them. Resolves with null, having fetched nothing, when
+   * `settled` is false and the values need more price history than is loaded: that waits for the release.
+   */
+  rerun(values: Record<string, number>, settled: boolean): Promise<RunOutput | null>;
+  /** Present only where the block can be edited. Rejects with a message fit to show when nothing was written. */
   apply?: (values: Record<string, number>) => Promise<void>;
 }
 
@@ -109,10 +113,57 @@ export interface ParamBarInput {
   show(out: RunOutput, settled: boolean): void;
 }
 
+/** What the bar does with the answers to the runs it asks for. */
+export interface RequesterHandlers {
+  /** A run for these values is the one to show. */
+  shown(out: RunOutput, values: Record<string, number>, settled: boolean): void;
+  /** The latest drag position needs history that is not loaded; nothing was fetched, and the release will fetch it. */
+  waiting(): void;
+  /** A release is fetching the history a drag was waiting for. */
+  loading(): void;
+  failed(error: unknown, settled: boolean): void;
+}
+
+/**
+ * Asks the hook for runs as the sliders move. Only the latest request is answered: an older answer that arrives after a
+ * newer request was made is dropped, so of several releases only the last one is used.
+ */
+export function createRequester(hook: Pick<ParamsHook, 'rerun'>, on: RequesterHandlers): { request(values: Record<string, number>, settled: boolean): void; cancel(): void } {
+  let latest = 0;
+  let waiting = false;
+  return {
+    request(values, settled) {
+      const asked = { ...values };
+      const seq = ++latest;
+      if (settled && waiting) on.loading();
+      // A failure while drawing an answer is reported like one while asking, so it is never left unhandled.
+      hook
+        .rerun(asked, settled)
+        .then((out) => {
+          if (seq !== latest) return;
+          waiting = out === null;
+          if (out === null) on.waiting();
+          else on.shown(out, asked, settled);
+        })
+        .catch((e: unknown) => {
+          if (seq !== latest) return;
+          waiting = false;
+          on.failed(e, settled);
+        });
+    },
+    cancel() {
+      latest++;
+    },
+  };
+}
+
 let nextId = 0;
 
 /** An error's message as a sentence: messages in this plugin do not end with a full stop. */
 const sentence = (e: unknown) => `${(e instanceof Error ? e.message : String(e)).replace(/[.\s]+$/, '')}.`;
+
+const WAITING = 'This value needs more price history than is loaded. The result stays as it was, and the history loads when you let go of the slider.';
+const LOADING = 'Loading more price history…';
 
 /** The "Parameters" bar. The bar is built once and never redrawn, so the slider under a finger survives. Returns a cleanup function. */
 export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () => void {
@@ -156,8 +207,10 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
   problem.hidden = true;
   problem.setAttribute('aria-live', 'polite');
 
-  const say = (text: string | null) => {
+  /** What sits under the bar: a problem, or with `plain` a note that is not one. */
+  const say = (text: string | null, plain = false) => {
     problem.hidden = text === null;
+    problem.classList.toggle('bt-param-plain', plain);
     problem.textContent = text;
   };
   const showDifference = () => {
@@ -166,47 +219,41 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     diffText.textContent = text;
   };
 
-  let latest = 0;
-  let frame = 0;
   let last: RunOutput | null = null;
   let lastSettled = true;
-  const request = (settled: boolean) => {
-    const values = { ...wanted };
-    const seq = ++latest;
-    hook.rerun(values).then(
-      (out) => {
-        // An answer that arrives after a newer request was made is out of date.
-        if (seq !== latest) return;
-        say(null);
-        onScreen = values;
-        last = out;
-        lastSettled = settled;
-        showDifference();
-        input.show(out, settled);
-      },
-      (e: unknown) => {
-        if (seq !== latest) return;
-        say(`These values do not run. ${sentence(e)} The result below is still the last one that ran.`);
-        // A drag that ends on values that do not run leaves the last good result half drawn.
-        if (settled && last && !lastSettled) {
-          lastSettled = true;
-          input.show(last, true);
-        }
-      },
-    );
-  };
+  const requester = createRequester(hook, {
+    shown(out, values, settled) {
+      say(null);
+      onScreen = values;
+      last = out;
+      lastSettled = settled;
+      showDifference();
+      input.show(out, settled);
+    },
+    waiting: () => say(WAITING, true),
+    loading: () => say(LOADING, true),
+    failed(e, settled) {
+      say(`These values do not run. ${sentence(e)} The result below is still the last one that ran.`);
+      // A drag that ends on values that do not run leaves the last good result half drawn.
+      if (settled && last && !lastSettled) {
+        lastSettled = true;
+        input.show(last, true);
+      }
+    },
+  });
+  let frame = 0;
   const schedule = () => {
     if (!frame) {
       frame = window.requestAnimationFrame(() => {
         frame = 0;
-        request(false);
+        requester.request(wanted, false);
       });
     }
   };
   const settle = () => {
     window.cancelAnimationFrame(frame);
     frame = 0;
-    request(true);
+    requester.request(wanted, true);
   };
 
   for (const { p, slider, value } of rows) {
@@ -233,22 +280,21 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     settle();
     rows[0].slider.focus();
   });
-  write?.addEventListener('click', () => {
+  write?.addEventListener('click', async () => {
     const values = { ...onScreen };
     reset.disabled = write.disabled = true;
-    hook.apply!(values).then(
-      () => {
-        reset.disabled = write.disabled = false;
-      },
-      (e: unknown) => {
-        reset.disabled = write.disabled = false;
-        say(`Couldn't write the values to the block. ${sentence(e)}`);
-      },
-    );
+    try {
+      await hook.apply!(values);
+      say(null);
+    } catch (e) {
+      say(`Couldn't write the values to the block. ${sentence(e)}`);
+    } finally {
+      reset.disabled = write.disabled = false;
+    }
   });
 
   return () => {
     window.cancelAnimationFrame(frame);
-    latest++;
+    requester.cancel();
   };
 }

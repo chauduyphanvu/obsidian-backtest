@@ -4,7 +4,7 @@ import { runBacktest } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
 import { cashIndex, parseCompare, type Curve } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
-import { DASHBOARD_TEMPLATE } from './dashboard.ts';
+import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import type { DataDeps } from './data.ts';
 import { DAY, isoDate } from './dom.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
@@ -25,7 +25,7 @@ import { renderLuck } from './render-luck.ts';
 import { blockStateKey, renderErrors, renderFailure, renderLoading, renderResult, type Section } from './render.ts';
 import { renderSweep } from './render-sweep.ts';
 import { ResultCache, cacheKey, csvPaths, csvVersions, debounce } from './result-cache.ts';
-import { findBlock, setParamValues, setParamValuesInNote } from './rewrite.ts';
+import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
 import { Runner, lookbackBars, type RunOutput } from './runner.ts';
 import { SymbolLookup } from './symbols.ts';
 import { shutdownWorkers } from './worker-client.ts';
@@ -45,8 +45,6 @@ const KEPT_BLOCK_STATES = 500;
 const PROPERTY_DELAY = 1000;
 /** Strategies run side by side when today's orders are worked out. */
 const ORDERS_CONCURRENCY = 3;
-/** Notes read between pauses that let the window redraw. */
-const NOTES_PER_PAUSE = 50;
 
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 
@@ -155,7 +153,7 @@ export default class BacktestBlocks extends Plugin {
     this.addCommand({
       id: 'insert-dashboard',
       name: 'Insert strategy dashboard',
-      editorCallback: (editor) => editor.replaceSelection(DASHBOARD_TEMPLATE),
+      editorCallback: (editor) => place(editor, DASHBOARD_TEMPLATE),
     });
 
     this.ordersBadge = new OrdersBadge(
@@ -183,6 +181,11 @@ export default class BacktestBlocks extends Plugin {
     await this.saveData(this.settings);
     // Defaults are part of every result's key, but the freshness window is not.
     this.results = new ResultCache<RunOutput>(KEPT_RESULTS, this.settings.cacheHours * HOUR);
+  }
+
+  setOrdersBadge(on: boolean): void {
+    if (on) this.ordersBadge?.start();
+    else this.ordersBadge?.turnOff();
   }
 
   async clearPrices(): Promise<void> {
@@ -290,19 +293,8 @@ export default class BacktestBlocks extends Plugin {
     const stateKey = blockStateKey(ctx.sourcePath, found.block.name, found.index);
     const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
     if (!(file instanceof TFile)) return { stateKey };
-    const apply = async (values: Record<string, number>): Promise<void> => {
-      // Asked again now: the note may have moved the block since it was drawn.
-      const line = ctx.getSectionInfo(el)?.lineStart;
-      let written = false;
-      if (line !== undefined) {
-        await this.app.vault.process(file, (note) => {
-          const next = setParamValuesInNote(note, line, source, values);
-          written = next !== null;
-          return next ?? note;
-        });
-      }
-      if (!written) new Notice('The note has changed since this result was drawn, so nothing was written. Try again.');
-    };
+    // The block's line is asked for again now: the note may have moved it since it was drawn.
+    const apply = (values: Record<string, number>): Promise<void> => writeValuesInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, values);
     return { stateKey, apply };
   }
 
@@ -311,7 +303,12 @@ export default class BacktestBlocks extends Plugin {
     const runner = this.runner();
     const defaults = defaultsFrom(this.settings);
     const force = opts.force ?? false;
-    const retry = (refetch: boolean) => () => void this.renderStrategy(source, el, child, { ...opts, force: refetch });
+    // In the panel a failed first run is for the panel to show, but a retry has nobody above it: it draws its own failure.
+    const redraw = (refetch: boolean): void => {
+      this.renderStrategy(source, el, child, { ...opts, force: refetch }).catch(showFailure);
+    };
+    const showFailure = (e: unknown): void => renderFailure(el, e instanceof Error ? e.message : String(e), source, () => redraw(false));
+    const retry = (refetch: boolean) => () => redraw(refetch);
     try {
       const { spec, errors, warnings } = runner.parse(source);
       if (!spec) {
@@ -349,14 +346,16 @@ export default class BacktestBlocks extends Plugin {
             ]),
         ];
       };
-      // Other parameter values run on the prices already loaded unless they need more history than the block as written.
-      const rerun = async (values: Record<string, number>): Promise<RunOutput> => {
+      // Other parameter values run on the prices already loaded. Ones that need more history than the block as written fetch it
+      // only once the slider is released: a drag passes through many values, and each would start its own download.
+      const rerun = async (values: Record<string, number>, settled: boolean): Promise<RunOutput | null> => {
         const parsed = runner.parse(source, values);
         if (!parsed.spec) throw new Error(`Line ${parsed.errors[0].line}: ${parsed.errors[0].message}`);
         if (lookbackBars(parsed.spec) <= lookbackBars(spec)) return { ...out, spec: parsed.spec, backtest: runBacktest(parsed.spec, out.data) };
-        return runner.run(parsed.spec);
+        return settled ? runner.run(parsed.spec) : null;
       };
-      const stateKey = opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined);
+      // The panel keeps its own view of a block, apart from the note's folded or open state.
+      const stateKey = opts.panel ? undefined : (opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined));
       this.disposers.set(
         child,
         renderResult(el, {
@@ -376,7 +375,7 @@ export default class BacktestBlocks extends Plugin {
       }
     } catch (e) {
       if (opts.panel) throw e;
-      renderFailure(el, e instanceof Error ? e.message : String(e), source, retry(false));
+      showFailure(e);
     }
   }
 
@@ -406,18 +405,19 @@ export default class BacktestBlocks extends Plugin {
     }
   }
 
-  /** The host of a `backtests` block. `find` marks the start of a round: prices fetched since then are fresh for the strategies after it. */
+  /**
+   * The host of a `backtests` block. `find` marks the start of a round: results are dropped once there when it is forced, and
+   * prices fetched since then are fresh for the strategies after it.
+   */
   private dashboardHost(): DashboardHost {
     let started = Date.now();
     return {
-      find: () => {
+      find: (force) => {
         started = Date.now();
+        if (force) this.results.clear();
         return this.findStrategies();
       },
-      run: (source, force) => {
-        if (force) this.results.clear();
-        return this.runSource(source, force ? { runner: this.runner(Date.now() - started) } : {});
-      },
+      run: (source, force) => this.runSource(source, force ? { runner: this.runner(Date.now() - started) } : {}),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       now: () => Date.now(),
     };
@@ -527,20 +527,20 @@ export default class BacktestBlocks extends Plugin {
     }
   }
 
-  /** Every strategy block in the vault. Pauses now and then so a large vault does not freeze the window. */
-  private async findStrategies(): Promise<{ note: string; name: string; source: string }[]> {
-    const found: { note: string; name: string; source: string }[] = [];
-    let read = 0;
-    for (const file of this.app.vault.getMarkdownFiles()) {
-      if (++read % NOTES_PER_PAUSE === 0) await idle();
-      const text = await this.app.vault.cachedRead(file);
-      if (!text.includes('strategy')) continue;
-      extractBlocks(text).forEach((b, i, all) => found.push({ note: file.path, name: b.name ?? (all.length > 1 ? `${file.basename} ${i + 1}` : file.basename), source: b.source }));
-    }
-    return found;
+  /** Every strategy block in the vault. Notes Obsidian has already read and found no code in are not read again here. */
+  private findStrategies(): Promise<FoundStrategy[]> {
+    const { vault, metadataCache } = this.app;
+    return findInNotes(vault.getMarkdownFiles(), {
+      sections: (file) => {
+        const cache = metadataCache.getFileCache(file);
+        return cache ? (cache.sections ?? []).map((section) => section.type) : null;
+      },
+      read: (file) => vault.cachedRead(file),
+      pause: idle,
+    });
   }
 
-  /** Every strategy in the vault, run and read as the next open's orders. `force` refetches every price once. */
+  /** Every strategy in the vault, run and read as today's orders. `force` refetches every price once. */
   private async scanOrders(force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]> {
     const started = Date.now();
     // Results are dropped so every strategy runs again. A price fetched since the scan began is fresh for the strategies

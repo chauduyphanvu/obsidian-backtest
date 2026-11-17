@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { parseSpec } from '../src/dsl.ts';
 import { blockTickers } from '../src/symbols.ts';
 import { analyzeBlock, blockDiagnostics, closesFence, fenceOf, findBlocks, fixForDiagnostic, placeDiagnostic, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
 
@@ -362,4 +363,31 @@ test('a warning from the parser gets no fix', () => {
   const [d] = blockDiagnostics(lines);
   assert.equal(d.severity, 'warning');
   assert.equal(fixForDiagnostic(lines, d, {}, null), null);
+});
+
+test('a CSV file referred to by its bare name is not looked up, underlined or offered a replacement', () => {
+  const lines = ['universe: SPY, csv:Data/myfund.csv', 'buy when close of myfund > sma(20) of myfund'];
+  assert.deepEqual(parseSpec(lines.join('\n')).errors, []);
+  const asked: string[] = [];
+  const lookup = {
+    peek: (ticker: string) => (asked.push(ticker), 'unknown' as const),
+    peekSearch: (query: string) => (asked.push(query), [{ ticker: 'MYFUND.L', name: '', detail: '', source: 'yahoo' as const }]),
+  };
+  const notes = unknownTickers(blockTickers(lines), lookup);
+  assert.deepEqual(notes.map((d) => d.ticker?.ticker), ['SPY']);
+  assert.ok(!asked.includes('MYFUND'));
+  for (const d of notes) assert.equal(fixForDiagnostic(lines, d, {}, lookup), null);
+});
+
+test('fixForDiagnostic: a ticker named on a `for` line changes with the one in the universe, and a clash elsewhere stops the fix', () => {
+  const lookup = known({ 'yahoo|SPYY': 'unknown', 'yahoo|QQQ': 'known' }, { SPYY: ['SPY'] });
+  const lines = ['universe: SPYY, QQQ', 'buy when close > sma(50)', 'for SPYY:', '  stop loss: 5%'];
+  const [note] = unknownTickers(blockTickers(lines), lookup);
+  const fix = fixForDiagnostic(lines, note, {}, lookup)!;
+  assert.deepEqual([fix.line, fix.from, fix.to, fix.insert, fix.label], [1, 10, 14, 'SPY', 'Change to SPY (2 places)']);
+  assert.deepEqual(fix.also, [{ line: 3, from: 4, to: 8, insert: 'SPY' }]);
+
+  const clash = ['universe: SPYY, QQQ', 'buy when close of csv:Data/spy.csv > 1'];
+  const [again] = unknownTickers(blockTickers(clash), lookup);
+  assert.equal(fixForDiagnostic(clash, again, {}, lookup), null);
 });

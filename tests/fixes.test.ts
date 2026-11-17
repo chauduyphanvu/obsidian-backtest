@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec, type Diagnostic } from '../src/dsl.ts';
-import { closest, editDistance, fixFor, hintFor, tickerFix, type Fix } from '../src/fixes.ts';
+import { closest, editDistance, fixChanges, fixEdits, fixFor, hintFor, tickerFix, type Fix } from '../src/fixes.ts';
 
 const errorsOf = (lines: string[]) => parseSpec(lines.join('\n')).errors;
 
@@ -251,4 +251,75 @@ test('tickerFix: the nearest known ticker, with a source prefix kept', () => {
   // Yahoo spells some tickers with characters the distance has to treat as letters.
   const odd = ['universe: BRK.B', RULE];
   assert.equal(apply(odd, tickerFix(odd, { line: 1, from: 10, to: 15 }, ['BRK-B'])!)[0], 'universe: BRK-B');
+});
+
+/** The block after every edit of a fix, in the coordinates of the block before it. */
+function applyAll(lines: string[], f: Fix): string[] {
+  const out = [...lines];
+  const edits = fixEdits(f).sort((a, b) => b.line - a.line || b.from - a.from);
+  for (const e of edits) out[e.line - 1] = out[e.line - 1].slice(0, e.from) + e.insert + out[e.line - 1].slice(e.to);
+  return out;
+}
+
+const problems = (lines: string[]) => {
+  const { errors, warnings } = parseSpec(lines.join('\n'));
+  return [...errors, ...warnings].map((d) => `${d.line}: ${d.message}`);
+};
+
+test('tickerFix: the same ticker named on `for` lines and after `of` changes with it, so the block stays consistent', () => {
+  const lines = ['universe: SPYY, QQQ', 'buy when close > sma(50)', 'for SPYY:', '  stop loss: 5%'];
+  assert.deepEqual(problems(lines), []);
+  const f = tickerFix(lines, { line: 1, from: 10, to: 14 }, ['SPY', 'GLD'])!;
+  assert.ok(f);
+  assert.equal(f.label, 'Change to SPY (2 places)');
+  assert.equal(f.hint, 'Did you mean SPY?');
+  assert.deepEqual(applyAll(lines, f), ['universe: SPY, QQQ', 'buy when close > sma(50)', 'for SPY:', '  stop loss: 5%']);
+  assert.deepEqual(problems(applyAll(lines, f)), []);
+
+  const of = ['universe: SPYY, QQQ', 'buy when close of SPYY > sma(50) of spyy', 'for spyy:', '  stop loss: 5%'];
+  const g = tickerFix(of, { line: 1, from: 10, to: 14 }, ['SPY'])!;
+  assert.deepEqual(applyAll(of, g), ['universe: SPY, QQQ', 'buy when close of SPY > sma(50) of SPY', 'for SPY:', '  stop loss: 5%']);
+  assert.deepEqual(problems(applyAll(of, g)), []);
+  assert.equal(g.label, 'Change to SPY (4 places)');
+});
+
+test('tickerFix: a prefix is kept where it is written, and a prefix of another source is another ticker', () => {
+  const lines = ['universe: binance:BTCUSDTT', 'buy when close > sma(20)', 'for BTCUSDTT:', '  stop loss: 5%', 'sell when close of yahoo:BTCUSDTT < sma(20)'];
+  const f = tickerFix(lines, { line: 1, from: 10, to: 26 }, ['BTCUSDT'])!;
+  const after = applyAll(lines, f);
+  assert.equal(after[0], 'universe: binance:BTCUSDT');
+  assert.equal(after[2], 'for BTCUSDT:');
+  assert.equal(after[4], 'sell when close of yahoo:BTCUSDTT < sma(20)');
+  assert.deepEqual(problems(after), []);
+});
+
+test('tickerFix: a fix that gives the block a new problem anywhere in it is not offered', () => {
+  // SPY would clash with the file named spy.csv, which a rule on another line reads.
+  const lines = ['universe: SPYY, QQQ', 'buy when close of csv:Data/spy.csv > 1'];
+  assert.deepEqual(problems(lines), []);
+  assert.equal(tickerFix(lines, { line: 1, from: 10, to: 14 }, ['SPY']), null);
+  // The same edit is fine when the block has no such file.
+  assert.ok(tickerFix(['universe: SPYY, QQQ', 'buy when close > 1'], { line: 1, from: 10, to: 14 }, ['SPY']));
+});
+
+test('tickerFix: problems the block already had do not stop a fix, even when they name the ticker', () => {
+  const lines = ['universe: SPYY, QQQ', 'colour: red', 'buy when close > sma(50)', 'for SPYY:', '  stop loss: 5%'];
+  assert.ok(problems(lines).length > 0);
+  const f = tickerFix(lines, { line: 1, from: 10, to: 14 }, ['SPY'])!;
+  assert.ok(f);
+  assert.deepEqual(problems(applyAll(lines, f)), problems(lines));
+});
+
+test('fixChanges: every edit of a fix as a position in the note, none when a line is missing', () => {
+  const lines = ['universe: SPYY, QQQ', 'buy when close > sma(50)', 'for SPYY:', '  stop loss: 5%'];
+  const f = tickerFix(lines, { line: 1, from: 10, to: 14 }, ['SPY'])!;
+  // The block starts at line 5 of a note whose lines are 30 characters apart.
+  const start = (line: number) => (line <= lines.length ? (4 + line - 1) * 30 : null);
+  assert.deepEqual(fixChanges(f, start), [
+    { from: 120 + 10, to: 120 + 14, insert: 'SPY' },
+    { from: 180 + 4, to: 180 + 8, insert: 'SPY' },
+  ]);
+  assert.equal(fixChanges(f, (line) => (line === 1 ? 0 : null)), null);
+  const one = fixFor(['universe: SPY', 'buy when close > smaa(200)'], parseSpec('universe: SPY\nbuy when close > smaa(200)').errors[0])!;
+  assert.deepEqual(fixChanges(one, (line) => line * 100), [{ from: 200 + 17, to: 200 + 21, insert: 'sma' }]);
 });

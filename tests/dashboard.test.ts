@@ -10,7 +10,9 @@ import {
   failedRow,
   failureText,
   figures,
+  findStrategies,
   inFolder,
+  mayHoldStrategy,
   initialSort,
   parseDashboard,
   rowFrom,
@@ -431,9 +433,9 @@ test('a round that is dropped while the vault is searched does not list anything
   const { host } = fakeHost([found('A')]);
   const slow: DashboardHost = {
     ...host,
-    find: async () => {
+    find: async (force) => {
       live = false;
-      return host.find();
+      return host.find(force);
     },
   };
   const r = recorder(() => live);
@@ -457,4 +459,87 @@ test('the line under the table counts the strategies and says when the figures w
 test('while it runs the line says how far it has got', () => {
   assert.equal(summaryText([done('A', 0.1), running('B'), running('C'), failed('D')], null), 'Running 2 of 4\u2026');
   assert.equal(summaryText([running('A')], null), 'Running 0 of 1\u2026');
+});
+
+test('a round tells the host once, when it starts, whether it is forced', async () => {
+  for (const force of [true, false]) {
+    const forced: boolean[] = [];
+    const { host } = fakeHost([found('A'), found('B'), found('C')]);
+    const counting: DashboardHost = { ...host, find: async (f) => (forced.push(f), [found('A'), found('B'), found('C')]) };
+    await runRound(counting, { folder: null, sort: 'name' }, force, recorder().round);
+    assert.deepEqual(forced, [force]);
+  }
+});
+
+// ---- finding the strategies in the vault
+
+const note = (path: string) => ({ path, basename: path.replace(/^.*\//, '').replace(/\.md$/, '') });
+const STRATEGY = '```strategy\nuniverse: SPY\nbuy when true\n```';
+
+function vault(files: { path: string; types: string[] | null; text: string }[]) {
+  const reads: string[] = [];
+  let pauses = 0;
+  const notes = files.map((f) => note(f.path));
+  const host = {
+    sections: (n: { path: string }) => files.find((f) => f.path === n.path)!.types,
+    read: async (n: { path: string }) => {
+      reads.push(n.path);
+      return files.find((f) => f.path === n.path)!.text;
+    },
+    pause: async () => void pauses++,
+  };
+  return { notes, host, reads, pauses: () => pauses };
+}
+
+test('a note whose metadata is ready and has no code in it is not read', async () => {
+  const v = vault([
+    { path: 'plain.md', types: ['heading', 'paragraph', 'table'], text: 'strategy in words' },
+    { path: 'empty.md', types: [], text: '' },
+    { path: 'has.md', types: ['heading', 'code'], text: STRATEGY },
+  ]);
+  const list = await findStrategies(v.notes, v.host);
+  assert.deepEqual(v.reads, ['has.md']);
+  assert.deepEqual(list.map((f) => [f.note, f.name]), [['has.md', 'has']]);
+});
+
+test('a note whose metadata is not ready yet is read, and so is one with a list, callout or quote, where a block can sit', async () => {
+  const quoted = '> ```strategy\n> universe: SPY\n> buy when true\n> ```';
+  const v = vault([
+    { path: 'unknown.md', types: null, text: STRATEGY },
+    { path: 'callout.md', types: ['callout'], text: quoted },
+    { path: 'quote.md', types: ['blockquote'], text: quoted },
+    { path: 'list.md', types: ['list'], text: `- item\n  ${STRATEGY.split('\n').join('\n  ')}` },
+    { path: 'new-kind.md', types: ['somethingNew'], text: STRATEGY },
+  ]);
+  const list = await findStrategies(v.notes, v.host);
+  assert.equal(v.reads.length, 5);
+  assert.deepEqual(list.map((f) => f.note), ['unknown.md', 'callout.md', 'quote.md', 'list.md', 'new-kind.md']);
+});
+
+test('only the notes that are read count towards the pauses that let the window redraw', async () => {
+  const files = Array.from({ length: 130 }, (_, i) => ({ path: `n${i}.md`, types: i % 2 ? ['code'] : ['paragraph'], text: STRATEGY }));
+  const v = vault(files);
+  await findStrategies(v.notes, v.host);
+  assert.equal(v.reads.length, 65);
+  assert.equal(v.pauses(), 1);
+  const many = vault(Array.from({ length: 120 }, (_, i) => ({ path: `m${i}.md`, types: ['code'], text: STRATEGY })));
+  await findStrategies(many.notes, many.host);
+  assert.equal(many.pauses(), 2);
+});
+
+test('a note read without a strategy in it gives nothing, and blocks are named by their note when they have no name', async () => {
+  const two = `${STRATEGY}\n\n${STRATEGY.replace('universe: SPY', 'name: Second\nuniverse: SPY')}`;
+  const v = vault([
+    { path: 'Trading/a.md', types: ['code'], text: 'no fence here, only the word strategy' },
+    { path: 'Trading/b.md', types: ['code'], text: two },
+  ]);
+  const list = await findStrategies(v.notes, v.host);
+  assert.deepEqual(list.map((f) => [f.note, f.name]), [['Trading/b.md', 'b 1'], ['Trading/b.md', 'Second']]);
+});
+
+test('mayHoldStrategy: unknown metadata and any kind of section that can hold a fence say yes', () => {
+  assert.equal(mayHoldStrategy(null), true);
+  assert.equal(mayHoldStrategy([]), false);
+  assert.equal(mayHoldStrategy(['yaml', 'heading', 'paragraph', 'table', 'thematicBreak', 'html']), false);
+  for (const kind of ['code', 'callout', 'blockquote', 'list', 'footnoteDefinition', 'somethingNew']) assert.equal(mayHoldStrategy(['paragraph', kind]), true, kind);
 });

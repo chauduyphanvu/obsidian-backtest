@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { isoDate } from '../src/dom.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { blockStateKey, compactFacts, fillSentence } from '../src/render.ts';
+import { blockStateKey, compactFacts, fillSentence, summary } from '../src/render.ts';
 import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY, T0 } from './helpers.ts';
@@ -130,4 +130,44 @@ test('with fill: close an order still waiting, from a ranking made on a day a ti
   const CRY = bars(cryT.map((t) => (t < to ? 50 : 150)), { times: cryT });
   const facts = compactFacts(run('universe: STK, CRY\ncapital: 1000\nfill: close\nrebalance: monthly\nhold: top 1 by close', { STK, CRY }));
   assert.equal(facts.order, 'buys CRY and sells STK at the next close');
+});
+
+// ---- the line under the title
+
+const summaryOf = (src: string, overrides: Record<string, number> = {}) => {
+  const { spec, errors } = parseSpec(src, { overrides });
+  assert.deepEqual(errors, [], src);
+  return summary(spec!, src);
+};
+
+test('a stop that is a parameter is said once, as a stop, and a percentage is written as the block writes it', () => {
+  const src = 'universe: SPY\ncosts: 5 bps\nfast = 50\nslow = 200\nstop = 12%\nbuy when sma(fast) > sma(slow)\nstop loss: stop';
+  assert.equal(summaryOf(src), 'SPY, 5 bps costs, 12% stop, fast 50, slow 200');
+  assert.equal(summaryOf(src, { stop: 0.125 }), 'SPY, 5 bps costs, 12.5% stop, fast 50, slow 200');
+});
+
+test('a stop written as a number is not rounded to a whole percent', () => {
+  assert.equal(summaryOf('universe: SPY\nbuy when close > sma(50)\nstop loss: 12.5%'), 'SPY, no costs, 12.5% stop');
+  assert.equal(summaryOf('universe: SPY\nbuy when close > sma(50)\nstop loss: 10%\ntrailing stop: 15%\ntake profit: 2 atr(14)'), 'SPY, no costs, 10% stop, 15% trailing stop, 2 ATR target');
+});
+
+test('a percentage parameter that is not a stop is listed without a needless decimal', () => {
+  const src = 'universe: SPY\nband = 3%\nbuy when roc(10) > band';
+  assert.equal(summaryOf(src), 'SPY, no costs, band 3%');
+  assert.equal(summaryOf('universe: SPY\nband = 2.5%\nbuy when roc(10) > band'), 'SPY, no costs, band 2.5%');
+  assert.equal(summaryOf('universe: SPY\nx = 0.1\nbuy when close > x'), 'SPY, no costs, x 0.1');
+});
+
+test('a parameter that is a stop is kept in the list when the stops are not spelt out', () => {
+  const src = 'universe: SPY, TLT\nstop = 12%\nbuy when close > sma(50)\nstop loss: stop\nfor TLT:\n  stop loss: 5%';
+  assert.match(summaryOf(src), /stops set per ticker, stop 12%$/);
+});
+
+test('a stop that names a parameter in a comment or another setting is not taken for a stop parameter', () => {
+  const src = 'universe: SPY\nstop = 12%\nbuy when roc(10) > stop # stop loss: stop\nstop loss: 5%';
+  assert.equal(summaryOf(src), 'SPY, no costs, 5% stop, stop 12%');
+});
+
+test('a parameter used as the period of a stop is still listed', () => {
+  assert.equal(summaryOf('universe: SPY\nn = 14\nbuy when close > sma(50)\nstop loss: 2 atr(n)'), 'SPY, no costs, 2 ATR stop, n 14');
 });

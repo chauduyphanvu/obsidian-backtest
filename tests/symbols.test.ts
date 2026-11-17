@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { parseSpec } from '../src/dsl.ts';
 import { SymbolLookup, blockSource, blockTickers, unknownTickerMessage, writtenAs, type LookupDeps, type SymbolHit } from '../src/symbols.ts';
 
 // Trimmed from real answers of query2.finance.yahoo.com/v1/finance/search?q=...&quotesCount=8&newsCount=0
@@ -402,4 +403,30 @@ test('blockTickers: tickers on the lines that take them, with their source and c
 test('the message for a ticker the source does not know', () => {
   assert.equal(unknownTickerMessage('SPYY', 'yahoo'), 'Yahoo has no ticker called SPYY.');
   assert.equal(unknownTickerMessage('BTCUSDTT', 'binance'), 'Binance has no market called BTCUSDTT.');
+});
+
+test('blockTickers: a CSV file the block names is never a ticker, however a rule refers to it', () => {
+  const cases: string[][] = [
+    ['universe: SPY, csv:Data/myfund.csv', 'buy when close of myfund > sma(20) of myfund'],
+    // The parser matches names whatever the capitals, and takes the name from the file name without its ending.
+    ['universe: SPY, csv:Data/myfund.csv', 'buy when close of MyFund > sma(20) of MYFUND'],
+    ['universe: SPY, csv:Data/MyFund.CSV', 'buy when close of myfund > 1'],
+    ['universe: SPY, csv:myfund.csv', 'buy when close of myfund > 1'],
+    // A file first named after `of` is read by name afterwards.
+    ['universe: SPY', 'buy when close of csv:Data/gold.csv > 1 and close of gold > 1'],
+    ['universe: SPY', 'benchmark: csv:Data/gold.csv', 'buy when close > 1', 'sell when close of gold < 1'],
+    ['universe: csv:Data/a.csv, csv:Data/b.csv', 'buy when close of b > close of a', 'for a:', '  stop loss: 5%'],
+  ];
+  for (const lines of cases) {
+    const { spec } = parseSpec(lines.join('\n'));
+    const files = new Set((spec ? [...spec.universe, ...spec.extras] : []).filter((a) => a.source === 'csv').map((a) => a.name.toLowerCase()));
+    const sent = blockTickers(lines).map((r) => r.ticker.toLowerCase());
+    assert.deepEqual(sent.filter((t) => t !== 'spy'), [], lines.join(' / '));
+    if (spec) for (const name of files) assert.ok(!sent.includes(name));
+  }
+  // A name no file has is still a ticker, and so is one with its own prefix.
+  assert.deepEqual(
+    blockTickers(['universe: SPY, csv:Data/myfund.csv', 'buy when close of myfunds > 1 and close of binance:myfund > 1']).map((r) => `${r.source}:${r.ticker}`),
+    ['yahoo:SPY', 'yahoo:MYFUNDS', 'binance:MYFUND'],
+  );
 });
