@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { complete, tickers } from '../src/complete.ts';
+import { complete, hitCompletions, localTickers, tickerPosition, tickers } from '../src/complete.ts';
+import { shortOf } from '../src/docs.ts';
+import { SETTINGS } from '../src/dsl.ts';
 import { lineKind, tokenize, tokenizeBlock } from '../src/highlight.ts';
 
 const BLOCK = `name: Three sleeves
@@ -165,4 +167,88 @@ test('completions: hints for the new settings, and only stops inside a for secti
   assert.deepEqual(labels(['for TLT:'], 's'), ['sell when', 'stop loss']);
   assert.equal(labels(['for TLT:'], 'c'), null);
   assert.deepEqual(labels(['for TLT:', 'for all:'], 'c'), ['capital', 'costs', 'cash rate']);
+});
+
+test('completion descriptions come from the help table', () => {
+  for (const s of SETTINGS) {
+    const item = complete(BLOCK, [], s.split(' ')[0])?.items.find((i) => i.label === s);
+    assert.equal(item?.detail, shortOf(s), s);
+  }
+  const fn = (name: string, typed = name.slice(0, 3)) => complete(BLOCK, [], `buy when ${typed}`)!.items.find((i) => i.label === name)!;
+  assert.equal(fn('rsi').detail, 'rsi(n = 14) · relative strength index, 0 to 100');
+  assert.equal(fn('macd_signal').detail, 'macd_signal(fast = 12, slow = 26, signal = 9) · average of the macd line');
+  assert.equal(fn('close').detail, shortOf('close'));
+  assert.equal(fn('crosses above').detail, shortOf('crosses above'));
+  assert.equal(fn('of', 'o').detail, shortOf('of'));
+  assert.equal(complete(BLOCK, [], 'buy when month_s')!.items[0].detail, shortOf('month_start'));
+  assert.equal(complete(BLOCK, [], 'sell when ba')!.items[0].detail, shortOf('bars held'));
+  assert.equal(complete(BLOCK, [], 'rebalance: q')!.items[0].detail, shortOf('rebalance=quarterly'));
+  assert.equal(complete(BLOCK, [], 'interval: 2')!.items[0].detail, shortOf('interval=2h'));
+  assert.equal(complete(BLOCK, [], 'for a')!.items[0].detail, shortOf('for all'));
+  assert.equal(complete(BLOCK, [], 'fo')!.items.find((i) => i.label === 'for')!.detail, shortOf('for'));
+  const inSection = complete(BLOCK, ['for TLT:'], 's')!.items.find((i) => i.label === 'stop loss')!;
+  assert.equal(inSection.detail, `${shortOf('stop loss')}, for TLT only`);
+});
+
+test('fill: the setting and its two values complete once the language has it', () => {
+  if (!SETTINGS.includes('fill')) SETTINGS.push('fill');
+  assert.deepEqual(labels([], 'fi'), ['fill']);
+  assert.equal(complete(BLOCK, [], 'fi')!.items[0].detail, shortOf('fill'));
+  assert.deepEqual(labels([], 'fill: '), ['next open', 'close']);
+  assert.deepEqual(labels([], 'fill: n'), ['next open']);
+  assert.deepEqual(labels([], 'fill: next o'), ['next open']);
+  assert.deepEqual(labels([], 'fill: c'), ['close']);
+  assert.equal(labels([], 'fill: close'), null);
+  assert.equal(labels([], 'fill: next open'), null);
+  const r = complete(BLOCK, [], 'fill: next o')!;
+  assert.deepEqual([r.from, r.items[0].insert, r.items[0].detail], [6, 'next open', shortOf('fill=next open')]);
+});
+
+test('a ticker position: the word being typed on a universe, symbol, benchmark or cash rate line', () => {
+  assert.deepEqual(tickerPosition('universe: SP'), { from: 10, word: 'SP' });
+  assert.deepEqual(tickerPosition('universe: SPY 60%, TL'), { from: 19, word: 'TL' });
+  assert.deepEqual(tickerPosition('universe: SPY 60%, '), { from: 19, word: '' });
+  assert.deepEqual(tickerPosition('symbol: ^GS'), { from: 8, word: '^GS' });
+  assert.deepEqual(tickerPosition('benchmark: binance:BT'), { from: 11, word: 'binance:BT' });
+  assert.deepEqual(tickerPosition('  cash rate: ^IR'), { from: 13, word: '^IR' });
+  assert.deepEqual(tickerPosition('universe: csv:Data/go'), { from: 10, word: 'csv:Data/go' });
+  assert.deepEqual(tickerPosition('universe: BRK-B'), { from: 10, word: 'BRK-B' });
+  assert.deepEqual(tickerPosition('universe: 7203.T'), { from: 10, word: '7203.T' });
+  // Weights are left alone: only the ticker word is completed.
+  assert.equal(tickerPosition('universe: SPY 6'), null);
+  assert.equal(tickerPosition('universe: SPY '), null);
+  assert.equal(tickerPosition('universe: SPY 60%'), null);
+  assert.equal(tickerPosition('universe: SPY 60%, TLT 4'), null);
+  assert.equal(tickerPosition('cash rate: 4'), null);
+  assert.equal(tickerPosition('cash rate: 4%'), null);
+  assert.equal(tickerPosition('universe: SPY # TL'), null);
+  assert.equal(tickerPosition('name: SP'), null);
+  assert.equal(tickerPosition('buy when close of SP'), null);
+  assert.equal(tickerPosition('interval: 1'), null);
+});
+
+test('local ticker offers: the universe’s own tickers, or the vault’s CSV files after csv:', () => {
+  const block = ['universe: SPY, binance:BTCUSDT, csv:Data/gold.csv', 'benchmark: '];
+  const pos = (word: string) => ({ from: 11, word });
+  assert.deepEqual(localTickers(block, pos(''), [], []).map((c) => c.insert), ['SPY', 'binance:BTCUSDT', 'csv:Data/gold.csv']);
+  assert.deepEqual(localTickers(block, pos('b'), [], []).map((c) => c.insert), ['binance:BTCUSDT']);
+  assert.deepEqual(localTickers(block, pos('s'), ['SPY'], []).map((c) => c.insert), []);
+  const files = ['Data/gold.csv', 'Data/old prices.csv', 'Data/a,b.csv', 'Research/Gold history.csv', 'Data/silver.csv', 'gold2.csv'];
+  assert.deepEqual(localTickers(block, pos('csv:'), [], files).map((c) => c.insert), ['csv:gold2.csv', 'csv:Data/gold.csv', 'csv:Data/silver.csv']);
+  assert.deepEqual(localTickers(block, pos('csv:go'), [], files).map((c) => c.insert), ['csv:gold2.csv', 'csv:Data/gold.csv']);
+  assert.deepEqual(localTickers(block, pos('CSV:DATA/G'), [], files).map((c) => c.insert), ['csv:Data/gold.csv']);
+  assert.deepEqual(localTickers(block, pos('csv:'), [], []), []);
+});
+
+test('hits become completions with the name and exchange as the detail, and repeat nothing already offered', () => {
+  const own = [{ label: 'SPY', insert: 'SPY', detail: 'in this block' }];
+  const hits = [
+    { hit: { ticker: 'SPY', name: 'SPDR', detail: 'NYSEArca · ETF', source: 'yahoo' as const }, written: 'SPY' },
+    { hit: { ticker: 'SPYM', name: 'SPDR Portfolio S&P 500', detail: 'NYSEArca · ETF', source: 'yahoo' as const }, written: 'SPYM' },
+    { hit: { ticker: 'BTCUSDT', name: 'BTC / USDT', detail: 'Binance', source: 'binance' as const }, written: 'binance:BTCUSDT' },
+  ];
+  assert.deepEqual(hitCompletions(hits, own), [
+    { label: 'SPYM', insert: 'SPYM', detail: 'SPDR Portfolio S&P 500 · NYSEArca · ETF', hit: true },
+    { label: 'binance:BTCUSDT', insert: 'binance:BTCUSDT', detail: 'BTC / USDT · Binance', hit: true },
+  ]);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyzeBlock, blockDiagnostics, closesFence, fenceOf, findBlocks, placeDiagnostic, type BlockDiagnostic } from '../src/diagnostics.ts';
+import { analyzeBlock, blockDiagnostics, closesFence, fenceOf, findBlocks, fixForDiagnostic, placeDiagnostic, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
 
 /** Where a diagnostic points: line, columns, severity and the text under it. */
 const at = (lines: string[], d: BlockDiagnostic) => [d.line, d.from, d.to, d.severity, lines[d.line].slice(d.from, d.to)];
@@ -291,4 +291,66 @@ test('closesFence needs only fence characters, at least as many as the opening',
   assert.ok(!closesFence('~~~', '```'));
   assert.ok(!closesFence('```strategy', '```'));
   assert.ok(!closesFence('``` x', '```'));
+});
+
+/** A lookup that knows only what it is told, the way the editor reads it while drawing. */
+function known(verdicts: Record<string, 'known' | 'unknown'>, found: Record<string, string[]> = {}) {
+  return {
+    peek: (ticker: string, source: string) => verdicts[`${source}|${ticker.toUpperCase()}`] ?? null,
+    peekSearch: (query: string) =>
+      (found[query.toUpperCase()] ?? []).map((t) => ({ ticker: t, name: '', detail: '', source: 'yahoo' as const })),
+  };
+}
+
+test('a problem keeps the parser’s own diagnostic, so a fix can be worked out from it', () => {
+  const lines = ['universe: SPY', 'buy when close > smaa(200)'];
+  const [d] = blockDiagnostics(lines);
+  assert.equal(d.origin?.line, 2);
+  assert.match(d.origin!.message, /^Unknown name "smaa"/);
+  const fix = fixForDiagnostic(lines, d, {}, null);
+  assert.deepEqual([fix?.line, fix?.from, fix?.to, fix?.insert], [2, 17, 21, 'sma']);
+});
+
+test('unknownTickers: a note for each ticker the lookup knows its source does not have', () => {
+  const lines = ['universe: SPYY, TLT, binance:BTCUSDTT, csv:Data/x.csv', 'benchmark: QQQ', 'buy when close of ^VXI > 1'];
+  const lookup = known({ 'yahoo|SPYY': 'unknown', 'yahoo|TLT': 'known', 'binance|BTCUSDTT': 'unknown', 'yahoo|^VXI': 'unknown' });
+  const notes = unknownTickers(lines, {}, lookup);
+  assert.deepEqual(
+    notes.map((d) => [d.line, lines[d.line].slice(d.from, d.to), d.severity, d.message]),
+    [
+      [0, 'SPYY', 'warning', 'Yahoo has no ticker called SPYY.'],
+      [0, 'binance:BTCUSDTT', 'warning', 'Binance has no market called BTCUSDTT.'],
+      [2, '^VXI', 'warning', 'Yahoo has no ticker called ^VXI.'],
+    ],
+  );
+  // Not yet asked about (QQQ) and not known (unsure) give nothing, and a ticker being typed can be left out.
+  assert.deepEqual(unknownTickers(lines, {}, lookup, (r) => r.ticker === 'SPYY').map((d) => d.ticker!.ticker), ['BTCUSDTT', '^VXI']);
+  assert.deepEqual(unknownTickers(lines, {}, known({})), []);
+  // Where plain tickers come from decides which source is asked.
+  const binance = unknownTickers(['data: binance', 'universe: ABCUSDT'], {}, known({ 'binance|ABCUSDT': 'unknown' }));
+  assert.equal(binance[0].message, 'Binance has no market called ABCUSDT.');
+});
+
+test('fixForDiagnostic: an unknown ticker is changed to a known one, the block’s own first', () => {
+  const lines = ['universe: SPYY, TLT', 'buy when close of TLTT > 1'];
+  const lookup = known({ 'yahoo|SPYY': 'unknown', 'yahoo|TLT': 'known', 'yahoo|TLTT': 'unknown', 'yahoo|SPY': 'known' }, { SPYY: ['SPY', 'SPYY.DE'], TLTT: ['TLT'] });
+  const [first, second] = unknownTickers(lines, {}, lookup);
+  const a = fixForDiagnostic(lines, first, {}, lookup)!;
+  assert.deepEqual([a.line, a.from, a.to, a.insert, a.label], [1, 10, 14, 'SPY', 'Change to SPY']);
+  const b = fixForDiagnostic(lines, second, {}, lookup)!;
+  assert.deepEqual([b.line, b.from, b.to, b.insert], [2, 18, 22, 'TLT']);
+  // The block's own TLT is preferred, and the same word from a search is not needed.
+  assert.equal(fixForDiagnostic(lines, second, {}, known({ 'yahoo|TLT': 'known', 'yahoo|TLTT': 'unknown' }))!.insert, 'TLT');
+  // Nothing near enough, or nothing found: no fix, and no fix without a lookup.
+  assert.equal(fixForDiagnostic(lines, first, {}, known({ 'yahoo|SPYY': 'unknown' }, { SPYY: ['SPYY.DE', 'GLD'] })), null);
+  assert.equal(fixForDiagnostic(lines, first, {}, null), null);
+  // A suggestion that is not known to exist is not offered from the block's own tickers.
+  assert.equal(fixForDiagnostic(lines, second, {}, known({ 'yahoo|TLT': 'unknown', 'yahoo|TLTT': 'unknown' })), null);
+});
+
+test('a warning from the parser gets no fix', () => {
+  const lines = ['universe: SPY', 'buy when close > 100'];
+  const [d] = blockDiagnostics(lines);
+  assert.equal(d.severity, 'warning');
+  assert.equal(fixForDiagnostic(lines, d, {}, null), null);
 });

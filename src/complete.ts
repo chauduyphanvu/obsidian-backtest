@@ -1,12 +1,15 @@
 import { docFor, shortOf, valueId, FIXED_VALUES } from './docs.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
 import { declaredParams, lineKind, settingKey } from './highlight.ts';
+import type { Suggestion } from './symbols.ts';
 
 export interface Completion {
   label: string;
   /** Text that replaces what has been typed of the word. */
   insert: string;
   detail: string;
+  /** Set on a ticker that came from a lookup. */
+  hit?: boolean;
 }
 
 export interface CompletionResult {
@@ -184,4 +187,50 @@ export function tickerPosition(before: string): TickerPosition | null {
   const part = rest.slice(rest.lastIndexOf(',') + 1).trimStart();
   if (!/^[A-Za-z0-9^:/._=-]*$/.test(part) || /^[\d.]+$/.test(part)) return null;
   return { from: before.length - part.length, word: part };
+}
+
+/** The tickers a block's universe lines write, as written (`binance:BTCUSDT`, `csv:Data/gold.csv`), without repeats. */
+export function writtenTickers(lines: string[], keys: string[] = ['universe', 'symbol']): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    const key = settingKey(line);
+    if (!key || !keys.includes(key)) continue;
+    for (const part of line.replace(/(^|\s)(#|\/\/).*$/, '').slice(line.indexOf(':') + 1).split(',')) {
+      const ref = part.trim().split(/\s+/)[0];
+      if (ref && !out.some((o) => o.toLowerCase() === ref.toLowerCase())) out.push(ref);
+    }
+  }
+  return out;
+}
+
+const CSV_SHOWN = 20;
+
+/**
+ * What a ticker position can offer without a lookup: the vault's CSV files after `csv:` (paths with a
+ * space or comma cannot be written in a block), or else the tickers the block's universe already names
+ * and the line has not (`taken`).
+ */
+export function localTickers(block: string[], pos: TickerPosition, taken: string[], csvPaths: readonly string[]): Completion[] {
+  const word = pos.word.toLowerCase();
+  if (word.startsWith('csv:')) {
+    const typed = word.slice(4);
+    const name = (p: string) => p.split('/').pop()!.toLowerCase();
+    return csvPaths
+      .filter((p) => !/[\s,]/.test(p) && p.toLowerCase().includes(typed))
+      .sort((a, b) => Number(name(b).startsWith(typed)) - Number(name(a).startsWith(typed)) || a.length - b.length)
+      .slice(0, CSV_SHOWN)
+      .map((p) => ({ label: `csv:${p}`, insert: `csv:${p}`, detail: 'file in your vault' }));
+  }
+  const used = new Set(taken.map((t) => t.toLowerCase()));
+  return writtenTickers(block)
+    .filter((t) => t.toLowerCase().startsWith(word) && !used.has(t.toLowerCase()))
+    .map((t) => ({ label: t, insert: t, detail: 'in this block' }));
+}
+
+/** Lookup hits as completions: the ticker as the block needs it, then its name and exchange. */
+export function hitCompletions(hits: Suggestion[], own: Completion[]): Completion[] {
+  const have = new Set(own.map((o) => o.insert.toLowerCase()));
+  return hits
+    .filter((s) => !have.has(s.written.toLowerCase()))
+    .map((s) => ({ label: s.written, insert: s.written, detail: [s.hit.name, s.hit.detail].filter(Boolean).join(' \u00b7 '), hit: true }));
 }
