@@ -1,7 +1,7 @@
 // The comparison of several strategies: legend, equity chart, figures table and how alike they move.
 
 import { computeStats, type Stats } from './backtest.ts';
-import { alignCurves, combine, correlations, type Curve } from './compare.ts';
+import { alignCurves, cashReturns, combine, correlations, weightedCashReturn, type Aligned, type Curve } from './compare.ts';
 import { DAY, h, minus, money, moneyTicks, pct, s, stamp, timeTicks } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 
@@ -22,6 +22,8 @@ interface Line {
   cls: string;
   /** Rebased to 1 at the first date. */
   values: number[];
+  /** What cash earned over each step, for the Sharpe ratio. */
+  cashReturn: number[];
   combined: boolean;
 }
 
@@ -51,7 +53,7 @@ export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], s
 
 /** Renders the comparison into `parent` (which the caller has emptied). Returns a cleanup function. */
 export function renderCompare(parent: HTMLElement, input: CompareInput): () => void {
-  let aligned: ReturnType<typeof alignCurves>;
+  let aligned: Aligned;
   try {
     aligned = alignCurves(input.curves);
   } catch (e) {
@@ -60,16 +62,17 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
   }
   const { t } = aligned;
   const intraday = t.some((x) => x % DAY !== 0);
-  const lines: Line[] = aligned.series.map((values, i) => ({ mark: String(i + 1), label: input.curves[i].label, cls: `bt-cmp-c${i + 1}`, values, combined: false }));
+  const cash = cashReturns(aligned);
+  const lines: Line[] = aligned.series.map((values, i) => ({ mark: String(i + 1), label: input.curves[i].label, cls: `bt-cmp-c${i + 1}`, values, cashReturn: cash[i], combined: false }));
   const combined: Line | null = input.weights
-    ? { mark: 'C', label: 'Combined', cls: 'bt-cmp-all', values: combine(aligned, input.weights), combined: true }
+    ? { mark: 'C', label: 'Combined', cls: 'bt-cmp-all', values: combine(aligned, input.weights), cashReturn: weightedCashReturn(cash, input.weights), combined: true }
     : null;
   // Combined first wherever lines are listed, and drawn last so it sits on top of the chart.
   const listed = combined ? [combined, ...lines] : lines;
 
   const root = h(parent, 'div', 'bt-root');
   h(root, 'div', 'bt-title', 'Comparison');
-  h(root, 'div', 'bt-sub', `${stamp(t[0], intraday)} to ${stamp(t[t.length - 1], intraday)}, the dates every strategy covers. Each line starts with ${money(input.capital)}.`);
+  h(root, 'div', 'bt-sub', `${stamp(t[0], intraday)} to ${stamp(t[t.length - 1], intraday)}, the dates every strategy covers. Each line is rescaled to start at ${money(input.capital)}.`);
 
   const legend = h(root, 'div', 'bt-legend bt-cmp-legend');
   for (const l of listed) {
@@ -115,8 +118,12 @@ function mark(parent: HTMLElement, l: Line): void {
 /** Two decimals, with no "-0.00" for a value too small to show. */
 const ratio = (x: number) => minus((Math.round(x * 100) / 100 || 0).toFixed(2));
 
+/** The figures in the table for one line. The Sharpe ratio counts only what the line earned above cash, as it does in the strategy's own block. */
+export function lineStats(t: number[], values: number[], cashReturn: number[]): Stats {
+  return computeStats(t, values, values[0], t.map(() => 1), cashReturn);
+}
+
 function figures(root: HTMLElement, listed: Line[], t: number[]): void {
-  const ones = t.map(() => 1);
   const wrap = h(root, 'div', 'bt-scroll bt-cmp-scroll');
   const table = h(wrap, 'table', 'bt-table bt-cmp-table');
   const head = h(h(table, 'thead'), 'tr');
@@ -124,7 +131,7 @@ function figures(root: HTMLElement, listed: Line[], t: number[]): void {
   for (const name of ['Return per year', 'Total return', 'Worst drawdown', 'Sharpe ratio']) h(head, 'th', 'bt-num', name);
   const body = h(table, 'tbody');
   for (const l of listed) {
-    const st: Stats = computeStats(t, l.values, l.values[0], ones);
+    const st = lineStats(t, l.values, l.cashReturn);
     const row = h(body, 'tr', l.combined ? 'bt-cmp-combined' : undefined);
     const who = h(h(row, 'td', 'bt-cmp-name-cell'), 'span', 'bt-cmp-who');
     mark(who, l);
@@ -134,7 +141,7 @@ function figures(root: HTMLElement, listed: Line[], t: number[]): void {
   }
 }
 
-function alike(root: HTMLElement, lines: Line[], aligned: { t: number[]; series: number[][] }): void {
+function alike(root: HTMLElement, lines: Line[], aligned: Aligned): void {
   if (lines.length < 2) return;
   const corr = correlations(aligned);
   if (lines.length === 2) {

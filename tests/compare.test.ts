@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { alignCurves, combine, correlations, parseCompare, type Curve } from '../src/compare.ts';
-import { spreadLabels } from '../src/render-compare.ts';
-import { near } from './helpers.ts';
+import { runBacktest } from '../src/backtest.ts';
+import { alignCurves, cashIndex, cashReturns, combine, correlations, parseCompare, weightedCashReturn, type Curve } from '../src/compare.ts';
+import { parseSpec } from '../src/dsl.ts';
+import { lineStats, spreadLabels } from '../src/render-compare.ts';
+import { bars, near } from './helpers.ts';
 
 const entry = (link: string, block: string | null, label: string | null, weight: number | null, line: number) => ({ link, block, label, weight, line });
 
@@ -246,4 +248,108 @@ test('end labels are pulled back inside the chart, keeping their gaps', () => {
   assert.deepEqual(spreadLabels([190, 195, 199], 0, 200, 14), [172, 186, 200]);
   assert.deepEqual(spreadLabels([-5, 0], 6, 200, 14), [6, 20]);
   assert.deepEqual(spreadLabels([], 0, 200), []);
+});
+
+// --- Cash ------------------------------------------------------------------------------------------------------------
+
+test('a cash index starts at 1 and grows by each step\'s cash return', () => {
+  assert.deepEqual(cashIndex([0, 0.5, 0.5]), [1, 1.5, 2.25]);
+  assert.deepEqual(cashIndex([0, 0, 0]), [1, 1, 1]);
+  assert.deepEqual(cashIndex([]), []);
+});
+
+test('cash is carried onto the common timeline like equity, and rebased at the window start', () => {
+  // Window is day 2 to day 5. B has no point on day 3 or 5, so its cash index is carried there too.
+  const a: Curve = { ...curve('A', [1, 2, 3, 4, 5], [100, 110, 120, 130, 140]), cash: [1, 1.1, 1.21, 1.331, 1.4641] };
+  const b: Curve = { ...curve('B', [2, 4, 6], [50, 60, 90]), cash: [1, 2, 4] };
+  const r = alignCurves([a, b]);
+  assert.deepEqual(r.t, [day(2), day(3), day(4), day(5)]);
+  [1, 1.1, 1.21, 1.331].forEach((v, i) => assert.ok(near(r.cash[0][i], v), `A cash ${i}`));
+  assert.deepEqual(r.cash[1], [1, 1, 2, 2]);
+});
+
+test('a curve without a cash index counts as cash that earns nothing', () => {
+  const r = alignCurves([{ ...curve('A', [1, 2, 3], [1, 2, 3]), cash: [1, 1.5, 2.25] }, curve('B', [1, 2, 3], [1, 2, 3])]);
+  assert.deepEqual(r.cash[1], [1, 1, 1]);
+  assert.deepEqual(cashReturns(r)[1], [0, 0, 0]);
+  const rates = cashReturns(r)[0];
+  assert.deepEqual(rates.map((x) => Math.round(x * 1e9) / 1e9), [0, 0.5, 0.5]);
+});
+
+test('the cash return of a mix is the weighted average of its members, scaled to the members', () => {
+  const returns = [[0, 0.02, 0.04], [0, 0, 0.01], [0, 0.1, 0.1]];
+  // Weights 0.3, 0.1 and 0.1 add up to 0.5; they count as 0.6, 0.2 and 0.2.
+  const out = weightedCashReturn(returns, [0.3, 0.1, 0.1]);
+  assert.equal(out[0], 0);
+  assert.ok(near(out[1], 0.6 * 0.02 + 0.2 * 0 + 0.2 * 0.1));
+  assert.ok(near(out[2], 0.6 * 0.04 + 0.2 * 0.01 + 0.2 * 0.1));
+  assert.deepEqual(weightedCashReturn(returns, [0, 0, 0]), [0, 0, 0]);
+  assert.deepEqual(weightedCashReturn([], []), []);
+});
+
+test('the table\'s Sharpe is measured above cash: hand-worked', () => {
+  // Four daily steps with returns 0.1, 0, 0.1, 0 and cash earning 1% a step.
+  const equity = [1, 1.1, 1.1, 1.21, 1.21];
+  const days = [1, 2, 3, 4, 5];
+  const aligned = alignCurves([{ ...curve('A', days, equity), cash: cashIndex([0, 0.01, 0.01, 0.01, 0.01]) }, curve('B', days, equity)]);
+  const [withCash, without] = cashReturns(aligned).map((c, i) => lineStats(aligned.t, aligned.series[i], c));
+  // Excess returns are 0.09, -0.01, 0.09, -0.01: mean 0.04, deviation 0.05. With no cash they are 0.1, 0, 0.1, 0: mean 0.05, deviation 0.05.
+  // Four steps in 4 days make 365.25 steps a year.
+  assert.ok(near(without.sharpe, Math.sqrt(365.25), 1e-9));
+  assert.ok(near(withCash.sharpe, 0.8 * Math.sqrt(365.25), 1e-9));
+  // The other figures do not depend on cash.
+  assert.equal(withCash.cagr, without.cagr);
+  assert.equal(withCash.maxDrawdown, without.maxDrawdown);
+});
+
+test('the Combined line is measured above the weighted cash of its members', () => {
+  const days = [1, 2, 3, 4, 5];
+  const equity = [1, 1.1, 1.1, 1.21, 1.21];
+  const aligned = alignCurves([
+    { ...curve('A', days, equity), cash: cashIndex([0, 0.02, 0.02, 0.02, 0.02]) },
+    { ...curve('B', days, equity), cash: cashIndex([0, 0, 0, 0, 0]) },
+  ]);
+  const cash = cashReturns(aligned);
+  const weights = [0.75, 0.25];
+  const mix = weightedCashReturn(cash, weights);
+  // 0.75 * 0.02 + 0.25 * 0 = 0.015 a step.
+  mix.slice(1).forEach((x) => assert.ok(near(x, 0.015, 1e-12)));
+  // Both members take the same steps, so the mix does too: returns 0.1, 0, 0.1, 0 and excess 0.085, -0.015, 0.085, -0.015, whose mean is 0.035 and deviation 0.05.
+  const stats = lineStats(aligned.t, combine(aligned, weights), mix);
+  assert.ok(near(stats.sharpe, 0.7 * Math.sqrt(365.25), 1e-9));
+});
+
+test('the table\'s Sharpe for a strategy matches the one in its own block, at a 5% cash rate', () => {
+  const times: number[] = [];
+  for (let d = 0; times.length < 400; d++) {
+    const t = Date.UTC(2020, 0, 1) + d * 86_400_000;
+    if (![0, 6].includes(new Date(t).getUTCDay())) times.push(t);
+  }
+  const closes = times.map((_, i) => 100 * (1 + 0.1 * Math.sin(i / 7) + i * 0.0005));
+  const data = new Map([['X', bars(closes, { times })]]);
+  const run = (rate: string) => runBacktest(parseSpec(`universe: X\ncash rate: ${rate}\nbuy when close > sma(10)\nsell when close < sma(10)`).spec!, data);
+  for (const rate of ['0%', '5%']) {
+    const bt = run(rate);
+    const aligned = alignCurves([
+      { label: 'A', t: bt.run.t, equity: bt.run.equity, cash: cashIndex(bt.run.cashReturn) },
+      { label: 'B', t: bt.run.t, equity: bt.run.equity, cash: cashIndex(bt.run.cashReturn) },
+    ]);
+    const [shown] = cashReturns(aligned).map((c, i) => lineStats(aligned.t, aligned.series[i], c));
+    assert.ok(near(shown.sharpe, bt.stats.sharpe, 1e-9), `${rate}: ${shown.sharpe} vs ${bt.stats.sharpe}`);
+  }
+  // The figure the table used to show ignored the cash rate and differed from the block's own.
+  const bt = run('5%');
+  const ignoring = lineStats(bt.run.t, bt.run.equity, bt.run.t.map(() => 0));
+  assert.ok(Math.abs(ignoring.sharpe - bt.stats.sharpe) > 0.1);
+});
+
+test('a weight on a line is found after a long run of spaces without slowing down', () => {
+  const t0 = performance.now();
+  const spaces = ' '.repeat(50_000);
+  assert.equal(parseCompare(`a${spaces}1%x`).errors.length, 1);
+  assert.equal(parseCompare(`[[A]]${spaces}40%`).entries[0].weight, 0.4);
+  assert.equal(parseCompare(`a.md${spaces}40%`).entries[0].weight, 0.4);
+  parseCompare('a' + ' 1'.repeat(25_000) + 'x');
+  parseCompare('1'.repeat(50_000) + 'x');
+  assert.ok(performance.now() - t0 < 200, `${performance.now() - t0} ms`);
 });

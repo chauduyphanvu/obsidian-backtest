@@ -1,6 +1,6 @@
 import { MarkdownRenderChild, MarkdownView, Notice, Plugin, TFile, normalizePath, requestUrl } from 'obsidian';
 import { extractBlocks } from './blocks.ts';
-import { parseCompare, type Curve } from './compare.ts';
+import { cashIndex, parseCompare, type Curve } from './compare.ts';
 import type { DataDeps } from './data.ts';
 import { DAY, isoDate } from './dom.ts';
 import { StrategySuggest, strategyEditor } from './editor.ts';
@@ -269,7 +269,8 @@ export default class BacktestBlocks extends Plugin {
         } catch (e) {
           throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
         }
-        curves.push({ label: entry.label ?? block.name ?? file.basename, t: out.backtest.run.t, equity: out.backtest.run.equity });
+        const { run } = out.backtest;
+        curves.push({ label: entry.label ?? block.name ?? file.basename, t: run.t, equity: run.equity, cash: cashIndex(run.cashReturn) });
       }
       el.replaceChildren();
       const weights = entries.every((e) => e.weight !== null) ? entries.map((e) => e.weight!) : null;

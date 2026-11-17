@@ -19,7 +19,8 @@ export interface CompareEntry {
   line: number;
 }
 
-const WEIGHT_AT_END = /\s+([+-]?\d+(?:\.\d+)?\s*%)$/;
+// The lookbehind, not a leading \s+, keeps a long run of spaces from being retried at every position.
+const WEIGHT_AT_END = /(?<=\s)([+-]?\d+(?:\.\d+)?\s*%)$/;
 const WEIGHT = /^([+-]?\d+(?:\.\d+)?)\s*%$/;
 const BARE_PATH = /^(.+?\.md)(?:#(.*))?$/i;
 const EPS = 1e-9;
@@ -63,7 +64,7 @@ function parseLine(raw: string, line: number): CompareEntry | Diagnostic {
     }
   } else {
     const m = text.match(WEIGHT_AT_END);
-    const path = m ? text.slice(0, m.index) : text;
+    const path = m ? text.slice(0, m.index).trimEnd() : text;
     if (m) {
       const w = weightOf(raw, line, m[1]);
       if (typeof w !== 'number') return w;
@@ -126,10 +127,30 @@ export interface Curve {
   /** Epoch milliseconds, ascending. */
   t: number[];
   equity: number[];
+  /** What a unit of cash grew to by each time in `t`, starting at 1. Absent means cash earned nothing. */
+  cash?: number[];
+}
+
+/** The growth of cash as an index starting at 1, from a run's cash return per step (`cashReturn[i]` is what cash earned from step i - 1 to i). */
+export function cashIndex(cashReturn: number[]): number[] {
+  const out: number[] = [];
+  let level = 1;
+  for (let i = 0; i < cashReturn.length; i++) {
+    if (i > 0) level *= 1 + cashReturn[i];
+    out.push(level);
+  }
+  return out;
+}
+
+export interface Aligned {
+  t: number[];
+  series: number[][];
+  /** Each curve's cash index on `t`, rebased to 1 at the first time; all ones for a curve without cash. */
+  cash: number[][];
 }
 
 /** Puts curves on one timeline: the union of their times from the latest start to the earliest end, each carried forward between its own points and rebased to 1 at the window's first time. Throws a clear Error when the curves do not overlap for at least 2 points. */
-export function alignCurves(curves: Curve[]): { t: number[]; series: number[][] } {
+export function alignCurves(curves: Curve[]): Aligned {
   if (curves.length === 0) throw new Error('There are no strategies to compare');
   for (const c of curves) if (c.t.length === 0) throw new Error(`${c.label} has no prices to compare`);
   const last = (c: Curve) => c.t[c.t.length - 1];
@@ -144,15 +165,29 @@ export function alignCurves(curves: Curve[]): { t: number[]; series: number[][] 
   const times = [...new Set(curves.flatMap((c) => c.t.filter((t) => t >= start && t <= end)))].sort((a, b) => a - b);
   if (times.length < 2) throw new Error(`These strategies overlap on a single date, ${isoDate(start)}, which is too little to compare`);
 
-  const series = curves.map((c) => {
+  const carry = (c: Curve, values: number[]) => {
     let j = 0;
     const carried = times.map((t) => {
       while (j + 1 < c.t.length && c.t[j + 1] <= t) j++;
-      return c.equity[j];
+      return values[j];
     });
     return carried.map((v) => v / carried[0]);
-  });
-  return { t: times, series };
+  };
+  const series = curves.map((c) => carry(c, c.equity));
+  const cash = curves.map((c) => (c.cash ? carry(c, c.cash) : times.map(() => 1)));
+  return { t: times, series, cash };
+}
+
+/** What cash earned over each step of the aligned timeline, per curve; the first step has none. */
+export function cashReturns(aligned: Pick<Aligned, 'cash'>): number[][] {
+  return aligned.cash.map((index) => index.map((v, i) => (i === 0 ? 0 : v / index[i - 1] - 1)));
+}
+
+/** The cash return of a portfolio of several curves: their cash returns averaged at the given weights, scaled so the weights add up to 1. */
+export function weightedCashReturn(returns: number[][], weights: number[]): number[] {
+  const total = weights.reduce((s, w) => s + w, 0);
+  const steps = returns[0]?.length ?? 0;
+  return Array.from({ length: steps }, (_, i) => (total > 0 ? returns.reduce((s, r, k) => s + r[i] * weights[k], 0) / total : 0));
 }
 
 const monthOf = (t: number) => {
@@ -165,7 +200,7 @@ const monthOf = (t: number) => {
  * brought back to those weights at the first point of each calendar month (UTC). Starts at 1.
  * The first point of a month is valued with the weights drifted up to it, then the portfolio is reset to its weights from there.
  */
-export function combine(aligned: { t: number[]; series: number[][] }, weights: number[]): number[] {
+export function combine(aligned: Pick<Aligned, 't' | 'series'>, weights: number[]): number[] {
   if (weights.length !== aligned.series.length) throw new Error('There must be one weight for each curve');
   if (weights.some((w) => !(w >= 0))) throw new Error('Weights cannot be negative');
   const invested = weights.reduce((s, w) => s + w, 0);
@@ -192,7 +227,7 @@ export function combine(aligned: { t: number[]; series: number[][] }, weights: n
 }
 
 /** Correlation of per-step returns between every pair; 1 on the diagonal; NaN when a series never moves. */
-export function correlations(aligned: { t: number[]; series: number[][] }): number[][] {
+export function correlations(aligned: Pick<Aligned, 't' | 'series'>): number[][] {
   const returns = aligned.series.map((s) => s.slice(1).map((v, i) => v / s[i] - 1));
   const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length;
   const centered = returns.map((r) => {
