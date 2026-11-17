@@ -863,7 +863,7 @@ class ExprParser {
       const noun = def.real?.[i];
       const shortest = i === 0 ? (def.min ?? 1) : 1;
       if (noun ? n <= 0 : !Number.isInteger(n) || n < shortest || n > 10000) {
-        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${noun ?? 'period'}${!noun && shortest > 1 ? `. It needs at least ${shortest}` : ''}`);
+        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${noun ?? 'period'}${noun ? '' : `. Use a whole number from ${shortest} to 10000`}`);
       }
       return n;
     });
@@ -1180,7 +1180,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   const period = (text: string, where: At, what: string, min: number): number => {
     const n = text === '' ? 14 : plain(text, where, what, `${what.replace(/\(\)$/, '')}(14)`);
-    if (!Number.isInteger(n) || n < min || n > 10000) throw new SpecError(where, `${what}: ${n} is not a valid period`);
+    if (!Number.isInteger(n) || n < min || n > 10000) throw new SpecError(where, `${what}: ${n} is not a valid period. Use a whole number from ${min} to 10000`);
     return n;
   };
   /** `{ nParam }` when a period is written as a parameter's name, to spread into the setting's value. */

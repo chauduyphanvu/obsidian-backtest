@@ -69,16 +69,16 @@ test('wrong numbers of arguments and lengths out of range are refused in plain w
   assert.equal(failure('obv(5) > 0'), 'obv() takes no arguments');
   assert.equal(failure('wma() > 0'), 'wma() needs a period, as in wma(20)');
   assert.equal(failure('slope() > 0'), 'slope() needs a period, as in slope(20)');
-  assert.equal(failure('adx(0) > 25'), 'adx(): 0 is not a valid period');
-  assert.equal(failure('adx(1.5) > 25'), 'adx(): 1.5 is not a valid period');
-  assert.equal(failure('adx(10001) > 25'), 'adx(): 10001 is not a valid period');
-  assert.equal(failure('stoch_k(14, 0) > 25'), 'stoch_k(): 0 is not a valid period');
-  assert.equal(failure('keltner_upper(20, 2, 0) > 25'), 'keltner_upper(): 0 is not a valid period');
+  assert.equal(failure('adx(0) > 25'), 'adx(): 0 is not a valid period. Use a whole number from 1 to 10000');
+  assert.equal(failure('adx(1.5) > 25'), 'adx(): 1.5 is not a valid period. Use a whole number from 1 to 10000');
+  assert.equal(failure('adx(10001) > 25'), 'adx(): 10001 is not a valid period. Use a whole number from 1 to 10000');
+  assert.equal(failure('stoch_k(14, 0) > 25'), 'stoch_k(): 0 is not a valid period. Use a whole number from 1 to 10000');
+  assert.equal(failure('keltner_upper(20, 2, 0) > 25'), 'keltner_upper(): 0 is not a valid period. Use a whole number from 1 to 10000');
   assert.equal(failure('keltner_upper(20, 0) > 25'), 'keltner_upper(): 0 is not a valid band width');
   assert.equal(failure('supertrend(10, 0) > 25'), 'supertrend(): 0 is not a valid multiplier');
   // These need at least two bars: a line, a spread or a correlation through one value says nothing.
-  for (const name of ['slope', 'zscore', 'cci', 'hma']) assert.equal(failure(`${name}(1) > 0`), `${name}(): 1 is not a valid period. It needs at least 2`);
-  assert.equal(failure('correl(close of SPY, 1) > 0'), 'correl(): 1 is not a valid period. It needs at least 2');
+  for (const name of ['slope', 'zscore', 'cci', 'hma']) assert.equal(failure(`${name}(1) > 0`), `${name}(): 1 is not a valid period. Use a whole number from 2 to 10000`);
+  assert.equal(failure('correl(close of SPY, 1) > 0'), 'correl(): 1 is not a valid period. Use a whole number from 2 to 10000');
   // A length of 1 is fine where it means something.
   for (const name of ['adx', 'plus_di', 'minus_di', 'williams_r', 'mfi', 'vwap', 'wma', 'median', 'percent_rank']) assert.deepEqual(parseSpec(`universe: A\nbuy when ${name}(1) > 0`).errors, [], name);
 });
