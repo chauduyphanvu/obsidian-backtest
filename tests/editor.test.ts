@@ -84,10 +84,10 @@ test('setting values', () => {
 });
 
 test('inside a rule: series, functions and words', () => {
-  assert.deepEqual(labels([], 'buy when c'), ['close', 'crosses above', 'crosses below']);
-  assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev']);
+  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'crosses above', 'crosses below']);
+  assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev', 'stoch_k', 'stoch_d', 'supertrend', 'supertrend_up', 'slope']);
   assert.equal(complete(BLOCK, [], 'buy when close > sm')!.items[0].insert, 'sma(');
-  assert.deepEqual(labels([], 'buy when close > sma(h'), ['high', 'highest']);
+  assert.deepEqual(labels([], 'buy when close > sma(h'), ['high', 'highest', 'hma']);
   assert.deepEqual(labels(['buy when close > 1'], '   or rs'), ['rsi']);
   assert.deepEqual(labels([], 'buy '), ['when']);
   assert.deepEqual(labels([], 'sell when close crosses '), ['above', 'below']);
@@ -154,8 +154,8 @@ test('rules colour parameters, position values and calendar values', () => {
 });
 
 test('completions: position values in sell rules only, calendar values and parameters everywhere in a rule', () => {
-  assert.deepEqual(labels([], 'sell when ba', V2), ['bars held']);
-  assert.equal(labels([], 'buy when ba', V2), null);
+  assert.deepEqual(labels([], 'sell when ba', V2), ['bars held', 'bars_since']);
+  assert.deepEqual(labels([], 'buy when ba', V2), ['bars_since']);
   assert.deepEqual(labels(['sell when close > 1'], '  or en', V2), ['entry price']);
   assert.equal(labels(['buy when close > 1'], '  or en', V2), null);
   assert.deepEqual(labels([], 'buy when month_', V2), ['month_start', 'month_end']);
@@ -163,7 +163,7 @@ test('completions: position values in sell rules only, calendar values and param
   const fast = complete(V2, [], 'buy when close > sma(fa')!.items;
   assert.deepEqual(fast.map((i) => [i.label, i.detail]), [['fast', 'parameter: 50 in 20..100 step 10']]);
   assert.deepEqual(labels([], 'hold: top 3 by ro', V2), ['roc']);
-  assert.equal(labels([], 'hold: top 3 by ba', V2), null);
+  assert.deepEqual(labels([], 'hold: top 3 by ba', V2), ['bars_since']);
 });
 
 test('completions: hints for the new settings, and only stops inside a for section', () => {

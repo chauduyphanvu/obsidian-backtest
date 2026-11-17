@@ -33,6 +33,9 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
   return (from, to) => clock(from) !== clock(to);
 }
 
+/** Functions that weigh bars by volume, and so mean nothing on prices that have none. */
+const NEEDS_VOLUME = ['mfi', 'obv', 'vwap'];
+
 /** The Evaluator a spec's rules are read with, by the run and by everything that explains or redoes it. */
 export function specEvaluator(spec: Spec, data: Map<string, Bars>): Evaluator {
   return new Evaluator(data, clocksApart(spec, data));
@@ -282,6 +285,9 @@ export class Evaluator {
   private indicator(e: Extract<Expr, { k: 'ind' }>, asset: string, bars: Bars): number[] {
     const src = e.src ? this.eval(e.src, asset) : bars.c;
     const [a, b, c] = e.args;
+    if (NEEDS_VOLUME.includes(e.fn) && !bars.v.some((x) => x > 0)) {
+      throw new Error(`${asset} has no volume, which ${e.fn}() needs. A CSV file needs a volume column, and some indexes have none.`);
+    }
     switch (e.fn) {
       case 'sma':
         return ind.sma(src, a);
@@ -310,6 +316,54 @@ export class Evaluator {
         const sign = e.fn === 'bb_upper' ? b : -b;
         return mid.map((m, i) => m + sign * sd[i]);
       }
+      case 'wma':
+        return ind.wma(src, a);
+      case 'hma':
+        return ind.hma(src, a);
+      case 'median':
+        return ind.median(src, a);
+      case 'zscore':
+        return ind.zscore(src, a);
+      case 'percent_rank':
+        return ind.percentRank(src, a);
+      case 'slope':
+        return ind.slope(src, a);
+      // The other series was read through `of`, so it is already lined up with this ticker's bars.
+      case 'correl':
+        return ind.correl(bars.c, src, a);
+      case 'bars_since':
+        return ind.barsSince(src);
+      case 'stoch_k':
+        return ind.stochK(bars.h, bars.l, bars.c, a, b);
+      case 'stoch_d':
+        return ind.stochD(bars.h, bars.l, bars.c, a, b, c);
+      case 'adx':
+        return ind.adx(bars.h, bars.l, bars.c, a);
+      case 'plus_di':
+        return ind.plusDi(bars.h, bars.l, bars.c, a);
+      case 'minus_di':
+        return ind.minusDi(bars.h, bars.l, bars.c, a);
+      case 'cci':
+        return ind.cci(bars.h, bars.l, bars.c, a);
+      case 'williams_r':
+        return ind.williamsR(bars.h, bars.l, bars.c, a);
+      case 'mfi':
+        return ind.mfi(bars.h, bars.l, bars.c, bars.v, a);
+      case 'obv':
+        return ind.obv(bars.c, bars.v);
+      case 'vwap':
+        return ind.vwap(bars.h, bars.l, bars.c, bars.v, a);
+      case 'keltner_upper':
+      case 'keltner_lower': {
+        const mid = ind.ema(src, a);
+        const range = ind.atr(bars.h, bars.l, bars.c, c);
+        const sign = e.fn === 'keltner_upper' ? b : -b;
+        return mid.map((m, i) => m + sign * range[i]);
+      }
+      case 'supertrend':
+        return ind.supertrend(bars.h, bars.l, bars.c, a, b).line;
+      case 'supertrend_up':
+        return ind.supertrend(bars.h, bars.l, bars.c, a, b).up;
     }
     throw new Error(`Unknown function ${e.fn}`);
   }

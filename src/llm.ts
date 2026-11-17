@@ -207,6 +207,27 @@ Functions, written with parentheses. A period is a plain number or a parameter, 
   macd_signal(fast, slow, n)   average of the macd line; defaults 12, 26, 9
   bb_upper(n, width)           upper Bollinger band; defaults 20, 2
   bb_lower(n, width)           lower Bollinger band; defaults 20, 2
+  stoch_k(n, smooth)           stochastic %K, 0 to 100, averaged over smooth bars; defaults 14, 3
+  stoch_d(n, smooth, d)        stochastic %D: stoch_k averaged over d bars; defaults 14, 3, 3
+  adx(n)                       average directional index, 0 to 100: how strong a trend is, whichever way; n defaults to 14
+  plus_di(n)  minus_di(n)      Wilder's directional indicators, 0 to 100; n defaults to 14
+  cci(n)                       commodity channel index of the typical price; n defaults to 20, at least 2
+  williams_r(n)                Williams %R, -100 to 0; n defaults to 14
+  mfi(n)                       money flow index, 0 to 100; needs volume; n defaults to 14
+  obv()                        on-balance volume, a running total; needs volume; compare it with its own average: obv() > sma(obv(), 20)
+  vwap(n)                      volume-weighted average of (high + low + close) / 3 over n bars; needs volume; n defaults to 20
+  keltner_upper(n, width, atr) upper Keltner channel: ema(n) plus width average true ranges over atr bars; defaults 20, 2, 10
+  keltner_lower(n, width, atr) lower Keltner channel: ema(n) minus width average true ranges over atr bars
+  supertrend(n, mult)          supertrend line, under the price in an uptrend; defaults 10, 3
+  supertrend_up(n, mult)       a condition, true in an uptrend: buy when supertrend_up(10, 3)
+  wma(n)  hma(n)               weighted and Hull moving averages of the last n values; hma needs n of at least 2
+  median(n)                    median of the last n values
+  zscore(n)                    standard deviations from the n-bar average; n at least 2
+  percent_rank(n)              share of the previous n values below this one, 0 to 100
+  slope(n)                     least-squares slope over n bars, per bar; n at least 2
+  correl(other, n)             correlation of the one-bar changes of this ticker's close and of another series over n bars, n at least 2: correl(close of SPY, 60)
+  bars_since(condition)        bars since the condition was last true; unknown until it has been: bars_since(close crosses above sma(50)) < 10
+  Like atr, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, supertrend and supertrend_up take no series: they read the ticker's own bars. keltner_upper and keltner_lower take one first, for the average only.
   min(a, b)  max(a, b)  abs(x)
 Calendar values, read from each bar's date:
   month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), year such as 2024

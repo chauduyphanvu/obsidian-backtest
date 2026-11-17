@@ -135,6 +135,17 @@ export function tickers(days: string[]): TickerSpec[] {
   ];
 }
 
+/**
+ * A volume that changes from bar to bar, for the indicators that weigh by it. It draws nothing from the price generators'
+ * random numbers, so the prices stay what they were, and no case's rules read volume.
+ */
+function volume(id: number, k: number): number {
+  let h = Math.imul(id + 1, 0x9e3779b1) ^ Math.imul(k + 1, 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return 200_000_000 + (((h ^ (h >>> 15)) >>> 0) % 1_600_000_001);
+}
+
 /** The Monday-based week of a YYYY-MM-DD date, as our engine counts weeks. */
 export function weekOf(date: string): number {
   return Math.floor((Math.floor(Date.parse(date) / 86_400_000) + 3) / 7);
@@ -163,7 +174,7 @@ export function generate(): { days: string[]; specs: TickerSpec[]; rows: Row[] }
       const w2 = Math.abs(n()) * s.wick;
       if (k > s.first && s.missing && u() < s.missing) continue;
       if (k > s.first && nth === 1) {
-        rows.push({ id: s.id, date: days[k], o: prevClose, h: prevClose, l: prevClose, c: prevClose, v: 1_000_000_000 });
+        rows.push({ id: s.id, date: days[k], o: prevClose, h: prevClose, l: prevClose, c: prevClose, v: volume(s.id, k) });
         continue;
       }
       const o = k === s.first ? cents(s.start) : nth === 2 ? prevClose : cents(prevClose * Math.exp(g));
@@ -172,7 +183,7 @@ export function generate(): { days: string[]; specs: TickerSpec[]; rows: Row[] }
       const h = Math.max(o, c, Math.ceil(Math.max(o, c) * (1 + w1) * 100) / 100);
       const l = Math.min(o, c, Math.floor(Math.min(o, c) * (1 - w2) * 100) / 100);
       if (!(l > 0)) throw new Error(`${s.ticker} went to ${l} on ${days[k]}`);
-      rows.push({ id: s.id, date: days[k], o, h, l, c, v: 1_000_000_000 });
+      rows.push({ id: s.id, date: days[k], o, h, l, c, v: volume(s.id, k) });
       prevClose = c;
       x = Math.log(c);
     }
