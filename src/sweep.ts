@@ -125,28 +125,39 @@ export function baseSpec(parse: Parse): Spec {
   return base.spec;
 }
 
+/**
+ * `onProgress` also gets the result so far, which grows as the sweep runs. `pause` lets other work in between batches;
+ * a worker passes one that costs nothing.
+ */
 export async function runSweep(
   source: string,
   data: Map<string, Bars>,
-  opts: { parse?: Parse; maxRuns?: number; onProgress?: (done: number, total: number) => void; shouldStop?: () => boolean } = {},
+  opts: {
+    parse?: Parse;
+    maxRuns?: number;
+    onProgress?: (done: number, total: number, sofar: SweepResult) => void;
+    shouldStop?: () => boolean;
+    pause?: () => Promise<void>;
+  } = {},
 ): Promise<SweepResult> {
   const parse = opts.parse ?? ((overrides) => parseSpec(source, { overrides }));
+  const wait = opts.pause ?? pause;
   const params = sweepParams(baseSpec(parse));
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
-  const points: SweepPoint[] = [];
-  let stopped = false;
+  const result: SweepResult = { params, points: [], tried: 0, total, stopped: false };
   for (const index of grid(params)) {
     if (opts.shouldStop?.()) {
-      stopped = true;
+      result.stopped = true;
       break;
     }
-    points.push(runVariant(parse, data, valuesAt(params, index), index).point);
-    opts.onProgress?.(points.length, total);
-    if (points.length % BATCH === 0 && points.length < total) await pause();
+    result.points.push(runVariant(parse, data, valuesAt(params, index), index).point);
+    result.tried = result.points.length;
+    opts.onProgress?.(result.tried, total, result);
+    if (result.tried % BATCH === 0 && result.tried < total) await wait();
   }
-  return { params, points, tried: points.length, total, stopped };
+  return result;
 }
 
 /** The metric for one part of a variant's run; NaN when it has none. */

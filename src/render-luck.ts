@@ -2,9 +2,11 @@
 
 import type { Backtest } from './backtest.ts';
 import { h, isoDate, money, moneyTicks, niceStep, pct, s, timeTicks } from './dom.ts';
-import { bootstrap, monthOfBars, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
-import { observe, placeTip, plural, progressBar, valuesText, did, type Life, type SweepInput } from './render-sweep.ts';
-import { METRICS, pause, sweepParams } from './sweep.ts';
+import type { JobOf, Kind, Results } from './jobs.ts';
+import { monthOfBars, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
+import { observe, placeTip, plural, progressBar, valuesText, did, WAITING, type Life, type SweepInput } from './render-sweep.ts';
+import { METRICS, sweepParams } from './sweep.ts';
+import { blockJobs, type BlockJobs } from './worker-client.ts';
 
 const DEFAULT_SEED = 1;
 const RANDOM_RUNS = 200;
@@ -14,18 +16,22 @@ const CHAR = 6.6;
 /** Appends a collapsed "Was it luck?" section. Returns a cleanup function. */
 export function renderLuck(parent: HTMLElement, input: SweepInput): () => void {
   const life: Life = { gone: false, observers: [] };
+  const jobs = blockJobs(input);
   // Each check redraws on its own (Shuffle again redoes two of three), so each keeps its own observers.
   const blocks = new Map<HTMLElement, Life>();
   const details = h(parent, 'details', 'bt-details bt-luck');
   h(details, 'summary', undefined, 'Was it luck?');
-  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-luck-body'), input, life, blocks), { once: true });
+  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-luck-body'), input, life, blocks, jobs), { once: true });
   return () => {
     life.gone = true;
+    jobs.close();
     for (const b of blocks.values()) for (const o of b.observers) o.disconnect();
   };
 }
 
-function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTMLElement, Life>): void {
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTMLElement, Life>, jobs: BlockJobs): void {
   const bt = input.backtest;
   const ranged = sweepParams(bt.spec).length > 0;
   h(
@@ -50,15 +56,13 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
   const walk = h(body, 'div');
 
   let seed = DEFAULT_SEED;
-  let stopping = false;
+  let running: { stop(): void } | null = null;
   const busy = (on: boolean) => {
     stop.hidden = !on;
     progress.show(on);
     shuffle.disabled = on;
-    if (on) stopping = false;
   };
-  stop.addEventListener('click', () => (stopping = true));
-  const shouldStop = () => stopping || life.gone;
+  stop.addEventListener('click', () => running?.stop());
   /** A fresh set of observers for a check's block, the old ones disconnected. */
   const lifeOf = (el: HTMLElement): Life => {
     for (const o of blocks.get(el)?.observers ?? []) o.disconnect();
@@ -66,19 +70,45 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
     blocks.set(el, mine);
     return mine;
   };
+  /** Runs one check, which Stop ends; null when it was stopped with nothing to show. */
+  const step = async <K extends Kind>(job: JobOf<K>, first: string, label?: (done: number, total: number) => string): Promise<Results[K] | null> => {
+    progress.set(0, 1, first);
+    const r = jobs.run(job, {
+      onProgress: label && ((d, n) => progress.set(d, n, label(d, n))),
+      onWait: (waiting) => progress.set(0, 1, waiting ? WAITING : first),
+    });
+    running = r;
+    try {
+      return await r.done;
+    } finally {
+      running = null;
+    }
+  };
 
-  /** The two checks that draw at random; returns false when stopped. */
+  /** The two checks that draw at random; returns false when stopped or failed. */
   const randomChecks = async (): Promise<boolean> => {
-    progress.set(0, 1, 'Reshuffling history…');
-    await pause();
-    bootBlock(boot, lifeOf(boot), bt, bootstrap(bt.run.t, bt.run.equity, { seed, runs: RESHUFFLES, blockBars: blockFor(bt) }));
-    progress.set(0, RANDOM_RUNS, `Random entries: 0 of ${RANDOM_RUNS}`);
-    const r = await randomEntries(bt, { seed, runs: RANDOM_RUNS, shouldStop, onProgress: (d, n) => progress.set(d, n, `Random entries: ${d} of ${n}`) });
-    if (life.gone) return false;
-    randomBlock(random, lifeOf(random), r, RANDOM_RUNS);
+    let b: BootstrapResult | null;
+    try {
+      b = await step({ kind: 'reshuffle', seed, runs: RESHUFFLES }, 'Reshuffling history…');
+    } catch (e) {
+      if (!life.gone) bootBlock(boot, lifeOf(boot), bt, message(e));
+      return false;
+    }
+    // Stopped: what was shown before stays, seed and all.
+    if (life.gone || !b) return false;
+    bootBlock(boot, lifeOf(boot), bt, b);
+    let r: RandomEntriesResult | null = null;
+    try {
+      r = await step({ kind: 'random', seed, runs: RANDOM_RUNS }, `Random entries: 0 of ${RANDOM_RUNS}`, (d, n) => `Random entries: ${d} of ${n}`);
+      if (life.gone) return false;
+      randomBlock(random, lifeOf(random), bt, r && !(r.stopped && r.runs === 0) ? r : 'Stopped before the first try. Run the checks again to finish it.', RANDOM_RUNS);
+    } catch (e) {
+      if (life.gone) return false;
+      randomBlock(random, lifeOf(random), bt, message(e), RANDOM_RUNS);
+    }
     seedText.textContent = `Random draws use seed ${seed}. `;
     seedRow.hidden = false;
-    return !r.stopped;
+    return r !== null && !r.stopped;
   };
 
   run.addEventListener('click', async () => {
@@ -89,7 +119,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
       if (finished && ranged) {
         walk.replaceChildren();
         try {
-          const w = await walkForward(input.source, bt.data, { parse: input.parse, shouldStop, onProgress: (d, n) => progress.set(d, n, `Walk-forward: ${d} of ${n} backtests`) });
+          const w = await step({ kind: 'walk' }, 'Walk-forward…', (d, n) => `Walk-forward: ${d} of ${n} backtests`);
           if (life.gone) return;
           if (w) walkBlock(walk, lifeOf(walk), w);
           else {
@@ -97,9 +127,11 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
             finished = false;
           }
         } catch (e) {
-          walkBlock(walk, lifeOf(walk), e instanceof Error ? e.message : String(e));
+          if (life.gone) return;
+          walkBlock(walk, lifeOf(walk), message(e));
         }
       }
+      if (life.gone) return;
       if (!finished) {
         run.textContent = 'Run checks again';
         run.hidden = false;
@@ -146,17 +178,6 @@ function legend(parent: HTMLElement, items: [string, string][]): void {
 // ---------------------------------------------------------------- reshuffled history
 
 /**
- * About a month, or the strategy's typical holding when that is longer, so a typical position's
- * run stays in one piece; at most a tenth of the run, so there are pieces to reorder.
- */
-function blockFor(bt: Backtest): number {
-  const month = monthOfBars(bt.run.t);
-  const holds = bt.run.trades.map((t) => t.bars).sort((a, b) => a - b);
-  const typical = holds.length ? holds[holds.length >> 1] : 0;
-  return Math.max(1, Math.min(Math.max(month, typical), Math.floor((bt.run.t.length - 1) / 10)));
-}
-
-/**
  * What the reshuffled history shows, and what it does not. Every version is built from the run's own returns, so it says
  * how much the path and the drawdown depended on the order, not whether the return itself was luck.
  */
@@ -175,8 +196,12 @@ export function reshuffleVerdict(r: BootstrapResult): string {
   );
 }
 
-function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult): void {
+function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult | string): void {
   const sec = check(el, 'Reshuffled history');
+  if (typeof r === 'string') {
+    h(sec, 'p', 'bt-luck-verdict', r);
+    return;
+  }
   if (bt.run.trades.length === 0) {
     h(sec, 'p', 'bt-luck-verdict', 'The strategy made no trades, so there is nothing to reshuffle.');
     return;
@@ -208,9 +233,13 @@ function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult
 
 // ---------------------------------------------------------------- random entries
 
-function randomBlock(el: HTMLElement, life: Life, r: RandomEntriesResult, asked: number): void {
-  const picks = r.mode === 'picks';
+function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntriesResult | string, asked: number): void {
+  const picks = bt.spec.rank !== null;
   const sec = check(el, picks ? 'Random picks' : 'Random entries');
+  if (typeof r === 'string') {
+    h(sec, 'p', 'bt-luck-verdict', r);
+    return;
+  }
   const who = picks ? 'Random picks' : 'Random timing';
   const skip: Record<NonNullable<RandomEntriesResult['skip']>, string> = {
     'no-trades': 'The strategy made no trades, so there is nothing to compare.',

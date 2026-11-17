@@ -188,3 +188,39 @@
 .bt-root .bt-table tr.bt-sweep-row-declared td {
   font-weight: var(--font-semibold);
 }
+
+/* Picking a variant and writing its values into the block. */
+.bt-sweep-pickable {
+  cursor: pointer;
+}
+.bt-sweep-picked {
+  margin: 10px 0;
+}
+.bt-sweep-picked code {
+  white-space: nowrap;
+}
+.bt-sweep-pick-hint,
+.bt-sweep-applied {
+  color: var(--text-muted);
+}
+.bt-sweep-apply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+}
+.bt-sweep-picked-outline,
+.bt-sweep-picked-ring {
+  fill: none;
+  stroke: var(--interactive-accent);
+  stroke-width: 2;
+  pointer-events: none;
+}
+.bt-root .bt-table tr.bt-sweep-row-picked td {
+  background: var(--background-modifier-hover);
+}
+.bt-root .bt-table tr.bt-sweep-pickable:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
