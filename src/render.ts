@@ -2,8 +2,9 @@ import type { Backtest, Segment } from './backtest.ts';
 import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
 import { colourSource, DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { hintFor } from './fixes.ts';
+import { commentStart, declaredParams, settingKey } from './highlight.ts';
 import { pendingTiming, timingPhrase } from './orders.ts';
-import { renderParamBar, type ParamsHook } from './render-params.ts';
+import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderDeepStats } from './render-stats.ts';
 import { renderPositions, renderTrades } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
@@ -45,7 +46,28 @@ export function renderFailure(el: HTMLElement, message: string, src: string, onR
   source(root, src);
 }
 
-function summary(spec: Spec): string {
+const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
+
+/** The parameters (in lower case) that a stop setting takes as its whole level, as in `stop loss: stop`. */
+function stopParams(source: string): Set<string> {
+  const lines = source.split('\n');
+  const names = new Set(declaredParams(lines).map((p) => p.name.toLowerCase()));
+  const out = new Set<string>();
+  for (const line of lines) {
+    const key = settingKey(line);
+    if (!key || !STOP_SETTINGS.includes(key)) continue;
+    const comment = commentStart(line);
+    const value = (comment < 0 ? line : line.slice(0, comment)).slice(line.indexOf(':') + 1).trim().toLowerCase();
+    if (names.has(value)) out.add(value);
+  }
+  return out;
+}
+
+/**
+ * The line under the title. Percentages are written as the block writes them. A parameter that is a stop is not listed again
+ * when the line spells that stop out; `source` is the block's text, which says which parameters those are.
+ */
+export function summary(spec: Spec, source = ''): string {
   const names = spec.universe.map((a) => a.name);
   const parts = [
     spec.rank
@@ -58,15 +80,18 @@ function summary(spec: Spec): string {
   if (spec.interval !== '1d') parts.push(`${spec.interval} bars`);
   parts.push(spec.costBps ? `${spec.costBps} bps costs` : 'no costs');
   if (spec.slippageBps) parts.push(`${spec.slippageBps} bps slippage`);
-  const level = (l: StopLevel | null) => (l === null ? '' : l.k === 'pct' ? pct(l.v, 0) : `${l.mult} ATR`);
+  const level = (l: StopLevel | null) => (l === null ? '' : l.k === 'pct' ? formatParam({ percent: true }, l.v) : `${l.mult} ATR`);
   const text = (name: string) => {
     const st = spec.stops[name];
     return [st.stopLoss && `${level(st.stopLoss)} stop`, st.trailingStop && `${level(st.trailingStop)} trailing stop`, st.takeProfit && `${level(st.takeProfit)} target`].filter(Boolean).join(', ');
   };
   const stops = new Set(names.map(text));
+  const spelt = stops.size === 1 && text(names[0]) !== '';
   if (stops.size > 1) parts.push('stops set per ticker');
-  else if (text(names[0])) parts.push(text(names[0]));
-  if (spec.params.length) parts.push(spec.params.map((p) => `${p.name} ${p.percent ? pct(p.value, 1) : p.value}`).join(', '));
+  else if (spelt) parts.push(text(names[0]));
+  const asStops = spelt ? stopParams(source) : new Set<string>();
+  const listed = spec.params.filter((p) => !asStops.has(p.name.toLowerCase()));
+  if (listed.length) parts.push(listed.map((p) => `${p.name} ${formatParam(p, p.value)}`).join(', '));
   return parts.join(', ');
 }
 
@@ -265,7 +290,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   const body = h(root, 'div', 'bt-body');
 
   const build = () => {
-    const sub = h(body, 'div', 'bt-sub', summary(first.spec));
+    const sub = h(body, 'div', 'bt-sub', summary(first.spec, view.source));
     source(body, view.source);
 
     // The bar is made once, before the result it drives, and is never redrawn.
@@ -275,7 +300,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
     }
 
     const notes = h(body, 'div', 'bt-notes');
-    const tiles = h(body, 'div', 'bt-tiles');
+    const tiles = h(h(body, 'div', 'bt-tiles-box'), 'div', 'bt-tiles');
     const legend = h(body, 'div', 'bt-legend');
     const chart = h(body, 'div', 'bt-chart');
     const tip = h(chart, 'div', 'bt-tip');
@@ -295,7 +320,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
     // While the block is folded the chart has no width; the observer draws it when it opens.
     const paint = (out: RunOutput) => {
       bt = out.backtest;
-      sub.textContent = summary(out.spec);
+      sub.textContent = summary(out.spec, view.source);
       fillTiles(tiles, bt);
       fillLegend(legend, bt);
       chart.querySelector('svg')?.remove();

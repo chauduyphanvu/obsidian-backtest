@@ -105,6 +105,8 @@ export class OrdersBadge {
   private running = false;
   /** Counts answers that replace what is shown, so the answer of an older check is dropped. */
   private generation = 0;
+  /** Counts the times the badge was switched off, so a check that began before does not set a timer after. */
+  private epoch = 0;
   private startup = true;
   private lastTry: number | null = null;
   private lastFailed = false;
@@ -130,23 +132,39 @@ export class OrdersBadge {
     });
   }
 
-  /** Starts checking after a short wait, and again whenever the answer gets old. */
+  /** Starts checking after a short wait, and again whenever the answer gets old. Works again after `turnOff`. */
   start(): void {
     if (this.started || this.stopped) return;
     this.started = true;
+    this.lastTry = null;
     this.schedule(this.delayMs);
   }
 
-  /** Shows what the orders window just worked out, so the two agree. */
+  /** Shows what the orders window just worked out, so the two agree. While the badge is off it stays hidden. */
   show(list: StrategyStatus[]): void {
     if (!this.started || this.stopped) return;
     this.generation++;
     this.answered(readyState(list));
   }
 
+  /** The badge is switched off in the settings: no more checks, and nothing on show. `start` switches it on again. */
+  turnOff(): void {
+    this.started = false;
+    this.cancel();
+    this.shown = false;
+    this.paint({ text: null, tooltip: '', mark: 'none', orders: 0 });
+  }
+
+  /** Ends the badge's work for good, when the plugin unloads. */
   stop(): void {
     this.stopped = true;
+    this.cancel();
+  }
+
+  /** No timer, and an answer on its way is dropped. */
+  private cancel(): void {
     this.generation++;
+    this.epoch++;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -165,11 +183,13 @@ export class OrdersBadge {
   }
 
   private async tick(): Promise<void> {
+    const mine = this.epoch;
     try {
       if (!this.running && this.due()) await this.check();
     } finally {
-      // With no status bar nobody sees a later answer, so only the first check is made.
-      if (!this.stopped && this.el !== null) this.schedule(LOOK_EVERY_MS);
+      // With no status bar nobody sees a later answer, so only the first check is made. A badge turned off, or off and on
+      // again, while this check ran has its own timer.
+      if (mine === this.epoch && this.el !== null) this.schedule(LOOK_EVERY_MS);
     }
   }
 

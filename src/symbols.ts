@@ -343,11 +343,26 @@ export interface TickerRef {
   source: LookupSource;
 }
 
-/** Every Yahoo or Binance ticker a block names: universe, symbol, benchmark, cash rate and `of` tickers. CSV files are not tickers. */
+/** The name the parser gives a `csv:` file: its file name without the ending, as `parseRef` reads it. */
+const csvName = (path: string): string => path.split('/').pop()!.replace(/\.csv$/i, '').toLowerCase();
+
+/**
+ * Every Yahoo or Binance ticker a block names: universe, symbol, benchmark, cash rate and `of` tickers. CSV files are not
+ * tickers, and neither is a bare name that the parser resolves to a CSV file the block names (`of myfund` for
+ * `csv:Data/myfund.csv`, whatever the capitals), so none of them is ever sent to a lookup.
+ */
 export function blockTickers(lines: string[], defaults: Partial<Defaults> = {}): TickerRef[] {
   const tokens = tokenizeBlock(lines);
   const kinds = lineKinds(lines);
   const plain = blockSource(lines, defaults);
+  const files = new Set<string>();
+  lines.forEach((line, i) => {
+    if (kinds[i] === 'for') return;
+    for (const t of tokens[i]) {
+      const written = t.kind === 'ticker' ? line.slice(t.from, t.to) : '';
+      if (/^csv:/i.test(written)) files.add(csvName(written.slice(4)));
+    }
+  });
   const out: TickerRef[] = [];
   lines.forEach((line, i) => {
     if (kinds[i] === 'for') return;
@@ -358,6 +373,7 @@ export function blockTickers(lines: string[], defaults: Partial<Defaults> = {}):
       const prefix = m ? m[1].toLowerCase() : '';
       const id = written.slice(m ? m[0].length : 0);
       if (prefix === 'csv' || !/^[A-Za-z0-9^._=-]+$/.test(id) || /^[\d.]+$/.test(id)) continue;
+      if (!prefix && files.has(id.toLowerCase())) continue;
       out.push({ line: i, from: t.from, to: t.to, idFrom: t.from + (m ? m[0].length : 0), ticker: id.toUpperCase(), source: (prefix || plain) as LookupSource });
     }
   });

@@ -72,3 +72,26 @@ export function setParamValuesInNote(note: string, line: number, source: string,
   }
   return lines.join('\n');
 }
+
+export const NOTE_CHANGED = 'The note has changed since this result was drawn, so nothing was written. Try again.';
+
+/**
+ * Writes values into the block that opens on `line` of a note, through `process`, which edits the note's text in place
+ * (Obsidian's `vault.process`). Rejects with a message fit to show when nothing was written: the block has no known place,
+ * or is no longer there with the text `source`.
+ */
+export async function writeValuesInNote(
+  process: (edit: (note: string) => string) => Promise<unknown>,
+  line: number | undefined,
+  source: string,
+  values: Record<string, number>,
+): Promise<void> {
+  if (line === undefined) throw new Error(NOTE_CHANGED);
+  let written = false;
+  await process((note) => {
+    const next = setParamValuesInNote(note, line, source, values);
+    written = next !== null;
+    return next ?? note;
+  });
+  if (!written) throw new Error(NOTE_CHANGED);
+}

@@ -5,7 +5,7 @@ import { complete, hitCompletions, localTickers, tickerPosition, writtenTickers,
 import { analyzeBlock, closesFence, fenceOf, findBlocks, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
 import { helpAt, type Doc } from './docs.ts';
 import type { Defaults } from './dsl.ts';
-import type { Fix } from './fixes.ts';
+import { fixChanges, type Fix } from './fixes.ts';
 import { lineKinds, type TokenKind } from './highlight.ts';
 import { ResultCache } from './result-cache.ts';
 import { blockSource, blockTickers, type SymbolLookup, type TickerRef } from './symbols.ts';
@@ -41,11 +41,9 @@ interface Help {
   doc: Doc;
 }
 
-/** A change to the note, ready to dispatch. */
+/** A change to the note, ready to dispatch: one or more edits that are made together, in the note as it is now. */
 interface Change {
-  from: number;
-  to: number;
-  insert: string;
+  edits: { from: number; to: number; insert: string }[];
   label: string;
 }
 
@@ -212,10 +210,12 @@ class StrategyView {
 
 /** The change a fix makes to the note, from its place in a block. */
 function changeFor(view: EditorView, block: Shown, fix: Fix): Change | null {
-  const n = block.first + fix.line;
-  if (n < 1 || n > view.state.doc.lines) return null;
-  const start = view.state.doc.line(n).from;
-  return { from: start + fix.from, to: start + fix.to, insert: fix.insert, label: fix.label };
+  const { doc } = view.state;
+  const edits = fixChanges(fix, (line) => {
+    const n = block.first + line;
+    return n < 1 || n > doc.lines ? null : doc.line(n).from;
+  });
+  return edits && { edits, label: fix.label };
 }
 
 interface Handle {
@@ -230,7 +230,7 @@ const handles = Facet.define<Handle, Handle | null>({ combine: (all) => all[0] ?
 export function applyFixAtCursor(view: EditorView): boolean {
   const change = view.state.facet(handles)?.fixAt(view, view.state.selection.main.head);
   if (!change) return false;
-  view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, userEvent: 'input.fix' });
+  view.dispatch({ changes: change.edits, userEvent: 'input.fix' });
   return true;
 }
 
@@ -261,7 +261,7 @@ function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf:
           const button = element(doc, 'button', 'bt-fix', change.label);
           // The editor keeps its focus and cursor; the edit is an ordinary transaction, so undo works.
           button.addEventListener('mousedown', (e) => e.preventDefault());
-          button.addEventListener('click', () => view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, userEvent: 'input.fix' }));
+          button.addEventListener('click', () => view.dispatch({ changes: change.edits, userEvent: 'input.fix' }));
           row.append(button);
         }
         dom.append(row);

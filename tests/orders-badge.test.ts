@@ -459,6 +459,93 @@ test('start can be called twice without a second schedule', async () => {
   badge.stop();
 });
 
+// ---- turning the badge off and on
+
+test('turning the badge off hides it, stops its timers and drops an answer still on the way', async () => {
+  let finish!: (list: StrategyStatus[]) => void;
+  const { badge, el, log } = setup({ scan: () => new Promise((resolve) => (finish = resolve)) });
+  badge.start();
+  await advance(START_DELAY_MS);
+  assert.equal(el!.textContent, 'Checking orders…');
+  badge.turnOff();
+  assert.equal(el!.hidden, true);
+  assert.equal(el!.textContent, '');
+  assert.equal(pending(), 0);
+  finish([status('A', [['buy', 'X']])]);
+  await flush();
+  assert.equal(el!.hidden, true);
+  assert.equal(el!.textContent, '');
+  await advance(100 * HOUR);
+  assert.equal(log.scans, 1);
+  assert.equal(pending(), 0);
+});
+
+test('turning the badge off after it showed a count hides the count', async () => {
+  const { badge, el } = setup();
+  badge.start();
+  await advance(START_DELAY_MS);
+  assert.equal(el!.textContent, '1 order today');
+  badge.turnOff();
+  assert.equal(el!.hidden, true);
+  assert.equal(el!.textContent, '');
+  assert.equal(pending(), 0);
+});
+
+test('with the badge off the orders window leaves it hidden, as before the first start', async () => {
+  const { badge, el } = setup();
+  badge.show([status('A', [['buy', 'X']])]);
+  assert.equal(el!.hidden, true);
+  badge.start();
+  await advance(START_DELAY_MS);
+  badge.turnOff();
+  badge.show([status('A', [['buy', 'X'], ['sell', 'Y']])]);
+  assert.equal(el!.hidden, true);
+  assert.equal(el!.textContent, '');
+});
+
+test('turning the badge on again checks after the usual wait, even when the last answer is recent', async () => {
+  const { badge, el, log } = setup();
+  badge.start();
+  await advance(START_DELAY_MS);
+  assert.equal(log.scans, 1);
+  badge.turnOff();
+  await advance(MINUTE);
+  badge.start();
+  assert.equal(pending(), 1);
+  assert.equal(el!.hidden, true);
+  await advance(START_DELAY_MS);
+  assert.equal(log.scans, 2);
+  assert.equal(el!.textContent, '1 order today');
+  assert.equal(pending(), 1);
+  // And it goes on checking by itself afterwards.
+  await advance(7 * HOUR);
+  assert.ok(log.scans >= 3);
+  badge.stop();
+});
+
+test('turning the badge off and on while a check runs leaves one timer, not two', async () => {
+  let finish!: (list: StrategyStatus[]) => void;
+  const { badge, log } = setup({ scan: () => new Promise((resolve) => (finish = resolve)) });
+  badge.start();
+  await advance(START_DELAY_MS);
+  badge.turnOff();
+  badge.start();
+  finish([status('A', [['buy', 'X']])]);
+  await flush();
+  assert.equal(pending(), 1);
+  badge.stop();
+  assert.equal(pending(), 0);
+  assert.equal(log.scans, 1);
+});
+
+test('stop is final: the badge cannot be started again after it', async () => {
+  const { badge } = setup();
+  badge.start();
+  badge.stop();
+  badge.start();
+  assert.equal(pending(), 0);
+});
+
 // ---- no status bar
 
 test('with no status bar the start-up check says the count once when there are orders', async () => {

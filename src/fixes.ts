@@ -1,17 +1,42 @@
 import { tickers } from './complete.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
-import { declaredParams, settingKey } from './highlight.ts';
+import { declaredParams, settingKey, tokenizeBlock } from './highlight.ts';
 
-/** One change to a block's text, and how to offer it. Columns are in line `line` (1-based, as in a parser Diagnostic). */
-export interface Fix {
+/** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
+export interface FixEdit {
   line: number;
   from: number;
   to: number;
   insert: string;
+}
+
+/** A change to a block's text, and how to offer it. */
+export interface Fix extends FixEdit {
   /** For the button: "Change to sma". */
   label: string;
   /** For places that can only show text: "Did you mean sma?". */
   hint: string;
+  /** Further changes that go with this one, so the block stays consistent. Columns are in the block as it is before any change. */
+  also?: FixEdit[];
+}
+
+/** Every change a fix makes, the first one first. */
+export function fixEdits(f: Fix): FixEdit[] {
+  return [{ line: f.line, from: f.from, to: f.to, insert: f.insert }, ...(f.also ?? [])];
+}
+
+/**
+ * The changes of a fix as positions in a note, all in the note as it is before any of them. `lineStart` gives where a block's
+ * line (1-based) starts in the note, or null when the note has no such line; then nothing is offered.
+ */
+export function fixChanges(f: Fix, lineStart: (line: number) => number | null): { from: number; to: number; insert: string }[] | null {
+  const out: { from: number; to: number; insert: string }[] = [];
+  for (const e of fixEdits(f)) {
+    const start = lineStart(e.line);
+    if (start === null) return null;
+    out.push({ from: start + e.from, to: start + e.to, insert: e.insert });
+  }
+  return out;
 }
 
 /** How many edits apart a typed word may be from a candidate, by the length of the typed word. */
@@ -63,13 +88,11 @@ export function closest(word: string, candidates: readonly string[]): string | n
   return best && (!next || compare(best.key, next.key) !== 0) ? best.value : null;
 }
 
-interface Edit {
-  line: number;
-  from: number;
-  to: number;
-  insert: string;
+interface Edit extends FixEdit {
   /** What to call the new text in a label, when it carries spaces for the neighbours. */
   shown?: string;
+  /** Other places the same change is made. */
+  also?: FixEdit[];
 }
 
 interface Context {
@@ -78,42 +101,64 @@ interface Context {
   defaults: Partial<Defaults>;
   /** The block's problems before the edit. */
   errors: Diagnostic[];
-  /** Any new problem on the edited line counts, not only one that touches the new text. */
-  strict?: boolean;
+  /**
+   * Any problem the block did not have before, anywhere in it, counts against the edit; otherwise only one on the
+   * edited line that touches the new text does. `problems` are the block's problems and notes before the edit.
+   */
+  strict?: { problems: Diagnostic[] };
 }
 
 const textOf = (lines: string[], line: number, from: number, to: number): string => lines[line - 1]?.slice(from, to) ?? '';
 
 function applied(lines: string[], e: Edit): string[] {
   const out = [...lines];
-  out[e.line - 1] = out[e.line - 1].slice(0, e.from) + e.insert + out[e.line - 1].slice(e.to);
+  // From the end of each line backwards, so the columns of the edits still to make stay right.
+  for (const x of [{ line: e.line, from: e.from, to: e.to, insert: e.insert }, ...(e.also ?? [])].sort((a, b) => b.line - a.line || b.from - a.from)) {
+    out[x.line - 1] = out[x.line - 1].slice(0, x.from) + x.insert + out[x.line - 1].slice(x.to);
+  }
   return out;
 }
 
 const errorsOf = (lines: string[], defaults: Partial<Defaults>): Diagnostic[] => parseSpec(lines.join('\n'), { defaults }).errors;
+
+const problemsOf = (lines: string[], defaults: Partial<Defaults>): Diagnostic[] => {
+  const { errors, warnings } = parseSpec(lines.join('\n'), { defaults });
+  return [...errors, ...warnings];
+};
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Whether the edit makes the problem go away without a new one in its place: the same message no
  * longer starts where the problem started, and nothing that was not there before touches the new text.
  */
 function removes(ctx: Context, e: Edit): boolean {
-  const after = errorsOf(applied(ctx.lines, e), ctx.defaults);
+  const edited = applied(ctx.lines, e);
+  if (ctx.strict) {
+    // A problem that names the old text now names the new text, and is still the same problem.
+    const typed = new RegExp(`(?<![A-Za-z0-9_])${escaped(textOf(ctx.lines, e.line, e.from, e.to))}(?![A-Za-z0-9_])`, 'gi');
+    const had = ctx.strict.problems.map((b) => ({ line: b.line, message: b.message.replace(typed, e.insert) }));
+    return !problemsOf(edited, ctx.defaults).some((x) => !had.some((b) => b.line === x.line && b.message === x.message));
+  }
+  const after = errorsOf(edited, ctx.defaults);
   if (after.some((x) => x.line === ctx.d.line && x.message === ctx.d.message && x.from === ctx.d.from)) return false;
   return !after.some((x) => {
     if (x.line !== e.line || ctx.errors.some((b) => b.line === x.line && b.message === x.message)) return false;
-    return ctx.strict || x.from === undefined || (x.from < e.from + e.insert.length && (x.to ?? Infinity) > e.from);
+    return x.from === undefined || (x.from < e.from + e.insert.length && (x.to ?? Infinity) > e.from);
   });
 }
 
 function fix(e: Edit, replaced: string, habit = false): Fix {
   const word = (e.shown ?? e.insert).trim();
+  const places = e.also?.length ? ` (${e.also.length + 1} places)` : '';
   return {
     line: e.line,
     from: e.from,
     to: e.to,
     insert: e.insert,
-    label: `Change to ${word}`,
+    label: `Change to ${word}${places}`,
     hint: habit ? `Write ${word} instead of ${replaced}.` : `Did you mean ${word}?`,
+    ...(e.also?.length ? { also: e.also } : {}),
   };
 }
 
@@ -308,15 +353,40 @@ export function hintFor(lines: string[], d: Diagnostic, defaults: Partial<Defaul
   return fixFor(lines, d, defaults)?.hint ?? null;
 }
 
+/** Where else a block writes a ticker, as the same ticker: on `for` lines, after `of`, in the universe and so on. */
+function otherPlaces(lines: string[], at: { line: number; from: number }, prefix: string, typed: string): FixEdit[] {
+  const out: FixEdit[] = [];
+  tokenizeBlock(lines).forEach((row, i) => {
+    for (const t of row) {
+      if (t.kind !== 'ticker' || (i + 1 === at.line && t.from === at.from)) continue;
+      const written = lines[i].slice(t.from, t.to);
+      const there = written.match(/^(yahoo|binance|csv):/i)?.[0] ?? '';
+      // A bare name refers to the ticker by name, whatever its prefix; another prefix is another ticker.
+      if (written.slice(there.length).toUpperCase() !== typed.toUpperCase() || (there && there.toLowerCase() !== prefix.toLowerCase())) continue;
+      out.push({ line: i + 1, from: t.from + there.length, to: t.to, insert: '' });
+    }
+  });
+  return out;
+}
+
 /**
  * Replaces a ticker the source does not know with the nearest of `candidates` (tickers the source does
- * know). `at` is where the ticker is written, with any `binance:` style prefix. Nothing is offered when
- * the edit would give the block a problem it did not have.
+ * know). `at` is where the ticker is written, with any `binance:` style prefix. The same ticker written
+ * elsewhere in the block, on a `for` line or after `of`, changes with it, so the block stays consistent.
+ * Nothing is offered when the edit would give the block a problem it did not have, anywhere in it.
  */
 export function tickerFix(lines: string[], at: { line: number; from: number; to: number }, candidates: readonly string[], defaults: Partial<Defaults> = {}): Fix | null {
   const written = textOf(lines, at.line, at.from, at.to);
   const prefix = written.match(/^(yahoo|binance):/i)?.[0] ?? '';
   const typed = written.slice(prefix.length);
-  const ctx: Context = { lines, d: { line: at.line, message: '', from: at.from, to: at.to }, defaults, errors: errorsOf(lines, defaults), strict: true };
-  return pick(ctx, typed, candidates, (c) => ({ line: at.line, from: at.from + prefix.length, to: at.to, insert: c, shown: c }));
+  const ctx: Context = { lines, d: { line: at.line, message: '', from: at.from, to: at.to }, defaults, errors: errorsOf(lines, defaults), strict: { problems: problemsOf(lines, defaults) } };
+  const others = otherPlaces(lines, at, prefix, typed);
+  return pick(ctx, typed, candidates, (c) => ({
+    line: at.line,
+    from: at.from + prefix.length,
+    to: at.to,
+    insert: c,
+    shown: c,
+    also: others.map((o) => ({ ...o, insert: c })),
+  }));
 }

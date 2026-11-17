@@ -9,6 +9,8 @@ export interface SettingsHost {
   saveSettings(): Promise<void>;
   /** Removes the saved price files. */
   clearPrices(): Promise<void>;
+  /** Switches the count of today's orders in the status bar on or off at once, as the setting says. */
+  setOrdersBadge(on: boolean): void;
 }
 
 export class BacktestSettingTab extends PluginSettingTab {
@@ -119,16 +121,19 @@ export class BacktestSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('Check for orders when Obsidian starts')
-      .setDesc("Runs every strategy in the vault shortly after start-up and shows how many orders are due in the status bar. This fetches prices for every strategy's tickers.")
+      .setDesc("Runs every strategy in the vault shortly after start-up and shows how many orders are due in the status bar. This fetches prices for every strategy's tickers. Turning it off hides the count and stops the checks at once.")
       .addToggle((t) =>
         t.setValue(settings.ordersOnStartup).onChange(async (v) => {
           settings.ordersOnStartup = v;
+          this.host.setOrdersBadge(v);
           await this.host.saveSettings();
         }),
       );
     new Setting(containerEl)
       .setName('Look tickers up while writing')
-      .setDesc('Suggests matching tickers and marks ones that do not exist. The tickers in your strategies, and what you type where a ticker goes, are sent to Yahoo to search. Nothing else from your notes is sent.')
+      .setDesc(
+        "Suggests matching tickers and marks ones that do not exist. What you type where a ticker goes, and the Yahoo tickers named in strategy blocks on screen, are sent to Yahoo's search, one ticker at a time. Starting what you type with binance: or csv: keeps it from being sent. Binance's list of markets is downloaded without sending anything. Nothing else from your notes is sent.",
+      )
       .addToggle((t) =>
         t.setValue(settings.tickerLookup).onChange(async (v) => {
           settings.tickerLookup = v;
