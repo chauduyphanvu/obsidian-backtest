@@ -5,6 +5,7 @@ import { runBacktest } from '../src/backtest.ts';
 import { parseCompare } from '../src/compare.ts';
 import { parseDashboard } from '../src/dashboard.ts';
 import { INSIDE_BARS } from '../src/data.ts';
+import { CSV_ASK_BYTES, CSV_MAX_BYTES } from '../src/debug.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, YAHOO_INSIDE_DAYS, parseSpec } from '../src/dsl.ts';
 import { SMALL_TRADE } from '../src/engine.ts';
 import { resultProperties } from '../src/export.ts';
@@ -223,8 +224,23 @@ test('the README quotes the limit messages, buttons and numbers as the plugin wo
 
 test('the README names the controls of the bar-by-bar table as the plugin words them', () => {
   const debug = read('src/render-debug.ts');
-  const labels = ['Rule values, bar by bar', '← Earlier', 'Later →', 'Go to date', '← Previous trade', 'Next trade →', 'Only bars where something happened or nearly happened', 'Save as CSV', 'Position', 'What happened'];
+  const labels = ['Rule values, bar by bar', '← Earlier', 'Later →', 'Go to date', '← Previous trade', 'Next trade →', 'Only bars where something happened or nearly happened', 'Save as CSV', 'Save every bar', 'Position', 'What happened'];
   for (const label of labels) assert.ok(debug.includes(`'${label}'`) && readme.includes(`"${label}"`), label);
+  assert.ok(readme.includes(`over about ${CSV_ASK_BYTES / 1e6} MB`) && readme.includes(`over about ${CSV_MAX_BYTES / 1e6} MB`));
+  assert.ok(debug.includes('` bars ${shown.from + 1} to ${shown.to}`') && readme.includes('`<name> rule values <ticker> bars 121 to 180 <date>`'));
+  const columns = readme.match(/\*\*The columns\.\*\*[^\n]*/)![0];
+  assert.ok(columns.indexOf('"What happened" and "Position"') > columns.indexOf('the close'), 'the README gives the columns in the order of the table');
+  assert.match(debug, /'Close'\)[^]*?'What happened'\)[^]*?'Position'\)/, 'the table draws Close, What happened, then Position');
+});
+
+test('the README quotes the line about changed default settings and the CSV helper\'s words as the plugin has them', () => {
+  const quoted: [string, string][] = [
+    ['src/render.ts', 'The default settings were changed after this result was worked out. It still has the old ones.'],
+    ['src/csv-modal.ts', 'Are some of these columns prices? Choose them yourself'],
+    ['src/csv-modal.ts', 'This file has no prices. A strategy can read its columns but cannot trade it.'],
+  ];
+  for (const [file, text] of quoted) assert.ok(read(file).includes(`'${text}'`) && readme.includes(`"${text}"`), text);
+  assert.ok(read('src/render.ts').includes("'Run again'") && readme.includes('with a "Run again" button'));
 });
 
 test('the README gives the numbers of magnify, commission and the cross-check as the code has them', () => {
