@@ -197,6 +197,12 @@ test('a price compared with a fixed number warns when the prices come from Yahoo
   assert.deepEqual(parse('universe: SPY\nbuy when close > open and volume > 1000 and close > sma(20) * 1.1').warnings, []);
 });
 
+test('the interval must suit the benchmark\'s source too', () => {
+  fails('universe: binance:BTCUSDT\ninterval: 1h\nbenchmark: SPY\nbuy when true', /Yahoo data comes as 1d or 1w bars, not "1h"/, 2);
+  fails('universe: csv:data/x.csv\ninterval: 2d\nbenchmark: binance:BTCUSDT\nbuy when true', /Binance intervals/, 2);
+  ok('universe: binance:BTCUSDT\ninterval: 1h\nbenchmark: binance:ETHUSDT\nbuy when true');
+});
+
 test('index levels are not adjusted, so comparing them with a number gives no warning', () => {
   assert.deepEqual(parse('universe: SPY\nbuy when close of ^VIX < 20').warnings, []);
   assert.deepEqual(parse('universe: ^GSPC, ^NDX\nbuy when close > 4000').warnings, []);

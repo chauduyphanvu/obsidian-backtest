@@ -1033,7 +1033,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   if (cashClash) errors.push(diag(cashSetting?.valueAt ?? { line: 1 }, cashClash));
 
   // The cash-rate ticker is left out: a yield only needs daily closes, which Yahoo serves for any interval.
-  const sources = new Set([...universe, ...extras].map((a) => a.source));
+  const sources = new Set([...universe, ...extras, ...(benchmark ? [benchmark] : [])].map((a) => a.source));
   const intervalAt = settings.get('interval')?.valueAt ?? { line: 1 };
   if (sources.has('yahoo') && !YAHOO_INTERVALS.includes(interval)) {
     errors.push(diag(intervalAt, `Yahoo data comes as 1d or 1w bars, not "${interval}"`));
