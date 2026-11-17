@@ -33,6 +33,29 @@ test('the ranking score, per-ticker rules and readings of other tickers all coun
   assert.deepEqual(runSize(s, data), { bars: 600, tickers: 3, ruleWork: 7 * 100 + 7 * 100 + 6 * 400, windowWork: 60 * 100 + 60 * 100 + 80 * 400 });
 });
 
+test('the add rule counts like the buy and sell rules', () => {
+  const big = Array.from({ length: 30 }, (_, k) => `sma(${k * 300 + 2}) > 0`).join(' and ');
+  const data = prices({ A: 30_000 });
+  const asSell = runSize(spec(`universe: A\nentries: 2\nbuy when true\nadd when true\nsell when ${big}`), data);
+  const asAdd = runSize(spec(`universe: A\nentries: 2\nbuy when true\nsell when true\nadd when ${big}`), data);
+  assert.deepEqual(asAdd, asSell);
+  assert.ok(asAdd.windowWork > 3e9);
+  assert.match(sizeRefusal(asAdd, 'here')!, /^Backtests run in the foreground here/);
+});
+
+test('a run whose bars are mostly the smaller bars of magnify is told that a longer magnify size makes it smaller', () => {
+  const s = spec('universe: A\nmagnify: 1h\nstop loss: 2%\nbuy when true');
+  const hours = closes(1_200_000);
+  const size = runSize(s, new Map([['A', closes(50_000)], ['A/1h', hours]]));
+  assert.deepEqual(size, { bars: 1_250_000, tickers: 1, ruleWork: 50_000, windowWork: 0, inside: 1_200_000 });
+  assert.equal(
+    sizeRefusal(size, 'worker'),
+    'This run has 1.3 million bars across 1 ticker; the limit is 1 million. Most of them are the smaller bars of "magnify", so a longer "magnify" size, a later "from" date or fewer tickers make it smaller.',
+  );
+  // When the smaller bars are the lesser part, the advice is as for any run.
+  assert.match(sizeRefusal({ ...size, bars: 2_500_000 }, 'worker')!, /\. A later "from" date, a longer "interval" or fewer tickers make it smaller\.$/);
+});
+
 test('below every limit nothing is refused, in the worker or here', () => {
   const s = runSize(spec('universe: A\nbuy when close > sma(200)\nsell when close < sma(200)'), prices({ A: 5000 }));
   assert.equal(sizeRefusal(s, 'worker'), null);
