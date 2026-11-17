@@ -1,0 +1,4 @@
+universe: TRND
+capital: 100000
+buy when close > sma(20) and close of LATE > sma(50) of LATE
+sell when close < sma(20)

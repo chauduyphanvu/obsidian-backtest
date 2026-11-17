@@ -1,0 +1,14 @@
+language 1
+strategy "u: ROC rotation with an exit" {
+  universe   symbols("TRND", "MREV", "CHOP", "LATE")
+  mom        roc(close, 63)
+  // Can't hold on a calm first day of the month (close = the day before's close >= its low), when
+  // we hold already and Rearview doesn't yet.
+  weak       close < lowest(low, 10)[1]
+  // Ranked where we rank, on the month's last day; a ticker whose sell rule holds there is not eligible.
+  enter long when mom[1] > -1 and (close > sma(close, 50))[1] and not weak[1]
+  rank by    mom[1]
+  exit when  weak
+  size       equal weight, max 2 positions
+  rebalance  monthly
+}

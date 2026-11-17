@@ -1,0 +1,7 @@
+language 1
+strategy "p: two tickers" {
+  universe   symbols("TRND", "MREV")
+  enter long when close > sma(close, 50) and not (close < sma(close, 50))
+  exit when  close < sma(close, 50)
+  size       50% of equity, max 2 positions
+}

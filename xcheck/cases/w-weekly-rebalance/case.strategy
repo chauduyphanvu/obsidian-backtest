@@ -1,0 +1,5 @@
+universe: WK1 60%, WK2 35%
+capital: 100000
+costs: 5 bps
+rebalance: weekly
+buy when true

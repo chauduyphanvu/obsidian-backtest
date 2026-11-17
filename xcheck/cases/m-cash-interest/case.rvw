@@ -1,0 +1,7 @@
+language 1
+strategy "m: cash interest" {
+  universe   symbols("TRND")
+  enter long when crosses_above(sma(close, 10), sma(close, 40)) and not crosses_below(sma(close, 10), sma(close, 40))
+  exit when  crosses_below(sma(close, 10), sma(close, 40))
+  size       100% of equity, max 1 positions
+}

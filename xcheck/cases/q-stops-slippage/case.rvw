@@ -1,0 +1,9 @@
+language 1
+strategy "q: stops with costs and slippage" {
+  universe   symbols("GAPY")
+  enter long when crosses_above(close, sma(close, 20)) and not crosses_below(close, sma(close, 50))
+  exit when  crosses_below(close, sma(close, 50))
+  stop       5%
+  target     8%
+  size       100% of equity, max 1 positions
+}

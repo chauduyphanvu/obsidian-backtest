@@ -1,0 +1,5 @@
+universe: VOLA
+capital: 100000
+buy when close > highest(20)[1]
+sell when close < lowest(10)[1]
+trailing stop: 8%

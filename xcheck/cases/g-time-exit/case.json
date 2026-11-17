@@ -1,0 +1,1 @@
+{"what": "RSI(2) < 15, out after bars held >= 4 (Rearview: bars_held >= 5) or RSI(2) > 85, MREV", "equity": "direct"}

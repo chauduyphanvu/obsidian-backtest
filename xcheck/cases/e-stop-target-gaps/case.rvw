@@ -1,0 +1,9 @@
+language 1
+strategy "e: stop and target on gaps" {
+  universe   symbols("GAPY")
+  enter long when crosses_above(close, sma(close, 10)) and not crosses_below(close, sma(close, 30))
+  exit when  crosses_below(close, sma(close, 30))
+  stop       4%
+  target     6%
+  size       100% of equity, max 1 positions
+}

@@ -1,0 +1,8 @@
+language 1
+strategy "s: another ticker as a filter" {
+  universe   symbols("TRND")
+  regime     close("LATE") > sma(close("LATE"), 50)
+  enter long when close > sma(close, 20) and regime and not (close < sma(close, 20))
+  exit when  close < sma(close, 20)
+  size       100% of equity, max 1 positions
+}

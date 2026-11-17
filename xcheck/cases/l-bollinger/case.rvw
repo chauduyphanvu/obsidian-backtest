@@ -1,0 +1,7 @@
+language 1
+strategy "l: Bollinger reversion" {
+  universe   symbols("MREV")
+  enter long when close < bollinger_lower(close, 20, 2) and not (close > sma(close, 20))
+  exit when  close > sma(close, 20)
+  size       100% of equity, max 1 positions
+}

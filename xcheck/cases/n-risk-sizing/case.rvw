@@ -1,0 +1,8 @@
+language 1
+strategy "n: risk sizing" {
+  universe   symbols("TRND")
+  enter long when close > highest(close, 20)[1] and not (close < sma(close, 20))
+  exit when  close < sma(close, 20)
+  stop       2 x atr(14)
+  size       risk 1% with stop, max 1 positions
+}

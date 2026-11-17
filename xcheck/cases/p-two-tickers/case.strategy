@@ -1,0 +1,5 @@
+universe: TRND 50%, MREV 50%
+capital: 100000
+costs: 10 bps
+buy when close > sma(50)
+sell when close < sma(50)

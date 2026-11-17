@@ -1,0 +1,4 @@
+universe: CHOP
+capital: 100000
+buy when close > sma(50)
+sell when close < sma(50)

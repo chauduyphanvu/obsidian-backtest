@@ -1,0 +1,8 @@
+language 1
+strategy "r: trailing stop with slippage" {
+  universe   symbols("VOLA")
+  enter long when close > sma(close, 20) and not (close < sma(close, 20))
+  exit when  close < sma(close, 20)
+  trail      6%
+  size       100% of equity, max 1 positions
+}

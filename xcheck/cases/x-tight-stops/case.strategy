@@ -1,0 +1,7 @@
+universe: VOLA
+capital: 100000
+costs: 5 bps
+buy when close crosses above ema(10)
+sell when close crosses below ema(10)
+stop loss: 2%
+take profit: 3%

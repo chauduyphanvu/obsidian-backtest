@@ -1,0 +1,9 @@
+language 1
+strategy "x: tight stop and target" {
+  universe   symbols("VOLA")
+  enter long when crosses_above(close, ema(close, 10)) and not crosses_below(close, ema(close, 10))
+  exit when  crosses_below(close, ema(close, 10))
+  stop       2%
+  target     3%
+  size       100% of equity, max 1 positions
+}

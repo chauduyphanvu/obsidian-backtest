@@ -1,0 +1,4 @@
+universe: MREV
+capital: 100000
+buy when rsi(2) < 15
+sell when bars held >= 4 or rsi(2) > 85

@@ -1,0 +1,4 @@
+universe: MREV
+capital: 100000
+buy when close < bb_lower(20, 2)
+sell when close > sma(20)

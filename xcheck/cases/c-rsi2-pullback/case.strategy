@@ -1,0 +1,4 @@
+universe: MREV
+capital: 100000
+buy when rsi(2) < 10 and close > sma(200)
+sell when close > sma(5)

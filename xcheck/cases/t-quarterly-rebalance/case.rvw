@@ -1,0 +1,8 @@
+language 1
+strategy "t: fixed weights, quarterly rebalance" {
+  universe   symbols("TRND", "MREV", "CHOP")
+  enter long when close > 0
+  rank by    series("w")
+  size       weight series("w"), max 3 positions
+  rebalance  quarterly
+}

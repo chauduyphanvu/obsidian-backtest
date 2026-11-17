@@ -1,0 +1,1 @@
+{"what": "6% trailing stop with 10 bps slippage, close vs SMA(20), VOLA", "equity": "replay", "explain": ["rearm", "trail"]}

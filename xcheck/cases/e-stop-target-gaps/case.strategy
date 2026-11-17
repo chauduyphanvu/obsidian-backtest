@@ -1,0 +1,7 @@
+universe: GAPY
+capital: 100000
+from: 2013-03-01
+buy when close crosses above sma(10)
+sell when close crosses below sma(30)
+stop loss: 4%
+take profit: 6%
