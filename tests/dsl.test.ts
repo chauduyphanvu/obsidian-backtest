@@ -273,3 +273,22 @@ test('calendar values', () => {
   for (const name of ['month', 'weekday', 'day', 'year', 'month_end', 'month_start']) assert.match(json, new RegExp(`"k":"cal","name":"${name}"`));
   errorOf('universe: SPY\nbuy when month', /needs a condition/);
 });
+
+test('one name for two different price sources is an error, wherever the second one is named', () => {
+  const said = (src: string) => parseSpec(src).errors.map((e) => [e.line, e.message]);
+  const twice = (a: string, b: string, name = 'SPY') => `${name} is used for two different things here: ${a} and ${b}. Rename the CSV file or use one of them.`;
+  assert.deepEqual(said('universe: SPY\nbenchmark: csv:Benchmarks/SPY.csv\nbuy when close of csv:Alt/SPY.csv > 0'), [
+    [2, twice('yahoo:SPY', 'csv:Benchmarks/SPY.csv')],
+    [3, twice('yahoo:SPY', 'csv:Alt/SPY.csv')],
+  ]);
+  assert.deepEqual(said('universe: csv:Data/SPY.csv\nbenchmark: SPY\nbuy when true'), [[2, twice('csv:Data/SPY.csv', 'yahoo:SPY')]]);
+  assert.deepEqual(said('universe: csv:Data/gold.csv\ncash rate: binance:GOLD\nbuy when true'), [[2, twice('csv:Data/gold.csv', 'binance:GOLD', 'gold')]]);
+  assert.deepEqual(said('universe: SPY\nbenchmark: csv:B/^IRX.csv\ncash rate: ^IRX\nbuy when true'), [[3, twice('csv:B/^IRX.csv', 'yahoo:^IRX', '^IRX')]]);
+  assert.deepEqual(said('universe: SPY\nbuy when true'), []);
+  assert.deepEqual(parseSpec('universe: SPY\nbuy when true', { defaults: { cashRate: 'csv:x/SPY.csv' } }).errors.map((e) => [e.line, e.message]), [
+    [1, twice('yahoo:SPY', 'csv:x/SPY.csv')],
+  ]);
+  // The same source twice is one ticker, and a bare name reads the CSV of that name.
+  ok('universe: csv:Data/gold.csv\nbenchmark: csv:Data/gold.csv\nbuy when close of gold > 0 and close of csv:Data/gold.csv > 0');
+  ok('universe: SPY\nbenchmark: yahoo:SPY\ncash rate: ^IRX\nbuy when close of yahoo:SPY > 0');
+});

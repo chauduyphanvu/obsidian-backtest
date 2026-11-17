@@ -609,6 +609,13 @@ function parseRef(text: string, defaultSource: Source, where: At): AssetRef {
   return { name: id, source, id };
 }
 
+/** The error for a ref whose name is already taken by a different source or file; null when there is no clash. */
+function clash(ref: AssetRef, known: AssetRef[]): string | null {
+  const other = known.find((a) => a.name.toLowerCase() === ref.name.toLowerCase());
+  if (!other || (other.source === ref.source && other.id === ref.id)) return null;
+  return `${other.name} is used for two different things here: ${other.source}:${other.id} and ${ref.source}:${ref.id}. Rename the CSV file or use one of them.`;
+}
+
 function parseDate(text: string, where: At): number {
   const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const ms = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
@@ -897,6 +904,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const known = [...universe, ...extras].find((a) => a.name.toLowerCase() === lower);
     if (known) return known.name;
     const ref = parseRef(sym.s, defaultSource, at(sym));
+    const problem = clash(ref, [...universe, ...extras]);
+    if (problem) throw new SpecError(at(sym), problem);
     const same = [...universe, ...extras].find((a) => a.name.toLowerCase() === ref.name.toLowerCase());
     if (same) return same.name;
     extras.push(ref);
@@ -958,6 +967,16 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   }
 
   const interval = get('interval', (v) => v.toLowerCase(), '1d');
+  const benchmark = get(
+    'benchmark',
+    (v, w) => {
+      const ref = parseRef(v, defaultSource, w);
+      const problem = clash(ref, [...universe, ...extras]);
+      if (problem) throw new SpecError(w, problem);
+      return ref;
+    },
+    null as AssetRef | null,
+  );
   const cashSetting = settings.get('cash rate');
   const parseCash = (text: string, where: At): CashRate => {
     const m = text.match(/^(-?\d+(?:\.\d+)?)\s*(%)?$/);
@@ -978,6 +997,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       errors.push({ line: 1, message: `The default cash rate "${defaults.cashRate}" in the plugin settings can't be read. Use a percentage, such as 4%, or a ticker, such as ^IRX` });
     }
   }
+  const cashClash = cash.k === 'ticker' ? clash(cash.ref, [...universe, ...extras, ...(benchmark ? [benchmark] : [])]) : null;
+  if (cashClash) errors.push(diag(cashSetting?.valueAt ?? { line: 1 }, cashClash));
 
   // The cash-rate ticker is left out: a yield only needs daily closes, which Yahoo serves for any interval.
   const sources = new Set([...universe, ...extras].map((a) => a.source));
@@ -1067,7 +1088,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     name: get('name', (v) => v, null as string | null),
     universe,
     extras,
-    benchmark: get('benchmark', (v, w) => parseRef(v, defaultSource, w), null as AssetRef | null),
+    benchmark,
     from,
     to,
     testFrom,
