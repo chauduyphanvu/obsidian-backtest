@@ -382,9 +382,14 @@ export function walkWindows(t: number[], trainMonths: number, testMonths: number
   return out;
 }
 
+/**
+ * A variant's score on bars a to b: growth from the last close before the stretch (as the test
+ * stretches and `test from` are measured), reading nothing after bar b.
+ */
 function windowScore(run: RunResult, [a, b]: [number, number], metric: Metric): number {
-  const slice = (xs: number[]) => xs.slice(a, b + 1);
-  const v = computeStats(slice(run.t), slice(run.equity), run.equity[a], slice(run.exposure), slice(run.cashReturn))[metric];
+  const base = Math.max(0, a - 1);
+  const slice = (xs: number[]) => xs.slice(base, b + 1);
+  const v = computeStats(slice(run.t), slice(run.equity), run.equity[base], run.exposure.slice(a, b + 1), slice(run.cashReturn))[metric];
   return Number.isFinite(v) ? v : NaN;
 }
 

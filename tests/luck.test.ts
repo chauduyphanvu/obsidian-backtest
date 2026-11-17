@@ -309,6 +309,26 @@ test('walk-forward: changing prices after a training stretch never changes that 
   assert.deepEqual(b.windows[1].chosen, { m: 5 });
 });
 
+test('walk-forward measures each stretch from the last close before it, so the stitched test stretches multiply to the whole', async () => {
+  // A 50% jump on 1 January 2016, held only by the December variant (in from early December, out
+  // on 2 January). The second training stretch starts that day: measured from the close before it,
+  // the jump counts, and December (+50%) beats March 2016 (+1.01^30 - 1, about 35%).
+  const jump = (d: Date) => (d.getUTCFullYear() === 2016 && d.getUTCMonth() === 0 && d.getUTCDate() === 1 ? 1.5 : seasons(d.getUTCFullYear(), d.getUTCMonth() + 1));
+  const A = daily('2015-01-01', '2019-12-31', jump);
+  const opts = { metric: 'totalReturn' as const, trainYears: 2, testYears: 1 };
+  const r = (await walkForward(MONTHLY, new Map([['A', A]]), opts))!;
+  assert.deepEqual(r.windows.map((w) => w.chosen.m), [3, 12, 9]);
+  assert.ok(near(r.windows[1].trainScore, 0.5, 1e-9));
+  // The test stretches' growth multiplies to the stitched line's, for the picks and the note's values.
+  const product = (xs: number[]) => xs.reduce((p, x) => p * (1 + x), 1);
+  assert.ok(near(product(r.windows.map((w) => w.testReturn)), 1 + r.stats.totalReturn, 1e-9));
+  assert.ok(near(product(r.windows.map((w) => w.declaredReturn)), 1 + r.declared.stats.totalReturn, 1e-9));
+  // A pick reads nothing after its stretch: a jump on the first bar after it changes neither pick nor score.
+  const after = daily('2015-01-01', '2019-12-31', (d) => (d.getUTCFullYear() === 2017 && d.getUTCMonth() === 0 && d.getUTCDate() === 1 ? 3 : jump(d)));
+  const b = (await walkForward(MONTHLY, new Map([['A', after]]), opts))!;
+  assert.deepEqual([b.windows[0].chosen, b.windows[0].trainScore], [r.windows[0].chosen, r.windows[0].trainScore]);
+});
+
 test('walk-forward refuses without a range, with too little history, and can be stopped', async () => {
   const A = daily('2015-01-01', '2019-12-31', () => 1);
   await assert.rejects(walkForward('universe: A\nn = 5\nbuy when close > sma(n)', new Map([['A', A]])), /needs a parameter with a range/);
