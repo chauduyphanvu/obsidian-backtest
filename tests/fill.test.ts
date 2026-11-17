@@ -133,6 +133,9 @@ test('with fill: close the last bar leaves nothing pending, and the state says w
   const out = run('universe: B\nfill: close\nbuy when close > 11\nsell when close < 10', { B });
   assert.deepEqual([out.run.states[0].long, out.run.states[0].pending, out.run.states[0].filled?.side], [false, null, 'sell']);
   assert.equal(run('universe: B\nfill: close\nbuy when close > 11', { B }).run.states[0].filled, null);
+  // A stop taken inside the last bar is not an order filled at its close.
+  const stopped = run('universe: B\nfill: close\nbuy when close > 11\nstop loss: 10%', { B });
+  assert.deepEqual([stopped.run.trades[0].reason, stopped.run.states[0].long, stopped.run.states[0].filled], ['stop loss', false, null]);
   // Without fill: close the state has no such field at all.
   assert.ok(!('filled' in run('universe: B\nbuy when close > 11', { B }).run.states[0]));
 });

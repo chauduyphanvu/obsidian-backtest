@@ -103,7 +103,11 @@ export interface AssetState {
   value: number;
   /** The weight a buy at the next open would use, estimated from the last close. */
   targetWeight: number;
-  /** Only with `fill: close`: what the rules or a ranking decision bought or sold at the close of the ticker's last bar, at that close; null when nothing. Price with slippage. */
+  /**
+   * Only with `fill: close`: a position the rules or a ranking decision opened or sold whole at the
+   * close of the ticker's last bar, at that close; null when nothing did. Rebalancing trims and
+   * top-ups and stop exits are not counted. Price with slippage.
+   */
   filled?: { side: 'buy' | 'sell'; shares: number; price: number } | null;
 }
 

@@ -21,7 +21,12 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     h(row, 'td', undefined, st.name);
     h(row, 'td', 'bt-num', pct(st.weight, 0));
     const now = st.long ? `Long since ${stamp(st.since!, intraday)}` : 'In cash';
-    h(row, 'td', undefined, now + (st.pending ? `, ${st.pending === 'buy' ? 'buys' : 'sells'} at the next open` : ''));
+    const order = st.pending
+      ? `, ${st.pending === 'buy' ? 'buys' : 'sells'} at the ${bt.spec.fill === 'close' ? 'next close' : 'next open'}`
+      : st.filled
+        ? `, ${st.filled.side === 'buy' ? 'bought' : 'sold'} at the last close`
+        : '';
+    h(row, 'td', undefined, now + order);
     h(row, 'td', 'bt-num', String(closed.length));
     h(row, 'td', 'bt-num', closed.length ? pct(closed.filter((t) => t.ret > 0).length / closed.length, 0) : '–');
     h(row, 'td', 'bt-num', closed.length ? signedPct(closed.reduce((a, t) => a + t.ret, 0) / closed.length) : '–');
