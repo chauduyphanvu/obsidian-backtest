@@ -12,7 +12,9 @@ import { OrdersModal } from './orders-view.ts';
 import { renderActions } from './render-actions.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderPriceCharts } from './render-price.ts';
+import { renderLuck } from './render-luck.ts';
 import { renderErrors, renderFailure, renderLoading, renderResult, type Section } from './render.ts';
+import { renderSweep } from './render-sweep.ts';
 import { ResultCache, cacheKey } from './result-cache.ts';
 import { Runner, type RunOutput } from './runner.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
@@ -185,6 +187,8 @@ export default class BacktestBlocks extends Plugin {
             to: bt.run.t[bt.run.t.length - 1],
             intraday,
           }),
+        (root) => renderSweep(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides) }),
+        (root) => renderLuck(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides) }),
         (root) =>
           renderActions(root, [
             { label: 'Save trades as CSV', run: () => this.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
