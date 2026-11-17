@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { explainTrade, type Explanation, type Row, type Section } from '../src/explain.ts';
+import type { Trade } from '../src/engine.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, near, DAY, T0 } from './helpers.ts';
 
@@ -135,6 +136,20 @@ test('a ranking: the place, the cut-off and the whole table, at the buy and at t
   const first = explainTrade(rule, rule.run.trades[0]);
   assert.equal(find(first, 'bought', 'B').value, 'could not be chosen: its buy rule did not hold');
   assert.equal(find(first, 'size', /^Weight/).label, 'Weight: each of the 2 held gets the same share');
+});
+
+test('a ranking table prints scores that differ with enough decimals to tell them apart, and says when they are equal', () => {
+  const close = (x: number) => bars([x, x, x]);
+  const bt = run('universe: A, B, C\ncapital: 1000\nhold: top 1 by close', { A: close(0.012341), B: close(0.012344), C: close(0.012341) });
+  const ex = explainTrade(bt, bt.run.trades[0]);
+  const tie = 'the ticker listed first in the universe ranks higher';
+  assert.deepEqual(table(ex, 'bought').slice(2), [
+    ['Ranked 1st of 3 by close. Only the best is held.', 'close 0.012344', null, 0],
+    ['The ranking at the close of 2020-01-01, by close:', '', null, 0],
+    ['1. B (this one)', '0.012344', 'yes', 1],
+    ['2. A', `0.012341, tied with C: ${tie}`, 'no', 1],
+    ['3. C', `0.012341, tied with A: ${tie}`, 'no', 1],
+  ]);
 });
 
 test('a stop loss inside the bar and through a gapped open', () => {
@@ -344,7 +359,55 @@ const STRATEGIES = [
   'universe: C\nrisk per trade: 1% at 2 atr(14)\nstop loss: 2 atr(14)\nbuy when close > highest(20)[1]\nsell when close < lowest(10)[1]',
   'universe: A, C\nweighting: inverse volatility(20)\nrebalance: monthly\nbuy when close > sma(25)\nsell when close < sma(25)',
   'universe: A, B\nlimit = 3% in 1%..5%\nbuy when roc(5) > limit and not close < close[3]\nsell when close < entry price * 0.95 or bars held >= 8',
+  'universe: A, B, C\nrebalance: monthly\nhold: top 1 by roc(20)',
 ];
+
+const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+/**
+ * The dates the words give for a trade's decisions are the ones the engine recorded: the ranking's own close, the bar it
+ * read, and with fill: close "the close the rule read" only when the fill was at that close, otherwise the close read.
+ * Returns how many fills came at a later close than the one read.
+ */
+function checkDates(bt: Backtest, t: Trade, ex: Explanation): number {
+  const why = t.why!;
+  const atClose = bt.spec.fill === 'close';
+  let later = 0;
+  const first = section(ex, 'bought')[0].label;
+  if (why.rank) {
+    assert.ok(first.includes(`made at the close of ${iso(why.rank.decision.t)}`), first);
+    if (why.rank.decision.t === why.buyT) assert.ok(!first.includes('which read'), first);
+    else assert.ok(first.includes(`which read its bar of ${iso(why.buyT)}`), first);
+  } else {
+    assert.equal(first, `The buy rule was read at the close of ${iso(why.buyT)}.`);
+  }
+  const by = why.rank ? 'ranking' : 'rule';
+  const filled = find(ex, 'size', /^Filled at the/).label;
+  if (atClose) {
+    assert.ok(filled.startsWith(`Filled at the close of ${iso(t.entryT)}`), filled);
+    if (why.buyT === t.entryT) assert.ok(filled.endsWith(`, the close the ${by} read`), filled);
+    else {
+      later++;
+      assert.ok(filled.endsWith(`; the ${by} read the close of ${iso(why.buyT)}`), filled);
+    }
+  }
+  const exit = why.exit;
+  if (exit && exit.k !== 'level') {
+    const sold = section(ex, 'sold').at(-1)!.label;
+    const head = section(ex, 'sold')[0].label;
+    assert.ok(head.includes(iso(exit.k === 'rule' ? exit.t : exit.rank.decision.t)), head);
+    if (atClose) {
+      const said = exit.k === 'rank' ? 'ranking' : 'rule';
+      assert.ok(sold.startsWith(`Sold at the close of ${iso(t.exitT)}`), sold);
+      if (exit.t === t.exitT) assert.ok(sold.endsWith(`, the close the ${said} read`), sold);
+      else {
+        later++;
+        assert.ok(sold.endsWith(`; the ${said} read the close of ${iso(exit.t)}`), sold);
+      }
+    }
+  }
+  return later;
+}
 
 test('every trade\'s explanation agrees with the trade, with either kind of fill', () => {
   const data = { A: walk(500, 7, 0.0008, true), B: walk(500, 11, 0.0003, true), C: walk(700, 23, 0.0005, false), D: walk(480, 31, 0.0002, true, Date.UTC(2019, 0, 20)), X: walk(500, 41, 0.0004, true) };
@@ -373,9 +436,39 @@ test('every trade\'s explanation agrees with the trade, with either kind of fill
         const fillRow = find(ex, 'size', /^Filled at the/);
         assert.match(fillRow.label, fill ? /^Filled at the close of/ : /^Filled at the open of/);
         if (t.reason === 'signal') assert.match(section(ex, 'sold').at(-1)!.label, fill ? /^Sold at the close of/ : /^Sold at the open of/);
+        checkDates(bt, t, ex);
         checked++;
       }
     }
   }
   assert.ok(checked > 200, `only ${checked} trades checked`);
+});
+
+test('a mixed-calendar ranking with close fills: every trade\'s words give the decision and the bar it read as recorded', () => {
+  // The review's case: two weekday stocks and a ticker that trades every day, ranked monthly and filled at the close.
+  const series = (n: number, seed: number, weekdays: boolean): Bars => {
+    let x = seed;
+    const rnd = () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const out: Bars = { t: [], o: [], h: [], l: [], c: [], v: [] };
+    let p = 50 + rnd() * 50;
+    for (let d = Date.UTC(2019, 0, 1); out.t.length < n; d += DAY) {
+      if (weekdays && [0, 6].includes(new Date(d).getUTCDay())) continue;
+      const o = p * (1 + (rnd() - 0.5) * 0.01);
+      const c = o * (1 + (rnd() - 0.5) * 0.06);
+      out.t.push(d);
+      out.o.push(o);
+      out.c.push(c);
+      out.h.push(Math.max(o, c) * (1 + rnd() * 0.02));
+      out.l.push(Math.min(o, c) * (1 - rnd() * 0.02));
+      out.v.push(1000);
+      p = c;
+    }
+    return out;
+  };
+  const bt = run('universe: STK, STK2, CRY\nfill: close\nrebalance: monthly\nhold: top 1 by roc(20)', { STK: series(500, 7, true), STK2: series(500, 9, true), CRY: series(700, 11, false) });
+  assert.ok(bt.run.trades.length >= 10);
+  let later = 0;
+  for (const t of bt.run.trades) later += checkDates(bt, t, explainTrade(bt, t));
+  // Some buys and sells fill a close or more after the bar the ranking read; their words must say so.
+  assert.ok(later >= 5, `only ${later} later fills`);
 });

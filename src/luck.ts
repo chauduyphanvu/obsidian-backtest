@@ -3,7 +3,7 @@
 import { computeStats, maxDrawdown, type Backtest, type Stats } from './backtest.ts';
 import { parseSpec } from './dsl.ts';
 import { simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
-import { Evaluator, type BarRule } from './evaluate.ts';
+import { specEvaluator, type BarRule } from './evaluate.ts';
 import { makeRng, shuffle, type Rng } from './rng.ts';
 import { baseSpec, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
 import type { Bars } from './types.ts';
@@ -200,7 +200,7 @@ export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Ho
 export type PickRules = Map<string, { buy: number[]; sell: BarRule | null }>;
 
 export function pickRules(bt: Backtest): PickRules {
-  const ev = new Evaluator(bt.data);
+  const ev = specEvaluator(bt.spec, bt.data);
   return new Map(
     bt.spec.universe.map((a) => {
       const rule = bt.spec.rules[a.name];

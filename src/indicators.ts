@@ -1,4 +1,4 @@
-// Every function returns an array as long as its input, with NaN where the value is not yet known.
+// Every indicator returns an array as long as its input, with NaN where the value is not yet known.
 
 function filled(n: number): number[] {
   return new Array<number>(n).fill(NaN);
@@ -167,12 +167,37 @@ export function barEnds(t: number[]): number[] {
  * ended, or -1 when none had. Reading another series through this never sees a bar still in progress.
  */
 export function alignByEnd(from: number[], to: number[]): number[] {
+  return endedBy(from, barEnds(to));
+}
+
+/** For each moment in `at` (ascending), the index of the latest bar of `from` that had ended by then, or -1 when none had. */
+export function endedBy(from: number[], at: number[]): number[] {
   const fromEnd = barEnds(from);
   let j = -1;
-  return barEnds(to).map((end) => {
-    while (j + 1 < from.length && fromEnd[j + 1] <= end) j++;
+  return at.map((x) => {
+    while (j + 1 < from.length && fromEnd[j + 1] <= x) j++;
     return j;
   });
+}
+
+/** A day of the week counts as one a series trades on when at least this share of its bars fall on it, so a stray bar does not. */
+const TRADING_DAY = 0.02;
+
+/**
+ * The clock a series keeps, as far as its prices show it: where they come from, its bar length (counted as barEnds counts
+ * it) and the days of the week it has bars on. Two series with the same clock close their bars together, or at least the
+ * data cannot tell that they don't. Bars are stamped with their start, a daily bar at midnight UTC of its trading date
+ * whatever the market's hours, so series on different clocks can close the "same" bar hours apart.
+ */
+export function clockOf(source: string, t: number[]): string {
+  let step = Infinity;
+  for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) step = Math.min(step, t[i] - t[i - 1]);
+  const length = !Number.isFinite(step) ? '?' : step < 20 * DAY ? `${step}ms` : `${Math.max(1, Math.round(step / (30.4375 * DAY)))}mo`;
+  const count = new Array<number>(7).fill(0);
+  // Day 0 of the epoch was a Thursday.
+  for (const x of t) count[(((Math.floor(x / DAY) + 4) % 7) + 7) % 7]++;
+  const weekdays = count.flatMap((n, d) => (n > 0 && n >= TRADING_DAY * t.length ? [d] : [])).join('');
+  return `${source} ${length} ${weekdays}`;
 }
 
 /** 1 on the first bar of each period; unknown on the series' first bar, whose period may have begun earlier. */
