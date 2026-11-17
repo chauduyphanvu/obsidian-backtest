@@ -51,12 +51,21 @@ export interface Backtest {
 
 const YEAR = 365.25 * 86_400_000;
 
+/** Fall from the highest value so far at each step; NaN where the value is unknown. */
 export function drawdowns(equity: number[]): number[] {
   let peak = -Infinity;
   return equity.map((e) => {
-    peak = Math.max(peak, e);
+    if (Number.isNaN(e)) return NaN;
+    if (e > peak) peak = e;
     return e / peak - 1;
   });
+}
+
+/** The worst drawdown, as a fraction at or below 0. A loop, since spreading a long run into Math.min overflows the stack. */
+export function maxDrawdown(equity: number[]): number {
+  let worst = 0;
+  for (const d of drawdowns(equity)) if (d < worst) worst = d;
+  return worst;
 }
 
 /** `cashReturn[i]` is what cash earned from bar i - 1 to bar i; Sharpe and Sortino measure returns above it. */
@@ -81,7 +90,7 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
   return {
     totalReturn: total,
     cagr: (1 + total) ** (1 / years) - 1,
-    maxDrawdown: Math.min(...drawdowns(equity)),
+    maxDrawdown: maxDrawdown(equity),
     volatility: sd * Math.sqrt(perYear),
     sharpe: sdExcess > 0 ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
     sortino: downside > 0 ? (meanExcess / downside) * Math.sqrt(perYear) : 0,

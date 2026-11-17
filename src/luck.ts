@@ -1,6 +1,6 @@
 // "Was it luck?": three checks that try to make a lucky or over-fitted backtest look like one.
 
-import { computeStats, drawdowns, type Backtest, type Stats } from './backtest.ts';
+import { computeStats, maxDrawdown, type Backtest, type Stats } from './backtest.ts';
 import { parseSpec } from './dsl.ts';
 import { simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
 import { Evaluator, type BarRule } from './evaluate.ts';
@@ -87,7 +87,7 @@ export function bootstrap(t: number[], equity: number[], opts: { runs?: number; 
     cagr: spread(cagr),
     maxDrawdown: spread(worst),
     lossShare: losses / runs,
-    actual: { cagr: (equity[n] / equity[0]) ** (1 / years) - 1, maxDrawdown: Math.min(...drawdowns(equity)) },
+    actual: { cagr: (equity[n] / equity[0]) ** (1 / years) - 1, maxDrawdown: maxDrawdown(equity) },
   };
 }
 

@@ -1,7 +1,7 @@
 // Statistics beyond the headline tiles: calendar-period returns, downside-adjusted ratios and time under water.
 // All functions take an equity series as `t` (epoch ms, ascending) and `equity` (same length, at least 2 points).
 
-import { drawdowns } from './backtest.ts';
+import { maxDrawdown } from './backtest.ts';
 import { DAY } from './dom.ts';
 
 const YEAR = 365.25 * DAY;
@@ -66,7 +66,7 @@ export function sortino(t: number[], equity: number[]): number {
 
 /** Return per year divided by the worst drawdown's size. 0 when there is no drawdown. */
 export function calmar(t: number[], equity: number[]): number {
-  const worst = Math.min(...drawdowns(equity));
+  const worst = maxDrawdown(equity);
   if (worst === 0) return 0;
   const years = (t[t.length - 1] - t[0]) / YEAR;
   const perYear = (equity[equity.length - 1] / equity[0]) ** (1 / years) - 1;
