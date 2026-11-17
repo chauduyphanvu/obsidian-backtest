@@ -28,6 +28,7 @@ import { ResultCache, cacheKey, csvPaths, csvVersions, debounce } from './result
 import { findBlock, setParamValues, setParamValuesInNote } from './rewrite.ts';
 import { Runner, lookbackBars, type RunOutput } from './runner.ts';
 import { SymbolLookup } from './symbols.ts';
+import { shutdownWorkers } from './worker-client.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
 
 /** Puts text at the cursor; a block starts on its own line. */
@@ -174,6 +175,7 @@ export default class BacktestBlocks extends Plugin {
 
   onunload(): void {
     this.ordersBadge?.stop();
+    shutdownWorkers();
     for (const write of this.propertyWrites.values()) write.cancel();
   }
 
