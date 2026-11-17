@@ -58,6 +58,38 @@ test('between decisions a sell rule still exits, and the slot waits for the next
   assert.deepEqual(r.run.states.map((s) => [s.long, s.pending]), [[false, null], [false, null]]);
 });
 
+/** UTC midnights from `from` to `to`, weekdays only when asked. */
+function calendar(from: number, to: number, weekdays: boolean): number[] {
+  const out: number[] = [];
+  for (let t = from; t <= to; t += DAY) if (!weekdays || ![0, 6].includes(new Date(t).getUTCDay())) out.push(t);
+  return out;
+}
+
+test('in rank mode a buy waits for the sells of the same decision, on any calendar', () => {
+  // Monday 30 December 2019 to Tuesday 4 February 2020. CRY trades every day, STK on weekdays.
+  const dec30 = Date.UTC(2019, 11, 30);
+  const cryT = calendar(dec30, feb(4), false);
+  const stkT = calendar(dec30, feb(4), true);
+  const STK = bars(stkT.map(() => 100), { times: stkT });
+  // CRY scores 50 until it jumps to 150 at the close of Friday 31 January, and doubles on 4 February.
+  const CRY = bars(cryT.map((t) => (t < jan(31) ? 50 : t < feb(4) ? 150 : 300)), { times: cryT });
+  const r = run('universe: STK, CRY\ncapital: 1000\nrebalance: monthly\nhold: top 1 by close', { STK, CRY });
+  // 31 December picks STK, bought on 1 January. 31 January picks CRY: STK sells at its next open,
+  // Monday 3 February, and CRY's buy waits through the weekend for that cash, then fills the same open.
+  assert.deepEqual(trades(r), [['STK', jan(1), feb(3), 'signal'], ['CRY', feb(3), feb(4), 'open']]);
+  assert.deepEqual(r.run.equity.slice(-4), [1000, 1000, 1000, 2000]);
+  assert.deepEqual(r.run.exposure.slice(-4), [1, 1, 1, 1]);
+});
+
+test('in rank mode, when cash is short, the best score is bought first', () => {
+  // Both are chosen; 1% costs leave too little cash for two full halves. B scores higher.
+  const r = run('universe: A, B\ncapital: 1000\ncosts: 100 bps\nhold: top 2 by close', { A: bars([10, 10, 10]), B: bars([20, 20, 20]) });
+  const [a, b] = r.run.states;
+  // B gets its full 500 (25 shares), paying 5 in costs; A gets what is left, 495 / 1.01.
+  assert.ok(near(b.shares, 25));
+  assert.ok(near(a.shares, 495 / 1.01 / 10));
+});
+
 test('in rank mode a stopped-out ticker can be bought again at the next decision', () => {
   const A = bars([100, 100, 88, 88, 88], { opens: [100, 100, 100, 88, 88], lows: [100, 100, 85, 88, 88] });
   const r = run('universe: A\nhold: top 1 by close\nstop loss: 10%', { A });

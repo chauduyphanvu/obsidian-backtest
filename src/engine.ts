@@ -129,6 +129,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       // After a stop or target exit, the buy rule must stop holding before it can fire again.
       armed: true,
       pending: null as 'buy' | 'sell' | null,
+      // Place in the latest ranking decision (0 is the best score), for funding buys in that order.
+      rankPos: Infinity,
     };
   });
   type A = (typeof assets)[number];
@@ -171,6 +173,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   let cash = p.capital;
   let costs = 0;
   let interest = 0;
+  // Positions the latest ranking decision sells; its buys wait until these have filled.
+  let waiting = new Set<A>();
   const trades: Trade[] = [];
   const equity: number[] = [];
   const exposure: number[] = [];
@@ -278,7 +282,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     const mark = (a: A) => (a.shares === 0 ? 0 : a.shares * (isLive.has(a) ? a.bars.o[a.i] : a.lastClose));
     const equityAtOpen = cash + assets.reduce((s, a) => s + mark(a), 0);
     for (const a of live) if (a.pending === 'sell' && a.shares > 0) close(a, t, a.bars.o[a.i], 'signal');
-    const entering = new Set(live.filter((a) => a.pending === 'buy' && a.shares === 0));
+    for (const a of waiting) if (a.shares === 0) waiting.delete(a);
+    const entering = new Set(live.filter((a) => a.pending === 'buy' && a.shares === 0 && waiting.size === 0));
     // Volatility as of the last close before this open.
     const weights = targetWeights(entering, (a) => (isLive.has(a) ? a.i - 1 : a.i));
     const buys: { a: A; notional: number; entry: boolean }[] = [];
@@ -291,15 +296,20 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         if (delta < 0) sell(a, -delta / open, open);
         else buys.push({ a, notional: delta, entry: false });
       }
-      a.pending = null;
+      // A ranking buy stays wanted until it fills or the next decision replaces it.
+      if (!(p.rank && a.pending === 'buy')) a.pending = null;
     }
+    if (p.rank) buys.sort((x, y) => x.a.rankPos - y.a.rankPos || x.a.order - y.a.order);
     for (const { a, notional, entry } of buys) {
       if (entry) {
         a.cashIn = 0;
         a.cashOut = 0;
       }
       buy(a, notional, a.bars.o[a.i]);
-      if (entry && a.shares > 0) openPosition(a, t, a.bars.o[a.i]);
+      if (entry && a.shares > 0) {
+        openPosition(a, t, a.bars.o[a.i]);
+        a.pending = null;
+      }
     }
 
     // Inside the bar: the open comes first, so a gap through the stop or the target fills there;
@@ -348,11 +358,19 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const eligible = assets.filter((a) => a.i >= 0 && a.sig.buy[a.i] === 1 && !sells(a) && Number.isFinite(score(a)));
       eligible.sort((x, y) => score(y) - score(x) || x.order - y.order);
       const chosen = new Set(eligible.slice(0, p.rank.top));
+      for (const a of assets) a.rankPos = Infinity;
+      eligible.forEach((a, n) => (a.rankPos = n));
+      // A sell that can never fill (the ticker has no later bar in the run) is not waited for.
+      const fills = (a: A) => a.i + 1 < a.bars.t.length && a.bars.t[a.i + 1] <= end;
+      waiting = new Set();
       for (const a of assets) {
         if (chosen.has(a)) {
-          if (a.shares === 0) a.pending = 'buy';
+          a.pending = a.shares === 0 ? 'buy' : null;
+        } else if (a.shares > 0) {
+          a.pending = 'sell';
+          if (fills(a)) waiting.add(a);
         } else {
-          a.pending = a.shares > 0 ? 'sell' : null;
+          a.pending = null;
         }
       }
     }
