@@ -1,4 +1,5 @@
-import { BINANCE_INTERVALS, REBALANCE, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
+import { docFor, shortOf, valueId, FIXED_VALUES } from './docs.ts';
+import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
 import { declaredParams, lineKind, settingKey } from './highlight.ts';
 
 export interface Completion {
@@ -14,34 +15,10 @@ export interface CompletionResult {
   items: Completion[];
 }
 
-const SETTING_HELP: Record<string, string> = {
-  name: 'title shown above the result',
-  universe: 'tickers and weights: SPY 60%, TLT 40%',
-  symbol: 'one ticker (same as universe)',
-  from: 'first day, as 2015-01-31',
-  to: 'last day, as 2024-12-31',
-  data: 'where plain tickers come from: yahoo or binance',
-  interval: 'bar size: 1d, 1w, or 1h and others on Binance',
-  capital: 'starting money, as 10000 or 10k',
-  costs: 'per trade, as 5 bps or 0.05%',
-  size: 'share of equity to use when tickers have no weights',
-  rebalance: 'never, weekly, monthly, quarterly or yearly',
-  benchmark: 'ticker to compare with, bought and held',
-  'stop loss': 'sell this far below the entry price, as 10% or 2 atr(14)',
-  'trailing stop': 'sell this far below the highest price since entry',
-  'take profit': 'sell this far above the entry price',
-  slippage: 'how much worse each fill is than the price, as 5 bps',
-  'cash rate': 'what cash earns: 4% a year, or a yield ticker such as ^IRX',
-  'test from': 'report results before and from this day apart',
-  hold: 'hold only the best-ranked tickers: top 3 by roc(126)',
-  weighting: 'inverse volatility(60): calmer tickers get more weight',
-  'risk per trade': 'size each buy by what it risks: 1% at 2 atr(14)',
-};
+const entry = (id: string, insert = id, detail = shortOf(id)): Completion => ({ label: id, insert, detail });
 
 const VALUE_HINTS: Record<string, Completion[]> = {
-  rebalance: REBALANCE.map((v) => ({ label: v, insert: v, detail: '' })),
-  data: ['yahoo', 'binance'].map((v) => ({ label: v, insert: v, detail: '' })),
-  interval: BINANCE_INTERVALS.map((v) => ({ label: v, insert: v, detail: v !== '1d' && v !== '1w' ? 'Binance only' : '' })),
+  ...Object.fromEntries(Object.entries(FIXED_VALUES).map(([key, values]) => [key, values.map((v) => entry(v, v, shortOf(valueId(key, v))))])),
   'stop loss': [
     { label: '10%', insert: '10%', detail: 'below the entry price' },
     { label: '2 atr(14)', insert: '2 atr(14)', detail: 'two average true ranges below the entry price' },
@@ -65,58 +42,32 @@ const VALUE_HINTS: Record<string, Completion[]> = {
   'risk per trade': [{ label: '1% at 2 atr(14)', insert: '1% at 2 atr(14)', detail: 'lose 1% of equity if the price falls 2 average true ranges' }],
 };
 
-const FUNCTION_HELP: Record<string, string> = {
-  sma: 'sma(n) · simple average of the last n closes; sma(series, n) for another series',
-  ema: 'ema(n) · exponential average',
-  rsi: 'rsi(n = 14) · relative strength index, 0 to 100',
-  roc: 'roc(n) · change over n bars, compare with a percentage',
-  stdev: 'stdev(n) · standard deviation of the last n closes',
-  highest: 'highest(n) · highest high of the last n bars; add [1] to leave out this bar',
-  lowest: 'lowest(n) · lowest low of the last n bars',
-  atr: 'atr(n = 14) · average true range',
-  macd: 'macd(fast = 12, slow = 26) · fast average minus slow average',
-  macd_signal: 'macd_signal(12, 26, 9) · average of the macd line',
-  bb_upper: 'bb_upper(n = 20, width = 2) · upper Bollinger band',
-  bb_lower: 'bb_lower(n = 20, width = 2) · lower Bollinger band',
-  min: 'min(a, b) · the smaller value',
-  max: 'max(a, b) · the larger value',
-  abs: 'abs(x) · value without its sign',
-};
+const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
 
-const SERIES_HELP: Record<string, string> = { open: "the bar's open", high: "the bar's high", low: "the bar's low", close: "the bar's close", volume: "the bar's volume" };
+/** A function's signature and what it does, as one line. */
+const functionDetail = (f: string) => `${docFor(f)!.signature} \u00b7 ${shortOf(f)}`;
 
-const POSITION_WORDS: Completion[] = [
-  { label: 'bars held', insert: 'bars held', detail: 'completed bars since the buy filled, 0 on that bar' },
-  { label: 'entry price', insert: 'entry price', detail: 'the price the position was bought at' },
-];
-
-const CALENDAR_WORDS: Completion[] = [
-  { label: 'month', insert: 'month', detail: 'month of the bar, 1 to 12' },
-  { label: 'day', insert: 'day', detail: 'day of the month, 1 to 31' },
-  { label: 'weekday', insert: 'weekday', detail: '1 = Monday to 7 = Sunday' },
-  { label: 'year', insert: 'year', detail: 'the year, as 2024' },
-  { label: 'month_start', insert: 'month_start', detail: 'first bar of a month' },
-  { label: 'month_end', insert: 'month_end', detail: 'last bar of a month' },
-];
+const POSITION_WORDS: Completion[] = Object.values(POSITION).map((p) => entry(p));
+const CALENDAR_WORDS: Completion[] = CALENDAR.map((c) => entry(c));
 
 const WORDS: Completion[] = [
-  { label: 'and', insert: 'and ', detail: 'both conditions hold' },
-  { label: 'or', insert: 'or ', detail: 'either condition holds' },
-  { label: 'not', insert: 'not ', detail: 'the condition does not hold' },
-  { label: 'crosses above', insert: 'crosses above ', detail: 'was at or below, is now above' },
-  { label: 'crosses below', insert: 'crosses below ', detail: 'was at or above, is now below' },
-  { label: 'above', insert: 'above ', detail: 'same as >' },
-  { label: 'below', insert: 'below ', detail: 'same as <' },
-  { label: 'of', insert: 'of ', detail: "another ticker's value: sma(200) of SPY" },
-  { label: 'true', insert: 'true', detail: 'always holds' },
+  entry('and', 'and '),
+  entry('or', 'or '),
+  entry('not', 'not '),
+  entry('crosses above', 'crosses above '),
+  entry('crosses below', 'crosses below '),
+  entry('above', 'above '),
+  entry('below', 'below '),
+  entry('of', 'of '),
+  entry('true', 'true'),
 ];
 
-/** Names the block's universe and benchmark can be referred to by. */
-export function tickers(lines: string[]): string[] {
+/** Names the block's universe and benchmark can be referred to by; `keys` narrows the lines read. */
+export function tickers(lines: string[], keys: string[] = ['universe', 'symbol', 'benchmark']): string[] {
   const out: string[] = [];
   for (const line of lines) {
     const key = settingKey(line);
-    if (key !== 'universe' && key !== 'symbol' && key !== 'benchmark') continue;
+    if (!key || !keys.includes(key)) continue;
     for (const part of line.slice(line.indexOf(':') + 1).split(',')) {
       const ref = part.trim().split(/\s+/)[0];
       if (!ref) continue;
@@ -169,11 +120,11 @@ export function complete(block: string[], above: string[], before: string): Comp
     if (/\bcrosses\s+$/i.test(head)) return match([{ label: 'above', insert: 'above ', detail: '' }, { label: 'below', insert: 'below ', detail: '' }], true);
     if (/^\d/.test(word) || /[\d.]$/.test(head)) return null;
     return match([
-      ...SERIES.map((s) => ({ label: s, insert: s, detail: SERIES_HELP[s] })),
+      ...SERIES.map((s) => entry(s)),
       ...(positions ? POSITION_WORDS : []),
       ...CALENDAR_WORDS,
       ...params.map((p) => ({ label: p.name, insert: p.name, detail: `parameter: ${p.value}` })),
-      ...Object.keys(FUNCTION_HELP).map((f) => ({ label: f, insert: `${f}(`, detail: FUNCTION_HELP[f] })),
+      ...FUNCTIONS.map((f) => entry(f, `${f}(`, functionDetail(f))),
       ...WORDS,
     ]);
   };
@@ -183,26 +134,54 @@ export function complete(block: string[], above: string[], before: string): Comp
     // A "for" section can only hold rules and stops of its own.
     const settings = section === null ? SETTINGS : STOP_SETTINGS;
     const starts: Completion[] = [
-      { label: 'buy when', insert: 'buy when ', detail: 'condition that opens a position' },
-      { label: 'sell when', insert: 'sell when ', detail: 'condition that closes it' },
+      entry('buy when', 'buy when '),
+      entry('sell when', 'sell when '),
       ...(inRule ? WORDS.slice(0, 2).map((w) => ({ ...w, detail: `continue the rule: ${w.detail}` })) : []),
-      ...settings.map((s) => ({ label: s, insert: `${s}: `, detail: section === null ? SETTING_HELP[s] : `${SETTING_HELP[s]}, for ${section} only` })),
-      { label: 'for', insert: 'for ', detail: 'rules and stops for one ticker: for TLT:' },
+      ...settings.map((s) => entry(s, `${s}: `, section === null ? shortOf(s) : `${shortOf(s)}, for ${section} only`)),
+      entry('for', 'for '),
     ];
     return match(starts);
   }
   if (/^\s*(buy|sell)\s+$/i.test(head)) return match([{ label: 'when', insert: 'when ', detail: '' }], true);
-  if (/^\s*for\s+$/i.test(head)) return match([...names(':', 'rules for this ticker only'), { label: 'all', insert: 'all:', detail: 'back to the rules every ticker shares' }], true);
+  if (/^\s*for\s+$/i.test(head)) return match([...names(':', 'rules for this ticker only'), entry('all', 'all:', shortOf('for all'))], true);
 
   const key = settingKey(head);
-  if (key && /:\s*$/.test(head)) {
-    const percents = STOP_SETTINGS.includes(key) ? params.filter((p) => p.value.includes('%')).map((p) => ({ label: p.name, insert: p.name, detail: `parameter: ${p.value}` })) : [];
-    return match([...(VALUE_HINTS[key] ?? []), ...percents], true);
-  }
   if (key === 'hold' && /:\s*top\s+\S+\s+by\s/i.test(head)) return expression(false);
-  if (key) return null;
+  if (key) {
+    const percents = STOP_SETTINGS.includes(key) ? params.filter((p) => p.value.includes('%')).map((p) => ({ label: p.name, insert: p.name, detail: `parameter: ${p.value}` })) : [];
+    // A value can be several words (`next open`), so it is matched as a whole, from the first thing after the colon.
+    const afterColon = before.slice(before.indexOf(':') + 1);
+    const valueFrom = before.length - afterColon.trimStart().length;
+    const typed = before.slice(valueFrom).toLowerCase();
+    const hits = [...(VALUE_HINTS[key] ?? []), ...percents].filter((i) => i.label.toLowerCase().startsWith(typed));
+    if (hits.length === 0 || (hits.length === 1 && hits[0].insert.toLowerCase() === typed)) return null;
+    return { from: valueFrom, items: hits };
+  }
 
   const kind = lineKind(before, inRule);
   if (kind !== 'rule' && kind !== 'continuation') return null;
   return expression(kind === 'rule' ? /^\s*sell/i.test(before) : sell);
+}
+
+/** Where the cursor is when a ticker is being written on a `universe`, `symbol`, `benchmark` or `cash rate` line. */
+export interface TickerPosition {
+  /** Column where the ticker, with any `binance:` style prefix, starts. */
+  from: number;
+  /** What has been typed of it. */
+  word: string;
+}
+
+const TICKER_LINES = ['universe', 'symbol', 'benchmark', 'cash rate'];
+
+/**
+ * The ticker being typed, or null when the cursor is somewhere else on the line: after a weight
+ * (`SPY 60`), in a number, or in a comment. Only the ticker word counts, so weights are left alone.
+ */
+export function tickerPosition(before: string): TickerPosition | null {
+  const key = settingKey(before);
+  if (!key || !TICKER_LINES.includes(key) || /(^|\s)(#|\/\/)/.test(before)) return null;
+  const rest = before.slice(before.indexOf(':') + 1);
+  const part = rest.slice(rest.lastIndexOf(',') + 1).trimStart();
+  if (!/^[A-Za-z0-9^:/._=-]*$/.test(part) || /^[\d.]+$/.test(part)) return null;
+  return { from: before.length - part.length, word: part };
 }
