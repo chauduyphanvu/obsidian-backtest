@@ -22,6 +22,7 @@ import { OrdersModal } from './orders-view.ts';
 import { renderActions } from './render-actions.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
+import { renderDebug } from './render-debug.ts';
 import { renderPriceCharts } from './render-price.ts';
 import { renderLuck } from './render-luck.ts';
 import { blockStateKey, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type Section } from './render.ts';
@@ -399,6 +400,7 @@ export default class BacktestBlocks extends Plugin {
               to: bt.run.t[bt.run.t.length - 1],
               intraday,
             }),
+          (root) => renderDebug(root, { backtest: bt, intraday, save: (title, csv) => this.saveFile(title, 'csv', csv) }),
           (root) => renderSweep(root, tryValues),
           (root) => renderLuck(root, tryValues),
           (root) =>
