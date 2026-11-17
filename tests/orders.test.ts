@@ -11,7 +11,7 @@ function run(src: string, data: Record<string, Bars>, warnings: string[] = []): 
   const { spec, errors } = parseSpec(src);
   assert.deepEqual(errors, []);
   const map = new Map(Object.entries(data));
-  return { spec: spec!, backtest: runBacktest(spec!, map), data: map, warnings };
+  return { spec: spec!, backtest: runBacktest(spec!, map), data: map, warnings, prices: [] };
 }
 const day = (n: number) => T0 + n * DAY;
 /** A time on the reader's clock; the tests must not depend on the machine's time zone. */
