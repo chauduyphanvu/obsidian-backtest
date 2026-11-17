@@ -50,6 +50,8 @@ export interface Backtest {
 }
 
 const YEAR = 365.25 * 86_400_000;
+/** A deviation per step below this is floating-point noise, not risk. */
+export const NOISE = 1e-12;
 
 /** Fall from the highest value so far at each step; NaN where the value is unknown. */
 export function drawdowns(equity: number[]): number[] {
@@ -92,8 +94,8 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
     cagr: (1 + total) ** (1 / years) - 1,
     maxDrawdown: maxDrawdown(equity),
     volatility: sd * Math.sqrt(perYear),
-    sharpe: sdExcess > 0 ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
-    sortino: downside > 0 ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
+    sharpe: sdExcess >= NOISE ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
+    sortino: downside >= NOISE ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
     exposure: exposure.reduce((s, x) => s + x, 0) / exposure.length,
   };
 }

@@ -1,7 +1,7 @@
 // Statistics beyond the headline tiles: calendar-period returns, downside-adjusted ratios and time under water.
 // All functions take an equity series as `t` (epoch ms, ascending) and `equity` (same length, at least 2 points).
 
-import { maxDrawdown } from './backtest.ts';
+import { maxDrawdown, NOISE } from './backtest.ts';
 import { DAY } from './dom.ts';
 
 const YEAR = 365.25 * DAY;
@@ -48,7 +48,7 @@ export function periodReturns(t: number[], equity: number[], period: 'year' | 'm
   return out;
 }
 
-/** Annualised mean return over annualised downside deviation (returns below 0), using steps per year inferred from the data like computeStats does. 0 when there is no downside. */
+/** Annualised mean return over annualised downside deviation (returns below 0), using steps per year inferred from the data like computeStats does. 0 when there is no downside beyond rounding noise. */
 export function sortino(t: number[], equity: number[]): number {
   const steps = equity.length - 1;
   let sum = 0;
@@ -59,7 +59,7 @@ export function sortino(t: number[], equity: number[]): number {
     if (r < 0) downside += r * r;
   }
   const dev = Math.sqrt(downside / steps);
-  if (dev === 0) return 0;
+  if (dev < NOISE) return 0;
   const perYear = steps / ((t[t.length - 1] - t[0]) / YEAR);
   return (sum / steps / dev) * Math.sqrt(perYear);
 }

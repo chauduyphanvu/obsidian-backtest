@@ -85,6 +85,12 @@ test('sortino is 0 without a down step', () => {
   assert.equal(sortino(t, [100, 101, 101, 105]), 0);
 });
 
+test('sortino is 0 when the only falls are rounding noise', () => {
+  const t = [0, 1, 2].map((i) => d(2024, 1, 1) + i * DAY);
+  // A fall of 1e-14 has a downside deviation of 7e-15: below 1e-12, so it counts as none.
+  assert.equal(sortino(t, [1, 1 - 1e-14, 1 + 2e-14]), 0);
+});
+
 test('calmar: return per year over the worst drawdown', () => {
   // 365 days, 100 to 150 with a drop from 120 to 90 (-25%).
   const t = [d(2021, 1, 1), d(2021, 4, 1), d(2021, 9, 1), d(2022, 1, 1)];

@@ -228,6 +228,18 @@ test('Sharpe and Sortino measure returns above the cash rate', () => {
   assert.ok(near(computeStats(t, [100, 110, 99], 100, [1, 1, 1]).sharpe, 0));
 });
 
+test('a run that only earns the cash rate has a Sharpe and Sortino of 0, not rounding noise', () => {
+  // Never invested at 4% a year: each step's return equals the cash return up to rounding (about 1e-20).
+  const A = bars(Array.from({ length: 20 }, () => 100));
+  const r = run('universe: A\ncapital: 10000\ncash rate: 4%\nbuy when false', { A });
+  assert.ok(r.stats.totalReturn > 0);
+  assert.equal(r.stats.sharpe, 0);
+  assert.equal(r.stats.sortino, 0);
+  // A real spread above 1e-12 a step still counts.
+  const s = computeStats([day(0), day(1), day(2)], [100, 100 + 1e-8, 100], 100, [1, 1, 1]);
+  assert.ok(s.sharpe !== 0 && s.sortino !== 0);
+});
+
 test('bars held counts completed bars since the entry fill', () => {
   const A = bars([10, 10, 10, 10, 10, 10, 10]);
   const r = run('universe: A\nbuy when true\nsell when bars held >= 2', { A });
