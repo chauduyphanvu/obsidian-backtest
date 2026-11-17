@@ -1,0 +1,179 @@
+import { Modal, Notice, setIcon, type App } from 'obsidian';
+import { h, isoDate, price, signedPct } from './dom.ts';
+import { latestAsOf, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoRows, type StrategyStatus, type TodoRow } from './orders.ts';
+
+export interface OrdersHost {
+  /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches prices. */
+  scan(force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]>;
+  /** Opens a note. */
+  openNote(path: string): void;
+  /** Writes the Markdown to the configured note; resolves with the path written, or null when no note is configured. */
+  save(markdown: string): Promise<string | null>;
+  now(): number;
+}
+
+export class OrdersModal extends Modal {
+  private host: OrdersHost;
+  /** Counts scans, so the answer to an older one, or one for a closed window, is dropped. */
+  private scans = 0;
+
+  constructor(app: App, host: OrdersHost) {
+    super(app);
+    this.host = host;
+  }
+
+  onOpen(): void {
+    this.modalEl.classList.add('bt-orders-modal');
+    this.titleEl.textContent = "Today's orders";
+    void this.load(false);
+  }
+
+  onClose(): void {
+    this.scans++;
+    this.contentEl.replaceChildren();
+  }
+
+  private async load(force: boolean): Promise<void> {
+    const mine = ++this.scans;
+    const current = () => mine === this.scans;
+    this.progress(0, 0);
+    try {
+      const list = await this.host.scan(force, (done, total) => {
+        if (current()) this.progress(done, total);
+      });
+      if (current()) this.show(sortStatuses(list));
+    } catch (e) {
+      if (current()) this.failed(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  private fresh(): HTMLElement {
+    this.contentEl.replaceChildren();
+    return h(this.contentEl, 'div', 'bt-orders');
+  }
+
+  private progress(done: number, total: number): void {
+    const status = h(this.fresh(), 'div', 'bt-orders-status', total > 0 ? `Checking strategies… ${done} of ${total}` : 'Checking strategies…');
+    status.setAttribute('role', 'status');
+  }
+
+  private failed(message: string): void {
+    const root = this.fresh();
+    h(root, 'p', 'bt-orders-empty', `Couldn't check the strategies. ${message}`);
+    h(root, 'button', 'bt-orders-button', 'Try again').addEventListener('click', () => void this.load(false));
+  }
+
+  private show(list: StrategyStatus[]): void {
+    const root = this.fresh();
+    if (list.length === 0) {
+      h(root, 'p', 'bt-orders-empty', 'No strategy blocks found. Add one with the command "Insert strategy block".');
+      return;
+    }
+    const todo = todoRows(list);
+    this.header(root, list);
+    this.todo(root, todo);
+    this.holding(root, list, todo.length > 0);
+    this.problems(root, list);
+    h(root, 'p', 'bt-orders-foot', 'From backtests of your rules on the latest prices. Nothing here places an order.');
+  }
+
+  private header(root: HTMLElement, list: StrategyStatus[]): void {
+    const through = latestAsOf(list);
+    const head = h(root, 'div', 'bt-orders-head');
+    h(head, 'div', 'bt-orders-asof', through === null ? 'No prices were loaded' : `Based on prices through ${isoDate(through)}`);
+    const actions = h(head, 'div', 'bt-orders-actions');
+    const button = (icon: string, label: string) => {
+      const b = h(actions, 'button', 'bt-orders-button');
+      setIcon(h(b, 'span', 'bt-orders-icon'), icon);
+      h(b, 'span', undefined, label);
+      return b;
+    };
+    button('refresh-cw', 'Refresh prices').addEventListener('click', () => void this.load(true));
+    const save = button('file-text', 'Save as note');
+    save.addEventListener('click', () => void this.save(save, list));
+  }
+
+  private async save(button: HTMLButtonElement, list: StrategyStatus[]): Promise<void> {
+    button.disabled = true;
+    try {
+      const path = await this.host.save(ordersMarkdown(list, this.host.now()));
+      new Notice(path === null ? "Choose a note for today's orders in the plugin's settings" : `Saved today's orders to ${path}`);
+    } catch (e) {
+      new Notice(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  private heading(parent: HTMLElement, text: string, tag: 'div' | 'summary' = 'div'): HTMLElement {
+    return h(parent, tag, 'bt-orders-heading', text);
+  }
+
+  /** The strategy's name, as a link that opens its note. */
+  private link(parent: HTMLElement, s: StrategyStatus): void {
+    const link = h(parent, 'button', 'bt-orders-link', s.strategy);
+    link.title = `Open ${s.note}`;
+    link.addEventListener('click', () => {
+      this.host.openNote(s.note);
+      this.close();
+    });
+  }
+
+  private todo(root: HTMLElement, rows: TodoRow[]): void {
+    const section = h(root, 'section', 'bt-orders-section');
+    this.heading(section, 'To do at the next open');
+    if (rows.length === 0) {
+      h(section, 'p', 'bt-orders-none', 'Nothing to do. No strategy has an order for the next open.');
+      return;
+    }
+    const list = h(section, 'ul', 'bt-orders-list');
+    for (const { status, order } of rows) {
+      const row = h(list, 'li', 'bt-orders-row');
+      h(row, 'span', `bt-orders-action bt-orders-${order.action}`, order.action === 'buy' ? 'Buy' : 'Sell');
+      const what = h(row, 'div', 'bt-orders-what');
+      h(what, 'span', 'bt-orders-ticker', order.ticker);
+      h(what, 'span', undefined, orderSize(order));
+      const detail = h(row, 'div', 'bt-orders-detail');
+      this.link(detail, status);
+      h(detail, 'span', undefined, `Last close ${price(order.lastClose)}`);
+      if (order.since !== null) h(detail, 'span', undefined, `Held since ${isoDate(order.since)}`);
+    }
+  }
+
+  /** Strategies with a position kept or no order at all; one with only orders is already covered above. */
+  private holding(root: HTMLElement, list: StrategyStatus[], collapsed: boolean): void {
+    const held = list.filter((s) => s.error === null && (s.holdings.length > 0 || s.orders.length === 0));
+    if (held.length === 0) return;
+    const section = h(root, 'details', 'bt-orders-section');
+    section.open = !collapsed;
+    this.heading(section, `Holding (${held.length})`, 'summary');
+    for (const s of held) {
+      const box = h(section, 'div', 'bt-orders-hold');
+      this.link(box, s);
+      if (s.holdings.length === 0) {
+        h(box, 'div', 'bt-orders-muted', 'In cash');
+        continue;
+      }
+      const items = h(box, 'ul', 'bt-orders-held');
+      for (const p of s.holdings) {
+        const item = h(items, 'li');
+        h(item, 'span', 'bt-orders-ticker', p.ticker);
+        const since = `since ${isoDate(p.since)}`;
+        h(item, 'span', 'bt-orders-muted', `${share(p.weight)} of the strategy, ${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`);
+      }
+    }
+  }
+
+  private problems(root: HTMLElement, list: StrategyStatus[]): void {
+    const found = list.flatMap((s) => problemsOf(s).map((text) => ({ s, text })));
+    if (found.length === 0) return;
+    const section = h(root, 'section', 'bt-orders-section');
+    this.heading(section, 'Problems');
+    const items = h(section, 'ul', 'bt-orders-problems');
+    for (const { s, text } of found) {
+      const item = h(items, 'li', s.error === null ? 'bt-orders-problem' : 'bt-orders-problem bt-orders-problem-error');
+      this.link(item, s);
+      h(item, 'div', 'bt-orders-muted', text);
+    }
+  }
+}
