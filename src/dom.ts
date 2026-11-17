@@ -1,5 +1,7 @@
 // DOM and number-format helpers shared by everything that renders.
 
+import { tokenizeBlock } from './highlight.ts';
+
 export const SVG = 'http://www.w3.org/2000/svg';
 export const DAY = 86_400_000;
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -10,6 +12,21 @@ export function h<K extends keyof HTMLElementTagNameMap>(parent: Element, tag: K
   if (text !== undefined) el.textContent = text;
   parent.appendChild(el);
   return el;
+}
+
+/** Writes strategy text into `pre` coloured the way the editor shows it, one span for each token. */
+export function colourSource(pre: HTMLElement, text: string): void {
+  const lines = text.split('\n');
+  tokenizeBlock(lines).forEach((tokens, i) => {
+    const line = lines[i];
+    let at = 0;
+    for (const t of tokens) {
+      if (t.from > at) pre.append(line.slice(at, t.from));
+      h(pre, 'span', `bt-tok bt-tok-${t.kind}`, line.slice(t.from, t.to));
+      at = t.to;
+    }
+    pre.append(line.slice(at) + (i < lines.length - 1 ? '\n' : ''));
+  });
 }
 
 export function s(parent: Element, tag: string, attrs: Record<string, string | number>, text?: string): SVGElement {

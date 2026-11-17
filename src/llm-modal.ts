@@ -1,6 +1,5 @@
 import { Modal, type App } from 'obsidian';
-import { h } from './dom.ts';
-import { tokenizeBlock } from './highlight.ts';
+import { colourSource, h } from './dom.ts';
 import { DRAFT_PRIVACY, type Draft } from './llm.ts';
 
 export interface DraftHost {
@@ -14,21 +13,6 @@ export interface DraftHost {
 
 const PLACEHOLDER = 'Example: Buy SPY when it closes above its 200-day average, sell when it falls back below, 5 bps costs.';
 const FENCE = '```';
-
-/** The text coloured the way a strategy block shows its source. */
-function colour(pre: HTMLElement, text: string): void {
-  const lines = text.split('\n');
-  tokenizeBlock(lines).forEach((tokens, i) => {
-    const line = lines[i];
-    let at = 0;
-    for (const t of tokens) {
-      if (t.from > at) pre.append(line.slice(at, t.from));
-      h(pre, 'span', `bt-tok bt-tok-${t.kind}`, line.slice(t.from, t.to));
-      at = t.to;
-    }
-    pre.append(line.slice(at) + (i < lines.length - 1 ? '\n' : ''));
-  });
-}
 
 export class DraftModal extends Modal {
   private host: DraftHost;
@@ -120,7 +104,7 @@ export class DraftModal extends Modal {
   private showDraft(draft: Draft): void {
     const panel = this.reset();
     h(panel, 'div', 'bt-llm-label', 'Draft');
-    colour(h(panel, 'pre', 'bt-source bt-llm-source'), draft.source);
+    colourSource(h(panel, 'pre', 'bt-source bt-llm-source'), draft.source);
 
     if (draft.notes.length > 0) {
       h(panel, 'div', 'bt-llm-label', "The model's notes");

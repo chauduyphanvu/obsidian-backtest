@@ -14,6 +14,15 @@ test('finds strategy blocks with their names and lines, and skips other language
 
 const strategy = (...body: string[]) => ['```strategy', ...body, '```'];
 
+test('a block from a note with Windows line endings is the same block, name and comments included', () => {
+  const note = strategy('universe: SPY # tickers', 'name: Trend // old', 'buy when true');
+  assert.deepEqual(extractBlocks(note.join('\r\n')), extractBlocks(note.join('\n')));
+  assert.deepEqual(extractBlocks(note.join('\r\n')).map((b) => b.name), ['Trend']);
+  // Even when the block has a problem, so the name is read from its line.
+  const broken = strategy('name: Trend # a', 'nonsense here');
+  assert.deepEqual(extractBlocks(broken.join('\r\n')).map((b) => b.name), ['Trend']);
+});
+
 test('a strategy example inside a longer fence of another language is not a block', () => {
   const note = ['# How to', '````markdown', ...strategy('name: Example only', 'universe: SPY', 'buy when true'), '````', '', ...strategy('name: Real', 'universe: SPY', 'buy when true')].join('\n');
   assert.deepEqual(

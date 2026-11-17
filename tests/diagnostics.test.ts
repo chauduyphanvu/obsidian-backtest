@@ -93,8 +93,15 @@ test('a problem about the whole block covers the trimmed text of a line', () => 
   const [d] = checked(lines);
   assert.deepEqual(at(lines, d), [0, 0, 13, 'error', 'universe: SPY']);
   assert.match(d.message, /^There is no buy rule/);
-  const unknown = [...HEAD, 'for QQQ:', '   buy when close > sma(5)  '];
-  assert.deepEqual(at(unknown, checked(unknown)[0]), [3, 3, 26, 'error', 'buy when close > sma(5)']);
+  const odd = [...HEAD, '', '   hello there  '];
+  assert.deepEqual(at(odd, checked(odd)[0]), [3, 3, 14, 'error', 'hello there']);
+});
+
+test('a ticker on a for line that is not in the universe is underlined once, on that line', () => {
+  const lines = [...HEAD, 'for QQQ:', '  buy when close > 1', '  stop loss: 5%'];
+  assert.deepEqual(checked(lines).map((d) => at(lines, d)), [[2, 4, 7, 'error', 'QQQ']]);
+  const spaced = [...HEAD, '  for   QQQ  :  # sleeve', '  stop loss: 5%'];
+  assert.deepEqual(checked(spaced).map((d) => at(spaced, d)), [[2, 8, 11, 'error', 'QQQ']]);
 });
 
 test('the adjusted-price warning covers the comparison and is not an error', () => {

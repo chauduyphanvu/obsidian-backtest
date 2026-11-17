@@ -193,12 +193,12 @@ export function parseCsv(text: string): Bars {
     const adj = ai >= 0 && num(f[ai]) > 0 ? num(f[ai]) / c : 1;
     return { t: parseTime(f[ti] ?? '', dayFirst), o: num(f[oi]) * adj, h: num(f[hi]) * adj, l: num(f[li]) * adj, c: c * adj, v: vi >= 0 ? num(f[vi]) : 0 };
   });
-  rows.sort((a, b) => a.t - b.t);
+  // A NaN time would make the comparator's answer NaN, and the sort undefined.
+  const dated = rows.filter((r) => Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
   const bars = emptyBars();
-  for (const r of rows) if (Number.isFinite(r.t)) push(bars, r.t, r.o, r.h, r.l, r.c, r.v);
+  for (const r of dated) push(bars, r.t, r.o, r.h, r.l, r.c, r.v);
   if (bars.t.length > 0) return bars;
 
-  const dated = rows.filter((r) => Number.isFinite(r.t));
   if (dated.length === 0) throw new Error(`The CSV has no usable rows: no date in the "${names[ti]}" column could be read. Dates should look like 2024-01-31`);
   for (const [name, key] of [[names[oi], 'o'], [names[hi], 'h'], [names[li], 'l'], [names[ci], 'c']] as const) {
     if (dated.every((r) => !Number.isFinite(r[key]))) throw new Error(`The CSV has no usable rows: no number in the "${name}" column could be read`);
