@@ -885,8 +885,8 @@ The second backtester has nothing to compare these with, so they rest on the uni
 
 Also not checked:
 
-- A real phone. The plugin has never been run on one, though the manifest does not rule it out. The newer parts have been drawn only in a browser with stand-ins for Obsidian's own objects. The older parts have also been looked at in Obsidian's phone emulation on a computer.
-- Four things have not been tried in a running Obsidian: the hover help pop-ups, the ticker lookup's suggestions, the CSV helper's save of a cleaned copy, and undoing a one-click fix. They have been checked by unit tests and in a browser only.
+- A real phone. The plugin has never been run on one, though the manifest does not rule it out. The result view, with the Parameters bar, has been looked at in Obsidian's phone emulation on a computer. The other newer parts (the preview panel, the windows, the `backtests` table) have been drawn at phone width only in a browser with stand-ins for Obsidian's own objects.
+- Five things have not been tried in a running Obsidian: the hover help pop-ups, the ticker lookup's suggestions, the CSV helper's save of a cleaned copy, undoing a one-click fix, and the fallback that runs sweeps and checks in the foreground when the background worker cannot start. They have been checked by unit tests and in a browser only.
 - Drafting has never been run against a live model at the time of writing. The tests use a fake server.
 - The drawing of the charts and the layout uses the DOM and has no automated tests. Only helpers such as tick spacing and marker placement are tested.
 - The cross-check used made-up prices. It says nothing about the data feeds.
