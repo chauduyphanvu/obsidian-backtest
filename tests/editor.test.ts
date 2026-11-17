@@ -166,6 +166,21 @@ test('completions: position values in sell rules only, calendar values and param
   assert.deepEqual(labels([], 'hold: top 3 by ba', V2), ['bars_since']);
 });
 
+test('completions: a two-word value goes on being offered after its space, and replaces the words typed', () => {
+  const at = (before: string, above: string[] = []) => {
+    const r = complete(V2, above, before);
+    return r ? { from: r.from, labels: r.items.map((i) => i.label) } : null;
+  };
+  assert.deepEqual(at('sell when bars h'), { from: 10, labels: ['bars held'] });
+  assert.deepEqual(at('sell when close < entry p'), { from: 18, labels: ['entry price'] });
+  assert.deepEqual(at('sell when close < last e'), { from: 18, labels: ['last entry price'] });
+  assert.deepEqual(at('buy when close crosses a'), { from: 23, labels: ['above'] });
+  // Fully typed: nothing left to offer. And a phrase is not offered where its words don't fit.
+  assert.equal(at('sell when bars held'), null);
+  assert.deepEqual(at('buy when bars h')?.labels, at('buy when h')?.labels);
+  assert.equal(at('sell when foobars h')?.labels.includes('bars held') ?? false, false);
+});
+
 test('completions: hints for the new settings, and only stops inside a for section', () => {
   assert.deepEqual(labels([], 'hold: '), ['top 3 by roc(126)']);
   assert.deepEqual(labels([], 'weighting: '), ['inverse volatility(60)']);

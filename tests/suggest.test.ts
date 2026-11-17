@@ -165,24 +165,35 @@ test('hits already known are shown at once, after the block’s own tickers', as
   assert.deepEqual(labels(items as never[]), ['TLT']);
 });
 
-test('an answer for text that has changed since is dropped', async () => {
+test('typing on before an answer arrives leaves the list open with the latest hits', async () => {
   mock.timers.enable({ apis: ['setTimeout'] });
   try {
     const lookup = new SymbolLookup(network().deps);
     const editor = note('universe: SPY, AAP');
     const suggest = new StrategySuggest({} as never, { lookup: () => lookup });
-    const trigger = (typed: string) => {
-      editor.lines[2] = typed;
-      const cursor = { line: 2, ch: typed.length };
-      const info = suggest.onTrigger(cursor, editor as never)!;
-      suggest.context = { ...info, editor: editor as never, file: null } as never;
-      return suggest.getSuggestions(suggest.context!) as Promise<{ label: string }[]>;
+    // What Obsidian 1.15 does with each key (app.js, EditorSuggest.trigger and showSuggestions): it awaits a promised
+    // answer and shows it, and an empty answer closes the list and forgets the context, so a later answer is not shown.
+    let shown: string[] | null = null;
+    const show = (items: { label: string }[]) => {
+      if (items.length === 0) {
+        suggest.context = null;
+        shown = null;
+      } else if (suggest.context) shown = labels(items);
     };
-    const first = trigger('universe: SPY, AAP');
-    const second = trigger('universe: SPY, AAPL');
+    const answers: Promise<void>[] = [];
+    const type = (typed: string) => {
+      editor.lines[2] = typed;
+      const info = suggest.onTrigger({ line: 2, ch: typed.length }, editor as never)!;
+      const context = (suggest.context = { ...info, editor: editor as never, file: null } as never);
+      const items = suggest.getSuggestions(context) as Promise<{ label: string }[]>;
+      answers.push(items.then((d) => d && show(d)));
+    };
+    type('universe: SPY, AA');
+    type('universe: SPY, AAP');
     mock.timers.tick(250);
-    assert.deepEqual(await first, [], 'the first word was replaced by the second');
-    assert.ok(Array.isArray(await second));
+    await answers[1];
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    assert.deepEqual(shown, ['AAPL', 'AAP'], 'the AAP search is shown; the overtaken AA request never answered');
   } finally {
     mock.timers.reset();
   }

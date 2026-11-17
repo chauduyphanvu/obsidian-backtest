@@ -115,6 +115,28 @@ export function csvFiles(lines: string[]): string[] {
 }
 
 /**
+ * The values of several words (`bars held`, `last entry price`) whose start, past at least one of their spaces, ends
+ * `before`: they replace those words, where matching the last word alone would offer `high` after `bars h`. Only the
+ * longest such start counts; null when there is none, or only one value and it is already written out.
+ */
+function phraseMatch(before: string, items: Completion[]): CompletionResult | null {
+  const low = before.toLowerCase();
+  let best = 0;
+  let hits: Completion[] = [];
+  for (const item of items) {
+    const label = item.label.toLowerCase();
+    for (let k = label.length; k > label.indexOf(' ') && label.includes(' '); k--) {
+      if (!low.endsWith(label.slice(0, k)) || /[A-Za-z0-9_]$/.test(before.slice(0, before.length - k))) continue;
+      if (k > best) [best, hits] = [k, []];
+      if (k === best) hits.push(item);
+      break;
+    }
+  }
+  if (hits.length === 0 || (hits.length === 1 && hits[0].label.length === best)) return null;
+  return { from: before.length - best, items: hits };
+}
+
+/**
  * What can come next. `before` is the cursor's line up to the cursor; `above` the block's lines
  * before that line and `block` every line of the block. `columnsOf` knows the columns of CSV files
  * the plugin has read; without it nothing is offered inside `column(`.
@@ -162,6 +184,8 @@ export function complete(block: string[], above: string[], before: string, colum
     if (/\bof\s+$/i.test(head)) return match(names('', 'read this ticker instead'), true);
     if (/\bcrosses\s+$/i.test(head)) return match([{ label: 'above', insert: 'above ', detail: '' }, { label: 'below', insert: 'below ', detail: '' }], true);
     if (/^\d/.test(word) || /[\d.]$/.test(head)) return null;
+    const spanning = phraseMatch(before, [...(positions ? POSITION_WORDS : []), ...WORDS]);
+    if (spanning) return spanning;
     return match([
       ...SERIES.map((s) => entry(s)),
       ...(positions ? POSITION_WORDS : []),
