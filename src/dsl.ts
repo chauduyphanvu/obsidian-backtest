@@ -1106,12 +1106,13 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     errors.push(diag(riskLine!.keyAt, `"risk per trade" sizes each position once, when it is bought, so it can't be combined with "rebalance: ${rebalance}". Remove one of them`));
   }
 
-  const sourceOf = (name: string) => [...universe, ...extras].find((a) => a.name === name)?.source;
+  // Yahoo adjusts prices for dividends and splits, but not index levels (tickers starting with ^).
+  const adjusted = (name: string) => [...universe, ...extras].some((a) => a.name === name && a.source === 'yahoo' && !a.id.startsWith('^'));
   const seen = new Set<string>();
   for (const c of priceChecks) {
     const names = c.asset !== null ? [c.asset] : c.scope !== null ? [c.scope] : universe.map((a) => a.name);
     const key = `${c.at.line}:${c.at.from}:${c.at.to}`;
-    if (seen.has(key) || !names.some((n) => sourceOf(n) === 'yahoo')) continue;
+    if (seen.has(key) || !names.some(adjusted)) continue;
     seen.add(key);
     warnings.push(diag(c.at, 'This compares a price with a fixed number. Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded.'));
   }

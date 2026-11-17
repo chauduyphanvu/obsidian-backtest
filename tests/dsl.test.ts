@@ -197,6 +197,13 @@ test('a price compared with a fixed number warns when the prices come from Yahoo
   assert.deepEqual(parse('universe: SPY\nbuy when close > open and volume > 1000 and close > sma(20) * 1.1').warnings, []);
 });
 
+test('index levels are not adjusted, so comparing them with a number gives no warning', () => {
+  assert.deepEqual(parse('universe: SPY\nbuy when close of ^VIX < 20').warnings, []);
+  assert.deepEqual(parse('universe: ^GSPC, ^NDX\nbuy when close > 4000').warnings, []);
+  // One adjusted ticker among them is enough for the warning.
+  assert.equal(parse('universe: ^GSPC, SPY\nbuy when close > 4000').warnings.length, 1);
+});
+
 test('slippage, cash rate and test from', () => {
   const spec = ok('universe: SPY\nfrom: 2010-01-01\nto: 2020-12-31\ntest from: 2018-01-01\nslippage: 0.05%\ncash rate: 4.5%\nbuy when true');
   assert.deepEqual([spec.slippageBps, spec.cash, spec.testFrom], [5, { k: 'fixed', rate: 0.045 }, Date.UTC(2018, 0, 1)]);
