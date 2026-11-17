@@ -375,7 +375,8 @@ export default class BacktestBlocks extends Plugin {
     const force = opts.force ?? false;
     // In the panel a failed first run is for the panel to show, but a retry has nobody above it: it draws its own failure.
     const redraw = (more: Pick<StrategyOptions, 'force' | 'anyway'>): void => {
-      this.renderStrategy(source, el, child, { ...opts, ...more }).catch(showFailure);
+      // A block run without the size limits is drawn again without them, whether it was asked for now or by the result it came from.
+      this.renderStrategy(source, el, child, { ...opts, anyway: drawing.anyway, ...more }).catch(showFailure);
     };
     const showFailure = (e: unknown): void => renderFailure(el, e instanceof Error ? e.message : String(e), source, () => redraw({ force: false }));
     const retry = (refetch: boolean) => () => redraw({ force: refetch });
