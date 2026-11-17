@@ -1,8 +1,9 @@
 import { Facet, StateEffect, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, hoverTooltip, type DecorationSet, type Tooltip, type ViewUpdate } from '@codemirror/view';
 import { EditorSuggest, type App, type Editor, type EditorPosition, type EditorSuggestContext, type EditorSuggestTriggerInfo } from 'obsidian';
+import { closesFence, fenceOf, findBlocks } from './blocks.ts';
 import { complete, hitCompletions, localTickers, tickerPosition, writtenTickers, type Completion } from './complete.ts';
-import { analyzeBlock, closesFence, fenceOf, findBlocks, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
+import { analyzeBlock, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
 import { helpAt, type Doc } from './docs.ts';
 import type { Defaults } from './dsl.ts';
 import { fixChanges, type Fix } from './fixes.ts';

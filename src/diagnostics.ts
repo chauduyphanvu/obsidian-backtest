@@ -23,54 +23,6 @@ export interface BlockAnalysis {
   diagnostics: BlockDiagnostic[];
 }
 
-/** A line that opens or closes a fenced code block: the fence, and what follows it. */
-export function fenceOf(line: string): { fence: string; info: string } | null {
-  const m = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
-  return m ? { fence: m[1], info: m[2].trim() } : null;
-}
-
-/** Whether a line closes a block opened with `fence`: only fence characters, at least as many. */
-export function closesFence(line: string, fence: string): boolean {
-  const m = line.match(/^\s*(`{3,}|~{3,})\s*$/);
-  return !!m && m[1][0] === fence[0] && m[1].length >= fence.length;
-}
-
-/** Lines of a strategy block in a note: 0-based indexes of its first and last content line (`last` is below `first` for an empty block). */
-export interface BlockSpan {
-  first: number;
-  last: number;
-}
-
-/**
- * The strategy blocks in a note, found from the top because a fence can only be read in context.
- * Lines after `upTo` are read only to finish a block that is still open there. A fence that is
- * never closed runs to the end, as in the note itself.
- */
-export function findBlocks(lines: Iterable<string>, upTo = Infinity): BlockSpan[] {
-  const out: BlockSpan[] = [];
-  let fence: string | null = null;
-  let strategy = false;
-  let start = 0;
-  let i = 0;
-  for (const line of lines) {
-    if (fence === null) {
-      if (i > upTo) return out;
-      const open = fenceOf(line);
-      if (open) {
-        fence = open.fence;
-        strategy = open.info === 'strategy';
-        start = i + 1;
-      }
-    } else if (closesFence(line, fence)) {
-      if (strategy) out.push({ first: start, last: i - 1 });
-      fence = null;
-    }
-    i++;
-  }
-  if (fence !== null && strategy) out.push({ first: start, last: i - 1 });
-  return out;
-}
-
 /**
  * Turns a parser diagnostic into a range on a line of the block. A range that is empty or starts
  * outside its line, and a problem reported on a line with no code (line 1 holds the ones about the
