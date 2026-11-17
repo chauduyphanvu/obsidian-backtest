@@ -1,0 +1,429 @@
+import { parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
+import { lineKind, type LineKind } from './highlight.ts';
+
+export interface LlmConfig {
+  provider: 'anthropic' | 'openai';
+  /** "" is the provider's own address for Anthropic. OpenAI-compatible servers need one, such as http://localhost:8000/v1. */
+  baseUrl: string;
+  /** "" means DEFAULT_MODEL for the provider. */
+  model: string;
+  /** May be "" for a local server. */
+  apiKey: string;
+}
+
+/** An OpenAI-compatible server has no default: model names are whatever that server serves. */
+export const DEFAULT_MODEL: Record<LlmConfig['provider'], string> = { anthropic: 'claude-opus-5-5', openai: '' };
+
+export interface HttpResponse {
+  status: number;
+  text: string;
+}
+export type HttpPost = (url: string, headers: Record<string, string>, body: string) => Promise<HttpResponse>;
+
+export interface Draft {
+  source: string;
+  notes: string[];
+  errors: Diagnostic[];
+  warnings: Diagnostic[];
+  /** Requests made to the model: the first draft plus any repairs. */
+  attempts: number;
+}
+
+const FENCE = '```';
+
+interface Example {
+  description: string;
+  source: string;
+  notes: string[];
+}
+
+const EXAMPLES: Example[] = [
+  {
+    description: 'Buy SPY when it closes above its 200-day average, sell when it falls back below, 5 bps costs.',
+    source: `name: SPY 200-day trend
+universe: SPY
+costs: 5 bps
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+    notes: [],
+  },
+  {
+    description:
+      'Hold 60% SPY and 40% TLT from 2010, rebalanced every quarter. Keep SPY always, with a 15% stop loss. Hold the bonds only while TLT is above its 100-day average, with an 8% stop. Cash earns 4%.',
+    source: `name: 60/40 with a bond trend filter
+universe: SPY 60%, TLT 40%
+from: 2010-01-01
+rebalance: quarterly
+cash rate: 4%
+stop loss: 15%
+
+buy when true
+
+for TLT:
+  buy when close > sma(100)
+  sell when close < sma(100)
+  stop loss: 8%`,
+    notes: [],
+  },
+  {
+    description: 'Buy QQQ on sharp dips in an uptrend: RSI(2) under 10 while the price is above its 200-day average. Sell when RSI(2) goes over 70 or after 10 days. 5% stop loss, 5 bps costs, from 2005.',
+    source: `name: QQQ RSI pullback
+universe: QQQ
+from: 2005-01-01
+costs: 5 bps
+stop loss: 5%
+
+buy when rsi(2) < 10 and close > sma(200)
+sell when rsi(2) > 70 or bars held >= 10`,
+    notes: [],
+  },
+  {
+    description: 'Every month, hold the 3 strongest of SPY, QQQ, IWM, EFA, TLT and GLD by 6-month momentum, but only those above their 200-day average. Otherwise stay in cash.',
+    source: `name: Momentum rotation
+universe: SPY, QQQ, IWM, EFA, TLT, GLD
+rebalance: monthly
+hold: top 3 by roc(126)
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+    notes: ['Six months is about 126 trading days, so the ranking uses roc(126).'],
+  },
+  {
+    description: 'Moving-average crossover on QQQ: buy when the fast average is above the slow one, sell when it is below. I want to try fast from 20 to 100 and slow from 100 to 250. Judge it on data from 2018.',
+    source: `name: QQQ moving-average crossover
+universe: QQQ
+test from: 2018-01-01
+
+fast = 50 in 20..100 step 10
+slow = 200 in 100..250 step 50
+
+buy when sma(fast) > sma(slow)
+sell when sma(fast) < sma(slow)`,
+    notes: ['You gave ranges but no starting values, so I started fast at 50 and slow at 200.'],
+  },
+  {
+    description: 'Short the S&P 500 with 2x leverage when it breaks below its 50-day average, and hedge with put options.',
+    source: `name: SPY 50-day trend, long or cash
+universe: SPY
+
+buy when close > sma(50)
+sell when close < sma(50)`,
+    notes: [
+      'Shorting, leverage and options are not supported. This holds SPY only while it is above its 50-day average and sits in cash otherwise, which is the closest long-or-flat version.',
+      'SPY stands in for the S&P 500.',
+    ],
+  },
+];
+
+export const PROMPT_EXAMPLES: string[] = EXAMPLES.map((e) => e.source);
+
+const renderExample = (e: Example): string =>
+  ['Description:', e.description, '', 'Reply:', `${FENCE}strategy`, e.source, FENCE, ...e.notes.map((n) => `NOTE: ${n}`)].join('\n');
+
+/** The fixed instructions: role, the complete language reference with worked examples, the reply format. */
+export const SYSTEM_PROMPT = `You turn a plain-English trading idea into a strategy for Backtest Blocks, a backtester inside the note-taking app Obsidian. Strategies are written in a small rule language. A parser checks every line you write, and the rules it accepts, not you, are what get backtested. Use only what this document lists.
+
+## Reply format
+
+Reply with the strategy in one ${FENCE}strategy code fence that holds only strategy lines. After the fence you may add lines that each start with "NOTE:", one short sentence per line, for:
+- anything the description asks for that the language cannot express, and what you wrote instead;
+- anything you chose that the description did not say, such as which ticker stands for "the market", a period, a threshold, a date or a cost.
+Write nothing else: no greeting, no explanation of the rules, no text in the fence that is not strategy.
+
+## Limits
+
+A strategy is long or flat: each ticker is either held or not, and cash earns the cash rate. There is no shorting, no leverage (weights never exceed 100%), no options, no futures and no margin. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w) or a CSV file in the vault. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo.
+If the description asks for something outside these limits, write the closest long-or-flat strategy the language can express and say in a NOTE what you left out or changed. Never invent syntax to cover it.
+
+## Layout
+
+A strategy is lines in this order: settings, then parameters, then rules. A line is one of:
+  key: value          a setting
+  name = value        a parameter
+  buy when ...        a rule (so is "sell when ...")
+  for TICKER:         starts rules for one ticker; "for all:" returns to the shared rules
+  # note              a comment, also written // note
+A rule may continue on the next lines (indent them and start each with "and" or "or"). A blank line ends it.
+
+## Settings
+
+Only universe is required. Add the others when the description asks for them or the strategy needs them.
+  name: Trend following             title shown above the result
+  universe: SPY 60%, TLT 40%        what to trade
+  symbol: SPY                       the same as universe, for one ticker
+  from: 2015-01-31                  first day; leave out to use all history
+  to: 2024-12-31                    last day
+  test from: 2019-01-01             results before and from this day are reported apart; must lie between from and to
+  data: binance                     where plain tickers come from: yahoo (the default) or binance
+  interval: 1d                      bar size; Yahoo gives 1d or 1w; Binance gives 1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w
+  capital: 10k                      starting money, written 10000 or 10k
+  costs: 5 bps                      cost of each trade, written 5 bps or 0.05% (100 bps = 1%)
+  slippage: 5 bps                   how much worse each fill is than the price
+  cash rate: 4%                     what cash earns a year, or a yield ticker such as ^IRX
+  size: 80%                         share of equity to use when the tickers have no weights (default 100%)
+  rebalance: monthly                never (the default), weekly, monthly, quarterly or yearly; held tickers return to their weights at the start of each period, and with hold the ranking is decided at the end of each period
+  benchmark: QQQ                    ticker to compare with, bought and held
+  stop loss: 10%                    sell this far below the entry price; also written 2 atr(14), two average true ranges
+  trailing stop: 15%                sell this far below the highest price since entry; also 3 atr(14)
+  take profit: 20%                  sell this far above the entry price; also 4 atr(14)
+  hold: top 3 by roc(126)           hold only the 3 tickers with the highest score, so the universe needs at least 3; the score is a number written like a value in a rule
+  weighting: inverse volatility(60) calmer tickers get more weight; volatility is measured over the last 60 returns
+  risk per trade: 1% at 2 atr(14)   size each buy so that a fall of 2 average true ranges loses 1% of equity
+universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, csv:Data/gold.csv for a CSV file in the vault. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
+Stops are checked on top of the sell rule. With no sell rule a position is held until a stop closes it or the run ends.
+
+## Rules
+
+buy when <condition>      opens a position when the condition holds and the ticker is not held
+sell when <condition>     closes it when the condition holds
+A rule that holds at a close fills at the next open. At most one buy rule and one sell rule per scope. A buy rule is optional only when hold is set (then every ticker is eligible).
+Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
+
+## Conditions and values
+
+Compare with > < >= <= == !=, or the words above and below (the same as > and <). "crosses above" and "crosses below" mean the moment a value changes sides: sma(50) crosses above sma(200). Join conditions with and, or, not and parentheses. Arithmetic with + - * / works on numbers: close > sma(200) * 1.02. A percentage is a number: roc(20) > 5% is the same as roc(20) > 0.05. true and false are conditions too (also written always and never).
+Earlier bars: close[1] is the previous bar's close, close[5] the close five bars back, highest(20)[1] the highest high of the 20 bars before this one.
+Another ticker: sma(200) of SPY, close of ^VIX < 25. The ticker need not be in the universe. Put "of" right after the value it applies to.
+Compare prices with averages, percentages or earlier prices rather than fixed price levels: Yahoo prices are adjusted for later dividends and splits.
+
+Series (the bar's values): open high low close volume
+Functions, written with parentheses. A period is a plain number or a parameter, not an expression. A first argument that is not a number replaces the default series, so sma(volume, 20) and sma(rsi(2), 5) both work.
+  sma(n)                       simple average of the last n closes
+  ema(n)                       exponential average of closes
+  rsi(n)                       relative strength index, 0 to 100; n defaults to 14
+  roc(n)                       change over n bars, as a fraction: compare with a percentage
+  stdev(n)                     standard deviation of the last n closes
+  highest(n)                   highest high of the last n bars, this bar included
+  lowest(n)                    lowest low of the last n bars, this bar included
+  atr(n)                       average true range; n defaults to 14
+  macd(fast, slow)             fast average minus slow average; defaults 12, 26
+  macd_signal(fast, slow, n)   average of the macd line; defaults 12, 26, 9
+  bb_upper(n, width)           upper Bollinger band; defaults 20, 2
+  bb_lower(n, width)           lower Bollinger band; defaults 20, 2
+  min(a, b)  max(a, b)  abs(x)
+Calendar values, read from each bar's date:
+  month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), year such as 2024
+  month_start and month_end are conditions: the first and the last bar of a month
+Position values, in sell rules only (written with a space, not inside functions, not with [n] or "of"):
+  bars held      completed bars since the buy filled, 0 on that bar
+  entry price    the price the position was bought at
+  Example: sell when bars held >= 10 or close > entry price * 1.1
+
+## Parameters
+
+A parameter is a named number on its own line: fast = 50. Use its name wherever a plain number goes: in rules (sma(fast), close[lag], rsi(n) < limit), in stop loss, trailing stop, take profit, risk per trade, and in hold ("hold: top n by roc(126)"). Add a range to let the plugin test values: fast = 50 in 20..100 step 10. The value after = is the one used, and it must lie inside the range; step is optional and defaults to 1 (or 1% for percentages). Write % on every number of a percentage parameter: stop = 8% in 4%..12% step 2%. Declare parameters only when the description asks to test, tune or vary a value. A name uses letters, digits and underscores and must not be a word the language already uses (a series, function, setting or calendar name, or words such as top, step or in): fast_ma, slow_ma and stop_pct are safe.
+
+## Do not
+
+- Do not invent settings, functions, series or words that this document does not list. If the language cannot say it, say so in a NOTE.
+- Do not write more than one "buy when" or one "sell when" in the same scope (the shared rules, or one "for TICKER:" section). Join conditions with "and" or "or" inside the one rule.
+- Do not put a setting after a "for TICKER:" line, except stop loss, trailing stop and take profit for that ticker. Put settings before the first "for" line, or after "for all:".
+- Do not set the same setting twice.
+- Do not write dates any way but YYYY-MM-DD, such as 2015-01-31.
+- Do not use shorting, leverage, options or margin, and do not let weights add up to more than 100%. A sell rule only closes a long position.
+- Do not use bars held or entry price in a buy rule, inside a function, or with [n] or "of".
+- Do not put an expression where a function wants a period: write sma(200), not sma(100 * 2).
+- Do not leave a blank line inside a rule, or put prose in the fence. A # comment line is fine.
+- Do not give universe weights when you use hold, and do not use weights together with size.
+- Do not combine risk per trade with weighting, or with a rebalance other than never.
+- Do not add settings the description did not ask for, other than name. Do not invent dates, costs or capital: leave them out unless the description gives them or the strategy needs one, and then say so in a NOTE.
+- Do not leave out universe, or the buy rule (except with hold).
+
+## Worked examples
+
+${EXAMPLES.map(renderExample).join('\n\n')}`;
+
+export function userMessage(description: string): string {
+  return `Description:\n${description.trim()}`;
+}
+
+export function repairMessage(draft: string, errors: Diagnostic[]): string {
+  const lines = draft.split('\n');
+  const problems = errors.map((e) => {
+    const text = lines[e.line - 1]?.trim();
+    return `- Line ${e.line}: ${e.message}${text ? `\n  ${text}` : ''}`;
+  });
+  return [
+    `The parser found ${errors.length === 1 ? 'a problem' : `${errors.length} problems`} in your draft.`,
+    '',
+    ...problems,
+    '',
+    'Your draft was:',
+    `${FENCE}strategy`,
+    draft,
+    FENCE,
+    '',
+    'Reply again in the same format with the whole strategy corrected. Change only what the problems require, and use only the settings and functions in your instructions.',
+  ].join('\n');
+}
+
+const NOTE_LINE = /^\s*(?:[-*•]\s+)?(?:\*\*)?NOTE(?::\*\*|\*\*:|:)\s*(.*\S)\s*$/i;
+
+/** Pulls the strategy text and the notes out of a model reply; tolerant of code fences and stray prose. Null when there is no strategy. */
+export function parseReply(reply: string): { source: string; notes: string[] } | null {
+  // Local reasoning models can print their thinking in the reply, and it may hold a draft of its own.
+  const lines = reply.replace(/<think>[\s\S]*?<\/think>/gi, '').split(/\r?\n/);
+
+  const blocks: { lang: string; from: number; to: number }[] = [];
+  let lang: string | null = null;
+  let start = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*```\s*([\w-]*)/);
+    if (!m) continue;
+    if (lang === null) {
+      lang = m[1].toLowerCase();
+      start = i + 1;
+    } else {
+      blocks.push({ lang, from: start, to: i });
+      lang = null;
+    }
+  }
+  if (lang !== null) blocks.push({ lang, from: start, to: lines.length });
+
+  let from: number;
+  let to: number;
+  const block = blocks.find((b) => b.lang === 'strategy') ?? blocks.find((b) => b.lang === '') ?? blocks[0];
+  if (block) {
+    ({ from, to } = block);
+  } else {
+    // No fence: the strategy runs from the first line that reads like one to the first line that does not.
+    const kinds: LineKind[] = [];
+    let inRule = false;
+    for (const line of lines) {
+      const kind = lineKind(line, inRule);
+      inRule = kind === 'rule' || kind === 'continuation';
+      kinds.push(kind);
+    }
+    from = kinds.findIndex((k) => k !== 'blank' && k !== 'other' && k !== 'continuation');
+    if (from < 0) return null;
+    to = kinds.findIndex((k, i) => i > from && k === 'other');
+    if (to < 0) to = lines.length;
+  }
+
+  const notes: string[] = [];
+  const kept: string[] = [];
+  lines.forEach((line, i) => {
+    const note = line.match(NOTE_LINE);
+    if (note) notes.push(note[1]);
+    else if (i >= from && i < to) kept.push(line);
+  });
+  const source = kept.join('\n').trim();
+  return source ? { source, notes } : null;
+}
+
+type Turn = { role: 'user' | 'assistant'; content: string };
+
+const ANTHROPIC_URL = 'https://api.anthropic.com';
+const ANTHROPIC_VERSION = '2023-06-01';
+const MAX_TOKENS = 16000;
+
+function checkConfig(config: LlmConfig): void {
+  if (config.provider === 'anthropic' && !config.apiKey.trim()) throw new Error('Enter your Anthropic API key in the plugin settings.');
+  if (config.provider === 'openai' && !config.baseUrl.trim()) throw new Error('Enter the address of your model server in the plugin settings, such as http://localhost:8000/v1.');
+  if (!(config.model.trim() || DEFAULT_MODEL[config.provider])) throw new Error('Enter the model name your server uses in the plugin settings.');
+}
+
+function buildRequest(config: LlmConfig, turns: Turn[]): { url: string; headers: Record<string, string>; body: string } {
+  const model = config.model.trim() || DEFAULT_MODEL[config.provider];
+  const base = config.baseUrl.trim().replace(/\/+$/, '');
+  const key = config.apiKey.trim();
+  if (config.provider === 'anthropic') {
+    return {
+      url: `${base || ANTHROPIC_URL}/v1/messages`,
+      headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+      // No temperature: current Claude models reject it.
+      body: JSON.stringify({ model, max_tokens: MAX_TOKENS, system: SYSTEM_PROMPT, messages: turns }),
+    };
+  }
+  return {
+    url: `${base}/chat/completions`,
+    headers: { 'content-type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+    body: JSON.stringify({ model, messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...turns], temperature: 0 }),
+  };
+}
+
+/** The message a service put in its error body, if any. */
+function serviceMessage(text: string): string {
+  try {
+    const message = (JSON.parse(text) as { error?: { message?: unknown } }).error?.message;
+    return typeof message === 'string' ? message.trim().slice(0, 300) : '';
+  } catch {
+    return '';
+  }
+}
+
+function httpError(res: HttpResponse): Error {
+  const { status } = res;
+  if (status === 401 || status === 403) return new Error('The service rejected the API key. Check it in the plugin settings.');
+  if (status === 404) return new Error('The service could not find that model or address. Check the model name and the server address in the plugin settings.');
+  if (status === 429) return new Error('The service is busy or over its limit. Try again in a minute.');
+  if (status >= 500) return new Error(`The service had a problem (HTTP ${status}). Try again in a minute.`);
+  const detail = serviceMessage(res.text);
+  return new Error(`The service refused the request (HTTP ${status})${detail ? `: ${detail}` : '.'}`);
+}
+
+function replyText(config: LlmConfig, raw: string): string {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error('The service sent a reply the plugin could not read. Check the server address in the plugin settings.');
+  }
+  if (config.provider === 'anthropic') {
+    const reply = data as { stop_reason?: string; content?: { type?: string; text?: unknown }[] };
+    if (reply.stop_reason === 'refusal') throw new Error('The model declined to write this strategy. Try describing it differently.');
+    return (reply.content ?? []).flatMap((b) => (b.type === 'text' && typeof b.text === 'string' ? [b.text] : [])).join('\n');
+  }
+  const content = (data as { choices?: { message?: { content?: unknown } }[] }).choices?.[0]?.message?.content;
+  return typeof content === 'string' ? content : '';
+}
+
+async function ask(config: LlmConfig, post: HttpPost, turns: Turn[]): Promise<string> {
+  const { url, headers, body } = buildRequest(config, turns);
+  let res: HttpResponse;
+  try {
+    res = await post(url, headers, body);
+  } catch (e) {
+    throw new Error(`Could not reach the model service (${e instanceof Error ? e.message : String(e)}). Check your connection and the server address in the plugin settings.`);
+  }
+  if (res.status < 200 || res.status >= 300) throw httpError(res);
+  return replyText(config, res.text);
+}
+
+function noStrategy(reply: string): Error {
+  const said = reply.replace(/\s+/g, ' ').trim();
+  return new Error(`The model's reply did not contain a strategy.${said ? ` It said: "${said.length > 200 ? `${said.slice(0, 200)}…` : said}"` : ''}`);
+}
+
+/**
+ * Asks for a draft, checks it with the parser, and asks for a repair while it has errors, at most
+ * `maxRepairs` times. Rejects with a plain-English Error when the service cannot be used or sends no strategy.
+ */
+export async function draftStrategy(
+  description: string,
+  config: LlmConfig,
+  post: HttpPost,
+  opts: { maxRepairs?: number; defaults?: Partial<Defaults>; onStatus?: (text: string) => void } = {},
+): Promise<Draft> {
+  checkConfig(config);
+  const maxRepairs = opts.maxRepairs ?? 2;
+  const turns: Turn[] = [{ role: 'user', content: userMessage(description) }];
+  let draft: Draft | null = null;
+  opts.onStatus?.('Writing a draft…');
+  for (let attempts = 1; ; attempts++) {
+    const reply = await ask(config, post, turns);
+    const parsed = parseReply(reply);
+    if (!parsed) {
+      // A repair that comes back empty-handed leaves the earlier draft, which is still worth showing.
+      if (draft) return { ...draft, attempts };
+      throw noStrategy(reply);
+    }
+    const { errors, warnings } = parseSpec(parsed.source, { defaults: opts.defaults });
+    const earlier: string[] = draft?.notes ?? [];
+    draft = { source: parsed.source, notes: [...earlier, ...parsed.notes.filter((n) => !earlier.includes(n))], errors, warnings, attempts };
+    if (errors.length === 0 || attempts > maxRepairs) return draft;
+    opts.onStatus?.(`Fixing ${errors.length} problem${errors.length === 1 ? '' : 's'}…`);
+    turns.push({ role: 'assistant', content: reply }, { role: 'user', content: repairMessage(parsed.source, errors) });
+  }
+}
