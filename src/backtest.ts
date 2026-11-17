@@ -289,8 +289,8 @@ function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intrad
 export const CLOSE_FILL_NOTE =
   'Orders fill at the same close the rules were read at (fill: close). The result assumes you can trade at that closing price, which a real order can only come near by being placed just before the close.';
 
-/** Runs the spec and a buy-and-hold benchmark over the same dates. `data` is keyed by asset name. */
-export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
+/** What each ticker's rules say, as simulate reads them. */
+export function specSignals(spec: Spec, data: Map<string, Bars>): Map<string, Signals> {
   const evaluator = specEvaluator(spec, data);
   const signals = new Map<string, Signals>();
   for (const a of spec.universe) {
@@ -302,6 +302,12 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
       add: r.add ? evaluator.compile(r.add, a.name) : null,
     });
   }
+  return signals;
+}
+
+/** Runs the spec and a buy-and-hold benchmark over the same dates. `data` is keyed by asset name. */
+export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
+  const signals = specSignals(spec, data);
   const run = simulate({ ...spec, assets: spec.universe }, data, signals);
 
   // The benchmark holds the same weights (or the named ticker) throughout, with the same costs

@@ -208,6 +208,23 @@ export interface SimParams {
    */
   magnify?: string;
   interval?: string;
+  /** Told about every fill, for tests of the long/flat promises; absent in a run. */
+  onFill?: (fill: FillSeen) => void;
+}
+
+/** A fill as SimParams.onFill sees it, just after it is made. */
+export interface FillSeen {
+  t: number;
+  asset: string;
+  kind: 'entry' | 'add' | 'rebalance' | 'owed' | 'trim' | 'sell' | 'stop';
+  /** The price it filled at before slippage, and the asset's shares after it. */
+  price: number;
+  shares: number;
+  /** Cash after it. */
+  cash: number;
+  /** For a buy: the equity it was sized against and the weight it used (the configured one, or its inverse-volatility share); NaN for a sale. */
+  equity: number;
+  weight: number;
 }
 
 /** Per asset, aligned with its bars. */
@@ -282,10 +299,14 @@ export function commissionFee(c: Commission, value: number, shares: number): num
   return c.max === null ? fee : Math.min(fee, c.max * value);
 }
 
-/** Where `data` holds an asset's smaller bars of size `interval`, for `magnify`. A ticker's name has no space, so no ticker is called this. */
-export const insideKey = (name: string, interval: string): string => `${name} ${interval}`;
+/**
+ * Where `data` holds an asset's smaller bars of size `interval`, for `magnify`. No name a block can give holds a slash: a
+ * ticker is letters, digits and `^ . _ = -`, and a CSV file is named by what follows the last slash of its path (dsl.ts
+ * parseRef). So no ticker or file is called this, whatever spaces its name has.
+ */
+export const insideKey = (name: string, interval: string): string => `${name}/${interval}`;
 /** Whether a key of `data` is an insideKey, not a ticker. */
-export const isInsideKey = (key: string): boolean => key.includes(' ');
+export const isInsideKey = (key: string): boolean => key.includes('/');
 
 /** A bar's smaller bars as its stops and targets move through them: their starts, and their opens, highs and lows on the bar's own scale. */
 export interface InsidePath {
@@ -633,7 +654,10 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const close = (a: A, t: number, price: number, reason: ExitReason, exit: ExitWhy | null) => {
     const exitPrice = reason === 'open' ? price : price * (1 - slip);
     const held = a.shares;
-    if (reason !== 'open') sell(a, a.shares, price);
+    if (reason !== 'open') {
+      sell(a, a.shares, price);
+      p.onFill?.({ t, asset: a.name, kind: reason === 'signal' ? 'sell' : 'stop', price, shares: a.shares, cash, equity: NaN, weight: NaN });
+    }
     a.owed = null;
     const why = a.why!;
     why.topUps = a.topUps;
@@ -825,34 +849,44 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const price = priceOf(a);
       // A position built in steps is rebalanced to its entries' share of the weight.
       const part = steps > 1 ? a.made / steps : 1;
-      /** What a rebalance at this fill takes the position to, when one does. */
-      let target: number | null = null;
+      /**
+       * What the position is worth once this fill's rebalancing of it is done, which an add is sized against: the target
+       * when a trim is made or a top-up is ordered, and what it is worth now when a trim is too small for its commission
+       * or nothing is traded. A top-up that buys less than it wants is caught where it fills.
+       */
+      let held = a.shares * price;
       if (entering.has(a)) {
         const weight = weights.get(a)!;
         const full = riskNotional(a, weight, equityNow, price, known(a));
         buys.push({ a, notional: steps > 1 ? full / steps : full, kind: 'entry', weight, full, held: 0 });
       } else if (a.shares > 0 && rebalances(a)) {
-        target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
-        const delta = target - a.shares * price;
+        const target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
+        const delta = target - held;
         if (delta < 0) {
           if (tooSmall(-delta * (1 - slip), -delta / price)) smallTrades++;
           else {
             sell(a, -delta / price, price);
             a.trims++;
+            held = target;
+            p.onFill?.({ t, asset: a.name, kind: 'trim', price, shares: a.shares, cash, equity: NaN, weight: NaN });
           }
-        } else buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0 });
+        } else {
+          buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0 });
+          held = target;
+        }
       } else if (a.shares > 0 && a.owed === periodKey(a.bars.t[a.i], p.rebalance)) {
         // The rest of this period's top-up; a debt from an earlier period has lapsed.
-        target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
-        const delta = target - a.shares * price;
-        if (delta > 0) buys.push({ a, notional: delta, kind: 'owed', weight: 0, full: 0, held: 0 });
-        else a.owed = null;
+        const target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
+        const delta = target - held;
+        if (delta > 0) {
+          buys.push({ a, notional: delta, kind: 'owed', weight: 0, full: 0, held: 0 });
+          held = target;
+        } else a.owed = null;
       }
       if (a.pending === 'add' && a.shares > 0 && a.made < steps) {
         // One more step of a whole position, cut so the position stays within it.
         const weight = weights.get(a)!;
         const full = riskNotional(a, weight, equityNow, price, known(a));
-        const held = target ?? a.shares * price;
         const notional = Math.min(full / steps, full - held);
         if (notional > 0) buys.push({ a, notional, kind: 'add', weight, full, held });
       }
@@ -860,7 +894,13 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       if (!(p.rank && a.pending === 'buy')) a.pending = null;
     }
     if (p.rank) buys.sort((x, y) => x.a.rankPos - y.a.rankPos || x.a.order - y.a.order);
-    for (const { a, notional, kind, weight, full, held } of buys) {
+    // Positions whose top-up at this fill bought less than it wanted; an add after it is sized from what they are worth.
+    const fellShort = new Set<A>();
+    for (let { a, notional, kind, weight, full, held } of buys) {
+      if (kind === 'add' && fellShort.has(a)) {
+        held = a.shares * priceOf(a);
+        notional = Math.min(full / steps, full - held);
+      }
       const entry = kind === 'entry';
       if (entry) {
         a.cashIn = 0;
@@ -874,6 +914,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const fill = priceOf(a) * (1 + slip);
       const short = charge !== null && affordable(fill) < notional;
       const spent = buy(a, notional, priceOf(a), !entry);
+      if (spent > 0) p.onFill?.({ t, asset: a.name, kind, price: priceOf(a), shares: a.shares, cash, equity: equityNow, weight: weights.get(a)! });
       if (small && (kind === 'add' || kind === 'rebalance')) smallTrades++;
       if (kind === 'rebalance' || kind === 'owed') {
         // The debt is for the period the rebalance opens: this one at an open, the next one at a close. A top-up left
@@ -881,6 +922,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         const owes = notional - spent > 1e-9 * notional && (!charge || spent > 0 || short);
         a.owed = owes ? periodKey(a.bars.t[a.i], p.rebalance) + (atClose ? 1 : 0) : null;
         if (spent > 0) a.topUps++;
+        if (spent < notional) fellShort.add(a);
       }
       if (entry && a.shares > 0) {
         openPosition(a, t, priceOf(a), known(a), { equity: equityNow, weight, wanted: notional, cash: before, spent, shares: a.shares });
@@ -1067,10 +1109,16 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         targetWeight: equityNow > 0 ? riskNotional(a, finalWeights.get(a)!, equityNow, a.lastClose, a.i) / equityNow : finalWeights.get(a)!,
       };
       if (steps > 1) {
-        // The next entry: a step of a whole position, cut for an add so the position stays within it.
+        // The next entry: a step of a whole position, cut for an add so the position stays within it. An add with no room
+        // left at the last close is not reported, as the next open would not make it unless the price fell. One that only
+        // the cash stands in the way of is, as a buy is: the sales and trims at that open are paid out first.
         const full = st.targetWeight;
         if (a.pending === 'buy') st.targetWeight = full / steps;
-        if (a.pending === 'add') st.targetWeight = Math.max(0, Math.min(full / steps, full - (equityNow > 0 ? st.value / equityNow : 0)));
+        if (a.pending === 'add') {
+          const room = Math.min(full / steps, full - (equityNow > 0 ? st.value / equityNow : 0));
+          if (room > 0) st.targetWeight = room;
+          else st.pending = null;
+        }
         st.entries = a.shares > 0 ? a.made : 0;
       }
       if (atClose) {

@@ -102,6 +102,10 @@ test('a buy the cash cannot pay the commission for is not made, and a sale never
   assert.deepEqual(r.run.equity, [10, 7, 0.7, 0]);
   assert.equal(r.run.trades[0].why!.commission!.paid, 3.7);
   assert.equal(r.run.commission, 3.7);
+  // The explanation's return is the trade's, with the commission the sale could pay.
+  const ex = explainTrade(r, r.run.trades[0]);
+  assert.ok(near(ex.facts.ret, r.run.trades[0].ret, 1e-12), `${ex.facts.ret} against ${r.run.trades[0].ret}`);
+  assert.equal(r.run.trades[0].ret, -1);
 });
 
 test('a rebalancing trade too small for its commission is not made, and the result says so', () => {
