@@ -1,4 +1,5 @@
-import { MarkdownRenderChild, MarkdownView, Notice, Plugin, TFile, normalizePath, requestUrl } from 'obsidian';
+import { MarkdownRenderChild, MarkdownView, Notice, Plugin, TFile, normalizePath, requestUrl, type MarkdownPostProcessorContext } from 'obsidian';
+import { runBacktest } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
 import { cashIndex, parseCompare, type Curve } from './compare.ts';
 import type { DataDeps } from './data.ts';
@@ -14,10 +15,11 @@ import { renderActions } from './render-actions.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderPriceCharts } from './render-price.ts';
 import { renderLuck } from './render-luck.ts';
-import { renderErrors, renderFailure, renderLoading, renderResult, type Section } from './render.ts';
+import { blockStateKey, renderErrors, renderFailure, renderLoading, renderResult, type Section } from './render.ts';
 import { renderSweep } from './render-sweep.ts';
 import { ResultCache, cacheKey, csvPaths, csvVersions, debounce } from './result-cache.ts';
-import { Runner, type RunOutput } from './runner.ts';
+import { findBlock, setParamValues, setParamValuesInNote } from './rewrite.ts';
+import { Runner, lookbackBars, type RunOutput } from './runner.ts';
 import { BacktestSettingTab, defaultsFrom, normalizeSettings, type Settings } from './settings.ts';
 
 const TEMPLATE = `\`\`\`strategy
@@ -33,6 +35,8 @@ sell when close < sma(200)
 
 const HOUR = 3_600_000;
 const KEPT_RESULTS = 40;
+/** Blocks whose open or folded state is remembered for the session. */
+const KEPT_BLOCK_STATES = 500;
 /** How long after the last block of a note renders its properties are written, so a note with several blocks is written once. */
 const PROPERTY_DELAY = 1000;
 /** Strategies run side by side when today's orders are worked out. */
@@ -42,6 +46,19 @@ const NOTES_PER_PAUSE = 50;
 
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 
+/** What a caller of `renderStrategy` says about where the block is. */
+interface StrategyOptions {
+  notePath: string;
+  /** Run again and fetch prices again, instead of reusing a recent result. */
+  force?: boolean;
+  /** Writes parameter values (fractions for percentages) into the block's text. Absent where the block can't be edited. */
+  apply?: (values: Record<string, number>) => Promise<void>;
+  /** Keys the block's remembered open or folded state; without one it is not remembered. */
+  stateKey?: string;
+  /** Start folded or open, instead of following the setting. */
+  compact?: boolean;
+}
+
 export default class BacktestBlocks extends Plugin {
   settings: Settings = normalizeSettings(null);
   private memory = new Map<string, string>();
@@ -50,6 +67,8 @@ export default class BacktestBlocks extends Plugin {
   /** What to run before a rendered block draws again or goes away. */
   private disposers = new WeakMap<MarkdownRenderChild, () => void>();
   private propertyWrites = new Map<string, { (): void; cancel(): void }>();
+  /** Whether each block was left open (true) or folded (false), for blocks drawn again within a session. */
+  private blockState = new ResultCache<boolean>(KEPT_BLOCK_STATES, Infinity);
 
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
@@ -60,7 +79,7 @@ export default class BacktestBlocks extends Plugin {
       const child = new MarkdownRenderChild(el);
       child.register(() => this.dispose(child));
       ctx.addChild(child);
-      void this.renderStrategy(source, el, child, ctx.sourcePath, false);
+      void this.renderStrategy(source, el, child, { notePath: ctx.sourcePath, ...this.placeInNote(source, el, ctx) });
     });
     this.registerMarkdownCodeBlockProcessor('compare', (source, el, ctx) => {
       const child = new MarkdownRenderChild(el);
@@ -203,11 +222,36 @@ export default class BacktestBlocks extends Plugin {
     this.disposers.delete(child);
   }
 
-  private async renderStrategy(source: string, el: HTMLElement, child: MarkdownRenderChild, notePath: string, force: boolean): Promise<void> {
+  /** What a strategy block can do because of where it sits in its note: write values back into it, and have its open or folded state remembered. */
+  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'stateKey'> {
+    const info = ctx.getSectionInfo(el);
+    const found = info ? findBlock(info.text, info.lineStart, source) : null;
+    if (!found) return {};
+    const stateKey = blockStateKey(ctx.sourcePath, found.block.name, found.index);
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    if (!(file instanceof TFile)) return { stateKey };
+    const apply = async (values: Record<string, number>): Promise<void> => {
+      // Asked again now: the note may have moved the block since it was drawn.
+      const line = ctx.getSectionInfo(el)?.lineStart;
+      let written = false;
+      if (line !== undefined) {
+        await this.app.vault.process(file, (note) => {
+          const next = setParamValuesInNote(note, line, source, values);
+          written = next !== null;
+          return next ?? note;
+        });
+      }
+      if (!written) new Notice('The note has changed since this result was drawn, so nothing was written. Try again.');
+    };
+    return { stateKey, apply };
+  }
+
+  private async renderStrategy(source: string, el: HTMLElement, child: MarkdownRenderChild, opts: StrategyOptions): Promise<void> {
     this.dispose(child);
     const runner = this.runner();
     const defaults = defaultsFrom(this.settings);
-    const retry = (refetch: boolean) => () => void this.renderStrategy(source, el, child, notePath, refetch);
+    const force = opts.force ?? false;
+    const retry = (refetch: boolean) => () => void this.renderStrategy(source, el, child, { ...opts, force: refetch });
     try {
       const { spec, errors, warnings } = runner.parse(source);
       if (!spec) {
@@ -217,31 +261,57 @@ export default class BacktestBlocks extends Plugin {
       const key = await this.resultKey(spec, source);
       if (force || this.results.get(key) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
       const out = await this.runSpec(runner, spec, key, force);
-      const bt = out.backtest;
-      const intraday = bt.run.t.some((t) => t % DAY !== 0);
-      const name = spec.name ?? 'Backtest';
-      const sections: Section[] = [
-        (root) =>
-          renderPriceCharts(root, {
-            data: out.data,
-            tickers: spec.universe.map((a) => a.name),
-            trades: bt.run.trades,
-            from: bt.run.t[0],
-            to: bt.run.t[bt.run.t.length - 1],
-            intraday,
-          }),
-        (root) => renderSweep(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides), defaults }),
-        (root) => renderLuck(root, { source, backtest: bt, parse: (overrides) => runner.parse(source, overrides), defaults }),
-        (root) =>
-          renderActions(root, [
-            { label: 'Save trades as CSV', run: () => this.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
-            { label: 'Save value history as CSV', run: () => this.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
-            { label: 'Keep this result as a note', run: () => this.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source, backtest: bt, now: Date.now() })) },
-          ]),
-      ];
-      this.disposers.set(child, renderResult(el, { source, out, notes: warnings, onRefresh: retry(true), sections }));
+      const sections = (shown: RunOutput): Section[] => {
+        const bt = shown.backtest;
+        const intraday = bt.run.t.some((t) => t % DAY !== 0);
+        const name = shown.spec.name ?? 'Backtest';
+        // The sweep and the luck checks start from the block's own text and put values on top of it.
+        const tryValues = { source, backtest: bt, parse: (overrides: Record<string, number>) => runner.parse(source, overrides), defaults, apply: opts.apply };
+        // A kept note carries the values that made its result.
+        const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
+        return [
+          (root) =>
+            renderPriceCharts(root, {
+              data: shown.data,
+              tickers: shown.spec.universe.map((a) => a.name),
+              trades: bt.run.trades,
+              from: bt.run.t[0],
+              to: bt.run.t[bt.run.t.length - 1],
+              intraday,
+            }),
+          (root) => renderSweep(root, tryValues),
+          (root) => renderLuck(root, tryValues),
+          (root) =>
+            renderActions(root, [
+              { label: 'Save trades as CSV', run: () => this.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
+              { label: 'Save value history as CSV', run: () => this.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
+              { label: 'Keep this result as a note', run: () => this.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
+            ]),
+        ];
+      };
+      // Other parameter values run on the prices already loaded unless they need more history than the block as written.
+      const rerun = async (values: Record<string, number>): Promise<RunOutput> => {
+        const parsed = runner.parse(source, values);
+        if (!parsed.spec) throw new Error(`Line ${parsed.errors[0].line}: ${parsed.errors[0].message}`);
+        if (lookbackBars(parsed.spec) <= lookbackBars(spec)) return { ...out, spec: parsed.spec, backtest: runBacktest(parsed.spec, out.data) };
+        return runner.run(parsed.spec);
+      };
+      const stateKey = opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined);
+      this.disposers.set(
+        child,
+        renderResult(el, {
+          source,
+          out,
+          notes: warnings,
+          onRefresh: retry(true),
+          sections,
+          compact: opts.compact ?? this.settings.resultView === 'compact',
+          remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
+          params: spec.params.length > 0 ? { rerun, apply: opts.apply } : undefined,
+        }),
+      );
       if (this.settings.writeProperties) {
-        const file = this.app.vault.getAbstractFileByPath(notePath);
+        const file = this.app.vault.getAbstractFileByPath(opts.notePath);
         if (file instanceof TFile) this.scheduleProperties(file);
       }
     } catch (e) {

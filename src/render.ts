@@ -2,6 +2,7 @@ import type { Backtest, Segment } from './backtest.ts';
 import type { Diagnostic, Spec, StopLevel } from './dsl.ts';
 import { DAY, h, isoDate, minus, money, moneyTicks, niceStep, pct, s, signedPct, stamp, timeTicks } from './dom.ts';
 import { tokenizeBlock } from './highlight.ts';
+import { renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderDeepStats } from './render-stats.ts';
 import { renderPositions, renderTrades } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
@@ -86,8 +87,58 @@ export interface ResultView {
   /** The parser's warnings for this block. */
   notes: Diagnostic[];
   onRefresh: () => void;
-  /** Sections placed after the trade list, in order. */
-  sections?: Section[];
+  /** Sections placed after the trade list, in order. Built for the run on screen, so they are built again when the sliders show other values. */
+  sections?: (out: RunOutput) => Section[];
+  /** Start as one line that opens on a click. A remembered state wins over this. */
+  compact?: boolean;
+  /** Where the block's open or folded state is kept, so a block drawn again comes back as the reader left it. */
+  remember?: { get(): boolean | undefined; set(open: boolean): void };
+  /** Sliders for the strategy's parameters; ignored when it declares none. */
+  params?: ParamsHook;
+}
+
+/** Keys the remembered state of a block: its note and its name, or its place among the note's blocks when it has no name. */
+export function blockStateKey(notePath: string, name: string | null, index: number): string {
+  return `${notePath}\u0000${name ? `name:${name.toLowerCase()}` : `block:${index}`}`;
+}
+
+export interface CompactFacts {
+  /** The tickers, for a strategy with no name, so folded blocks can be told apart. */
+  tickers: string | null;
+  figures: string[];
+  holding: string;
+  /** What is due at the next open, or null. */
+  order: string | null;
+}
+
+/** What a folded block shows besides its name, worded like the positions table. */
+export function compactFacts(out: RunOutput): CompactFacts {
+  const { stats, run } = out.backtest;
+  const intraday = run.t.some((t) => t % DAY !== 0);
+  const long = run.states.filter((st) => st.long);
+  const holding = long.length === 0 ? 'In cash' : long.length === 1 ? `Long ${long[0].name} since ${stamp(long[0].since!, intraday)}` : `Holds ${long.length} of ${run.states.length}`;
+  const list = (names: string[], most = 2, joiner = ' and ') => (names.length <= most ? names.join(joiner) : `${names.length} tickers`);
+  const named = (side: 'buy' | 'sell') => run.states.filter((st) => st.pending === side).map((st) => st.name);
+  const buys = named('buy');
+  const sells = named('sell');
+  const due = [...(buys.length ? [`buys ${list(buys)}`] : []), ...(sells.length ? [`sells ${list(sells)}`] : [])];
+  return {
+    tickers: out.spec.name ? null : list(out.spec.universe.map((a) => a.name), 3, ', '),
+    figures: [`${signedPct(stats.cagr)} a year`, `worst drawdown ${pct(stats.maxDrawdown)}`],
+    holding,
+    order: due.length ? `${due.join(' and ')} at the next open` : null,
+  };
+}
+
+/** Everything worth a reader's attention that is not an error: price warnings, the run's own notes, the parser's warnings. */
+function notesOf(view: ResultView, out: RunOutput): string[] {
+  const { spec, warnings, backtest: bt } = out;
+  const first = bt.run.t[0];
+  const notes = [...warnings, ...bt.notes, ...view.notes.map((n) => `Line ${n.line}: ${n.message}`)];
+  if (spec.from !== null && first - spec.from > 7 * DAY) {
+    notes.push(`The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
+  }
+  return notes;
 }
 
 function segments(root: HTMLElement, bt: Backtest): void {
@@ -113,32 +164,11 @@ function segments(root: HTMLElement, bt: Backtest): void {
   h(wrap, 'div', 'bt-note', 'Rules chosen by looking at the first period are only tested by the second.');
 }
 
-export function renderResult(el: HTMLElement, view: ResultView): () => void {
-  el.replaceChildren();
-  const root = h(el, 'div', 'bt-root');
-  const { spec, backtest: bt, warnings, prices } = view.out;
-  const { run, stats, tradeStats, benchmark } = bt;
-  const first = run.t[0];
-  const last = run.t[run.t.length - 1];
-  const intraday = run.t.some((t) => t % DAY !== 0);
-  const cleanups: (() => void)[] = [];
+const isIntraday = (bt: Backtest) => bt.run.t.some((t) => t % DAY !== 0);
 
-  const head = h(root, 'div', 'bt-head');
-  const titles = h(head, 'div');
-  h(titles, 'div', 'bt-title', spec.name ?? 'Backtest');
-  h(titles, 'div', 'bt-sub', summary(spec));
-  const refresh = h(head, 'button', 'bt-button', 'Refresh prices');
-  refresh.addEventListener('click', view.onRefresh);
-  source(root, view.source);
-
-  for (const w of warnings) h(root, 'div', 'bt-warning', w);
-  for (const n of bt.notes) h(root, 'div', 'bt-warning', n);
-  for (const n of view.notes) h(root, 'div', 'bt-warning', `Line ${n.line}: ${n.message}`);
-  if (spec.from !== null && first - spec.from > 7 * DAY) {
-    h(root, 'div', 'bt-warning', `The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
-  }
-
-  const tiles = h(root, 'div', 'bt-tiles');
+function fillTiles(tiles: HTMLElement, bt: Backtest): void {
+  tiles.replaceChildren();
+  const { stats, tradeStats, benchmark } = bt;
   const tile = (label: string, value: string, sub: string) => {
     const t = h(tiles, 'div', 'bt-tile');
     h(t, 'div', 'bt-tile-label', label);
@@ -156,30 +186,27 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
     String(tradeStats.count),
     tradeStats.count ? `${pct(tradeStats.winRate, 0)} won, ${signedPct(tradeStats.avgReturn)} on average` : tradeStats.open ? 'none closed yet' : 'the buy rule never fired',
   );
+}
 
-  const legend = h(root, 'div', 'bt-legend');
+function fillLegend(legend: HTMLElement, bt: Backtest): void {
+  legend.replaceChildren();
   const key = (cls: string, label: string, value: number) => {
     const k = h(legend, 'span', 'bt-key');
     h(k, 'span', `bt-swatch ${cls}`);
     h(k, 'span', undefined, label);
     h(k, 'span', 'bt-key-value', money(value));
   };
-  key('bt-swatch-strategy', 'Strategy', run.equity[run.equity.length - 1]);
-  key('bt-swatch-benchmark', benchmark.label, benchmark.equity[benchmark.equity.length - 1]);
+  key('bt-swatch-strategy', 'Strategy', bt.run.equity[bt.run.equity.length - 1]);
+  key('bt-swatch-benchmark', bt.benchmark.label, bt.benchmark.equity[bt.benchmark.equity.length - 1]);
+}
 
-  const chart = h(root, 'div', 'bt-chart');
-  const tip = h(chart, 'div', 'bt-tip');
-  tip.hidden = true;
-  let drawn = 0;
-  const observer = new ResizeObserver((entries) => {
-    const width = Math.floor(entries[0].contentRect.width);
-    // Drawing changes the chart's height, which would notify this observer again within the same frame.
-    if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawChart(chart, tip, (drawn = width), bt, intraday));
-  });
-  observer.observe(chart);
-  cleanups.push(() => observer.disconnect());
-
-  const facts = [`${stamp(first, intraday)} to ${stamp(last, intraday)}, starting with ${money(spec.capital)}.`, 'A rule seen at a close fills at the next open.'];
+/** The parts of a result that are heavy to draw or rarely needed. Returns what to run when they are drawn again or go away. */
+function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() => void)[] {
+  const { spec, backtest: bt, prices } = out;
+  const { run } = bt;
+  const intraday = isIntraday(bt);
+  const stops: (() => void)[] = [];
+  const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, 'A rule seen at a close fills at the next open.'];
   if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}.`);
   facts.push(bt.interest > 0 ? `${bt.cashRateNote}: ${money(bt.interest)} of interest.` : `${bt.cashRateNote}.`);
   h(root, 'div', 'bt-note', facts.join(' '));
@@ -193,11 +220,129 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   segments(root, bt);
   renderPositions(root, bt, intraday);
   renderTrades(root, bt, intraday);
-  cleanups.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: benchmark.equity, benchmarkLabel: benchmark.label, cashReturn: run.cashReturn }));
-  for (const section of view.sections ?? []) {
+  stops.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: bt.benchmark.equity, benchmarkLabel: bt.benchmark.label, cashReturn: run.cashReturn }));
+  for (const section of sections) {
     const stop = section(root);
-    if (stop) cleanups.push(stop);
+    if (stop) stops.push(stop);
   }
+  return stops;
+}
+
+function chevron(parent: HTMLElement): void {
+  const span = h(parent, 'span', 'bt-chevron');
+  span.setAttribute('aria-hidden', 'true');
+  const svg = s(span, 'svg', { width: 12, height: 12, viewBox: '0 0 12 12' });
+  s(svg, 'path', { d: 'M4 2l4 4-4 4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+}
+
+/**
+ * The result of a run. The title is a button that folds the result to one line (its figures, what it holds, what is due)
+ * and opens it again. The result itself is not built until the block is first open.
+ */
+export function renderResult(el: HTMLElement, view: ResultView): () => void {
+  el.replaceChildren();
+  const root = h(el, 'div', 'bt-root');
+  const cleanups: (() => void)[] = [];
+  const first = view.out;
+
+  const head = h(root, 'div', 'bt-head');
+  const fold = h(head, 'button', 'bt-fold');
+  fold.type = 'button';
+  chevron(fold);
+  const text = h(fold, 'span', 'bt-fold-text');
+  h(text, 'span', 'bt-title', first.spec.name ?? 'Backtest');
+  const line = h(text, 'span', 'bt-fold-facts');
+  const facts = compactFacts(first);
+  for (const fact of [...(facts.tickers ? [facts.tickers] : []), ...facts.figures, facts.holding]) h(line, 'span', 'bt-fold-fact', fact);
+  if (facts.order) h(line, 'span', 'bt-fold-fact bt-fold-order', facts.order);
+  const noteCount = notesOf(view, first).length;
+  if (noteCount > 0) h(line, 'span', 'bt-fold-mark', noteCount === 1 ? '1 note' : `${noteCount} notes`);
+  const refresh = h(head, 'button', 'bt-button', 'Refresh prices');
+  refresh.addEventListener('click', view.onRefresh);
+  const body = h(root, 'div', 'bt-body');
+
+  const build = () => {
+    const sub = h(body, 'div', 'bt-sub', summary(first.spec));
+    source(body, view.source);
+
+    // The bar is made once, before the result it drives, and is never redrawn.
+    let show = (_out: RunOutput, _settled: boolean): void => {};
+    if (view.params && first.spec.params.length > 0) {
+      cleanups.push(renderParamBar(body, { params: first.spec.params, hook: view.params, show: (out, settled) => show(out, settled) }));
+    }
+
+    const notes = h(body, 'div', 'bt-notes');
+    const tiles = h(body, 'div', 'bt-tiles');
+    const legend = h(body, 'div', 'bt-legend');
+    const chart = h(body, 'div', 'bt-chart');
+    const tip = h(chart, 'div', 'bt-tip');
+    tip.hidden = true;
+    const rest = h(body, 'div', 'bt-rest');
+
+    let bt = first.backtest;
+    let drawn = 0;
+    // Drawing the chart changes its height, which would notify the observer again within the same frame.
+    const observer = new ResizeObserver((entries) => {
+      const width = Math.floor(entries[0].contentRect.width);
+      if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawChart(chart, tip, (drawn = width), bt, isIntraday(bt)));
+    });
+    observer.observe(chart);
+    cleanups.push(() => observer.disconnect());
+
+    // While the block is folded the chart has no width; the observer draws it when it opens.
+    const paint = (out: RunOutput) => {
+      bt = out.backtest;
+      sub.textContent = summary(out.spec);
+      fillTiles(tiles, bt);
+      fillLegend(legend, bt);
+      chart.querySelector('svg')?.remove();
+      drawn = Math.floor(chart.clientWidth);
+      if (drawn > 0) drawChart(chart, tip, drawn, bt, isIntraday(bt));
+    };
+    let stops: (() => void)[] = [];
+    const stopRest = () => {
+      for (const stop of stops) stop();
+      stops = [];
+    };
+    cleanups.push(stopRest);
+
+    const paintAll = (out: RunOutput) => {
+      notes.replaceChildren();
+      for (const text of notesOf(view, out)) h(notes, 'div', 'bt-warning', text);
+      paint(out);
+      stopRest();
+      rest.replaceChildren();
+      rest.classList.remove('bt-stale');
+      stops = fillRest(rest, out, view.sections?.(out) ?? []);
+    };
+    // Between two frames of a drag only what is at the top is worth redrawing; the rest says it is out of date.
+    show = (out, settled) => {
+      if (settled) paintAll(out);
+      else {
+        paint(out);
+        rest.classList.add('bt-stale');
+      }
+    };
+    paintAll(first);
+  };
+
+  let built = false;
+  const setOpen = (open: boolean) => {
+    root.classList.toggle('bt-folded', !open);
+    fold.setAttribute('aria-expanded', String(open));
+    fold.title = open ? 'Fold this result to one line' : 'Open this result';
+    body.hidden = refresh.hidden = !open;
+    if (open && !built) {
+      built = true;
+      build();
+    }
+  };
+  fold.addEventListener('click', () => {
+    const open = fold.getAttribute('aria-expanded') !== 'true';
+    setOpen(open);
+    view.remember?.set(open);
+  });
+  setOpen(view.remember?.get() ?? !view.compact);
   return () => cleanups.forEach((stop) => stop());
 }
 

@@ -1,0 +1,90 @@
+/* The title of a result is a button that folds it to one line and opens it again. */
+
+/* A button's own display rule would otherwise beat the hidden attribute. */
+.bt-root [hidden] {
+  display: none !important;
+}
+.bt-root.bt-folded {
+  padding: 6px 10px;
+}
+
+.bt-root button.bt-fold,
+.bt-root button.bt-fold:hover,
+.bt-root button.bt-fold:active {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 3px 6px 3px 2px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: none;
+  box-shadow: none;
+  color: var(--text-normal);
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.bt-root button.bt-fold:hover {
+  background: var(--background-modifier-hover);
+}
+.bt-root button.bt-fold:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.bt-chevron {
+  display: inline-flex;
+  flex: none;
+  padding-top: 5px;
+  color: var(--text-muted);
+  transition: transform 0.12s ease;
+}
+.bt-fold[aria-expanded='true'] .bt-chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bt-chevron {
+    transition: none;
+  }
+}
+
+.bt-fold-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  min-width: 0;
+}
+/* Each fact wraps on its own, beside the name when there is room. */
+.bt-fold-facts {
+  display: contents;
+}
+.bt-fold-fact {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bt-fold[aria-expanded='true'] .bt-fold-facts {
+  display: none;
+}
+.bt-fold-order {
+  color: var(--text-normal);
+}
+.bt-fold-mark {
+  padding: 0 7px;
+  border: 1px solid var(--bt-warning);
+  border-radius: 999px;
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+/* While a slider is being dragged only the top of the result is redrawn. */
+.bt-rest.bt-stale {
+  opacity: 0.45;
+  pointer-events: none;
+}
