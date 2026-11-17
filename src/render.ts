@@ -171,9 +171,11 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   const chart = h(root, 'div', 'bt-chart');
   const tip = h(chart, 'div', 'bt-tip');
   tip.hidden = true;
+  let drawn = 0;
   const observer = new ResizeObserver((entries) => {
     const width = Math.floor(entries[0].contentRect.width);
-    if (width > 0) drawChart(chart, tip, width, bt, intraday);
+    // Drawing changes the chart's height, which would notify this observer again within the same frame.
+    if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawChart(chart, tip, (drawn = width), bt, intraday));
   });
   observer.observe(chart);
   cleanups.push(() => observer.disconnect());
@@ -289,7 +291,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   const split = bt.spec.testFrom;
   if (split !== null && split > t[0] && split < t[n - 1]) {
     s(svg, 'rect', { x: x(split), y: top, width: width - right - x(split), height: ddTop + ddH - top, class: 'bt-test-band' });
-    s(svg, 'text', { x: x(split) + 5, y: top + 12, class: 'bt-axis' }, 'Test period');
+    s(svg, 'text', { x: x(split) + 5, y: ddTop - 9, class: 'bt-axis' }, 'Test period');
   }
 
   // Grid and axis labels.

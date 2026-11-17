@@ -2,7 +2,7 @@
   "id": "backtest-blocks",
   "name": "Backtest Blocks",
   "version": "0.1.0",
-  "minAppVersion": "1.5.0",
+  "minAppVersion": "1.11.4",
   "description": "Write a trading strategy in a readable rule language inside a note and see its backtest rendered underneath.",
   "author": "Vu",
   "isDesktopOnly": false

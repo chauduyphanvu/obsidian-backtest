@@ -316,3 +316,10 @@
 .bt-split-title {
   font-weight: var(--font-semibold);
 }
+
+.bt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

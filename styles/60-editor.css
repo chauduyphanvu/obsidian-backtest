@@ -12,14 +12,17 @@
   text-decoration-color: var(--text-warning);
 }
 
-.cm-editor .cm-tooltip.bt-diag-tip {
-  max-width: 420px;
-  padding: 6px 9px;
+/* CodeMirror puts the message inside its own tooltip box, which is the element that needs the frame. */
+.cm-editor .cm-tooltip:has(> .bt-diag-tip) {
+  max-width: min(420px, 90vw);
   background: var(--background-primary);
-  color: var(--text-normal);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   box-shadow: var(--shadow-s);
+}
+.bt-diag-tip {
+  padding: 6px 9px;
+  color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: var(--font-ui-smaller);
   line-height: 1.4;

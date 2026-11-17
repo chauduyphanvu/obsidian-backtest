@@ -127,8 +127,6 @@ export function strategyEditor(getDefaults: () => Partial<Defaults>): Extension[
   return [plugin, hover];
 }
 
-/** Until `main.ts` passes its own defaults to `strategyEditor`: the same extensions with the built-in defaults. */
-export const strategyHighlighter: Extension[] = strategyEditor(() => ({}));
 
 /** The strategy block around a line: every line in it and those above the given line; null outside one. */
 function blockAround(editor: Editor, at: number): { block: string[]; above: string[] } | null {
