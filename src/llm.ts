@@ -175,6 +175,7 @@ Only universe is required. Add the others when the description asks for them or 
   hold: top 3 by roc(126)           hold only the 3 tickers with the highest score, so the universe needs at least 3; the score is a number written like a value in a rule
   weighting: inverse volatility(60) calmer tickers get more weight; volatility is measured over the last 60 returns
   risk per trade: 1% at 2 atr(14)   size each buy so that a fall of 2 average true ranges loses 1% of equity
+  fill: close                       fill each order at the close the rule was read at; the default, next open, fills at the next bar's open
 universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, csv:Data/gold.csv for a CSV file in the vault. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
 Stops are checked on top of the sell rule. With no sell rule a position is held until a stop closes it or the run ends.
 

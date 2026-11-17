@@ -146,7 +146,8 @@ function warmupNotes(spec: Spec, data: Map<string, Bars>, signals: Map<string, S
   });
 }
 
-const INPUT: Record<Skipped['input'], (n: number) => string> = {
+/** How a warm-up input is named in a sentence, with its period. */
+export const WARMUP_INPUT: Record<Skipped['input'], (n: number) => string> = {
   'risk per trade': (n) => `the ${n}-bar ATR for risk per trade`,
   'inverse volatility': (n) => `the ${n}-bar volatility for inverse volatility weighting`,
   'stop loss': (n) => `the ${n}-bar ATR for the stop loss`,
@@ -166,7 +167,7 @@ function skippedNotes(skipped: Skipped[]): string[] {
     const total = rows.reduce((sum, r) => sum + r.count, 0);
     const signals = `${total} buy signal${total === 1 ? '' : 's'}`;
     const verb = total === 1 ? 'was' : 'were';
-    const input = INPUT[rows[0].input](rows[0].n);
+    const input = WARMUP_INPUT[rows[0].input](rows[0].n);
     return rows.length === 1
       ? `${signals} for ${rows[0].asset} ${verb} not acted on while ${input} was still unknown.`
       : `${signals} ${verb} not acted on while ${input} was still unknown: ${rows.map((r) => `${r.asset} ${r.count}`).join(', ')}.`;
@@ -182,6 +183,9 @@ function cashRateNote(spec: Spec): string {
   if (spec.cash.k === 'ticker') return `Cash earns the ${spec.cash.ref.name} rate`;
   return spec.cash.rate === 0 ? 'Cash earns nothing' : `Cash earns ${Number((spec.cash.rate * 100).toFixed(2))}% a year`;
 }
+
+export const CLOSE_FILL_NOTE =
+  'Orders fill at the same close the rules were read at (fill: close). The result assumes you can trade at that closing price, which a real order can only come near by being placed just before the close.';
 
 /** Runs the spec and a buy-and-hold benchmark over the same dates. `data` is keyed by asset name. */
 export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
@@ -220,6 +224,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
       cash: spec.cash,
       sizing: { k: 'fixed' },
       rank: null,
+      fill: spec.fill,
     },
     data,
     always,
@@ -242,6 +247,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
 
   const intraday = run.t.some((t) => t % DAY !== 0);
   const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped)];
+  if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE);
   if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
     notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
   }

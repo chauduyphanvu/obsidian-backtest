@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { runBacktest } from '../src/backtest.ts';
 import type { DataDeps } from '../src/data.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { lookbackBars, Runner } from '../src/runner.ts';
@@ -59,6 +60,27 @@ test('lookbackBars: the longest chain of windows and lags in the spec, at least 
   assert.equal(lookbackBars(parsed('universe: A, B\nweighting: inverse volatility(400)\nbuy when true')), 401);
 });
 
+test('lookbackBars: a period or lag set by a parameter with a range counts at the largest value of the range', () => {
+  assert.equal(lookbackBars(parsed('universe: A\nslow = 200 in 100..300 step 50\nbuy when close > sma(slow)')), 300);
+  // The declared value counts when it is the largest, and a parameter without a range counts as written.
+  // (100..295 step 50 steps through 100 to 250, and the declared 290 is tried as well.)
+  assert.equal(lookbackBars(parsed('universe: A\nslow = 290 in 100..295 step 50\nbuy when close > sma(slow)')), 290);
+  assert.equal(lookbackBars(parsed('universe: A\nslow = 280\nbuy when close > sma(slow)')), 280);
+  // Recursive indicators, nested windows, lags, ATR stops and sizing.
+  assert.equal(lookbackBars(parsed('universe: A\nn = 20 in 10..100 step 10\nbuy when rsi(n) > 50')), 501);
+  assert.equal(lookbackBars(parsed('universe: A\na = 100 in 50..150 step 50\nb = 50 in 20..120 step 50\nbuy when sma(ema(close, a), b) > 0')), 5 * 150 + 120);
+  assert.equal(lookbackBars(parsed('universe: A\nlag = 5 in 1..300 step 50\nbuy when close > close[lag]')), 251);
+  assert.equal(lookbackBars(parsed('universe: A\nn = 14 in 10..80 step 10\nbuy when true\nstop loss: 2 atr(n)')), 401);
+  assert.equal(lookbackBars(parsed('universe: A\nn = 14 in 10..90 step 10\nrisk per trade: 1% at 2 atr(n)\nbuy when true')), 451);
+  assert.equal(lookbackBars(parsed('universe: A, B\nn = 60 in 20..420 step 100\nweighting: inverse volatility(n)\nbuy when true')), 421);
+  assert.equal(lookbackBars(parsed('universe: A, B\nn = 60 in 20..300 step 40\nhold: top 1 by roc(n)')), 300);
+  // A period range reaching past what the parser accepts needs no more than its longest valid period.
+  assert.equal(lookbackBars(parsed('universe: A\nn = 50 in 50..19950 step 100\nbuy when close > sma(n)')), 9950);
+  // Any value of the range, as a sweep tries it, asks for the same history: the block's.
+  const block = 'universe: A\nslow = 200 in 100..300 step 50\nbuy when close > sma(slow)';
+  for (const slow of [100, 150, 300]) assert.equal(lookbackBars(parseSpec(block, { overrides: { slow } }).spec!), 300);
+});
+
 /** Hourly Binance klines from 1 July 2023 served page by page, with a cache in memory. */
 function binance(n: number): DataDeps & { starts: number[] } {
   const T0 = Date.UTC(2023, 6, 1);
@@ -101,6 +123,19 @@ test('prices start the lookback before "from", whatever the cache holds, so a ru
   assert.equal(again.data.get('BTCUSDT')!.t[0], since);
   assert.deepEqual(again.backtest.run.equity, first.backtest.run.equity);
   assert.ok(first.backtest.run.trades.length > 0);
+});
+
+test('a variant from the top of a range is as well served by the loaded prices as the declared value', async () => {
+  const d = binance(2500);
+  const runner = new Runner(d);
+  const block = 'universe: BTCUSDT\ndata: binance\ninterval: 1h\nfrom: 2023-08-01\nslow = 100 in 50..400 step 50\nbuy when close > sma(slow)\nsell when close < sma(slow)';
+  const out = await runner.run(parsed(block));
+  const from = Date.UTC(2023, 7, 1);
+  assert.equal(out.data.get('BTCUSDT')!.t[0], from - 400 * 3_600_000);
+  // The variant with slow = 400, run on those prices as a sweep runs it, knows its average from the first bar.
+  const variant = runBacktest(parseSpec(block, { overrides: { slow: 400 } }).spec!, out.data);
+  assert.deepEqual(variant.notes, []);
+  assert.equal(variant.run.t[0], from);
 });
 
 test('daily and longer intervals reach 1.6 times as far back, for days without trading', async () => {

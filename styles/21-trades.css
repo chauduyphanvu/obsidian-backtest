@@ -1,0 +1,116 @@
+/* The trade list's "explain this trade" buttons, and the explanation opened under a trade. */
+
+/* The explanation is as wide as the visible part of the list, however wide the table. */
+.bt-trades {
+  container-type: inline-size;
+}
+
+.bt-root .bt-table td.bt-why-cell {
+  width: 1px;
+  padding: 2px 0 2px 2px;
+}
+.bt-root button.bt-why {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.bt-root button.bt-why::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateX(-1px) rotate(-45deg);
+}
+.bt-root button.bt-why[aria-expanded='true']::before {
+  transform: translateY(-2px) rotate(45deg);
+}
+.bt-root button.bt-why:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.bt-root button.bt-why:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.bt-root .bt-table tr.bt-explain-tr > td {
+  padding: 0;
+}
+.bt-explain {
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  width: 100cqw;
+  padding: 10px 12px 12px;
+  background: var(--background-secondary);
+  border-left: 2px solid var(--interactive-accent);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.bt-explain-title {
+  font-weight: var(--font-semibold);
+}
+.bt-explain-section {
+  margin-top: 10px;
+}
+.bt-explain-heading {
+  margin-bottom: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+.bt-explain-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bt-explain-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0 3px calc(var(--bt-depth, 0) * 16px);
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-explain-row:first-child {
+  border-top: none;
+}
+.bt-explain-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1px 12px;
+}
+.bt-explain-code .bt-explain-label {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+.bt-explain-value {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bt-explain-mark {
+  flex: none;
+  min-width: 4.5em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+.bt-explain-yes {
+  color: var(--text-success);
+}
+.bt-explain-unknown {
+  font-style: italic;
+}

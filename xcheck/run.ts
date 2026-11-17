@@ -44,7 +44,10 @@ interface CaseConfig {
    * sizing at the signal close leaves cash over after a gap down.
    */
   equity: 'direct' | 'replay';
-  /** Rearview fills a scheduled rebalance on the second trading day of the period, a day after us. */
+  /**
+   * Rearview fills a scheduled rebalance on the second trading day of the period, a day after us;
+   * with fill: close (Rearview's same_close) at the close of the first day, a day after our last.
+   */
   rebalanceShift?: 'month' | 'week';
   /** Extra Rearview `run` settings. */
   run?: Record<string, unknown>;
@@ -56,6 +59,7 @@ const EXPLAIN: Record<string, string> = {
   halt: 'the ticker had no bar on the day after the signal: Rearview cancels the entry order, we fill it at the next bar',
   rearm: 'after a stop or target exit our buy rule must stop holding before it fires again; Rearview enters again at once',
   trail: "on its entry bar a trailing stop trails Rearview's fill price, slippage included, and our open",
+  closetrail: "with close fills Rearview's trailing stop also trails the high of the bar it bought at, made before the fill; ours starts from the close it bought at",
   knock: 'knock-on of an explained difference: the other engine held a position from an explained trade at the time',
 };
 
@@ -260,16 +264,20 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   rvw(RVW, ['run', '--store', ctx.store, '--script', join(dir, 'case.rvw'), '--config', join(runDir, 'config.json'), '--out', join(runDir, 'rv')]);
   const rv = readRun(join(runDir, 'rv'));
 
+  const atClose = spec.fill === 'close';
   const dayIdx = new Map(ctx.days.map((d, i) => [d, i]));
-  const secondOfPeriod = (d: string) => {
-    const i = dayIdx.get(d)!;
+  const periodStart = (d: string, offset: number) => {
+    const i = dayIdx.get(d)! - offset;
     const p = (k: number) => periodOf(ctx.days[k], cfg.rebalanceShift!);
-    return i >= 2 && p(i - 1) === p(i) && p(i - 2) !== p(i - 1);
+    return i >= 1 && p(i - 1) !== p(i) && (offset === 0 || p(i) === p(i + offset));
   };
   // A rebalance Rearview decides at the close of a period's first trading day fills on the second;
-  // ours fills at the first day's open. The fill after the run's first bar is the same in both.
+  // ours fills at the first day's open. With close fills Rearview's fills at that first close, and
+  // ours at the close of the day before, the period's last. The fills at the run's start are the same.
   const shifted = (f: RvFill) =>
-    !!cfg.rebalanceShift && (f.reason === 'REBALANCE' || f.reason === 'ENTRY_SIGNAL') && secondOfPeriod(f.date) && ctx.days[dayIdx.get(f.date)! - 1] !== dates[0];
+    !!cfg.rebalanceShift &&
+    (f.reason === 'REBALANCE' || f.reason === 'ENTRY_SIGNAL') &&
+    (atClose ? periodStart(f.date, 0) && f.date !== dates[0] : periodStart(f.date, 1) && ctx.days[dayIdx.get(f.date)! - 1] !== dates[0]);
   const fillDay = (f: RvFill) => (shifted(f) ? ctx.days[dayIdx.get(f.date)! - 1] : f.date);
 
   const mine: T[] = ours.run.trades.map((t) => ({
@@ -355,6 +363,21 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     if (o.exit === r.exit && o.reason === 'trailing stop') return Math.abs(o.exitPx! * (1 + slip) - r.exitPx!) <= PRICE_TOL * 2;
     return low > ourLevel && low <= theirLevel + PRICE_TOL;
   };
+  /**
+   * With close fills Rearview's trailing level counts the high of the bar it bought at, which came
+   * before the fill. Explained when that high is above every later one before Rearview's exit, and
+   * Rearview's exit is the fill at the level it gives.
+   */
+  const closeEntryTrail = (o: T, r: T) => {
+    if (!atClose || !allowed.has('closetrail') || r.reason !== 'trailing stop' || r.exit === null || trailPct?.k !== 'pct') return false;
+    const bars = ctx.data.get(r.asset)!;
+    const k = barIndex(r.asset, r.entry);
+    const x = barIndex(r.asset, r.exit);
+    let later = bars.c[k];
+    for (let j = k + 1; j < x; j++) later = Math.max(later, bars.h[j]);
+    const level = bars.h[k] * (1 - trailPct.v);
+    return bars.h[k] > later && (o.exit === null || o.exit >= r.exit) && Math.abs(r.exitPx! - Math.min(bars.o[x], level) * (1 - slip)) <= PRICE_TOL * 2;
+  };
   const explainedSpans: T[] = [];
   const diverged: T[] = [];
   const mismatchedPairs = new Set<T>();
@@ -363,6 +386,12 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     const problems = problemsOf(o, r);
     if (problems.length === 0) {
       matched++;
+    } else if (closeEntryTrail(o, r)) {
+      why.set(r, 'closetrail');
+      // The money differs from Rearview's exit on, whether or not the exits fall on one day.
+      const both = { ...r, exit: o.exit === null || o.exit > r.exit! ? o.exit : r.exit };
+      explainedSpans.push(both);
+      diverged.push(both);
     } else if (entryBarTrail(o, r)) {
       why.set(r, 'trail');
       if (o.exit !== r.exit) {
@@ -382,9 +411,11 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     for (const r of onlyTheirs) {
       const k = barIndex(r.asset, r.entry);
       if (k < 1) continue;
-      const signalDay = iso(ctx.data.get(r.asset)!.t[k - 1]);
+      // With close fills the entry's own close is the signal: Rearview can buy at the close of the day its stop hit.
+      const signal = atClose ? k : k - 1;
+      const signalDay = iso(ctx.data.get(r.asset)!.t[signal]);
       const exited = [...mine, ...theirs].some((t) => t.asset === r.asset && t.exit === signalDay && protective(t));
-      if (exited && ev.eval(spec.rules[r.asset].buy, r.asset)[k - 1] === 1) why.set(r, 'rearm');
+      if (exited && ev.eval(spec.rules[r.asset].buy, r.asset)[signal] === 1) why.set(r, 'rearm');
     }
   }
   if (allowed.has('halt')) {
@@ -408,9 +439,10 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   const explainedList: string[] = [];
   const describe = (t: T, side: string) => `${key(t)} -> ${t.exit ?? 'open'} ${t.reason}: ${side}`;
   for (const [o, r] of pairs) {
-    if (why.get(r) !== 'trail') continue;
-    explained.trail = (explained.trail ?? 0) + 1;
-    explainedList.push(`${describe(r, 'Rearview')} vs ${o.exit ?? 'open'} ${o.reason} at ${o.exitPx} (trail)`);
+    const w = why.get(r);
+    if (w !== 'trail' && w !== 'closetrail') continue;
+    explained[w] = (explained[w] ?? 0) + 1;
+    explainedList.push(`${describe(r, 'Rearview')} vs ${o.exit ?? 'open'} ${o.reason} at ${o.exitPx} (${w})`);
   }
   for (const [list, side] of [[onlyMine, 'only ours'], [onlyTheirs, "only Rearview's"]] as const) {
     for (const t of list) {
@@ -533,6 +565,15 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       const theirsPending = pending.get(st.name) ?? null;
       if (st.pending !== theirsPending) {
         totals.push(`${st.name} pending ${st.pending} vs ${theirsPending}`);
+        totalsOk = false;
+      }
+      // With close fills what the last close decided has filled there: ours in `filled`, Rearview's as that day's signal fills.
+      if (!atClose) continue;
+      const id = [...ctx.ids].find(([, n]) => n === st.name)![0];
+      const fill = rv.fills.find((f) => f.id === id && f.date === lastDay && (f.reason === 'ENTRY_SIGNAL' || f.reason === 'EXIT_SIGNAL'));
+      const theirsFilled = fill ? (fill.side === 'BUY' ? 'buy' : 'sell') : null;
+      if ((st.filled?.side ?? null) !== theirsFilled) {
+        totals.push(`${st.name} filled at the last close ${st.filled?.side ?? null} vs ${theirsFilled}`);
         totalsOk = false;
       }
     }

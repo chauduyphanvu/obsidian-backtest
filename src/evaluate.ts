@@ -140,6 +140,12 @@ export class Evaluator {
     throw new Error(`Position values can't be used inside ${e.k}`);
   }
 
+  /** The index of `other`'s bar that `of` reads for `asset`'s bar `i`; -1 when none had ended. */
+  barOf(other: string, asset: string, i: number): number {
+    if (i < 0) return -1;
+    return other === asset ? i : this.aligned(other, asset)[i];
+  }
+
   /** Indices into `from`'s bars for each bar of `to`; see alignByEnd. */
   private aligned(from: string, to: string): number[] {
     const key = `${from}\u0000${to}`;

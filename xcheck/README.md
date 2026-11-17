@@ -46,6 +46,10 @@ compared exactly. `series/w.csv` gives Rearview the per-ticker weights of the re
   `case.json` (what it tests, how to compare, which documented differences it may show). Rearview
   runs in a cash account with 6 share decimals, fills at the next open, commission and slippage
   as ours, the cash rate times 360/365 (it counts a 360-day year) and our first and last day.
+  The `y` cases fill at the close instead: our `fill: close` against Rearview's `fill same_close`
+  (a plain rule with costs and slippage, stops and targets on gaps, a trailing stop, a monthly
+  rebalance and a ranking). There the orders filled at the last close are compared too: our
+  `filled` state against Rearview's signal fills that day.
   - Trades are matched by ticker and entry day: entry and exit prices to Rearview's rounding
     (1.5e-6), exit day, reason and bars held exactly; P&L to 1e-8 of capital where sizing agrees.
   - Equity: levels up to the first trade that isn't in both runs, to 1e-6, and daily returns on
@@ -72,6 +76,8 @@ run held at the same time as an explained one (`knock`).
 | `trail` | on the entry bar the trailing stop trails the open | trails the fill, slippage included | explained; replayed our way |
 | Targets | slipped like every fill | limit orders, never slipped | compared after our slippage |
 | Rebalance | fills at the period's first open | decided at the first close, filled the next day | calm days; fills and costs moved back a day |
+| Rebalance, close fills | fills at the close of the period's last day | fills at the close of its first day | calm days; fills and costs moved back a day |
+| `closetrail` | with close fills the trailing stop starts from the close it bought at | also trails the high of the bar it bought at, made before the fill | explained when that high set Rearview's level and its exit matches it |
 | Bars held | 0 at the entry bar's close | 1 | `bars held >= N` is `bars_held >= N+1` |
 | Sell rule while flat | blocks a buy | ignored | Rearview entries add `and not <exit>` |
 | ATR | first true range = first bar's high - low | starts on the second bar | ATR cases start in 2014; values agree from bar 400 |
