@@ -80,7 +80,7 @@ export interface RunResult {
 const DAY = 86_400_000;
 const NO_STOPS: Stops = { stopLoss: null, trailingStop: null, takeProfit: null };
 
-export function periodKey(t: number, mode: Rebalance): number {
+function periodKey(t: number, mode: Rebalance): number {
   const d = new Date(t);
   switch (mode) {
     case 'weekly':
@@ -228,12 +228,12 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
    * assets' configured weights by 1 / volatility, measured up to `idx(a)`; an asset with unknown
    * volatility keeps its configured weight.
    */
-  const targetWeights = (entering: A[], idx: (a: A) => number): Map<A, number> => {
+  const targetWeights = (entering: Set<A>, idx: (a: A) => number): Map<A, number> => {
     const out = new Map(assets.map((a) => [a, a.weight]));
     if (p.sizing.k !== 'invvol') return out;
     const n = p.sizing.n;
     const known = assets
-      .filter((a) => a.shares > 0 || entering.includes(a))
+      .filter((a) => a.shares > 0 || entering.has(a))
       .map((a) => ({ a, vol: volAt(a, n, idx(a)) }))
       .filter((x) => x.vol > 0);
     const total = known.reduce((s, x) => s + x.a.weight, 0);
@@ -276,16 +276,17 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     const period = periodKey(t, p.rebalance);
     const rebalance = prevPeriod !== null && period !== prevPeriod;
     prevPeriod = period;
-    const mark = (a: A) => (a.shares === 0 ? 0 : a.shares * (live.includes(a) ? a.bars.o[a.i] : a.lastClose));
+    const isLive = new Set(live);
+    const mark = (a: A) => (a.shares === 0 ? 0 : a.shares * (isLive.has(a) ? a.bars.o[a.i] : a.lastClose));
     const equityAtOpen = cash + assets.reduce((s, a) => s + mark(a), 0);
     for (const a of live) if (a.pending === 'sell' && a.shares > 0) close(a, t, a.bars.o[a.i], 'signal');
-    const entering = live.filter((a) => a.pending === 'buy' && a.shares === 0);
+    const entering = new Set(live.filter((a) => a.pending === 'buy' && a.shares === 0));
     // Volatility as of the last close before this open.
-    const weights = targetWeights(entering, (a) => (live.includes(a) ? a.i - 1 : a.i));
+    const weights = targetWeights(entering, (a) => (isLive.has(a) ? a.i - 1 : a.i));
     const buys: { a: A; notional: number; entry: boolean }[] = [];
     for (const a of live) {
       const open = a.bars.o[a.i];
-      if (entering.includes(a)) {
+      if (entering.has(a)) {
         buys.push({ a, notional: riskNotional(a, weights.get(a)!, equityAtOpen, open, a.i - 1), entry: true });
       } else if (rebalance && a.shares > 0) {
         const delta = weights.get(a)! * equityAtOpen - a.shares * open;
@@ -364,10 +365,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   trades.sort((x, y) => x.entryT - y.entryT);
 
   const equityNow = equity[equity.length - 1];
-  const finalWeights = targetWeights(
-    assets.filter((a) => a.pending === 'buy' && a.shares === 0),
-    (a) => a.i,
-  );
+  const finalWeights = targetWeights(new Set(assets.filter((a) => a.pending === 'buy' && a.shares === 0)), (a) => a.i);
   return {
     t: timeline,
     equity,
