@@ -94,8 +94,10 @@ export function parseBinance(json: string, now: number): Bars {
   return bars;
 }
 
-/** 31/01/2024, 01/31/2024 or 31.01.2024, optionally followed by a time. */
-const SLASHED = /^(\d{1,2})([/.])(\d{1,2})\2(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+/** 31/01/2024, 01/31/2024, 31-01-2024, 01-31-2024 or 31.01.2024, optionally followed by a time. */
+const SLASHED = /^(\d{1,2})([/.-])(\d{1,2})\2(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+/** A zone at the end of a date and time: Z, or an offset such as -05:00 or +0100 after the time of day, never a year. */
+const ZONE = /\d:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:[zZ]|[+-]\d{2}:?\d{2})$/;
 
 function parseTime(s: string, dayFirst: boolean): number {
   if (/^\d{9,}$/.test(s)) return s.length > 11 ? Number(s) : Number(s) * 1000;
@@ -107,17 +109,17 @@ function parseTime(s: string, dayFirst: boolean): number {
     return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? t : NaN;
   }
   // A bare date is that UTC day; a date with a time and no zone is read as UTC too.
-  const iso = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00Z' : /[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(' ', 'T') + 'Z';
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00Z' : ZONE.test(s) ? s : s.replace(' ', 'T') + 'Z';
   return Date.parse(iso);
 }
 
-/** Slashed dates are month first unless some first number is above 12 and no second number is. */
+/** Dates with slashes or dashes are month first unless some first number is above 12 and no second number is. Dotted ones are always day first. */
 function slashedDatesAreDayFirst(values: string[]): boolean {
   let first = false;
   let second = false;
   for (const v of values) {
     const m = SLASHED.exec(v);
-    if (m?.[2] !== '/') continue;
+    if (!m || m[2] === '.') continue;
     if (Number(m[1]) > 12) first = true;
     if (Number(m[3]) > 12) second = true;
   }
@@ -171,7 +173,8 @@ export const CSV_HEADERS = {
 
 /**
  * CSV with a header row naming a date or time column and open, high, low, close (volume optional).
- * Separators can be commas, semicolons or tabs; dates can be ISO, MM/DD/YYYY, DD/MM/YYYY (when some day is above 12) or DD.MM.YYYY.
+ * Separators can be commas, semicolons or tabs; dates can be ISO, MM/DD/YYYY, DD/MM/YYYY (when some day is above 12), the
+ * same two with dashes, or DD.MM.YYYY.
  */
 export function parseCsv(text: string): Bars {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());

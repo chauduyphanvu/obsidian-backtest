@@ -1,5 +1,5 @@
 import { Modal, type App } from 'obsidian';
-import { cleanedPath, csvStrategy, csvTicker, dateOrderIsAmbiguous, inspectCsv, remapCsv, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvUnread, type DateOrder } from './csv-import.ts';
+import { cleanedPath, csvStrategy, csvTicker, dateOrderIsAmbiguous, dateSeparator, inspectCsv, remapCsv, type CsvInspection, type CsvMapping, type CsvRead, type CsvRow, type CsvUnread, type DateOrder } from './csv-import.ts';
 import { h, price } from './dom.ts';
 
 export interface CsvHost {
@@ -293,10 +293,20 @@ export class CsvModal extends Modal {
       });
     }
     const order = h(box, 'label', 'bt-csv-field bt-csv-order');
-    h(order, 'span', 'bt-csv-label', 'Dates such as 02/01/2024 are');
+    const orderLabel = h(order, 'span', 'bt-csv-label');
     const choose = h(order, 'select', 'dropdown');
-    h(choose, 'option', undefined, 'month first, so 2 January is 01/02/2024').value = 'month-first';
-    h(choose, 'option', undefined, 'day first, so 2 January is 02/01/2024').value = 'day-first';
+    const monthFirst = h(choose, 'option');
+    monthFirst.value = 'month-first';
+    const dayFirst = h(choose, 'option');
+    dayFirst.value = 'day-first';
+    /** The question in the file's own way of writing dates: 02/01/2024 or 02-01-2024. */
+    const ask = (sep: string) => {
+      const date = (a: string, b: string) => `${a}${sep}${b}${sep}2024`;
+      orderLabel.textContent = `Dates such as ${date('02', '01')} are`;
+      monthFirst.textContent = `month first, so 2 January is ${date('01', '02')}`;
+      dayFirst.textContent = `day first, so 2 January is ${date('02', '01')}`;
+    };
+    ask('/');
     choose.value = file.mapping.dateOrder ?? 'month-first';
     choose.addEventListener('change', () => {
       file.mapping.dateOrder = choose.value as DateOrder;
@@ -312,6 +322,7 @@ export class CsvModal extends Modal {
       const { mapping } = file;
       const ambiguous = mapping.date !== null && dateOrderIsAmbiguous(file.text, mapping.date);
       order.hidden = !ambiguous;
+      if (ambiguous) ask(dateSeparator(file.text, mapping.date!));
       if (!ambiguous) mapping.dateOrder = null;
       else if (mapping.dateOrder === null) mapping.dateOrder = choose.value as DateOrder;
       preview.replaceChildren();

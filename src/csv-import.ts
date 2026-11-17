@@ -46,7 +46,7 @@ interface Shown {
   rawRows: string[][];
   /** The columns parseCsv used, or, for a file it cannot read, a best guess. */
   columns: CsvMapping;
-  /** Dates such as 02/01/2024 that could be day first or month first. */
+  /** Dates such as 02/01/2024 or 02-01-2024 that could be day first or month first. */
   ambiguousDates: boolean;
 }
 
@@ -330,12 +330,15 @@ function leftOut(tally: Tally, of: number, verb: string): string | null {
   return `${total.toLocaleString('en-US')} of ${plural(of, 'row')} ${verb}: ${why.join(', ')}.`;
 }
 
-/** What the slashed dates in a column show about their order: a number above 12 can only be a day. */
+/** Whether a date is written 02/01/2024 or 02-01-2024, which can be day first or month first (02.01.2024 is always day first). */
+const twoWays = (m: RegExpExecArray | null): m is RegExpExecArray => m !== null && m[2] !== '.';
+
+/** What the slashed or dashed dates in a column show about their order: a number above 12 can only be a day. */
 function slashedOrder(values: string[]): { any: boolean; dayFirst: boolean; monthFirst: boolean; differs: boolean } {
   const out = { any: false, dayFirst: false, monthFirst: false, differs: false };
   for (const v of values) {
     const m = CSV_SLASHED_DATE.exec(v);
-    if (m?.[2] !== '/') continue;
+    if (!twoWays(m)) continue;
     out.any = true;
     if (Number(m[1]) > 12) out.dayFirst = true;
     if (Number(m[3]) > 12) out.monthFirst = true;
@@ -344,7 +347,7 @@ function slashedOrder(values: string[]): { any: boolean; dayFirst: boolean; mont
   return out;
 }
 
-/** Slashed dates that are all numbers up to 12, and so could be read either way round. */
+/** Slashed or dashed dates that are all numbers up to 12, and so could be read either way round. */
 function ambiguousOf(values: string[]): boolean {
   const o = slashedOrder(values);
   return o.any && !o.dayFirst && !o.monthFirst && o.differs;
@@ -354,6 +357,15 @@ function ambiguousOf(values: string[]): boolean {
 export function dateOrderIsAmbiguous(text: string, column: number): boolean {
   const t = table(text);
   return t !== null && ambiguousOf(t.rows.map((r) => r[column] ?? ''));
+}
+
+/** How the dates in this column that could be read two ways are written: 02/01/2024 or 02-01-2024. */
+export function dateSeparator(text: string, column: number): '/' | '-' {
+  for (const r of table(text)?.rows ?? []) {
+    const m = CSV_SLASHED_DATE.exec(r[column] ?? '');
+    if (twoWays(m)) return m[2] === '-' ? '-' : '/';
+  }
+  return '/';
 }
 
 function gaps(times: number[]): string | null {
@@ -379,11 +391,11 @@ function orderNote(dates: number[]): string | null {
   return `The rows are ${up === 0 ? 'newest first' : 'not in date order'}. They are sorted oldest first when the file is read.`;
 }
 
-/** The first slashed date whose day and month are different numbers, so that reading it two ways gives two dates. */
+/** The first slashed or dashed date whose day and month are different numbers, so that reading it two ways gives two dates. */
 function firstSlashed(values: string[]): string | null {
   return values.find((v) => {
     const m = CSV_SLASHED_DATE.exec(v);
-    return m?.[2] === '/' && Number(m[1]) !== Number(m[3]);
+    return twoWays(m) && Number(m[1]) !== Number(m[3]);
   }) ?? null;
 }
 
@@ -393,15 +405,10 @@ function slashedExample(value: string): string {
   return `${value} is ${iso(m[1], m[3])} month first, or ${iso(m[3], m[1])} day first`;
 }
 
-function doubtsOf(t: Table, cols: Cols, bars: { t: number[]; v: number[] }, tally: Tally, dates: number[], lost: number): string[] {
+function doubtsOf(t: Table, cols: Cols, bars: { t: number[]; v: number[] }, tally: Tally, dates: number[]): string[] {
   const out: string[] = [];
   const skipped = leftOut(tally, t.rows.length, 'were skipped');
   if (skipped) out.push(skipped);
-  if (lost > 0) {
-    out.push(
-      `${plural(lost, 'usable row')} ${lost === 1 ? 'was' : 'were'} lost when the file was read, because a row with no date sits among rows that are not in date order. Save a cleaned copy to get ${lost === 1 ? 'it' : 'them'} back.`,
-    );
-  }
   const order = orderNote(dates);
   if (order) out.push(order);
   const values = t.rows.map((r) => r[cols.date] ?? '');
@@ -496,7 +503,7 @@ export function inspectCsv(text: string): CsvInspection {
     last: isoOf(bars.t[n - 1]),
     head,
     tail,
-    doubts: doubtsOf(t, cols, bars, mine.tally, mine.dates, Math.max(0, mine.parsed.length - n)),
+    doubts: doubtsOf(t, cols, bars, mine.tally, mine.dates),
   };
 }
 
