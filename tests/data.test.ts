@@ -105,6 +105,9 @@ test('a failed refresh falls back to saved prices with a warning; with none save
   const r = await loadBars(SPY, '1d', 0, d);
   assert.equal(r.bars.t.length, 4);
   assert.match(r.warning!, /Couldn't refresh SPY .*saved on 2024-01-10/);
+  assert.equal(r.stale, true);
+  assert.equal(r.fetched, Date.UTC(2024, 0, 10));
+  assert.equal(r.through, Date.UTC(2024, 0, 5));
   await assert.rejects(loadBars({ name: 'QQQ', source: 'yahoo', id: 'QQQ' }, '1d', 0, d), /Couldn't load QQQ from yahoo/);
 });
 
@@ -142,4 +145,208 @@ test('csv comes from the vault', async () => {
   const { d } = deps({ readVaultFile: async (p) => (p === 'Data/x.csv' ? 'date,open,high,low,close\n2024-01-02,1,1,1,1' : null) });
   assert.equal((await loadBars({ name: 'x', source: 'csv', id: 'Data/x.csv' }, '1d', 0, d)).bars.t.length, 1);
   await assert.rejects(loadBars({ name: 'y', source: 'csv', id: 'Data/y.csv' }, '1d', 0, d), /No file at Data\/y.csv/);
+});
+
+const HOSTS = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'query1.finance.yahoo.com'];
+const hostOf = (url: string) => new URL(url).hostname;
+const NOT_FOUND = JSON.stringify({ chart: { result: null, error: { code: 'Not Found', description: 'No data found, symbol may be delisted' } } });
+const GOOD = yahoo(stamps, [100, 101, 102, 103], [100, 101, 102, 103]);
+
+test('yahoo is retried on query1, query2, query1 with 500 ms then 1500 ms between tries', async () => {
+  const hosts: string[] = [];
+  const sleeps: number[] = [];
+  const answers = [() => Promise.reject(new Error('HTTP 429')), () => Promise.resolve('Too Many Requests'), () => Promise.resolve(GOOD)];
+  const { d } = deps({
+    fetchText: async (url) => {
+      hosts.push(hostOf(url));
+      return answers[hosts.length - 1]();
+    },
+    sleep: async (ms) => void sleeps.push(ms),
+  });
+  const r = await loadBars(SPY, '1d', 0, d);
+  assert.deepEqual(hosts, HOSTS);
+  assert.deepEqual(sleeps, [500, 1500]);
+  assert.equal(r.bars.t.length, 4);
+  assert.equal(r.warning, null);
+});
+
+test('a first answer needs no wait, and retries go out at once when there is no sleep', async () => {
+  const sleeps: number[] = [];
+  const ok = deps({ sleep: async (ms) => void sleeps.push(ms) });
+  await loadBars(SPY, '1d', 0, ok.d);
+  assert.equal(ok.calls.length, 1);
+  assert.deepEqual(sleeps, []);
+
+  const down = deps({
+    fetchText: async (url) => {
+      down.calls.push(url);
+      throw new Error('HTTP 503');
+    },
+  });
+  await assert.rejects(loadBars(SPY, '1d', 0, down.d), /Couldn't load SPY from yahoo: HTTP 503/);
+  assert.deepEqual(down.calls.map(hostOf), HOSTS);
+});
+
+test('an error Yahoo explains in its answer is final and is not retried', async () => {
+  const sleeps: number[] = [];
+  const body = JSON.stringify({ chart: { result: null, error: { code: 'Bad Request', description: 'Invalid input - interval=1x is not supported' } } });
+  const { d, calls } = deps({ fetchText: async (url) => (calls.push(url), body), sleep: async (ms) => void sleeps.push(ms) });
+  await assert.rejects(loadBars(SPY, '1d', 0, d), /Couldn't load SPY from yahoo: Invalid input/);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sleeps, []);
+});
+
+test('with every Yahoo try failed, the saved copy is used and marked stale', async () => {
+  let now = Date.UTC(2024, 0, 10, 12);
+  let offline = false;
+  const { d, calls } = deps({
+    now: () => now,
+    fetchText: async (url) => {
+      calls.push(url);
+      if (offline) throw new Error('HTTP 500');
+      return GOOD;
+    },
+  });
+  const first = await loadBars(SPY, '1d', 0, d);
+  assert.equal(first.stale, false);
+  offline = true;
+  now += 2 * DAY;
+  const r = await loadBars(SPY, '1d', 0, d);
+  assert.equal(calls.length, 1 + 3);
+  assert.equal(r.stale, true);
+  assert.equal(r.fetched, Date.UTC(2024, 0, 10, 12));
+  assert.equal(r.source, 'yahoo');
+  assert.match(r.warning!, /^Couldn't refresh SPY \(HTTP 500\); using prices saved on 2024-01-10\.$/);
+});
+
+test('an unknown ticker gets a plain message, no retry and no saved copy', async () => {
+  const { d, calls } = deps({ fetchText: async (url) => (calls.push(url), NOT_FOUND) });
+  const XYZ = { name: 'XYZ', source: 'yahoo' as const, id: 'XYZ' };
+  await assert.rejects(loadBars(XYZ, '1d', 0, d), { message: 'Yahoo has no prices for XYZ. Check the ticker.' });
+  assert.equal(calls.length, 1);
+
+  // Even with a saved copy there is nothing to fall back to.
+  const saved = deps({});
+  await loadBars(XYZ, '1d', 0, saved.d);
+  const gone = deps({ now: () => Date.UTC(2024, 0, 12), cacheRead: saved.d.cacheRead, fetchText: async () => NOT_FOUND });
+  await assert.rejects(loadBars(XYZ, '1d', 0, gone.d), { message: 'Yahoo has no prices for XYZ. Check the ticker.' });
+
+  const bad = deps({ fetchText: async () => JSON.stringify({ code: -1121, msg: 'Invalid symbol.' }) });
+  await assert.rejects(loadBars({ name: 'BTCUSD', source: 'binance', id: 'BTCUSD' }, '1h', 0, bad.d), {
+    message: 'Binance has no market called BTCUSD. Check the symbol, such as BTCUSDT.',
+  });
+});
+
+test('loaded bars say where they came from, how far they run and when they were fetched', async () => {
+  const now = Date.UTC(2024, 0, 10);
+  const y = deps({ now: () => now });
+  const fresh = await loadBars(SPY, '1d', 0, y.d);
+  assert.deepEqual([fresh.source, fresh.through, fresh.fetched, fresh.stale], ['yahoo', Date.UTC(2024, 0, 5), now, false]);
+  const again = await loadBars(SPY, '1d', 0, y.d);
+  assert.deepEqual([again.source, again.through, again.fetched, again.stale], ['yahoo', Date.UTC(2024, 0, 5), now, false]);
+
+  const H = 3_600_000;
+  const b = deps({ now: () => 10 * H, fetchText: async () => JSON.stringify([[0, '1', '1', '1', '1', '1', H - 1], [H, '1', '1', '1', '1', '1', 2 * H - 1]]) });
+  const btc = await loadBars({ name: 'BTCUSDT', source: 'binance', id: 'BTCUSDT' }, '1h', 0, b.d);
+  assert.deepEqual([btc.source, btc.through, btc.fetched, btc.stale, btc.warning], ['binance', H, 10 * H, false, null]);
+
+  const c = deps({ now: () => 777, readVaultFile: async () => 'date,open,high,low,close\n2024-01-02,1,1,1,1\n2024-01-03,1,1,1,1' });
+  const csv = await loadBars({ name: 'x', source: 'csv', id: 'x.csv' }, '1d', 0, c.d);
+  assert.deepEqual([csv.source, csv.through, csv.fetched, csv.stale], ['csv', Date.UTC(2024, 0, 3), 777, false]);
+});
+
+test('calls that need the same download share one request, but separate deps do not', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const { d, calls } = deps({ fetchText: async (url) => (calls.push(url), await gate, GOOD) });
+  const [a, b, c] = [loadBars(SPY, '1d', 0, d), loadBars(SPY, '1d', 0, d), loadBars(SPY, '1d', 0, d, true)];
+  const other = deps({ fetchText: async (url) => (other.calls.push(url), await gate, GOOD) });
+  const e = loadBars(SPY, '1d', 0, other.d);
+  await new Promise((r) => setImmediate(r));
+  release();
+  const [ra, rb, rc] = await Promise.all([a, b, c]);
+  await e;
+  assert.equal(calls.length, 1);
+  assert.equal(other.calls.length, 1);
+  assert.equal(ra, rb);
+  assert.equal(ra, rc);
+  // Once it has finished the next forced call downloads again.
+  await loadBars(SPY, '1d', 0, d, true);
+  assert.equal(calls.length, 2);
+});
+
+test('shared downloads also cover failures, and Binance downloads share only with the same start', async () => {
+  const down = deps({ fetchText: async (url) => (down.calls.push(url), Promise.reject(new Error('HTTP 500'))) });
+  const results = await Promise.allSettled([loadBars(SPY, '1d', 0, down.d), loadBars(SPY, '1d', 0, down.d)]);
+  assert.deepEqual(results.map((r) => r.status), ['rejected', 'rejected']);
+  assert.equal(down.calls.length, 3);
+
+  const H = 3_600_000;
+  const starts: number[] = [];
+  const { d } = deps({
+    now: () => 10 * H,
+    fetchText: async (url) => {
+      starts.push(Number(new URL(url).searchParams.get('startTime')));
+      return JSON.stringify([[0, '1', '1', '1', '1', '1', H - 1]]);
+    },
+  });
+  const BTC = { name: 'BTCUSDT', source: 'binance' as const, id: 'BTCUSDT' };
+  await Promise.all([loadBars(BTC, '1h', 0, d), loadBars(BTC, '1h', 0, d), loadBars(BTC, '1h', -H, d)]);
+  assert.deepEqual(starts.sort((x, y) => x - y), [-H, 0]);
+});
+
+test('freshForMs sets how long saved prices count as fresh', async () => {
+  let now = Date.UTC(2024, 0, 10);
+  const { d, calls } = deps({ now: () => now });
+  await loadBars(SPY, '1d', 0, d, false, { freshForMs: 3_600_000 });
+  now += 2 * 3_600_000;
+  await loadBars(SPY, '1d', 0, d, false, { freshForMs: 3_600_000 });
+  assert.equal(calls.length, 2);
+  now += 7 * 3_600_000;
+  await loadBars(SPY, '1d', 0, d, false, { freshForMs: 24 * 3_600_000 });
+  assert.equal(calls.length, 2);
+  await loadBars(SPY, '1d', 0, d);
+  assert.equal(calls.length, 3);
+});
+
+const jan = [Date.UTC(2024, 0, 2), Date.UTC(2024, 0, 3), Date.UTC(2024, 0, 31)];
+
+test('csv: semicolon and tab separators, picked from the header line', () => {
+  assert.deepEqual(parseCsv('Date;Open;High;Low;Close;Volume\n2024-01-02;1;2;1;2;5\n2024-01-03;2;3;2;3;5').c, [2, 3]);
+  const tab = parseCsv('date\topen\thigh\tlow\tclose\n2024-01-02\t1\t2\t1\t2\n2024-01-03\t2\t3\t2\t3');
+  assert.deepEqual(tab.t, jan.slice(0, 2));
+  assert.deepEqual(tab.h, [2, 3]);
+});
+
+test('csv: a byte order mark, quoted fields and CRLF line ends', () => {
+  const b = parseCsv('﻿"Date","Open","High","Low","Close","Note"\r\n"2024-01-02","1","2","1","2","a, b"\r\n"2024-01-03","2","3","2","3","say ""hi"""\r\n');
+  assert.deepEqual(b.t, jan.slice(0, 2));
+  assert.deepEqual(b.c, [2, 3]);
+  // A separator inside quotes does not split, even in a semicolon file.
+  assert.deepEqual(parseCsv('Date;Name;Open;High;Low;Close\n2024-01-02;"x; y";1;2;1;2').c, [2]);
+});
+
+test('csv: MM/DD/YYYY and DD.MM.YYYY dates', () => {
+  const us = parseCsv('Date,Open,High,Low,Close\n01/02/2024,1,2,1,2\n01/31/2024,1,2,1,2');
+  assert.deepEqual(us.t, [jan[0], jan[2]]);
+  const eu = parseCsv('Date;Open;High;Low;Close\n02.01.2024;1;2;1;2\n31.01.2024 14:30;1;2;1;2');
+  assert.deepEqual(eu.t, [jan[0], Date.UTC(2024, 0, 31, 14, 30)]);
+});
+
+test('csv: DD/MM/YYYY when the file proves it, MM/DD/YYYY when it is ambiguous', () => {
+  const dayFirst = parseCsv('Date,Open,High,Low,Close\n02/01/2024,1,2,1,2\n31/01/2024,1,2,1,2');
+  assert.deepEqual(dayFirst.t, [jan[0], jan[2]]);
+  const ambiguous = parseCsv('Date,Open,High,Low,Close\n02/01/2024,1,2,1,2\n03/01/2024,1,2,1,2');
+  assert.deepEqual(ambiguous.t, [Date.UTC(2024, 1, 1), Date.UTC(2024, 2, 1)]);
+  // A date that does not exist is skipped.
+  assert.deepEqual(parseCsv('Date,Open,High,Low,Close\n02/30/2024,1,2,1,2\n01/02/2024,1,2,1,2').t, [Date.UTC(2024, 0, 2)]);
+});
+
+test('csv: errors name the column that is the problem', () => {
+  assert.throws(() => parseCsv('Day,Open,High,Close\n2024-01-02,1,2,2'), /no date, low column/);
+  assert.throws(() => parseCsv('Day,Open,High,Low,Close\n2024-01-02,1,2,1,2'), /no date column/);
+  assert.throws(() => parseCsv('When,Open,High,Low,Close\n'), /no rows/);
+  assert.throws(() => parseCsv('Date,Open,High,Low,Close\nlast tuesday,1,2,1,2'), /"Date" column/);
+  assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,1,2,1,n/a'), /"Close" column/);
+  assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,0,0,0,0'), /price at or below zero/);
 });
