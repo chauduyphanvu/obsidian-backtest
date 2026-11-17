@@ -1,0 +1,246 @@
+/* Comparing and combining strategies. Series colours keep a fixed order and are never cycled. */
+
+.bt-root {
+  --bt-cat-1: #2a78d6;
+  --bt-cat-2: #eb6834;
+  --bt-cat-3: #1baf7a;
+  --bt-cat-4: #eda100;
+  --bt-cat-5: #e87ba4;
+  --bt-cat-6: #008300;
+  --bt-cat-7: #6250d6;
+  --bt-cat-8: #e34948;
+  --bt-cmp-pos: #2a78d6;
+  --bt-cmp-neg: #e34948;
+}
+.theme-dark .bt-root {
+  --bt-cat-1: #3987e5;
+  --bt-cat-2: #d95926;
+  --bt-cat-3: #199e70;
+  --bt-cat-4: #c98500;
+  --bt-cat-5: #d55181;
+  --bt-cat-6: #0ca30c;
+  --bt-cat-7: #9085e9;
+  --bt-cat-8: #e66767;
+  --bt-cmp-pos: #3987e5;
+  --bt-cmp-neg: #e66767;
+}
+
+.bt-cmp-c1 { --c: var(--bt-cat-1); }
+.bt-cmp-c2 { --c: var(--bt-cat-2); }
+.bt-cmp-c3 { --c: var(--bt-cat-3); }
+.bt-cmp-c4 { --c: var(--bt-cat-4); }
+.bt-cmp-c5 { --c: var(--bt-cat-5); }
+.bt-cmp-c6 { --c: var(--bt-cat-6); }
+.bt-cmp-c7 { --c: var(--bt-cat-7); }
+.bt-cmp-c8 { --c: var(--bt-cat-8); }
+/* The combined portfolio is the one line that is not a strategy, so it takes the text colour, not a series colour. */
+.bt-cmp-all { --c: var(--text-normal); }
+
+.bt-root .bt-cmp-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--c);
+}
+.bt-cmp-mark {
+  flex: none;
+  min-width: 1ch;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bt-cmp-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bt-root .bt-cmp-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 250px));
+  gap: 4px 18px;
+  margin-top: 10px;
+}
+.bt-cmp-key {
+  min-width: 0;
+}
+.bt-cmp-key .bt-key-value {
+  flex: none;
+  margin-left: auto;
+}
+
+.bt-cmp-line {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.bt-cmp-line-thin {
+  stroke-width: 1.5;
+}
+.bt-cmp-line-main {
+  stroke-width: 2.5;
+}
+.bt-cmp-leader {
+  stroke: var(--c);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+.bt-cmp-end {
+  fill: var(--c);
+}
+.bt-cmp-end-mark {
+  fill: var(--text-normal);
+  font-size: 11px;
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.bt-cmp-dot {
+  fill: var(--c);
+  stroke: var(--background-primary);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.bt-cmp-tip-row {
+  display: grid;
+  grid-template-columns: 10px 1.2ch minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+.bt-cmp-tip .bt-cmp-name {
+  max-width: 190px;
+}
+
+.bt-root .bt-cmp-scroll {
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.bt-cmp-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+.bt-root .bt-cmp-table th,
+.bt-root .bt-cmp-corr th {
+  vertical-align: bottom;
+}
+.bt-root .bt-cmp-table th.bt-num {
+  min-width: 4.5em;
+}
+.bt-root .bt-cmp-table td.bt-num {
+  white-space: nowrap;
+}
+.bt-root .bt-cmp-name-cell {
+  color: var(--text-normal);
+  font-weight: var(--font-normal);
+  max-width: 14em;
+}
+.bt-root .bt-cmp-combined td {
+  font-weight: var(--font-semibold);
+  border-bottom-color: var(--text-faint);
+}
+
+.bt-cmp-heading {
+  margin: 18px 0 6px;
+  font-weight: var(--font-semibold);
+}
+.bt-cmp-sentence {
+  margin-top: 14px;
+}
+.bt-root table.bt-cmp-corr {
+  border-collapse: separate;
+  border-spacing: 2px;
+  margin-top: 0;
+}
+.bt-root .bt-cmp-corr th,
+.bt-root .bt-cmp-corr td {
+  padding: 3px 6px;
+  white-space: nowrap;
+  border-bottom: none;
+}
+.bt-root .bt-cmp-corr td.bt-num {
+  min-width: 3.2em;
+  text-align: center;
+  border-radius: var(--radius-s);
+}
+.bt-root .bt-cmp-corr th.bt-num {
+  text-align: center;
+}
+.bt-root .bt-cmp-corr th.bt-cmp-name-cell {
+  position: sticky;
+  left: 0;
+  padding-left: 0;
+  background: var(--background-primary);
+}
+.bt-root .bt-cmp-corr .bt-cmp-self {
+  background: var(--background-secondary);
+}
+.bt-root .bt-cmp-corr .bt-cmp-pos {
+  background: color-mix(in srgb, var(--bt-cmp-pos) var(--bt-cmp-tint), transparent);
+}
+.bt-root .bt-cmp-corr .bt-cmp-neg {
+  background: color-mix(in srgb, var(--bt-cmp-neg) var(--bt-cmp-tint), transparent);
+}
+
+/* A narrow card: each strategy in the figures table is a name over its four values, and the matrix shrinks to numbers. */
+.bt-cmp-scroll {
+  container-type: inline-size;
+}
+@container (max-width: 460px) {
+  .bt-root .bt-cmp-table,
+  .bt-root .bt-cmp-table thead,
+  .bt-root .bt-cmp-table tbody {
+    display: block;
+  }
+  .bt-root .bt-cmp-table tr {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2px 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+  }
+  .bt-root .bt-cmp-table th,
+  .bt-root .bt-cmp-table td {
+    padding: 0;
+    border: none;
+  }
+  .bt-root .bt-cmp-table th:first-child {
+    display: none;
+  }
+  .bt-root .bt-cmp-table th.bt-num,
+  .bt-root .bt-cmp-table td.bt-num {
+    min-width: 0;
+    text-align: left;
+    white-space: normal;
+  }
+  .bt-root .bt-cmp-table td.bt-cmp-name-cell {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+  .bt-root .bt-cmp-combined {
+    border-bottom-color: var(--text-faint);
+  }
+
+  .bt-root .bt-cmp-corr .bt-cmp-name {
+    display: none;
+  }
+  .bt-root .bt-cmp-corr .bt-cmp-who {
+    gap: 4px;
+  }
+  .bt-root table.bt-cmp-corr {
+    border-spacing: 1px;
+  }
+  .bt-root .bt-cmp-corr th,
+  .bt-root .bt-cmp-corr td {
+    padding: 3px 1px;
+    font-size: 11px;
+  }
+  .bt-root .bt-cmp-corr td.bt-num {
+    min-width: 0;
+  }
+}
