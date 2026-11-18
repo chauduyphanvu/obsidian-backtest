@@ -1,7 +1,7 @@
 import { Modal, Notice, setIcon, type App } from 'obsidian';
 import { h } from './dom.ts';
 import { price, signedPct } from './format.ts';
-import { actionWord, barLabel, barTime, basisOf, CLOSE_FILL_NOTE, LAST_CLOSE_NOTE, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoGroups, todoRows, WATCH_HEADING, WATCH_NOTE, watchList, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
+import { actionWord, barLabel, barTime, basisOf, CLOSE_FILL_NOTE, LAST_CLOSE_NOTE, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoGroups, todoRows, WATCH_HEADING, WATCH_NOTE, watchClose, watchList, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
 
 export interface OrdersHost {
   /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches every price once. */
@@ -174,7 +174,7 @@ export class OrdersModal extends Modal {
       h(what, 'span', undefined, `${row.phrase}, ${row.when}`);
       const detail = h(item, 'div', 'bt-orders-detail');
       this.link(detail, status);
-      h(detail, 'span', undefined, `Last close ${price(row.lastClose)}`);
+      h(detail, 'span', undefined, `Last close ${watchClose(row)}`);
       h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
     }
   }

@@ -71,7 +71,8 @@ export interface WatchRow {
   /** The rule's part in words, such as "Buys if it closes above 512.30 (+1.2%)", and when its order fills, such as "at the following open". */
   phrase: string;
   when: string;
-  /** The last close of the ticker whose close it is about, and the signed share of it to the nearest price where the outcome changes (NaN when none was found). */
+  /** The ticker whose close it is about (trigger.ts Trigger.driver), its last close, and the signed share of that to the nearest price where the outcome changes (NaN when none was found). */
+  driver: string;
   lastClose: number;
   distance: number;
   /** It gives its order at an unchanged close. */
@@ -160,10 +161,13 @@ export function watchRows(report: TriggerReport): WatchRow[] {
     const near = nearest(t);
     if (t.side === 'rearm' || phrase === null || near === null) continue;
     if (!report.closeFill && !near.now && !(Math.abs(near.distance) <= WATCH_WITHIN)) continue;
-    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), lastClose: t.last, distance: near.distance, now: near.now });
+    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), driver: t.driver, lastClose: t.last, distance: near.distance, now: near.now });
   }
   return rows.sort((a, b) => nearness(a) - nearness(b) || compare(a.ticker, b.ticker));
 }
+
+/** The last close a row to watch is about, with the ticker named when its rule reads another's: "512.30", "512.30 (SPY)". */
+export const watchClose = (row: WatchRow): string => `${price(row.lastClose)}${row.driver === row.ticker ? '' : ` (${row.driver})`}`;
 
 /** Every strategy's rows to watch as one list, nearest first. */
 export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row: WatchRow }[] {
@@ -429,7 +433,7 @@ export function ordersMarkdown(list: StrategyStatus[], now: number): string {
     lines.push(`## ${WATCH_HEADING}`, '', WATCH_NOTE, '', '| Strategy | Ticker | Watch for | Last close | Based on |', '| --- | --- | --- | ---: | --- |');
     for (const { status, row } of watching) {
       const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
-      lines.push(`| ${link(status, true)} | ${row.ticker} | ${row.phrase}, ${row.when} | ${price(row.lastClose)} | ${basisCell} |`);
+      lines.push(`| ${link(status, true)} | ${row.ticker} | ${row.phrase}, ${row.when} | ${watchClose(row)} | ${basisCell} |`);
     }
     lines.push('');
   }

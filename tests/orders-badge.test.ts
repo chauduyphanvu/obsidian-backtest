@@ -82,7 +82,7 @@ test('no orders says so and offers the holdings', () => {
 });
 
 test('the three nearest closes to watch follow the orders in the tooltip, and are not counted as orders', () => {
-  const watch = (ticker: string, distance: number, now = false): WatchRow => ({ ticker, side: 'buy', phrase: `Buys if it closes above ${ticker}`, when: 'at the following open', lastClose: 10, distance, now });
+  const watch = (ticker: string, distance: number, now = false): WatchRow => ({ ticker, side: 'buy', phrase: `Buys if it closes above ${ticker}`, when: 'at the following open', driver: ticker, lastClose: 10, distance, now });
   const v = ready([
     status('Trend', [['sell', 'SPY']], { watch: [watch('QQQ', 0.015), watch('IWM', -0.019)] }),
     status('Dip', [], { watch: [watch('TLT', 0.004), watch('GLD', 0.05, true)] }),
