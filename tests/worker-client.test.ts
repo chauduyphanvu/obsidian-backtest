@@ -9,8 +9,9 @@ import { Latest, drawHeld } from '../src/live-core.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from '../src/luck.ts';
 import { makeRng } from '../src/rng.ts';
 import { runSweep, type Parse, type SweepResult } from '../src/sweep.ts';
+import { computeTriggers, triggerRun } from '../src/trigger.ts';
 import type { Bars } from '../src/types.ts';
-import { createJobClient, type JobInput, type MakeWorker, type RunRequest, type RunResult } from '../src/worker-client.ts';
+import { createJobClient, type JobInput, type MakeWorker, type RunRequest, type RunResult, type TriggersRequest } from '../src/worker-client.ts';
 import { bars, near } from './helpers.ts';
 
 const DEFAULTS: Partial<Defaults> = { capital: 25_000, costBps: 5 };
@@ -748,4 +749,59 @@ test('a draw that fails after its run lets its prices go instead of leaving them
     (e: unknown) => e instanceof LimitError,
   );
   assert.ok(!w.log.includes('data 2'));
+});
+
+// ---------------------------------------------------------------- trigger prices
+
+/** The trigger prices of the run behind `input`, as Results asks for them. */
+function triggersOf(block: JobInput, more: Partial<TriggersRequest> = {}): TriggersRequest {
+  const bt = block.backtest;
+  return { spec: bt.spec, prices: bt.data, run: triggerRun(bt.run), size: runSize(bt.spec, bt.data), ...more };
+}
+const triggersHere = (block: JobInput) => computeTriggers(block.backtest.spec, block.backtest.data, triggerRun(block.backtest.run));
+
+test('trigger prices go to the runs\' worker, which already holds the prices of the run, and give exactly what they give here', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  const block = input();
+  const runs = client.runs();
+  await runs.run(request(block));
+  const report = await runs.triggers(triggersOf(block));
+  assert.deepStrictEqual(report, triggersHere(block));
+  assert.ok(report!.triggers.length === 2);
+  assert.deepEqual(w.log.map((m) => m.split(' ')[0]), ['data', 'run', 'triggers']);
+  runs.close();
+  assert.equal(w.log.at(-1), 'drop 1');
+});
+
+test('when no worker can be made, trigger prices are worked out here, except for a run too large for the main thread', async (t) => {
+  const client = track(t, { makeWorker: noWorker });
+  const block = input();
+  const runs = client.runs();
+  assert.deepStrictEqual(await runs.triggers(triggersOf(block)), triggersHere(block));
+  assert.equal(await runs.triggers(triggersOf(block, { size: { bars: 300_000, tickers: 1, ruleWork: 0, windowWork: 0 } })), null);
+});
+
+test('closing the runs drops trigger prices still on their way, and ones past the time a run may take are left out, not failed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const w = byHand();
+  const client = track(t, { makeWorker: w.make });
+  const block = input();
+  const runs = client.runs();
+  const waiting = runs.triggers(triggersOf(block));
+  runs.close();
+  assert.equal(await waiting, null);
+  const slow = client.runs().triggers(triggersOf(block));
+  w.workers.at(-1)!.on.message({ type: 'ready' });
+  t.mock.timers.tick(LIMITS.runMs);
+  assert.equal(await slow, null);
+  assert.equal(w.workers.at(-1)!.alive, false);
+});
+
+test('trigger prices that fail in the worker reject with the message', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  const block = input();
+  const broken = { ...block.backtest.spec, universe: [...block.backtest.spec.universe, { name: 'C', source: 'yahoo' as const, id: 'C', weight: 0.5 }] };
+  await assert.rejects(client.runs().triggers(triggersOf(block, { spec: broken })));
 });

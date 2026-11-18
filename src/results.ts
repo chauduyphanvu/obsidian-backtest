@@ -1,12 +1,15 @@
 // Running a block's text and keeping the result, so a block drawn again, the compare and backtests blocks, the orders and
-// the note properties reuse a recent run of the same text, defaults and CSV files instead of running it again.
+// the note properties reuse a recent run of the same text, defaults and CSV files instead of running it again. A result's
+// trigger prices are kept with it the same way.
 
+import type { Backtest } from './backtest.ts';
 import type { DataDeps } from './data.ts';
 import type { Defaults, Spec } from './dsl.ts';
 import { HOUR } from './format.ts';
-import { LIMITS, WeighedCache, resultBytes } from './limits.ts';
+import { LIMITS, WeighedCache, resultBytes, runSize } from './limits.ts';
 import { cacheKey, csvPaths, csvVersions, pricesAsOf } from './result-cache.ts';
 import { Runner, type RunOutput } from './runner.ts';
+import { triggerRun, watchable, type TriggerReport } from './trigger.ts';
 import { BlockDrawing, blockRuns, type BlockRuns } from './worker-client.ts';
 
 /** A result kept in memory, with when its prices were current (pricesAsOf). */
@@ -30,6 +33,8 @@ export interface ResultsOptions {
 
 export class Results {
   private results = this.keptResults(6 * HOUR);
+  /** Each result's trigger prices, asked for once; one stopped or failed is forgotten, so the next ask tries again. */
+  private reports = new WeakMap<Backtest, Promise<TriggerReport | null>>();
   private o: ResultsOptions;
   private newRuns: () => BlockRuns;
 
@@ -97,11 +102,40 @@ export class Results {
   }
 
   /**
+   * The trigger prices of a result (trigger.ts), worked out once and kept with it; null for a result with no next close to
+   * watch (watchable). `runs` are those of whoever shows the result, whose worker already holds its prices; without them
+   * the request gets runs of its own. A kept request that was stopped is asked again with `runs`.
+   */
+  triggers(out: RunOutput, runs?: BlockRuns, background = false): Promise<TriggerReport | null> | null {
+    if (!watchable(out.spec)) return null;
+    const kept = this.reports.get(out.backtest);
+    if (kept) return kept.then((r) => r ?? this.request(out, runs, background));
+    return this.request(out, runs, background);
+  }
+
+  private request(out: RunOutput, runs: BlockRuns | undefined, background: boolean): Promise<TriggerReport | null> {
+    const own = runs ?? this.newRuns();
+    const asked = own
+      .triggers({ spec: out.spec, prices: out.data, run: triggerRun(out.backtest.run), size: runSize(out.spec, out.data), background })
+      .finally(() => {
+        if (!runs) own.close();
+      });
+    this.reports.set(out.backtest, asked);
+    const forget = () => {
+      if (this.reports.get(out.backtest) === asked) this.reports.delete(out.backtest);
+    };
+    asked.then((r) => r ?? forget(), forget);
+    return asked;
+  }
+
+  /**
    * Runs a block's text, reusing a recent result for the same text, defaults and CSV files. A block that does not parse rejects
    * with its first problem. With `cachedOnly` nothing runs: a block with no kept result rejects. `background` is for a scan
-   * of the vault, whose runs wait for those of the blocks on screen. `freshForMs` is how old saved prices may be.
+   * of the vault, whose runs wait for those of the blocks on screen. `freshForMs` is how old saved prices may be. With
+   * `triggers`, the result's trigger prices are worked out before its runs close, while the worker still holds its prices,
+   * so asking for them afterwards (triggers) finds them kept.
    */
-  async runSource(source: string, opts: { force?: boolean; freshForMs?: number; cachedOnly?: boolean; background?: boolean } = {}): Promise<RunOutput> {
+  async runSource(source: string, opts: { force?: boolean; freshForMs?: number; cachedOnly?: boolean; background?: boolean; triggers?: boolean } = {}): Promise<RunOutput> {
     const runs = this.newRuns();
     try {
       const drawing = this.drawing(source, runs, { freshForMs: opts.freshForMs, background: opts.background });
@@ -115,6 +149,8 @@ export class Results {
       }
       const out = await this.runSpec(drawing, spec, key, opts.force);
       if (!out) throw new Error('The run was stopped.');
+      // A result is worth having without its trigger prices, so their failing does not fail the run.
+      if (opts.triggers) await this.triggers(out, runs, opts.background)?.catch(() => null);
       return out;
     } finally {
       runs.close();

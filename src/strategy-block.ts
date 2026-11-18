@@ -206,6 +206,7 @@ export class StrategyBlocks {
         remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
         params: spec.params.length > 0 ? { ...sliders, apply: opts.apply } : undefined,
         figuresNote: ledger ? (note, now) => renderTriesNote(note, ledger, now.backtest) : undefined,
+        triggers: (shown) => this.host.results.triggers(shown, runs),
       });
       this.onScreen.set(child, { source, drawn: drawing.defaults, say: renderDefaultsChanged(el, () => redraw({ force: false })) });
       this.disposers.set(child, () => {

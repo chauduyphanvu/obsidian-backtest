@@ -28,7 +28,7 @@ const inProcess: MakeWorker = (on) => {
   return { post: (m: ToWorker) => void setTimeout(() => void handle(structuredClone(m))), terminate: () => {} };
 };
 
-function setup(o: { defaults?: () => Defaults; modified?: (path: string) => Promise<number | null> } = {}) {
+function setup(o: { defaults?: () => Defaults; modified?: (path: string) => Promise<number | null>; makeWorker?: MakeWorker } = {}) {
   const reads: string[] = [];
   const deps: DataDeps = {
     fetchText: () => Promise.reject(new Error('no network in tests')),
@@ -40,7 +40,7 @@ function setup(o: { defaults?: () => Defaults; modified?: (path: string) => Prom
     cacheWrite: async () => {},
     now: () => Date.now(),
   };
-  const client = createJobClient({ makeWorker: inProcess });
+  const client = createJobClient({ makeWorker: o.makeWorker ?? inProcess });
   const results = new Results({
     deps: () => deps,
     defaults: o.defaults ?? (() => DEFAULTS),
@@ -119,5 +119,39 @@ test('the key of a result covers the text, the defaults and each file it reads',
   assert.equal(await results.resultKey(spec, SRC, DEFAULTS), key);
   assert.notEqual(await results.resultKey(spec, `${SRC}\n`, DEFAULTS), key);
   assert.notEqual(await results.resultKey(spec, SRC, { ...DEFAULTS, costBps: 5 }), key);
+  client.shutdown();
+});
+
+test('a result\'s trigger prices are worked out once and kept with it; asked for with the run, its prices go to the worker once', async () => {
+  const posts: string[] = [];
+  const logging: MakeWorker = (on) => {
+    const handle = serve((m) => on.message(structuredClone(m)), 0);
+    setTimeout(() => on.message({ type: 'ready' }));
+    return {
+      post: (m: ToWorker) => {
+        posts.push(m.type);
+        setTimeout(() => void handle(structuredClone(m)));
+      },
+      terminate: () => {},
+    };
+  };
+  const { results, client } = setup({ makeWorker: logging });
+  const out = await results.runSource(SRC, { triggers: true, background: true });
+  assert.deepEqual(posts, ['data', 'run', 'triggers', 'drop']);
+  const report = await results.triggers(out);
+  assert.deepEqual(report?.triggers.map((t) => [t.ticker, t.blocked]), [['a', 'csv']]);
+  // Kept: neither asking again nor running the kept result again with them sends anything.
+  await results.triggers(out);
+  assert.equal(await results.runSource(SRC, { triggers: true }), out);
+  assert.deepEqual(posts, ['data', 'run', 'triggers', 'drop']);
+  // One stopped on its way is not kept: the next ask works them out.
+  const fresh = await results.runSource(SRC, { force: true });
+  const runs = client.runs();
+  const stopped = results.triggers(fresh, runs)!;
+  runs.close();
+  assert.equal(await stopped, null);
+  assert.ok((await results.triggers(fresh)) !== null);
+  // A strategy that ends at a "to" date has no next close to watch.
+  assert.equal(results.triggers(await results.runSource(`${SRC}\nto: 2020-06-01`)), null);
   client.shutdown();
 });

@@ -181,6 +181,12 @@ export interface AssetState {
    * top-ups and stop exits are not counted. Price with slippage.
    */
   filled?: { side: 'buy' | 'sell' | 'add'; shares: number; price: number } | null;
+  /** While long: the position as the sell and add rules read it at the next bar. */
+  pos?: PosState;
+  /** Only when flat after a stop or target exit, outside a ranking: the buy rule has to stop holding at a close before it can buy again. */
+  rearming?: true;
+  /** While long with a stop or target: the levels in force for the next bar, the trailing stop's moved by the last bar's high. */
+  levels?: { stop: number | null; target: number | null };
 }
 
 export interface SimParams {
@@ -421,6 +427,19 @@ function mergeTimes(ts: number[][], start: number, end: number): number[] {
     out = merged;
   }
   return out;
+}
+
+/**
+ * The first input a buy signalled at a bar needs that is still unknown there, with its period; null when all are known.
+ * `atr` and `vol` give the ticker's average true range and volatility over `n` bars at that bar.
+ */
+export function missingInputAt(sizing: Sizing, stops: Stops | undefined, atr: (n: number) => number, vol: (n: number) => number): { input: WarmupInput; n: number } | null {
+  if (sizing.k === 'risk' && Number.isNaN(atr(sizing.n))) return { input: 'risk per trade', n: sizing.n };
+  if (sizing.k === 'invvol' && Number.isNaN(vol(sizing.n))) return { input: 'inverse volatility', n: sizing.n };
+  for (const [input, level] of [['stop loss', stops?.stopLoss], ['trailing stop', stops?.trailingStop], ['take profit', stops?.takeProfit]] as const) {
+    if (level?.k === 'atr' && Number.isNaN(atr(level.n))) return { input, n: level.n };
+  }
+  return null;
 }
 
 /** The period of time `t` for a rebalance or ranking: bars with the same key fall in one period. */
@@ -828,15 +847,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     return true;
   };
 
-  /** The first input a buy signalled at bar `idx` needs that is still unknown there, with its period; null when all are known. */
-  const missingInput = (a: A, idx: number): { input: WarmupInput; n: number } | null => {
-    if (p.sizing.k === 'risk' && Number.isNaN(atrAt(a, p.sizing.n, idx))) return { input: 'risk per trade', n: p.sizing.n };
-    if (p.sizing.k === 'invvol' && Number.isNaN(volAt(a, p.sizing.n, idx))) return { input: 'inverse volatility', n: p.sizing.n };
-    for (const [input, level] of [['stop loss', a.stops.stopLoss], ['trailing stop', a.stops.trailingStop], ['take profit', a.stops.takeProfit]] as const) {
-      if (level?.k === 'atr' && Number.isNaN(atrAt(a, level.n, idx))) return { input, n: level.n };
-    }
-    return null;
-  };
+  const missingInput = (a: A, idx: number) => missingInputAt(p.sizing, a.stops, (n) => atrAt(a, n, idx), (n) => volAt(a, n, idx));
   const skipped: Skipped[] = [];
   /** Whether a buy signalled at the asset's current bar can go ahead; counts it as skipped when it can't. */
   const ready = (a: A): boolean => {
@@ -997,6 +1008,10 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     }
   };
 
+  /** The open position as the sell and add rules read it; null when flat. */
+  const position = (a: A): PosState | null =>
+    a.shares > 0 ? { entryIdx: a.entryIdx, entryPrice: a.entryPrice, lastPrice: a.lastEntryPrice, entries: a.made } : null;
+
   for (let k = 0; k < timeline.length; k++) {
     const t = timeline[k];
     if (k > 0) {
@@ -1046,8 +1061,6 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
 
     // Close: read the rules, then (with fill: close) fill what they decided, then mark the book.
     for (const a of live) a.lastClose = a.bars.c[a.i];
-    const position = (a: A): PosState | null =>
-      a.shares > 0 ? { entryIdx: a.entryIdx, entryPrice: a.entryPrice, lastPrice: a.lastEntryPrice, entries: a.made } : null;
     const sells = (a: A) => a.sig.sell !== null && a.sig.sell(a.i, position(a)) === 1;
     const adds = (a: A) => a.made < steps && !!a.sig.add && a.sig.add(a.i, position(a)) === 1;
     // A buy whose sizing or stop input is still warming up waits for a later signal.
@@ -1185,6 +1198,11 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         const f = a.lastFill;
         st.filled = f && f.t === a.bars.t[a.i] ? { side: f.side, shares: f.shares, price: f.price } : null;
       }
+      if (a.shares > 0) {
+        st.pos = position(a)!;
+        const stop = Math.max(a.hard, trailFrom(a, a.highWater));
+        if (stop > -Infinity || a.target < Infinity) st.levels = { stop: stop > -Infinity ? stop : null, target: a.target < Infinity ? a.target : null };
+      } else if (!p.rank && !a.armed) st.rearming = true;
       return st;
     }),
     costs,
