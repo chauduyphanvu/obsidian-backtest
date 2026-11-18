@@ -380,32 +380,56 @@ export function headerGuess(text: string, saved: Partial<FillColumns> = {}): Hea
 
 /**
  * Reads a `fills columns` setting: `date = Run Date; ticker = Symbol; side = Action; quantity = Quantity; price = Price ($);
- * fees = Commission ($) + Fees ($)`. Parts not named are found by their usual headers. A string is the problem with it.
+ * fees = Commission ($) + Fees ($)`. A header that holds a +, a ; or a quote is written in quotes, with a quote inside
+ * doubled: `fees = "Comm+Fees"`. Parts not named are found by their usual headers. A string is the problem with it.
  */
 export function parseFillColumns(text: string): Partial<FillColumns> | string {
   const out: Partial<FillColumns> = {};
-  for (const part of text.split(';')) {
+  for (const part of splitOutsideQuotes(text, ';')) {
     if (!part.trim()) continue;
-    const m = part.match(/^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$/);
+    const m = part.match(/^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$/s);
     const role = FILL_ROLES.find((r) => r === m?.[1].toLowerCase());
     if (!m || !role) return `"${part.trim()}" does not say which column holds what. Write each as a part, =, and the header, such as price = Price ($); the parts are ${ROLE_FORMS}`;
     if (role in out) return `${role} is named twice`;
     if (!m[2]) return `Write the header of the ${role} column after "${role} ="`;
-    if (role === 'fees') {
-      const headers = m[2].split('+').map((h) => h.trim());
-      if (headers.some((h) => !h)) return 'Write each fees header between the + signs';
-      out.fees = headers;
-    } else out[role] = m[2];
+    const headers = (role === 'fees' ? splitOutsideQuotes(m[2], '+') : [m[2]]).map(unquoted);
+    const open = headers.find((h) => h === null);
+    if (open !== undefined) return `A header in quotes needs its closing quote: ${m[2].slice(m[2].indexOf('"'))}`;
+    if (headers.some((h) => !h)) return 'Write each fees header between the + signs';
+    if (role === 'fees') out.fees = headers as string[];
+    else out[role] = headers[0]!;
   }
   if (Object.keys(out).length === 0) return `Name at least one column, such as date = Trade Date; the parts are ${ROLE_FORMS}`;
   return out;
 }
 
+/** The pieces of `text` between each `sep` that is not inside double quotes. */
+function splitOutsideQuotes(text: string, sep: string): string[] {
+  const out = [''];
+  let quoted = false;
+  for (const ch of text) {
+    if (ch === '"') quoted = !quoted;
+    if (ch === sep && !quoted) out.push('');
+    else out[out.length - 1] += ch;
+  }
+  return out;
+}
+
+/** A header as written, trimmed, without the quotes around it and with a doubled quote inside as one; null for an unclosed quote. */
+function unquoted(written: string): string | null {
+  const h = written.trim();
+  if (!h.startsWith('"')) return h;
+  return /^"(?:[^"]|"")*"$/.test(h) ? h.slice(1, -1).replace(/""/g, '"') : null;
+}
+
+/** A header as `fillColumnsText` writes it: in quotes when it holds a character the setting's own syntax uses. */
+const quotedHeader = (h: string): string => (/[+;"]/.test(h) ? `"${h.replace(/"/g, '""')}"` : h);
+
 /** The text of a `fills columns` setting for these columns: what `parseFillColumns` reads back as the same. */
 export function fillColumnsText(c: Partial<FillColumns>): string {
   return FILL_ROLES.flatMap((role) => {
-    if (role === 'fees') return c.fees?.length ? [`fees = ${c.fees.join(' + ')}`] : [];
-    return c[role] ? [`${role} = ${c[role]}`] : [];
+    if (role === 'fees') return c.fees?.length ? [`fees = ${c.fees.map(quotedHeader).join(' + ')}`] : [];
+    return c[role] ? [`${role} = ${quotedHeader(c[role])}`] : [];
   }).join('; ');
 }
 
@@ -420,12 +444,19 @@ export interface Followed {
   log: FillLog;
   t: number[];
   equity: number[];
+  /** The run's own bars of each ticker it trades, which its prices are converted with; without them its prices are taken as the broker's. */
+  bars?: Map<string, Bars>;
+  /** It fills at the close, so its orders are not netted with those others make at the open of the same bar. */
+  closeFill?: boolean;
 }
 
 /** Prices as the broker sees them, unadjusted for later dividends and splits. */
 export interface RawPrices {
-  /** What a price of the run at time `t` is multiplied by to be the broker's price that day; NaN when that is not known. */
-  factor(ticker: string, t: number): number;
+  /**
+   * What a price of `bars`, one run's own bars of the ticker, is multiplied by to be the broker's price on `day`, and what
+   * its shares are divided by to be the broker's shares that day; NaN when that is not known.
+   */
+  factor(ticker: string, bars: Bars | undefined, day: number): number;
   /** The unadjusted low and high of the ticker's day; null when they are not known. */
   range(ticker: string, day: number): { low: number; high: number } | null;
 }
@@ -442,22 +473,35 @@ function atOrBefore(t: number[], at: number): number {
   return lo - 1;
 }
 
+/** The shortest step between bars: a day for daily bars, a week for weekly ones; Infinity for a single bar, whose step is not known. */
+const steps = new WeakMap<Bars, number>();
+function stepOf(bars: Bars): number {
+  let step = steps.get(bars);
+  if (step === undefined) {
+    step = Infinity;
+    for (let i = 1; i < bars.t.length; i++) step = Math.min(step, bars.t[i] - bars.t[i - 1]);
+    steps.set(bars, step);
+  }
+  return step;
+}
+
 /**
- * The broker's prices for each ticker from the runs' own bars (`own`) and, for the tickers in `adjusted` (Yahoo's and
- * Tiingo's, whose prices are adjusted for later dividends and splits), their bars as traded (`raw`, daily). A run's bar is
- * converted by its close against the raw close of the last day it covers, so a weekly bar is converted at its Friday; an
- * intraday bar, whose close is no day's close, is not converted, and neither is a ticker whose raw bars are missing.
+ * The broker's prices for each ticker in `adjusted` (Yahoo's and Tiingo's, whose prices are adjusted for later dividends
+ * and splits) from their daily bars as traded (`raw`). A run's bar is converted by its close against the raw close of the
+ * last day it covers, so a weekly bar is converted at its Friday; an intraday bar, whose close is no day's close, is not
+ * converted, and neither is a ticker whose raw bars are missing. The prices of other tickers are as traded already, and
+ * their days' ranges are read from the runs' own bars (`own`).
  */
 export function rawPrices(own: Map<string, Bars>, raw: Map<string, Bars>, adjusted: Set<string>): RawPrices {
   return {
-    factor(ticker, t) {
+    factor(ticker, bars, day) {
       if (!adjusted.has(ticker)) return 1;
-      const bars = own.get(ticker);
       const r = raw.get(ticker);
       if (!bars || !r || isIntraday(bars.t)) return NaN;
-      const i = atOrBefore(bars.t, t);
+      const i = atOrBefore(bars.t, day);
       if (i < 0) return NaN;
-      const j = atOrBefore(r.t, (bars.t[i + 1] ?? Infinity) - 1);
+      // A bar covers the days up to the next one, and the last one as many as a step of the bars.
+      const j = atOrBefore(r.t, (bars.t[i + 1] ?? bars.t[i] + stepOf(bars)) - 1);
       return j >= 0 && r.t[j] >= bars.t[i] ? r.c[j] / bars.c[i] : NaN;
     },
     range(ticker, day) {
@@ -479,17 +523,20 @@ export interface MatchOptions {
   from: number;
   /** The `capital at start`; null leaves sizes and money of trades not made unmeasured. */
   capital: number | null;
-  /** The last price of each ticker the strategies trade, in the run's prices. */
+  /** The last price of each ticker the strategies trade, in their prices, for a strategy without bars of its own. */
   last: Record<string, number>;
-  /** The bar times of each ticker the strategies trade. */
-  times: Record<string, number[]>;
+  /**
+   * The days each ticker traded on, as ascending UTC midnights, which lateness is counted in. A ticker without them counts
+   * Monday to Friday, up to the strategies' last bar.
+   */
+  days?: Record<string, number[]>;
   /** Without it, the run's prices are compared as they are and no fill is checked against its day's range. */
   raw?: RawPrices;
-  /** How many bars after the strategies' trade a fill still counts as late rather than off plan. */
-  lateBars?: number;
+  /** How many trading days after the strategies' trade a fill still counts as late rather than off plan. */
+  lateDays?: number;
 }
 
-export const LATE_BARS = 5;
+export const LATE_DAYS = 5;
 /** A trade made under this share of its size has the rest counted as not made, and a day's fills this far over what they matched are oversized. */
 export const PARTIAL = 0.7;
 export const OVERSIZED = 1.3;
@@ -526,8 +573,8 @@ export interface MatchRow {
   model: ModelTrade | null;
   /** The part of your fills of a day on one side that the row covers, with their fees on the first row of them; null for a trade or its rest not made. */
   yours: YourTrade | null;
-  /** For a late fill: how many bars after the strategies' trade it came. */
-  barsLate: number | null;
+  /** For a late fill: how many trading days after the strategies' trade it came. */
+  daysLate: number | null;
   /** Your price against the strategies', in basis points of theirs, worse for you above 0; null when not compared. */
   bps: number | null;
   /** What a fill of the same day cost against the strategies' price, worse for you above 0. */
@@ -580,28 +627,32 @@ function equityAt(s: Followed, from: number): number {
   return s.equity[i];
 }
 
+/** One strategy's part of a trade: its shares at the account's size, above 0, and its price, both in its own bars' terms. */
+interface Part {
+  strategy: number;
+  shares: number;
+  price: number;
+}
+
 /** The strategies' trades of one ticker on one day on one side, at the account's size. */
 interface ModelSide {
   ticker: string;
   day: number;
-  /** The time of its first fill, at which its price is converted. */
-  t: number;
   side: Side;
-  /** Shares at the account's size (per unit of capital without one), above 0, and their value in the run's prices. */
-  quantity: number;
+  parts: Part[];
+  /** The parts' money, in the strategies' own prices: what is the same whatever a later split or dividend did. */
   value: number;
-  /** The moments it is made of, each with its shares (signed) and price: what the trade would have made by the last price. */
-  moments: { shares: number; price: number }[];
   strategies: number[];
 }
 
 /**
- * The strategies' trades from `from` on, sized to the account. A ticker's fills of one day at one price are one moment,
- * such as the open, where the strategies' orders net into one; the moments of a day are then added up on each side apart,
- * so a position opened and stopped out the same day is a purchase and a sale.
+ * The strategies' trades from `from` on, sized to the account. A ticker's orders at one moment, such as the open of a
+ * day, net into one, counted in shares as traded since each strategy's prices may be adjusted by another amount. A stop
+ * is a moment of its own, and so is a strategy's close, so a position opened and stopped out the same day is a purchase
+ * and a sale. A day's moments are then added up on each side apart.
  */
-function modelTrades(strategies: Followed[], opts: MatchOptions): ModelSide[] {
-  const moments = new Map<string, { ticker: string; day: number; t: number; price: number; shares: number; gross: number; strategies: Set<number> }>();
+function modelTrades(strategies: Followed[], opts: MatchOptions, asTraded: (k: number, ticker: string, day: number) => number): ModelSide[] {
+  const moments = new Map<string, { ticker: string; day: number; parts: (Part & { sign: number; traded: number })[] }>();
   strategies.forEach((s, k) => {
     const start = equityAt(s, opts.from);
     const scale = start > 0 ? (s.alloc * (opts.capital ?? 1)) / start : 0;
@@ -613,27 +664,33 @@ function modelTrades(strategies: Followed[], opts: MatchOptions): ModelSide[] {
       held.set(asset, log.sharesAfter[j]);
       const day = Math.floor(log.t[j] / DAY) * DAY;
       if (day < opts.from || change === 0 || scale === 0) continue;
-      const key = `${asset}\u0000${day}\u0000${log.price[j]}`;
+      const at = log.kind[j] === 'stop' ? 'stop' : s.closeFill ? 'close' : 'open';
+      const key = `${asset}\u0000${log.t[j]}\u0000${at}`;
       let m = moments.get(key);
-      if (!m) moments.set(key, (m = { ticker: asset, day, t: log.t[j], price: log.price[j], shares: 0, gross: 0, strategies: new Set() }));
-      m.shares += change * scale;
-      m.gross += Math.abs(change * scale);
-      m.strategies.add(k);
+      if (!m) moments.set(key, (m = { ticker: asset, day, parts: [] }));
+      const shares = Math.abs(change * scale);
+      m.parts.push({ strategy: k, shares, price: log.price[j], sign: Math.sign(change), traded: shares / asTraded(k, asset, day) });
     }
   });
   const sides = new Map<string, ModelSide>();
   for (const m of moments.values()) {
+    const bought = m.parts.reduce((s, p) => s + (p.sign > 0 ? p.traded : 0), 0);
+    const sold = m.parts.reduce((s, p) => s + (p.sign < 0 ? p.traded : 0), 0);
     // Orders that cancel out across the strategies leave nothing to do.
-    if (Math.abs(m.shares) <= 1e-9 * m.gross) continue;
-    const side: Side = m.shares > 0 ? 'buy' : 'sell';
+    if (Math.abs(bought - sold) <= 1e-9 * (bought + sold)) continue;
+    const side: Side = bought > sold ? 'buy' : 'sell';
+    // What is left of the larger side, each of its strategies' orders cut in proportion.
+    const kept = (Math.max(bought, sold) - Math.min(bought, sold)) / Math.max(bought, sold);
     const key = `${m.ticker}\u0000${m.day}\u0000${side}`;
     let s = sides.get(key);
-    if (!s) sides.set(key, (s = { ticker: m.ticker, day: m.day, t: m.t, side, quantity: 0, value: 0, moments: [], strategies: [] }));
-    s.t = Math.min(s.t, m.t);
-    s.quantity += Math.abs(m.shares);
-    s.value += Math.abs(m.shares) * m.price;
-    s.moments.push({ shares: m.shares, price: m.price });
-    s.strategies = [...new Set([...s.strategies, ...m.strategies])].sort((a, b) => a - b);
+    if (!s) sides.set(key, (s = { ticker: m.ticker, day: m.day, side, parts: [], value: 0, strategies: [] }));
+    for (const p of m.parts) {
+      if (!s.strategies.includes(p.strategy)) s.strategies.push(p.strategy);
+      if ((p.sign > 0) !== (side === 'buy')) continue;
+      s.parts.push({ strategy: p.strategy, shares: p.shares * kept, price: p.price });
+      s.value += p.shares * kept * p.price;
+    }
+    s.strategies.sort((a, b) => a - b);
   }
   return [...sides.values()];
 }
@@ -664,17 +721,14 @@ function yourTrades(fills: Fill[], from: number): { ticker: string; trade: YourT
 
 /** The number of trading days of a ticker after `a` up to and including `b`. */
 function daysBetween(days: number[], a: number, b: number): number {
-  const upTo = (d: number) => {
-    let lo = 0;
-    let hi = days.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (days[mid] <= d) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  };
-  return upTo(b) - upTo(a);
+  return atOrBefore(days, b) - atOrBefore(days, a);
+}
+
+/** Monday to Friday from `from` to `to`, as UTC midnights. */
+function weekdays(from: number, to: number): number[] {
+  const out: number[] = [];
+  for (let t = Math.floor(from / DAY) * DAY; t <= to; t += DAY) if (![0, 6].includes(new Date(t).getUTCDay())) out.push(t);
+  return out;
 }
 
 const median = (xs: number[]): number => {
@@ -685,96 +739,112 @@ const median = (xs: number[]): number => {
 
 /**
  * Sets your fills against the strategies' trades, ticker by ticker and side by side, share for share in time order. Each
- * trade is sized as `alloc × capital at start ÷ the strategy's equity when the account started`. Your fills of a day go
- * first to the trade of that day (on time); what is left of a trade then takes what is left of your fills of the
- * `lateBars` trading days after it, earliest first (late). A trade made under `PARTIAL` of its size has the rest as a
- * partial row, or as waiting while its days are not over; one with no fill is skipped, or waiting. What is left of a day of
- * your fills goes with its first row, which is oversized when it is more than `OVERSIZED` of what it matched; a day with
- * no trade is off plan. Without a capital at start each trade and each day of fills counts as one, so a fill matches a
- * trade or does not, and nothing is partial or oversized. The total is exactly the sum of its parts: slippage, fees, late
- * fills and skipped trades.
+ * trade is sized as `alloc × capital at start ÷ the strategy's equity when the account started`, and counted in shares as
+ * traded on the day it is set against, with each strategy's prices converted by its own bars (RawPrices). Your fills of a
+ * day go first to the trade of that day (on time); what is left of a trade then takes what is left of your fills of the
+ * `lateDays` trading days after it, earliest first (late), set against its price on your fill's day, so a split or a
+ * dividend between them is no cost. A trade made under `PARTIAL` of its size has the rest as a partial row, or as waiting
+ * while its days are not over; one with no fill is skipped, or waiting. What is left of a day of your fills goes with its
+ * first row, which is oversized when it is more than `OVERSIZED` of what it matched; a day with no trade is off plan.
+ * Without a capital at start each trade and each day of fills counts as one, so a fill matches a trade or does not, and
+ * nothing is partial or oversized. The total is exactly the sum of its parts: slippage, fees, late fills and skipped trades.
  */
 export function matchFills(strategies: Followed[], fills: Fill[], opts: MatchOptions): Reconciliation {
-  const lateBars = opts.lateBars ?? LATE_BARS;
+  const lateDays = opts.lateDays ?? LATE_DAYS;
   const sized = opts.capital !== null;
   const raw = opts.raw ?? { factor: () => 1, range: () => null };
+  const factor = (k: number, ticker: string, day: number) => raw.factor(ticker, strategies[k].bars?.get(ticker), day);
+  // Shares can still be matched when a price is not known: they are then taken as they are.
+  const asTraded = (k: number, ticker: string, day: number) => {
+    const f = factor(k, ticker, day);
+    return Number.isFinite(f) ? f : 1;
+  };
   const days = new Map<string, number[]>();
   const daysOf = (ticker: string) => {
     let d = days.get(ticker);
-    if (!d) days.set(ticker, (d = [...new Set((opts.times[ticker] ?? []).map((t) => Math.floor(t / DAY) * DAY))].sort((a, b) => a - b)));
+    if (!d) {
+      const end = Math.max(...strategies.map((s) => (s.bars?.get(ticker)?.t ?? s.t).at(-1) ?? -Infinity), ...fills.filter((f) => f.ticker === ticker).map((f) => f.date));
+      days.set(ticker, (d = opts.days?.[ticker] ?? weekdays(opts.from, end)));
+    }
     return d;
   };
   const inOrder = <T extends { ticker: string }>(day: (x: T) => number) => (a: T, b: T) => day(a) - day(b) || a.ticker.localeCompare(b.ticker);
-  const models = modelTrades(strategies, opts).sort(inOrder((m) => m.day));
+  const models = modelTrades(strategies, opts, asTraded).sort(inOrder((m) => m.day));
   const yours = yourTrades(fills, opts.from).sort(inOrder((y) => y.trade.day));
   const before = fills.filter((f) => f.date < opts.from).length;
 
-  // Shares, or one for each trade and each day of fills without sizes.
-  const size = (x: { quantity: number }) => (sized ? x.quantity : 1);
-  const modelLeft = models.map(size);
-  const yoursLeft = yours.map((y) => size(y.trade));
-  const tiny = (x: number, of: number) => x <= 1e-9 * of;
-  const pairs: { mi: number; yi: number; units: number; barsLate: number | null }[] = [];
-  const take = (mi: number, yi: number, barsLate: number | null) => {
-    const units = Math.min(modelLeft[mi], yoursLeft[yi]);
-    if (tiny(units, size(models[mi]))) return;
-    modelLeft[mi] -= units;
-    yoursLeft[yi] -= units;
-    pairs.push({ mi, yi, units, barsLate });
+  /** A trade's shares as traded on `day`, and its price that day; NaN when a strategy's price that day is not known. */
+  const sharesOn = (m: ModelSide, day: number) => m.parts.reduce((s, p) => s + p.shares / asTraded(p.strategy, m.ticker, day), 0);
+  const priceOn = (m: ModelSide, day: number) => (m.parts.every((p) => Number.isFinite(factor(p.strategy, m.ticker, day))) ? m.value / sharesOn(m, day) : NaN);
+  /** What a trade is counted in on `day`: its shares, or one without sizes. */
+  const units = (m: ModelSide, day: number) => (sized ? sharesOn(m, day) : 1);
+
+  // How much of each trade is left, from 1, and of each day of your fills, in shares or as one.
+  const modelLeft = models.map(() => 1);
+  const yoursLeft = yours.map((y) => (sized ? y.trade.quantity : 1));
+  const pairs: { mi: number; yi: number; amount: number; daysLate: number | null }[] = [];
+  const take = (mi: number, yi: number, daysLate: number | null) => {
+    const whole = units(models[mi], yours[yi].trade.day);
+    const amount = Math.min(modelLeft[mi] * whole, yoursLeft[yi]);
+    if (amount <= 1e-9 * whole) return;
+    modelLeft[mi] -= amount / whole;
+    yoursLeft[yi] -= amount;
+    pairs.push({ mi, yi, amount, daysLate });
   };
   const fits = (m: ModelSide, y: { ticker: string; trade: YourTrade }) => y.ticker === m.ticker && y.trade.side === m.side;
   models.forEach((m, mi) => yours.forEach((y, yi) => fits(m, y) && y.trade.day === m.day && take(mi, yi, null)));
   models.forEach((m, mi) => {
-    if (modelLeft[mi] <= (1 - PARTIAL) * size(m)) return;
+    if (modelLeft[mi] <= 1 - PARTIAL) return;
     const all = daysOf(m.ticker);
     yours.forEach((y, yi) => {
       if (!fits(m, y) || y.trade.day <= m.day) return;
-      const bars = daysBetween(all, m.day, y.trade.day);
-      if (bars <= lateBars) take(mi, yi, bars);
+      const late = daysBetween(all, m.day, y.trade.day);
+      if (late <= lateDays) take(mi, yi, late);
     });
   });
 
-  /** A part of a trade of the strategies: `units` of its size. */
-  const part = (m: ModelSide, units: number): ModelTrade => ({
+  /** The part of a trade a row covers, `amount` of what it is counted in on `day`. */
+  const part = (m: ModelSide, amount: number, day: number): ModelTrade => ({
     day: m.day,
     side: m.side,
-    quantity: sized ? units : null,
-    value: sized ? (units * m.value) / m.quantity : null,
-    price: (m.value / m.quantity) * raw.factor(m.ticker, m.t),
+    quantity: sized ? amount : null,
+    value: sized ? (amount / units(m, day)) * m.value : null,
+    price: priceOn(m, day),
     strategies: m.strategies,
   });
-  const blank = (ticker: string, cls: MatchClass): MatchRow => ({ ticker, class: cls, model: null, yours: null, barsLate: null, bps: null, slippage: 0, late: 0, skipped: 0, fees: 0, move: null, outside: false, unpriced: false });
+  const blank = (ticker: string, cls: MatchClass): MatchRow => ({ ticker, class: cls, model: null, yours: null, daysLate: null, bps: null, slippage: 0, late: 0, skipped: 0, fees: 0, move: null, outside: false, unpriced: false });
   const rows: MatchRow[] = [];
 
   yours.forEach((y, yi) => {
-    const own = pairs.filter((p) => p.yi === yi).sort((a, b) => (a.barsLate ?? -1) - (b.barsLate ?? -1));
+    const own = pairs.filter((p) => p.yi === yi).sort((a, b) => (a.daysLate ?? -1) - (b.daysLate ?? -1));
     const left = yoursLeft[yi];
-    const shares = (units: number) => (sized ? units : y.trade.quantity);
+    const whole = sized ? y.trade.quantity : 1;
+    const shares = (amount: number) => (sized ? amount : y.trade.quantity);
     let offPlan = own.length === 0 ? y.trade.quantity : 0;
     let oversized = false;
     const extra = own.map(() => 0);
-    if (own.length > 0 && !tiny(left, size(y.trade))) {
-      const big = left > (OVERSIZED - 1) * (size(y.trade) - left);
+    if (own.length > 0 && left > 1e-9 * whole) {
+      const big = left > (OVERSIZED - 1) * (whole - left);
       if (!big) extra[0] = left;
-      else if (own[0].barsLate === null) [extra[0], oversized] = [left, true];
+      else if (own[0].daysLate === null) [extra[0], oversized] = [left, true];
       else offPlan = left;
     }
     own.forEach((p, k) => {
-      const m = part(models[p.mi], p.units);
-      const trade: YourTrade = { ...y.trade, quantity: shares(p.units) + extra[k], fees: k === 0 ? y.trade.fees : 0 };
+      const m = part(models[p.mi], p.amount, y.trade.day);
+      const trade: YourTrade = { ...y.trade, quantity: shares(p.amount) + extra[k], fees: k === 0 ? y.trade.fees : 0 };
       const range = raw.range(y.ticker, trade.day);
       const unpriced = !Number.isFinite(m.price);
       const outside = range !== null && (trade.price < range.low * (1 - OUTSIDE) || trade.price > range.high * (1 + OUTSIDE));
       const compared = !outside && !unpriced;
       const worse = compared ? sign(m.side) * (trade.price - m.price) * trade.quantity : 0;
       rows.push({
-        ...blank(y.ticker, p.barsLate !== null ? 'late' : k === 0 && oversized ? 'oversized' : 'on time'),
+        ...blank(y.ticker, p.daysLate !== null ? 'late' : k === 0 && oversized ? 'oversized' : 'on time'),
         model: m,
         yours: trade,
-        barsLate: p.barsLate,
-        bps: compared && p.barsLate === null ? (sign(m.side) * (trade.price - m.price) * 1e4) / m.price : null,
-        slippage: p.barsLate === null ? worse : 0,
-        late: p.barsLate === null ? 0 : worse,
+        daysLate: p.daysLate,
+        bps: compared && p.daysLate === null ? (sign(m.side) * (trade.price - m.price) * 1e4) / m.price : null,
+        slippage: p.daysLate === null ? worse : 0,
+        late: p.daysLate === null ? 0 : worse,
         fees: trade.fees,
         outside,
         unpriced,
@@ -788,18 +858,16 @@ export function matchFills(strategies: Followed[], fills: Fill[], opts: MatchOpt
 
   models.forEach((m, mi) => {
     const left = modelLeft[mi];
-    const made = size(m) - left;
-    if (!tiny(made, size(m)) && left <= (1 - PARTIAL) * size(m)) return;
+    if (left < 1 - 1e-9 && left <= 1 - PARTIAL) return;
     const all = daysOf(m.ticker);
-    const last = opts.last[m.ticker];
-    const price = m.value / m.quantity;
-    const waiting = daysBetween(all, m.day, all[all.length - 1] ?? m.day) < lateBars;
-    const notMade = m.moments.reduce((s, x) => s + x.shares * (last - x.price), 0) * (left / size(m));
+    const waiting = daysBetween(all, m.day, all[all.length - 1] ?? m.day) < lateDays;
+    // What it would have made by each strategy's last price, in its own prices.
+    const made = m.parts.reduce((s, p) => s + p.shares * ((strategies[p.strategy].bars?.get(m.ticker)?.c.at(-1) ?? opts.last[m.ticker]) - p.price), 0) * sign(m.side);
     rows.push({
-      ...blank(m.ticker, waiting ? 'waiting' : tiny(made, size(m)) ? 'skipped' : 'partial'),
-      model: part(m, left),
-      skipped: waiting || !sized ? 0 : notMade,
-      move: (sign(m.side) * (last - price)) / price,
+      ...blank(m.ticker, waiting ? 'waiting' : left >= 1 - 1e-9 ? 'skipped' : 'partial'),
+      model: part(m, left * units(m, m.day), m.day),
+      skipped: waiting || !sized ? 0 : left * made,
+      move: made / m.value,
     });
   });
 

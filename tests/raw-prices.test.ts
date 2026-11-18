@@ -132,27 +132,34 @@ test("a run's adjusted price is converted by its bar's close against the close a
   const own = new Map<string, Bars>([['AAPL', bars([99, 100.98, 102.96, 103, 105], { start: day(3) })]]);
   const raw = new Map<string, Bars>([['AAPL', parseYahooRaw(chart(SPLIT), NOW)]]);
   const p = rawPrices(own, raw, new Set(['AAPL']));
+  const adjusted = own.get('AAPL');
   // Monday: 400 as traded against 99 adjusted. Thursday, the ex-dividend day, and after it the two agree.
-  assert.ok(Math.abs(p.factor('AAPL', day(3)) - 400 / 99) < 1e-12);
-  assert.equal(p.factor('AAPL', day(6)), 1);
+  assert.ok(Math.abs(p.factor('AAPL', adjusted, day(3)) - 400 / 99) < 1e-12);
+  assert.equal(p.factor('AAPL', adjusted, day(6)), 1);
   // A day's range is the day's range as traded: 98 to 102 before the split, four times that.
   assert.deepEqual(p.range('AAPL', day(3)), { low: 392, high: 408 });
   assert.equal(p.range('AAPL', day(8)), null);
   // A ticker with no prices as traded, or bars within a day, has no known conversion.
-  assert.ok(Number.isNaN(rawPrices(own, new Map(), new Set(['AAPL'])).factor('AAPL', day(3))));
-  const hourly = new Map<string, Bars>([['AAPL', bars([1, 2, 3], { start: day(3) + 14 * 3_600_000, step: 3_600_000 })]]);
-  assert.ok(Number.isNaN(rawPrices(hourly, raw, new Set(['AAPL'])).factor('AAPL', day(3) + 15 * 3_600_000)));
+  assert.ok(Number.isNaN(rawPrices(own, new Map(), new Set(['AAPL'])).factor('AAPL', adjusted, day(3))));
+  assert.ok(Number.isNaN(p.factor('AAPL', undefined, day(3))));
+  const hourly = bars([1, 2, 3], { start: day(3) + 14 * 3_600_000, step: 3_600_000 });
+  assert.ok(Number.isNaN(p.factor('AAPL', hourly, day(3) + 15 * 3_600_000)));
 });
 
 test("a weekly bar is converted at the last day it covers, and a ticker that is not adjusted keeps the run's prices", () => {
-  const weekly = new Map<string, Bars>([['AAPL', bars([104.5], { start: day(3), step: 7 * DAY })]]);
+  const weekly = bars([104.5], { start: day(3), step: 7 * DAY });
   const raw = new Map<string, Bars>([['AAPL', parseYahooRaw(chart(SPLIT), NOW)]]);
-  // The week's close is Friday's: 105 as traded.
-  assert.ok(Math.abs(rawPrices(weekly, raw, new Set(['AAPL'])).factor('AAPL', day(3)) - 105 / 104.5) < 1e-12);
+  // The week's close is Friday's: 105 as traded, for any day of the week.
+  const p0 = rawPrices(new Map(), raw, new Set(['AAPL']));
+  assert.ok(Math.abs(p0.factor('AAPL', weekly, day(3)) - 105 / 104.5) < 1e-12);
+  assert.ok(Math.abs(p0.factor('AAPL', weekly, day(5)) - 105 / 104.5) < 1e-12);
+  // The last daily bar covers its own day only, not the days after it.
+  const twoDays = bars([99, 100.98], { start: day(3) });
+  assert.ok(Math.abs(p0.factor('AAPL', twoDays, day(7)) - 408 / 100.98) < 1e-12);
   // A Binance ticker: factor 1, and the day's range from the run's own bars, hourly ones included.
   const hourly = new Map<string, Bars>([['BTCUSDT', bars([10, 12, 11], { start: day(3), step: 3_600_000, highs: [11, 13, 12], lows: [9, 11, 10] })]]);
   const p = rawPrices(hourly, new Map(), new Set());
-  assert.equal(p.factor('BTCUSDT', day(3)), 1);
+  assert.equal(p.factor('BTCUSDT', undefined, day(3)), 1);
   assert.deepEqual(p.range('BTCUSDT', day(3)), { low: 9, high: 13 });
 });
 
@@ -160,12 +167,12 @@ test('a fill whose broker price is not known is set against its trade but not co
   const t = [day(3), day(4), day(5), day(6), day(7)];
   const S: Followed = { label: 'S', alloc: 1, t, equity: t.map(() => 10_000), log: { t: [day(3)], asset: ['AAPL'], kind: ['entry'], sharesAfter: [10], price: [99] } };
   const unknown = { factor: () => NaN, range: () => null };
-  // The strategy's 10 shares at 99 are 990 of money: 2.5 shares as traded before the split.
-  const r = matchFills([S], [{ date: day(3), ticker: 'AAPL', side: 'buy', quantity: 2.5, price: 397, fees: 0, line: 2 }], {
+  // Its shares can't be converted either, so the strategy's 10 are taken as they are.
+  const r = matchFills([S], [{ date: day(3), ticker: 'AAPL', side: 'buy', quantity: 10, price: 397, fees: 0, line: 2 }], {
     from: day(3),
     capital: 10_000,
     last: { AAPL: 105 },
-    times: { AAPL: t },
+    days: { AAPL: t },
     raw: unknown,
   });
   assert.deepEqual([r.rows[0].class, r.rows[0].unpriced, r.rows[0].bps, r.rows[0].slippage], ['on time', true, null, 0]);

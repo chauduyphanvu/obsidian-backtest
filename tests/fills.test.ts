@@ -250,7 +250,7 @@ const OPTS: MatchOptions = {
   from: june(1),
   capital: 20_000,
   last: { SPY: 101, TLT: 52, QQQ: 205, IWM: 160, GLD: 170, XLK: 104, XLE: 82, DIA: 401 },
-  times: Object.fromEntries(TICKERS.map((t) => [t, WEEKDAYS])),
+  days: Object.fromEntries(TICKERS.map((t) => [t, WEEKDAYS])),
 };
 
 const summary = (rows: ReturnType<typeof matchFills>['rows']) => rows.map((r) => [new Date((r.model ?? r.yours)!.day).toISOString().slice(5, 10), r.ticker, r.class]);
@@ -305,7 +305,7 @@ test('slippage, fees, late fills and skipped trades, and a total that is exactly
   assert.ok(near(row('TLT', 'partial').skipped, -32) && row('TLT', 'partial').yours === null);
   // QQQ bought two trading days late at 202 against 200: 6 on 3 shares, counted as late, not slippage.
   const qqq = row('QQQ', 'late');
-  assert.equal(qqq.barsLate, 2);
+  assert.equal(qqq.daysLate, 2);
   assert.ok(near(qqq.late, 6) && qqq.slippage === 0 && qqq.bps === null);
   // IWM not bought: 4.8 shares that rose from 150 to 160 are a gain missed.
   assert.ok(near(row('IWM', 'skipped').skipped, 48) && near(row('IWM', 'skipped').move!, 10 / 150));
@@ -375,8 +375,8 @@ test('a fill after the late window is off plan, and the trade it might have been
   ]);
   const inTime = qqqOnly(matchFills([B], [fill(june(10), 'QQQ', 'buy', 3, 202, 0, 2)], OPTS).rows);
   assert.equal(inTime[0].class, 'late');
-  assert.equal(inTime[0].barsLate, 5);
-  assert.equal(qqqOnly(matchFills([B], [fill(june(11), 'QQQ', 'buy', 3, 202, 0, 2)], { ...OPTS, lateBars: 6 }).rows)[0].class, 'late');
+  assert.equal(inTime[0].daysLate, 5);
+  assert.equal(qqqOnly(matchFills([B], [fill(june(11), 'QQQ', 'buy', 3, 202, 0, 2)], { ...OPTS, lateDays: 6 }).rows)[0].class, 'late');
 });
 
 test('a fill on the wrong side is off plan, and one before the trade is not taken as late', () => {
@@ -491,7 +491,7 @@ test('one day of your fills covers two trades of the strategies: what is left af
     ['late', 10, 10, 0, 10, 0],
     ['on time', 10, 10, 0, 0, 0],
   ]);
-  assert.equal(r.rows[0].barsLate, 1);
+  assert.equal(r.rows[0].daysLate, 1);
   assert.equal(r.total, 10);
 });
 
