@@ -4,7 +4,7 @@
 import { DAY } from './format.ts';
 import { emptyBars, type Bars } from './types.ts';
 
-/** A day on which more observations than this were first published together is a backfill: history put in at once. */
+/** A series' first day of publication with more observations than this is a backfill: history put in at once. */
 export const BACKFILL = 5;
 
 /**
@@ -83,10 +83,12 @@ function onDays(published: number[]): string {
  * the newest one known that day, so `t` grows with every row. A missing value ("."), and a row whose date cannot be read,
  * is left out. Values may be zero or below.
  *
- * ALFRED's first vintage of a series often holds its whole history, published on the day the series was added. More than
- * BACKFILL observations first published on one day are taken for such a backfill, and each of them is dated instead the
- * median delay after its period's last day that the other observations show, or a whole period later when none shows it;
- * never later than its own publication, when that came after its period.
+ * ALFRED's first vintage of a series often holds its whole history, published on the day the series was added, as the
+ * figures known that day. When more than BACKFILL observations were first published on the series' first day, they are
+ * taken for such a backfill, and each of them is dated instead the median delay after its period's last day that the
+ * other observations show, or a whole period later when none shows it; never later than its own publication, when that
+ * came after its period. Its value stays the one of that first vintage. Many values first published on a later day are a
+ * real publication, such as a week's values put out at once, and are dated by it.
  */
 export function parseFred(json: string, id: string): FredSeries {
   const body = JSON.parse(json) as { observations?: unknown };
@@ -105,9 +107,11 @@ export function parseFred(json: string, id: string): FredSeries {
   const obs = [...first.values()].sort((a, b) => a.date - b.date);
   const period = periods(obs.map((o) => o.date));
 
-  const together = new Map<number, number>();
-  for (const o of obs) if (Number.isFinite(o.published)) together.set(o.published, (together.get(o.published) ?? 0) + 1);
-  const backfilled = (o: Observation) => !Number.isFinite(o.published) || together.get(o.published)! > BACKFILL;
+  // Only the first day can be the backfill: a later day with many values is a real publication, such as a week's values
+  // put out together, and is dated as such.
+  const firstDay = obs.reduce((m, o) => (o.published < m ? o.published : m), Infinity);
+  const backfillDay = obs.filter((o) => o.published === firstDay).length > BACKFILL ? firstDay : NaN;
+  const backfilled = (o: Observation) => !Number.isFinite(o.published) || o.published === backfillDay;
   const delays = obs.filter((o) => !backfilled(o) && o.published >= period.lastDay(o.date)).map((o) => o.published - period.lastDay(o.date));
   const delay = delays.length ? Math.round(median(delays) / DAY) * DAY : null;
 
@@ -142,7 +146,10 @@ export function parseFred(json: string, id: string): FredSeries {
         : delay === 0
           ? 'on the last day of its period, the usual delay of the values published later'
           : `${days(delay / DAY)} after the last day of its period, the median delay of the values published later`;
-    note = `FRED first published ${redated.length} ${redated.length === 1 ? 'value' : 'values'} of ${id} (dated ${span}) together ${onDays(redated.map((o) => o.published))}, so each is dated ${how}, and never later than it was published.`;
+    note =
+      `FRED first published ${redated.length} ${redated.length === 1 ? 'value' : 'values'} of ${id} (dated ${span}) together ${onDays(redated.map((o) => o.published))}, ` +
+      `so each is dated ${how}, and never later than it was published. ` +
+      `${redated.length === 1 ? 'It is' : 'They are'} the figures of that first release, which may already include later revisions: only the dates are estimates.`;
   }
   return { bars: { ...bars, values: true }, note };
 }

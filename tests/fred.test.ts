@@ -105,8 +105,27 @@ test('more than 5 values first published on one day are a backfill, dated by the
   assert.equal(t.length, 19);
   assert.equal(
     s.note,
-    'FRED first published 16 values of UNRATE (dated 2009-01-01 to 2010-04-01) together on 2010-05-03, so each is dated 13 days after the last day of its period, the median delay of the values published later, and never later than it was published.',
+    'FRED first published 16 values of UNRATE (dated 2009-01-01 to 2010-04-01) together on 2010-05-03, so each is dated 13 days after the last day of its period, the median delay of the values published later, and never later than it was published. They are the figures of that first release, which may already include later revisions: only the dates are estimates.',
   );
+});
+
+test('only the first day a series was published on can be a backfill: values published together later are dated the day they came out', () => {
+  // ALFRED's first vintage, on Monday 5 January 2015, holds December 2014. After it, each week's seven values, Thursday
+  // to Wednesday, come out together on the Monday after the week ends.
+  const rows: [string, string, string][] = Array.from({ length: 31 }, (_, i) => [iso(Date.UTC(2014, 11, 1 + i)), '2015-01-05', '1']);
+  const weeks = 6;
+  for (let w = 0; w < weeks; w++) {
+    const thursday = Date.UTC(2015, 0, 1 + 7 * w);
+    for (let k = 0; k < 7; k++) rows.push([iso(thursday + k * DAY), iso(thursday + 11 * DAY), String(2 + w)]);
+  }
+  const s = parseFred(fredJson(rows), 'DFF');
+  const t = s.bars.t.map(iso);
+  // After the backfill, one row on each Monday a week came out, holding its Wednesday's value.
+  const after = t.findIndex((d) => d > '2015-01-05');
+  assert.deepEqual(t.slice(after), Array.from({ length: weeks }, (_, w) => iso(Date.UTC(2015, 0, 12 + 7 * w))));
+  assert.deepEqual(s.bars.c.slice(after), Array.from({ length: weeks }, (_, w) => 2 + w));
+  assert.ok(t.slice(0, after).every((d) => d <= '2015-01-05'));
+  assert.equal(s.note?.startsWith('FRED first published 31 values of DFF (dated 2014-12-01 to 2014-12-31) together on 2015-01-05,'), true, s.note!);
 });
 
 test('exactly 5 values published on one day are taken as published', () => {
