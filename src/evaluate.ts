@@ -183,6 +183,10 @@ export interface PosState {
   /** Absent for a position bought in one entry, whose last entry is its only one. */
   lastPrice?: number;
   entries?: number;
+  /** Absent for a long position. */
+  short?: true;
+  /** Present with `fill: close`: the first entry filled at the close of its bar, so that bar's range came before the fill. */
+  atClose?: true;
 }
 
 /** A rule evaluated one bar at a time: 1, 0 or NaN at bar `i`, given the open position (null when flat). */
@@ -221,6 +225,8 @@ function compare(op: CmpOp, a: number, b: number, pa: number, pb: number): numbe
       return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : a > b && pa <= pb ? 1 : 0;
     case 'xdn':
       return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : a < b && pa >= pb ? 1 : 0;
+    case 'xany':
+      return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : (a > b && pa <= pb) || (a < b && pa >= pb) ? 1 : 0;
   }
 }
 
@@ -297,6 +303,11 @@ export class Evaluator {
         if (e.name === 'bars_held') return (i, p) => (p ? i - p.entryIdx : NaN);
         if (e.name === 'last_entry_price') return (_, p) => (p ? (p.lastPrice ?? p.entryPrice) : NaN);
         if (e.name === 'entries_made') return (_, p) => (p ? (p.entries ?? 1) : NaN);
+        if (e.name === 'position_return') {
+          const c = this.bars(asset).c;
+          return (i, p) => (p ? (p.short ? 1 - c[i] / p.entryPrice : c[i] / p.entryPrice - 1) : NaN);
+        }
+        if (e.name === 'highest_since_entry' || e.name === 'lowest_since_entry') return this.sinceEntry(asset, e.name === 'highest_since_entry');
         return (_, p) => (p ? p.entryPrice : NaN);
       case 'math': {
         const a = this.compile(e.args[0], asset);
@@ -315,7 +326,7 @@ export class Evaluator {
       case 'cmp': {
         const [a, b, op] = [this.compile(e.a, asset), this.compile(e.b, asset), e.op];
         // A cross reads the previous bar with the same position, so "bars held" is one less there.
-        const crosses = op === 'xup' || op === 'xdn';
+        const crosses = op === 'xup' || op === 'xdn' || op === 'xany';
         return (i, p) => compare(op, a(i, p), b(i, p), crosses && i > 0 ? a(i - 1, p) : NaN, crosses && i > 0 ? b(i - 1, p) : NaN);
       }
       case 'logic': {
@@ -329,6 +340,31 @@ export class Evaluator {
     }
     // The parser keeps position values out of lags, "of" and indicator inputs.
     throw new Error(`Position values can't be used inside ${e.k}`);
+  }
+
+  /**
+   * The highest high (or lowest low) since the position's first entry, read at bar `i`: the entry's price before slippage, then
+   * each bar's range from the bar it filled at, whose range counts only when it filled at that bar's open. It is what the
+   * trailing stop's high-water mark holds. A position's bars are read one after another, so it keeps the running value.
+   */
+  private sinceEntry(asset: string, highest: boolean): BarRule {
+    const bars = this.bars(asset);
+    const range = highest ? bars.h : bars.l;
+    let entry = -1;
+    let atClose = false;
+    let upto = -1;
+    let value = NaN;
+    return (i, p) => {
+      if (!p || i < p.entryIdx) return NaN;
+      const first = p.entryIdx + (p.atClose ? 1 : 0);
+      if (p.entryIdx !== entry || !!p.atClose !== atClose || i < upto) {
+        [entry, atClose, upto] = [p.entryIdx, !!p.atClose, first - 1];
+        value = (p.atClose ? bars.c : bars.o)[p.entryIdx];
+      }
+      for (let j = upto + 1; j <= i; j++) value = highest ? Math.max(value, range[j]) : Math.min(value, range[j]);
+      upto = Math.max(upto, i);
+      return value;
+    };
   }
 
   /** The index of `other`'s bar that `of` reads for `asset`'s bar `i`; -1 when none had ended. */
@@ -498,6 +534,8 @@ export class Evaluator {
         return ind.correl(this.readsEarly(e.src!, asset) ? ind.lag(bars.c, 1) : bars.c, src, a);
       case 'bars_since':
         return ind.barsSince(src);
+      case 'count':
+        return ind.count(src, a);
       case 'stoch_k':
         return ind.stochK(bars.h, bars.l, bars.c, a, b);
       case 'stoch_d':

@@ -2,11 +2,11 @@ import { DAY } from './format.ts';
 import { columnName, DATA_SOURCES, plainSource, SOURCE_PREFIX, type Asset, type AssetRef, type DataSource, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
-export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn';
+export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn' | 'xany';
 /** Values read from the bar's UTC date. */
 export type CalName = 'month' | 'day' | 'weekday' | 'year' | 'month_start' | 'month_end';
 /** Values that belong to the open position, so only sell and add rules can read them. */
-export type PosName = 'bars_held' | 'entry_price' | 'last_entry_price' | 'entries_made';
+export type PosName = 'bars_held' | 'entry_price' | 'last_entry_price' | 'entries_made' | 'highest_since_entry' | 'lowest_since_entry' | 'position_return';
 
 // `params` on `ind`, `param` on `lag` and `nParam` below name the parameter a period or a lag came
 // from, when one did, so the history loaded can cover every value of its range (see lookbackBars).
@@ -240,6 +240,7 @@ export const INDICATORS: Record<string, IndicatorDef> = {
   percent_rank: { src: 'close', params: [null] },
   slope: { src: 'close', params: [null], min: 2 },
   correl: { src: 'close', params: [null], min: 2, lead: 'series' },
+  count: { src: null, params: [null], lead: 'condition' },
   bars_since: { src: null, params: [], lead: 'condition' },
 };
 
@@ -249,7 +250,15 @@ export const CONDITIONS = ['supertrend_up'];
 export const SERIES: SeriesName[] = ['open', 'high', 'low', 'close', 'volume'];
 export const CALENDAR: CalName[] = ['month', 'day', 'weekday', 'year', 'month_start', 'month_end'];
 /** How each position value is written. */
-export const POSITION: Record<PosName, string> = { bars_held: 'bars held', entry_price: 'entry price', last_entry_price: 'last entry price', entries_made: 'entries made' };
+export const POSITION: Record<PosName, string> = {
+  bars_held: 'bars held',
+  entry_price: 'entry price',
+  last_entry_price: 'last entry price',
+  entries_made: 'entries made',
+  highest_since_entry: 'highest since entry',
+  lowest_since_entry: 'lowest since entry',
+  position_return: 'position return',
+};
 export const BINANCE_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const YAHOO_INTERVALS = ['1d', '1w'];
 /**
@@ -279,6 +288,7 @@ export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 export const RESERVED = new Set([
   'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
   'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
+  'between', 'within', 'highest_since_entry', 'lowest_since_entry', 'position_return',
   ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
 ]);
 
@@ -288,6 +298,10 @@ export const PARAM_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*(.*)$/;
 /** A number as a setting or parameter writes it, with an optional `%`. */
 export const NUM = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?`;
 const PARAM_VALUE = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(${NUM})(?:\s+step\s+(${NUM}))?)?$`, 'id');
+/** What a parameter's value starts with: a number, alone or followed by `in`. Any other value after `name =` defines a name. */
+const PARAM_SHAPE = new RegExp(String.raw`^(?:${NUM})(?:\s+in\b|$)`, 'i');
+/** Whether the value of a `name = value` line is a parameter's (an empty one is too, so the parameter's message explains it). */
+export const isParamValue = (value: string): boolean => value === '' || PARAM_SHAPE.test(value);
 const MAX_PARAM_VALUES = 200;
 /** The longest period a function or a setting can take, so a range reaching past it needs no more history than this. */
 export const MAX_PERIOD = 10_000;
@@ -297,6 +311,8 @@ const ATR_DISTANCE = /^(\d+(?:\.\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*(?=\s))\s*atr\
 /** A setting's name: words with runs of spaces between them, so no two parts of the pattern compete for the same spaces. */
 const SETTING_NAME = /^([A-Za-z]+(?: +[A-Za-z]+)*)\s*:/;
 const SETTING_LINE = new RegExp(SETTING_NAME.source + String.raw`\s*(.*)$`);
+/** The most tokens of definitions that reading one rule may go through, so definitions built from definitions cannot grow without bound. */
+const MAX_GROWN = 3000;
 /** Deepest an expression may nest: brackets, function calls and operators each add a level. */
 const MAX_DEPTH = 64;
 const TOO_DEEP = `This rule nests too deeply. Keep it to at most ${MAX_DEPTH} levels of brackets, functions and operators`;
@@ -315,6 +331,18 @@ class SpecError extends Error {
     this.at = at;
   }
 }
+
+/** A position value read where no position can be: kept apart so a definition that reads one is blamed at its use. */
+class PositionError extends SpecError {
+  pos: PosName;
+  constructor(at: At, message: string, pos: PosName) {
+    super(at, message);
+    this.pos = pos;
+  }
+}
+
+/** Stops a rule that uses a definition with an error of its own, which is reported on the definition's line, not again here. */
+class Quiet extends Error {}
 
 function diag(at: At, message: string): Diagnostic {
   return at.from === undefined ? { line: at.line, message } : { line: at.line, message, from: at.from, to: at.to };
@@ -411,6 +439,9 @@ export function isBool(e: Expr): boolean {
 
 const COLUMN_USAGE = 'column needs the name of a column in brackets, as in column(score) of signals. A name is letters, digits and underscores; a header with spaces goes in quotes, as in column("News Sentiment")';
 
+/** Whether the text of a rule's part is one bare name: for a part that joins conditions, only a definition's name reads like that. */
+export const isNameText = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(text);
+
 /** The first position value the expression reads, or null when it reads none. */
 export function findPos(e: Expr): PosName | null {
   switch (e.k) {
@@ -502,8 +533,31 @@ function notCsv(name: string, asset: string, source: Source): string {
   return `${asset} comes from ${SOURCE_NAME[source]}, not from a CSV file, so it has no column called ${name}. Name the file, as in ${COLUMN_EXAMPLE.replace('score', name)}`;
 }
 
+/** A `name = expression` line: a name for a condition or a number, replaced by its expression wherever it is used. */
+interface Definition {
+  /** As written. */
+  name: string;
+  nameAt: At;
+  line: number;
+  /** Its expression's tokens, with the end token last. */
+  toks: Tok[];
+  /** `new` until its expression is checked on its own, then `ok`, or `bad` once an error was reported on its line. */
+  state: 'new' | 'busy' | 'ok' | 'bad';
+  used: boolean;
+  /** Whether it is a condition rather than a number, once checked. */
+  bool?: boolean;
+}
+
 interface ExprContext {
   resolveAsset(sym: Tok): string;
+  defs: Map<string, Definition>;
+  /**
+   * Checks a definition's expression on its own, once, where position values are allowed; false when it has an error.
+   * `via` is the token that names it, in the definition being read when it is read from another.
+   */
+  checkDef(d: Definition, via?: Tok): boolean;
+  /** Reading a definition to check it, not to use it: it is not counted as used. */
+  checking?: true;
   /** Where a ticker `resolveAsset` named gets its prices from. */
   sourceOf(name: string): Source | null;
   params: Map<string, Param>;
@@ -525,24 +579,39 @@ class ExprParser {
   private depths = new WeakMap<Expr, number>();
   /** The first and last token of each expression, its brackets included. */
   private spans = new Map<Expr, [number, number]>();
+  /** Text and place of the nodes that are not made of this parser's own tokens: a definition's, and ones made up for `between` and windows. */
+  private told = new Map<Expr, { text: string; at: At | null }>();
   /** Numbers that are a parameter's value, with its name. */
   private paramOf = new Map<Expr, string>();
+  /** The expression a definition stands for where it is used, with the definition's name. */
+  private defUse = new Map<Expr, string>();
   /** Parameters read, by their declared names. */
   private used = new Set<string>();
+  /** How many tokens of definitions have been read so far for the expression, nested ones included, shared with the parsers that read them. */
+  private grown: { tokens: number };
 
-  constructor(toks: Tok[], ctx: ExprContext) {
+  constructor(toks: Tok[], ctx: ExprContext, parent?: ExprParser) {
     this.toks = toks;
     this.ctx = ctx;
+    this.nesting = parent?.nesting ?? 0;
+    this.grown = parent?.grown ?? { tokens: 0 };
   }
 
   /** The parsed expression as written; call after parseCondition or parseNumber. */
   written(root: Expr): Written {
     const parts: string[] = [];
-    walk(root, (e) => {
-      const s = this.spans.get(e);
-      parts.push(s ? this.ctx.text(this.toks[s[0]], this.toks[s[1]]) : '');
-    });
+    walk(root, (e) => parts.push(this.textOf(e)));
     return { text: this.ctx.text(this.toks[0], this.toks[this.toks.length - 2]), parts, params: [...this.used] };
+  }
+
+  private textOf(e: Expr): string {
+    const s = this.spans.get(e);
+    return s ? this.ctx.text(this.toks[s[0]], this.toks[s[1]]) : (this.told.get(e)?.text ?? '');
+  }
+
+  private placeOf(e: Expr): At | null {
+    const s = this.spans.get(e);
+    return s ? span(this.toks[s[0]], this.toks[s[1]]) : (this.told.get(e)?.at ?? null);
   }
 
   private mark<T extends Expr>(e: T, start: number): T {
@@ -550,10 +619,40 @@ class ExprParser {
     return e;
   }
 
+  /** A copy of `e` that reads as `e` does: the same text, place and depth for every node. */
+  private copy<T extends Expr>(e: T): T {
+    const out = structuredClone(e);
+    const was: Expr[] = [];
+    walk(e, (x) => was.push(x));
+    let k = 0;
+    walk(out, (y) => {
+      const x = was[k++];
+      const s = this.spans.get(x);
+      if (s) this.spans.set(y, s);
+      else this.told.set(y, { text: this.textOf(x), at: this.placeOf(x) });
+      const d = this.depths.get(x);
+      if (d !== undefined) this.depths.set(y, d);
+    });
+    return out;
+  }
+
+  /** `e` as text for a node made up from it. */
+  private said<T extends Expr>(e: T, text: string): T {
+    this.told.set(e, { text, at: null });
+    return e;
+  }
+
   parseCondition(): Expr {
     const e = this.or();
     this.expectEnd();
     if (!isBool(e)) throw new SpecError(this.spanFrom(0), 'A rule needs a condition, such as close > sma(200)');
+    return e;
+  }
+
+  /** A definition's expression: a condition or a number. */
+  parseValue(): Expr {
+    const e = this.or();
+    this.expectEnd();
     return e;
   }
 
@@ -658,10 +757,15 @@ class ExprParser {
     if (t.t !== 'id') return null;
     if (t.s === 'crosses') {
       this.next();
-      const dir = this.next();
-      if (dir.t === 'id' && dir.s === 'above') return 'xup';
-      if (dir.t === 'id' && dir.s === 'below') return 'xdn';
-      throw new SpecError(at(dir), 'Expected "above" or "below" after "crosses"');
+      if (this.isId('above')) {
+        this.next();
+        return 'xup';
+      }
+      if (this.isId('below')) {
+        this.next();
+        return 'xdn';
+      }
+      return 'xany';
     }
     if (t.s === 'is') {
       const after = this.toks[this.i + 1];
@@ -681,15 +785,83 @@ class ExprParser {
   private cmp(): Expr {
     const start = this.i;
     const a = this.sum();
+    if (this.isId('between')) return this.windows(this.between(a, start), start);
     const t = this.peek();
     const op = this.cmpOp();
-    if (!op) return a;
+    if (!op) return this.windows(a, start);
     const b = this.sum();
-    const e: Expr = this.mark(this.node({ k: 'cmp', op, a: this.needNum(a, t, 'A comparison'), b: this.needNum(b, t, 'A comparison') }, t, a, b), start);
+    // Two conditions can be compared for equality, as in uptrend of SPY == false: they are 1 and 0 where they are known.
+    const conditions = (op === '==' || op === '!=') && isBool(a) && isBool(b);
+    const e: Expr = this.mark(
+      this.node({ k: 'cmp', op, a: conditions ? a : this.needNum(a, t, 'A comparison'), b: conditions ? b : this.needNum(b, t, 'A comparison') }, t, a, b),
+      start,
+    );
     const pa = barePrice(a);
     const pb = barePrice(b);
     const price = pa !== undefined && isFixed(b) ? pa : pb !== undefined && isFixed(a) ? pb : undefined;
     if (price !== undefined) this.ctx.priceVsNumber(this.spanFrom(start), price);
+    return this.windows(e, start);
+  }
+
+  /** `a between lo and hi`: a >= lo and a <= hi, with a read twice. */
+  private between(a: Expr, start: number): Expr {
+    const t = this.next();
+    const example = 'rsi(2) between 10 and 30';
+    const lo = this.sum();
+    if (!this.isId('and')) throw new SpecError(at(this.peek()), `"between" takes two values joined by "and", as in ${example}`);
+    this.next();
+    const hi = this.sum();
+    this.needNum(a, t, '"between"');
+    this.needNum(lo, t, '"between"');
+    this.needNum(hi, t, '"between"');
+    const [aText, loText, hiText] = [this.textOf(a), this.textOf(lo), this.textOf(hi)];
+    const low = this.said(this.node({ k: 'cmp', op: '>=', a, b: lo }, t, a, lo), `${aText} >= ${loText}`);
+    const again = this.copy(a);
+    const high = this.said(this.node({ k: 'cmp', op: '<=', a: again, b: hi }, t, again, hi), `${aText} <= ${hiText}`);
+    const e: Expr = this.mark(this.node({ k: 'logic', op: 'and', a: low, b: high }, t, low, high), start);
+    const pa = barePrice(a);
+    if (pa !== undefined && (isFixed(lo) || isFixed(hi))) this.ctx.priceVsNumber(this.spanFrom(start), pa);
+    return e;
+  }
+
+  /**
+   * `cond for n bars` and `cond within n bars`, read on the comparison, so `a and b for 3 bars` is `a and (b for 3 bars)`:
+   * count(cond, n) is n, or at least 1.
+   */
+  private windows(cond: Expr, start: number): Expr {
+    let e = cond;
+    while (this.isId('for') || this.isId('within')) {
+      const t = this.next();
+      const every = t.s === 'for';
+      const example = every ? 'close > sma(200) for 3 bars' : 'close > sma(200) within 3 bars';
+      if (!isBool(e)) throw new SpecError(at(t), `"${t.s}" needs a condition before it, as in ${example}`);
+      const n = this.next();
+      const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
+      const v = n.t === 'num' ? n.v : p?.value;
+      if (n.t === 'id' && this.ctx.defs.has(n.s)) {
+        throw new SpecError(at(n), `"${n.s}" is a definition, and the number of bars must be a number or a parameter. Declare it as a parameter instead, as in ${n.s} = 3`);
+      }
+      if (v === undefined || !Number.isInteger(v) || v < 1 || v > MAX_PERIOD) {
+        throw new SpecError(at(n), `"${t.s}" needs a whole number of bars from 1 to ${MAX_PERIOD}, as in ${example}`);
+      }
+      const unit = this.next();
+      if (unit.t !== 'id' || (unit.s !== 'bars' && unit.s !== 'bar')) throw new SpecError(at(unit), `Write "bars" after the number, as in ${example}`);
+      const pos = findPos(e);
+      if (pos) {
+        throw new SpecError(
+          this.spanFrom(start),
+          `"${POSITION[pos]}" can't be read over several bars: it only exists for the open position at this bar. Read it outside the window, as in sell when bars held > 5 and close < sma(20) for 3 bars`,
+        );
+      }
+      if (p) this.used.add(p.name);
+      const [condText, nText] = [this.textOf(e), this.ctx.text(n, n)];
+      const counted: Expr = this.said(
+        this.node(p ? { k: 'ind', fn: 'count', src: e, args: [v], params: [p.name] } : { k: 'ind', fn: 'count', src: e, args: [v] }, t, e),
+        `count(${condText}, ${nText})`,
+      );
+      const target = this.said(this.node({ k: 'num', v: every ? v : 1 }, t), every ? nText : '1');
+      e = this.mark(this.node({ k: 'cmp', op: every ? '==' : '>=', a: counted, b: target }, t, counted, target), start);
+    }
     return e;
   }
 
@@ -734,6 +906,9 @@ class ExprParser {
         const n = this.next();
         const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
         const v = n.t === 'num' ? n.v : p?.value;
+        if (n.t === 'id' && this.ctx.defs.has(n.s)) {
+          throw new SpecError(at(n), `"${n.s}" is a definition, and bars ago must be a whole number or a parameter. Declare it as a parameter instead, as in ${n.s} = 5`);
+        }
         if (v === undefined || !Number.isInteger(v) || v < 0) throw new SpecError(at(n), 'Bars ago must be a whole number, as in close[1]');
         this.expect(']');
         const pos = findPos(e);
@@ -775,10 +950,13 @@ class ExprParser {
       if ((SERIES as string[]).includes(t.s)) return { k: 'series', name: t.s as SeriesName };
       if (t.s === 'min' || t.s === 'max' || t.s === 'abs') return this.math(t);
       if (t.s === 'column' && this.isOp('(')) return this.column(t);
+      if ((t.s === 'highest' || t.s === 'lowest') && this.isId('since')) return this.position(t)!;
       if (t.s in INDICATORS) return this.indicator(t);
       if ((CALENDAR as string[]).includes(t.s)) return { k: 'cal', name: t.s as CalName };
       const pos = this.position(t);
       if (pos) return pos;
+      const d = this.ctx.defs.get(t.s);
+      if (d) return this.definition(t, d);
       const p = this.ctx.params.get(t.s);
       if (p) {
         this.used.add(p.name);
@@ -792,6 +970,7 @@ class ExprParser {
         `Functions: ${Object.keys(INDICATORS).join(', ')}, min, max, abs, column`,
         `Dates: ${CALENDAR.join(', ')}`,
         ...(this.ctx.params.size ? [`Parameters: ${[...this.ctx.params.values()].map((x) => x.name).join(', ')}`] : []),
+        ...(this.ctx.defs.size ? [`Definitions: ${[...this.ctx.defs.values()].map((x) => x.name).join(', ')}`] : []),
       ];
       throw new SpecError(at(t), `Unknown name "${t.s}". ${known.join('. ')}`);
     }
@@ -812,18 +991,24 @@ class ExprParser {
 
   /** Each column the expression reads from its rule's own ticker, with where it was written. */
   ownColumns(root: Expr): { name: string; at: At }[] {
-    return ownColumns(root).map((e) => {
-      const [a, b] = this.spans.get(e)!;
-      return { name: e.name, at: span(this.toks[a], this.toks[b]) };
-    });
+    return ownColumns(root).map((e) => ({ name: e.name, at: this.placeOf(e)! }));
   }
 
   private position(t: Tok): Expr | null {
     let name: PosName;
     let end = t;
     const pairs: Record<string, [string, PosName]> = { bars: ['held', 'bars_held'], entry: ['price', 'entry_price'], entries: ['made', 'entries_made'] };
-    if (t.s === 'bars_held' || t.s === 'entry_price' || t.s === 'last_entry_price' || t.s === 'entries_made') {
-      name = t.s;
+    if (Object.hasOwn(POSITION, t.s)) {
+      name = t.s as PosName;
+    } else if ((t.s === 'highest' || t.s === 'lowest') && this.isId('since')) {
+      this.next();
+      if (!this.isId('entry')) throw new SpecError(at(this.peek()), `"${t.s} since" needs "entry" after it, as in ${t.s} since entry`);
+      end = this.next();
+      name = t.s === 'highest' ? 'highest_since_entry' : 'lowest_since_entry';
+    } else if (t.s === 'position' && this.isId('return')) {
+      // "position" alone stays free for a parameter's name.
+      end = this.next();
+      name = 'position_return';
     } else if (Object.hasOwn(pairs, t.s)) {
       const [second, full] = pairs[t.s];
       if (!this.isId(second)) throw new SpecError(at(t), `"${t.s}" on its own is not a name. Write "${t.s} ${second}"`);
@@ -837,8 +1022,31 @@ class ExprParser {
     } else {
       return null;
     }
-    if (!this.ctx.positions) throw new SpecError(span(t, end), `"${POSITION[name]}" only makes sense in a sell, cover or add rule`);
+    if (!this.ctx.positions) throw new PositionError(span(t, end), `"${POSITION[name]}" only makes sense in a sell, cover or add rule`, name);
     return { k: 'pos', name };
+  }
+
+  /** A definition used: its expression read again where it stands, so a position value in it is checked for this rule. */
+  private definition(t: Tok, d: Definition): Expr {
+    if (!this.ctx.checkDef(d, t)) throw new Quiet();
+    if ((this.grown.tokens += d.toks.length) > MAX_GROWN) {
+      throw new SpecError(at(t), 'This rule grows too big once its definitions are filled in. Use fewer definitions inside definitions, or write them shorter');
+    }
+    const sub = new ExprParser(d.toks, this.ctx, this);
+    let root: Expr;
+    try {
+      root = sub.parseValue();
+    } catch (e) {
+      if (e instanceof PositionError) throw new PositionError(at(t), `"${d.name}" reads "${POSITION[e.pos]}", which only makes sense in a sell, cover or add rule`, e.pos);
+      throw e;
+    }
+    if (!this.ctx.checking) d.used = true;
+    for (const n of sub.used) this.used.add(n);
+    walk(root, (x) => this.told.set(x, { text: sub.textOf(x), at: sub.placeOf(x) }));
+    this.told.delete(root);
+    this.depths.set(root, sub.depths.get(root) ?? 1);
+    this.defUse.set(root, d.name);
+    return root;
   }
 
   private args(): { e: Expr; at: At }[] {
@@ -877,11 +1085,14 @@ class ExprParser {
     let src: Expr | null = def.src ? { k: 'series', name: def.src } : null;
     let rest = args;
     if (def.lead === 'condition') {
-      const example = `${t.s}(close crosses above sma(50))`;
-      if (args.length !== 1) throw new SpecError(this.spanFrom(start), `${t.s}() takes one condition, as in ${example}`);
+      const counts = def.params.length > 0;
+      const example = counts ? `${t.s}(close > close[1], 10)` : `${t.s}(close crosses above sma(50))`;
+      if (args.length !== 1 + def.params.length) {
+        throw new SpecError(this.spanFrom(start), counts ? `${t.s}() takes a condition and a number of bars, as in ${example}` : `${t.s}() takes one condition, as in ${example}`);
+      }
       if (!isBool(args[0].e)) throw new SpecError(args[0].at, `${t.s}() needs a condition, not a number, as in ${example}`);
       src = args[0].e;
-      rest = [];
+      rest = args.slice(1);
     } else if (def.lead === 'series') {
       if (args.length === 0 || args[0].e.k === 'num') throw new SpecError(this.spanFrom(start), `${t.s}() needs the other ticker's series first, as in ${t.s}(close of SPY, 60)`);
       src = this.needNum(args[0].e, t, `${t.s}()`);
@@ -903,6 +1114,8 @@ class ExprParser {
         if (dflt === null) throw new SpecError(this.spanFrom(start), `${t.s}() needs a period, as in ${t.s}(${def.lead === 'series' ? 'close of SPY, 20' : '20'})`);
         return dflt;
       }
+      const named = this.defUse.get(a.e);
+      if (named !== undefined) throw new SpecError(a.at, `"${named}" is a definition, and ${t.s}() needs a plain number for its period. Declare it as a parameter instead, as in ${named} = 20`);
       if (a.e.k !== 'num') throw new SpecError(a.at, `${t.s}() periods must be plain numbers`);
       const n = a.e.v;
       const noun = def.real?.[i];
@@ -1093,14 +1306,20 @@ interface SettingLine {
 
 type RuleSide = 'buy' | 'sell' | 'add' | 'short' | 'cover';
 
-interface RawRule {
+/** The tickers of a `for` line, each with where its name is written and the list as written; null after `for all:` or before any `for` line. */
+type ScopeItem = { name: string; at: At; label: string };
+type Scope = ScopeItem[] | null;
+
+/** Something that takes the tokens of the lines after its first one: a rule, or a definition. */
+interface Open {
+  toks: Tok[];
+}
+
+interface RawRule extends Open {
   side: RuleSide;
-  scope: string | null;
-  /** The ticker's name on the `for` line. */
-  scopeAt: At | null;
+  scope: Scope;
   line: number;
   head: At;
-  toks: Tok[];
 }
 
 const BUILTIN_DEFAULTS: Defaults = { capital: 10_000, costBps: 0, slippageBps: 0, cashRate: '0%', dataSource: 'yahoo' };
@@ -1120,20 +1339,43 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const errors: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
   const settings = new Map<string, SettingLine>();
-  const scoped: { scope: string; scopeAt: At; s: SettingLine }[] = [];
-  const paramLines: ParamLine[] = [];
+  const scoped: { scope: NonNullable<Scope>; s: SettingLine }[] = [];
+  const decls: (ParamLine | Definition)[] = [];
   const rawRules: RawRule[] = [];
-  let scope: string | null = null;
-  let scopeAt: At | null = null;
-  let open: RawRule | null = null;
+  let scope: Scope = null;
+  let open: Open | null = null;
 
-  const guard = (fn: () => void) => {
+  /** Runs `fn`, which reports a problem by throwing; false when it did (one of a definition that already has its error is not reported again). */
+  const guard = (fn: () => void): boolean => {
     try {
       fn();
+      return true;
     } catch (e) {
+      if (e instanceof Quiet) return false;
       if (!(e instanceof SpecError)) throw e;
       errors.push(diag(e.at, e.message));
+      return false;
     }
+  };
+
+  /** The tickers a `for` line names, with the problems of the list reported once; null for `for all:`. */
+  const readScope = (text: string, lead: number, line: number): Scope => {
+    const names = text.slice(3, -1);
+    if (names.trim().toLowerCase() === 'all') return null;
+    const label = names.trim();
+    const list: NonNullable<Scope> = [];
+    let offset = lead + 3;
+    for (const piece of names.split(',')) {
+      const name = piece.trim();
+      const from = offset + piece.length - piece.trimStart().length;
+      const where: At = { line, from, to: from + name.length };
+      offset += piece.length + 1;
+      if (!name) errors.push(diag({ line, from: lead, to: lead + text.length }, 'Name a ticker between the commas, as in for SPY, QQQ:'));
+      else if (name.toLowerCase() === 'all') errors.push(diag(where, '"all" means every ticker, so it can\'t be listed with others. Write it alone, as in for all:'));
+      else if (list.some((x) => x.name.toLowerCase() === name.toLowerCase())) errors.push(diag(where, `${name} is listed twice. List each ticker once, as in for SPY, QQQ:`));
+      else list.push({ name, at: where, label });
+    }
+    return list;
   };
 
   /** Each line without its comment, for quoting rules as written. */
@@ -1155,13 +1397,10 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const forName = /^for\s/i.test(text) && text.endsWith(':') ? text.slice(4, -1).trim() : '';
     if (forName) {
       open = null;
-      scope = forName.toLowerCase() === 'all' ? null : forName;
-      const name = text.slice(3, -1);
-      const from = lead + 3 + name.length - name.trimStart().length;
-      scopeAt = scope === null ? null : { line, from, to: from + forName.length };
+      scope = readScope(text, lead, line);
     } else if ((m = text.match(/^(buy|sell|add|short|cover)\s+when\b(.*)$/i))) {
       const exprFrom = text.length - m[2].length;
-      const rule: RawRule = { side: m[1].toLowerCase() as RawRule['side'], scope, scopeAt, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
+      const rule: RawRule = { side: m[1].toLowerCase() as RawRule['side'], scope, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
       open = rule;
       rawRules.push(rule);
       guard(() => lex(m![2], line, lead + exprFrom, rule.toks));
@@ -1172,16 +1411,25 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const s: SettingLine = { key, value: m[2], line, keyAt, valueAt: { line, from: lead + text.length - m[2].length, to: lead + text.length } };
       if (!m[2]) errors.push(diag(keyAt, `"${key}" has no value`));
       else if (scope !== null) {
-        if (STOP_SETTINGS.includes(key)) scoped.push({ scope, scopeAt: scopeAt!, s });
+        if (STOP_SETTINGS.includes(key)) scoped.push({ scope, s });
         else errors.push(diag(keyAt, `"${key}" applies to the whole strategy. Put it above the first "for" line or after "for all:"`));
       } else if (settings.has(key)) errors.push(diag(keyAt, `"${key}" is set twice`));
       else settings.set(key, s);
     } else if ((m = text.match(PARAM_LINE)) && !RESERVED.has(m[1].toLowerCase())) {
-      open = null;
-      paramLines.push({ name: m[1], nameAt: { line, from: lead, to: lead + m[1].length }, value: m[2], valueFrom: lead + text.length - m[2].length, line });
+      const nameAt = { line, from: lead, to: lead + m[1].length };
+      const valueFrom = lead + text.length - m[2].length;
+      if (isParamValue(m[2])) {
+        open = null;
+        decls.push({ name: m[1], nameAt, value: m[2], valueFrom, line });
+      } else {
+        const def: Definition = { name: m[1], nameAt, line, toks: [], state: 'new', used: false };
+        open = def;
+        decls.push(def);
+        if (!guard(() => lex(m![2], line, valueFrom, def.toks))) def.state = 'bad';
+      }
     } else if (open) {
-      const rule: RawRule = open;
-      guard(() => lex(text, line, lead, rule.toks));
+      const into: Open = open;
+      if (!guard(() => lex(text, line, lead, into.toks)) && 'state' in into) (into as Definition).state = 'bad';
     } else if ((m = text.match(PARAM_LINE))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Give the parameter another name, such as my_${m[1].toLowerCase()}`));
     } else if ((m = text.match(SETTING_NAME))) {
@@ -1191,12 +1439,15 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     }
   });
 
-  // Parameters first, so every other line can use them wherever they sit.
+  // Parameters and definitions first, so every other line can use them wherever they sit.
   const params = new Map<string, Param>();
-  for (const p of paramLines) {
+  const defs = new Map<string, Definition>();
+  for (const p of decls) {
     guard(() => {
-      if (params.has(p.name.toLowerCase())) throw new SpecError(p.nameAt, `"${p.name}" is declared twice`);
-      params.set(p.name.toLowerCase(), parseParam(p));
+      const key = p.name.toLowerCase();
+      if (params.has(key) || defs.has(key)) throw new SpecError(p.nameAt, `"${p.name}" is declared twice`);
+      if ('toks' in p) defs.set(key, p);
+      else params.set(key, parseParam(p));
     });
   }
   for (const [name, v] of Object.entries(opts.overrides ?? {})) {
@@ -1222,6 +1473,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   /** A setting number, written out or as a parameter's name. */
   const plain = (text: string, where: At, what: string, example: string): number => {
     const p = params.get(text.toLowerCase());
+    const d = defs.get(text.toLowerCase());
+    if (d) throw new SpecError(where, `"${d.name}" is a definition, and ${what} needs a number or a parameter. Declare it as a parameter instead, as in ${d.name} = 10`);
     if (p) {
       if (p.percent) throw new SpecError(where, `${what} needs a plain number, and "${p.name}" is a percentage`);
       return p.value;
@@ -1231,6 +1484,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   const percentage = (text: string, where: At, what: string, max: number): number => {
     const p = params.get(text.toLowerCase());
+    const d = defs.get(text.toLowerCase());
+    if (d) throw new SpecError(where, `"${d.name}" is a definition, and ${what} needs a percentage or a parameter. Declare it as a parameter instead, as in ${d.name} = 10%`);
     if (!p) return parsePercent(text, where, what, max * 100);
     if (!p.percent) throw new SpecError(where, `${what} needs a percentage, and "${p.name}" is a plain number. Declare it as ${p.name} = 10%`);
     if (p.value <= 0 || p.value > max) throw new SpecError(where, `${what} is ${Number((p.value * 100).toPrecision(6))}% here, but must be above 0% and at most ${max * 100}%`);
@@ -1250,7 +1505,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const m = text.match(ATR_DISTANCE);
     if (!m) {
       const p = params.get(text.toLowerCase());
-      if (!p && !/^\d+(\.\d+)?\s*%/.test(text)) throw new SpecError(where, `${what} must be a percentage, such as 10%, or a multiple of the average true range, such as 2 atr(14)`);
+      if (!p && !defs.has(text.toLowerCase()) && !/^\d+(\.\d+)?\s*%/.test(text)) throw new SpecError(where, `${what} must be a percentage, such as 10%, or a multiple of the average true range, such as 2 atr(14)`);
       return { k: 'pct', v: percentage(text, where, what, max) };
     }
     const mult = plain(m[1], where, `The ${what} distance`, '2 atr(14)');
@@ -1319,7 +1574,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   }
 
   const extras: AssetRef[] = [];
-  const resolveAsset = (sym: Tok): string => {
+  /** The name of the ticker `sym` stands for, added to the extras when it is a new one and `register` says so. */
+  const resolveAsset = (sym: Tok, register = true): string => {
     const lower = sym.s.toLowerCase();
     const known = [...universe, ...extras].find((a) => a.name.toLowerCase() === lower);
     if (known) return known.name;
@@ -1328,12 +1584,12 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     if (problem) throw new SpecError(at(sym), problem);
     const same = [...universe, ...extras].find((a) => a.name.toLowerCase() === ref.name.toLowerCase());
     if (same) return same.name;
-    extras.push(ref);
+    if (register) extras.push(ref);
     return ref.name;
   };
   const findAsset = (name: string) => universe.find((a) => a.name.toLowerCase() === name.toLowerCase());
 
-  const priceChecks: { at: At; asset: string | null; scope: string | null }[] = [];
+  const priceChecks: { at: At; asset: string | null; scope: string[] | null }[] = [];
   const text = (a: Tok, b: Tok): string => {
     if (a.line === b.line) return plainLines[a.line - 1].slice(a.from, b.to);
     const parts = [plainLines[a.line - 1].slice(a.from)];
@@ -1341,25 +1597,75 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     parts.push(plainLines[b.line - 1].slice(0, b.to));
     return parts.map((s) => s.trim()).join(' ');
   };
-  const context = (positions: boolean, ruleScope: string | null): ExprContext => ({
+  const context = (positions: boolean, ruleScope: string[] | null): ExprContext => ({
     resolveAsset,
     sourceOf: (name) => [...universe, ...extras].find((a) => a.name === name)?.source ?? null,
     params,
+    defs,
+    checkDef,
     positions,
     priceVsNumber: (where, asset) => priceChecks.push({ at: where, asset, scope: ruleScope }),
     text,
   });
+  /**
+   * Reads a definition's expression on its own, once, where position values are allowed: its mistakes are reported on its
+   * own line, and the places that use it say nothing more. Whether a position value suits a rule is checked where it is used.
+   */
+  const checkDef = (d: Definition, via?: Tok): boolean => {
+    if (via && reading.length) reading[reading.length - 1].via = via;
+    if (d.state === 'busy') {
+      // It is being read already, so it leads back to itself: each definition of the loop says so on its own line.
+      const loop = reading.slice(reading.findIndex((x) => x.d === d));
+      loop.forEach((x, k) => {
+        const next = loop[(k + 1) % loop.length].d;
+        const how = next === x.d ? 'uses itself' : `leads back to itself through ${next.name}`;
+        if (x.via) errors.push(diag(at(x.via), `"${x.d.name}" ${how}. A definition can only be built from other names, as in ${x.d.name} = close > sma(200)`));
+      });
+      throw new Quiet();
+    }
+    if (d.state === 'new') {
+      if (via && reading.length >= MAX_DEPTH) throw new SpecError(at(via), TOO_DEEP);
+      d.state = 'busy';
+      reading.push({ d, via: null });
+      const alone: ExprContext = { ...context(true, null), checking: true, resolveAsset: (sym) => resolveAsset(sym, false), priceVsNumber: () => {} };
+      d.state = guard(() => (d.bool = isBool(new ExprParser(d.toks, alone).parseValue()))) ? 'ok' : 'bad';
+      reading.pop();
+    }
+    return d.state === 'ok';
+  };
+  /** The definitions being read to check them, innermost last, each with the token of its own line that names the next one. */
+  const reading: { d: Definition; via: Tok | null }[] = [];
   const endTok = (toks: Tok[], fallback: At): Tok => {
     const last = toks[toks.length - 1];
     return last ? { ...last, t: 'end', s: '' } : { t: 'end', s: '', v: 0, line: fallback.line, from: fallback.from!, to: fallback.to! };
   };
 
-  /** A `for` line is reported once, however many rules and stops sit under it. */
-  const reported = new Set<number>();
-  const unknownScope = (name: string, at: At): void => {
-    if (reported.has(at.line)) return;
-    reported.add(at.line);
-    throw new SpecError(at, `"for ${name}:" names a ticker that is not in the universe`);
+  /** A ticker on a `for` line that is not in the universe is reported once, however many rules and stops sit under it. */
+  const reported = new Set<string>();
+  const unknownScope = (list: NonNullable<Scope>, item: ScopeItem): void => {
+    const key = `${item.at.line}:${item.at.from}`;
+    if (reported.has(key)) return;
+    reported.add(key);
+    errors.push(diag(item.at, list.length === 1 ? `"for ${item.label}:" names a ticker that is not in the universe` : `"for ${item.label}:" names ${item.name}, which is not in the universe`));
+  };
+  /** The universe's assets a section names, in the order listed; null when one is not there (reported), or when the universe has nothing to look in. */
+  const sectionAssets = (list: NonNullable<Scope>): Asset[] | null => {
+    const found = list.map((item) => ({ item, asset: findAsset(item.name) }));
+    for (const f of found) if (!f.asset && universe.length) unknownScope(list, f.item);
+    return found.every((f) => f.asset) ? found.map((f) => f.asset!) : null;
+  };
+  /** Each ticker's own rules on `r.scope`'s line (or the shared ones), where nothing of this kind has been written yet. */
+  const targetsOf = (r: RawRule, assets: Asset[] | null): Partial<Record<RuleSide, Expr>>[] => {
+    if (assets === null) {
+      if (shared[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule. Join conditions with "and" or "or"`);
+      return [shared];
+    }
+    return assets.map((asset, k) => {
+      if (!own.has(asset.name)) own.set(asset.name, {});
+      const target = own.get(asset.name)!;
+      if (target[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule for ${r.scope![k].name}. Join conditions with "and" or "or"`);
+      return target;
+    });
   };
   const shared: Partial<Record<RuleSide, Expr>> = {};
   const own = new Map<string, Partial<Record<RuleSide, Expr>>>();
@@ -1369,26 +1675,23 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const writtenOf = new Map<Expr, Written>();
   /** The columns each rule reads from its own ticker, which must be a CSV file wherever the rule applies. */
   const ownReads = new Map<Expr, { name: string; at: At }[]>();
+  for (const d of defs.values()) d.toks.push(endTok(d.toks, d.nameAt));
+  for (const d of defs.values()) checkDef(d);
   for (const r of rawRules) {
     guard(() => {
-      let target = shared;
-      let ruleScope: string | null = null;
+      let ruleScope: string[] | null = null;
+      let assets: Asset[] | null = null;
       if (r.scope !== null) {
-        const asset = findAsset(r.scope);
-        if (!asset) {
-          if (universe.length) unknownScope(r.scope, r.scopeAt!);
-          return;
-        }
-        if (!own.has(asset.name)) own.set(asset.name, {});
-        target = own.get(asset.name)!;
-        ruleScope = asset.name;
+        assets = sectionAssets(r.scope);
+        if (assets === null) return;
+        ruleScope = assets.map((a) => a.name);
       }
-      if (target[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule${r.scope ? ` for ${r.scope}` : ''}. Join conditions with "and" or "or"`);
+      const targets = targetsOf(r, assets);
       r.toks.push(endTok(r.toks, r.head));
       // Like a buy rule, a short rule is read while flat, so it has no position to read.
       const parser = new ExprParser(r.toks, context(r.side !== 'buy' && r.side !== 'short', ruleScope));
       const e = parser.parseCondition();
-      target[r.side] = e;
+      for (const target of targets) target[r.side] = e;
       writtenOf.set(e, parser.written(e));
       ownReads.set(e, parser.ownColumns(e));
       if (r.side === 'add') addHeads.push(r.head);
@@ -1560,19 +1863,19 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   if (shareStops.takeProfit) targetAt.set(shareStops.takeProfit, settings.get('take profit')!.valueAt);
   const ownStops = new Map<string, Partial<Stops>>();
   const STOP_FIELD: Record<string, keyof Stops> = { 'stop loss': 'stopLoss', 'trailing stop': 'trailingStop', 'take profit': 'takeProfit' };
-  for (const { scope: name, scopeAt: at, s } of scoped) {
+  for (const { scope: list, s } of scoped) {
     guard(() => {
-      const asset = findAsset(name);
-      if (!asset) {
-        if (universe.length) unknownScope(name, at);
-        return;
-      }
-      const mine = ownStops.get(asset.name) ?? {};
-      ownStops.set(asset.name, mine);
+      const assets = sectionAssets(list);
+      if (assets === null) return;
       const field = STOP_FIELD[s.key];
-      if (mine[field] !== undefined) throw new SpecError(s.keyAt, `"${s.key}" is set twice for ${asset.name}`);
-      mine[field] = stopLevel(s.key, s.key === 'take profit' ? 1000 : 0.99)(s.value.trim(), s.valueAt);
-      if (field === 'takeProfit') targetAt.set(mine[field]!, s.valueAt);
+      const level = stopLevel(s.key, s.key === 'take profit' ? 1000 : 0.99)(s.value.trim(), s.valueAt);
+      for (const asset of assets) {
+        const mine = ownStops.get(asset.name) ?? {};
+        ownStops.set(asset.name, mine);
+        if (mine[field] !== undefined) throw new SpecError(s.keyAt, `"${s.key}" is set twice for ${asset.name}`);
+        mine[field] = level;
+      }
+      if (field === 'takeProfit') targetAt.set(level, s.valueAt);
     });
   }
   const stops: Record<string, Stops> = {};
@@ -1620,7 +1923,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const adjustedBy = (name: string) => [...universe, ...extras].find((a) => a.name === name && (a.source === 'yahoo' || a.source === 'tiingo') && !a.id.startsWith('^'))?.source;
   const seen = new Set<string>();
   for (const c of priceChecks) {
-    const names = c.asset !== null ? [c.asset] : c.scope !== null ? [c.scope] : universe.map((a) => a.name);
+    const names = c.asset !== null ? [c.asset] : (c.scope ?? universe.map((a) => a.name));
     const key = `${c.at.line}:${c.at.from}:${c.at.to}`;
     const by = new Set(names.map(adjustedBy).filter((s) => s !== undefined));
     if (seen.has(key) || by.size === 0) continue;
@@ -1672,6 +1975,12 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   if (entries !== null) spec.entries = entries;
   if (magnify !== null) spec.magnify = magnify;
 
+  // With a problem elsewhere a rule may not have been read at all, so a name it would have used is not reported as unused.
+  if (errors.length === 0) {
+    for (const d of defs.values()) {
+      if (!d.used) warnings.push(diag(d.nameAt, `"${d.name}" is defined but no rule or score reads it. Use it, as in buy when ${d.name}${d.bool ? '' : ' > 0'}, or remove the line`));
+    }
+  }
   errors.sort((a, b) => a.line - b.line);
   warnings.sort((a, b) => a.line - b.line);
   return { spec: errors.length ? null : spec, errors, warnings };

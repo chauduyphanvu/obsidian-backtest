@@ -1,8 +1,8 @@
 import { BINANCE_INTERVALS, CALENDAR, INDICATORS, NUM, POSITION, REBALANCE, SERIES } from './dsl.ts';
-import { commentStart, declaredParams, lineKinds, RULE_HEADS, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
+import { commentStart, declaredDefinitions, declaredParams, lineKinds, RULE_HEADS, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
 import { DATA_SOURCES, SOURCE_PREFIX } from './types.ts';
 
-export type DocKind = 'setting' | 'value' | 'function' | 'series' | 'calendar' | 'position' | 'word' | 'unit' | 'parameter';
+export type DocKind = 'setting' | 'value' | 'function' | 'series' | 'calendar' | 'position' | 'word' | 'unit' | 'parameter' | 'definition';
 
 /** What the editor says about one word of the language. */
 export interface Doc {
@@ -414,6 +414,13 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: 'buy when correl(close of SPY, 60) < 0.5',
     series: 'It reads close for this ticker; the series written first is read as of reads it, so it lines up with this ticker’s bars.',
   },
+  count: {
+    args: ['n'],
+    short: 'how many of the last n bars a condition held',
+    text: 'How many of the last n bars the condition held, this one included, and unknown while any of them is unknown.',
+    example: 'buy when count(close > close[1], 10) >= 7',
+    series: 'It takes no series, only a condition.',
+  },
   bars_since: {
     args: [],
     short: 'bars since a condition was last true',
@@ -465,7 +472,7 @@ calendar('year', 'year', 'the year, as 2024', 'The year, such as 2024.', 'buy wh
 calendar('month_start', 'month_start', 'first bar of a month', 'A condition: the first bar of a month.', 'buy when month_start');
 calendar('month_end', 'month_end', 'last bar of a month', 'A condition: the last bar of a month.', 'buy when month_end');
 
-const BELONGS = 'Only sell, cover and add rules can read it, and not inside a function, with [n] or with of.';
+const BELONGS = 'Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.';
 add(
   'position',
   POSITION.bars_held,
@@ -498,7 +505,52 @@ add(
   `How many entries the open position has made: 1 after the buy or short sale, then one more for each add. ${BELONGS}`,
   'sell when entries made == 1 and bars held >= 10',
 );
+add(
+  'position',
+  POSITION.highest_since_entry,
+  'highest since entry',
+  'the highest price since the position was entered',
+  `The highest price since the position's first entry: its fill price before slippage, then the high of each later bar, and of the fill bar too when it filled at that bar's open. ${BELONGS}`,
+  'sell when close < highest since entry - 3 * atr(22)',
+);
+add(
+  'position',
+  POSITION.lowest_since_entry,
+  'lowest since entry',
+  'the lowest price since the position was entered',
+  `The lowest price since the position's first entry: its fill price before slippage, then the low of each later bar, and of the fill bar too when it filled at that bar's open. ${BELONGS}`,
+  'short when close < sma(200)\ncover when close > lowest since entry + 3 * atr(22)',
+);
+add(
+  'position',
+  POSITION.position_return,
+  'position return',
+  'the open position’s return at this close, before costs',
+  `The open position's return at this close before costs: close / entry price - 1 for a long, 1 - close / entry price for a short. ${BELONGS}`,
+  'sell when position return > 20% or bars held > 30',
+);
 
+word(
+  'between',
+  'a between lo and hi',
+  'inside a range, both ends included',
+  'True when a is at least lo and at most hi, so rsi(2) between 10 and 30 means rsi(2) >= 10 and rsi(2) <= 30. It does not chain, and it is read as one comparison, so not rsi(2) between 10 and 30 holds outside the range.',
+  'buy when rsi(2) between 10 and 30',
+);
+word(
+  'for … bars',
+  'condition for n bars',
+  'held on each of the last n bars',
+  'True when the condition held on each of the last n bars, this one included, and unknown until all n are known. It applies to the comparison before it, so a and b for 3 bars means a and (b for 3 bars): use brackets for more.',
+  'buy when close > sma(200) for 3 bars',
+);
+word(
+  'within',
+  'condition within n bars',
+  'held on at least one of the last n bars',
+  'True when the condition held on at least one of the last n bars, this one included, and unknown until all n are known. n is a whole number from 1 to 10000 or a parameter, and bar is also accepted.',
+  'sell when rsi(2) > 90 within 3 bars',
+);
 word(
   'buy when',
   'buy when condition',
@@ -537,9 +589,9 @@ word(
 word(
   'for',
   'for TICKER:',
-  'rules and stops for one ticker: for TLT:',
-  'Starts rules for one ticker, which must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for that ticker only.',
-  'for TLT:',
+  'rules and stops for one ticker or several: for TLT:',
+  'Starts rules for one ticker, or for several separated by commas, as in for SPY, TLT:; each must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for those tickers only.',
+  'for SPY, TLT:',
 );
 word('for all', 'for all:', 'back to the rules every ticker shares', 'Goes back to the rules every ticker shares. What you write after it applies to every ticker that has no rule of its own.', 'for all:');
 word(
@@ -556,6 +608,13 @@ word(
   'the condition does not hold',
   'True when the condition after it is not true. It binds tighter than and but looser than a comparison, so not close > 1 reads as not (close > 1).',
   'buy when not close < sma(200)',
+);
+word(
+  'crosses',
+  'a crosses b',
+  'changed sides: crossed above or below',
+  'True on a bar where a crosses above or below b: it is on the other side of b than it was on the previous bar. Write crosses above or crosses below for one direction only.',
+  'buy when close crosses sma(50)',
 );
 word(
   'crosses above',
@@ -709,11 +768,18 @@ function parameterDoc(name: string, written: string): Doc {
   return { id: name, kind: 'parameter', signature, short: `parameter: ${written}`, text: `Your parameter. It is set to ${shown(m[1])}, ${range}.${rule}`, example: '' };
 }
 
+function definitionDoc(name: string, written: string): Doc {
+  return { id: name, kind: 'definition', signature: `${name} = ${written}`, short: `definition: ${written}`, text: `Your definition. Wherever you write ${name}, it means ${written}.`, example: '' };
+}
+
 const WORD_ALIASES: Record<string, string> = {
   bars_held: POSITION.bars_held,
   entry_price: POSITION.entry_price,
   last_entry_price: POSITION.last_entry_price,
   entries_made: POSITION.entries_made,
+  highest_since_entry: POSITION.highest_since_entry,
+  lowest_since_entry: POSITION.lowest_since_entry,
+  position_return: POSITION.position_return,
   always: 'true',
   never: 'false',
 };
@@ -756,11 +822,11 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
   const t = toks[i];
   const here = text(t).toLowerCase();
 
-  if (t.kind === 'param' || (t.kind === 'key' && kind === 'param')) {
+  if (t.kind === 'param' || (t.kind === 'key' && (kind === 'param' || kind === 'define'))) {
     const declared = declaredParams(lines).find((p) => p.name.toLowerCase() === here);
-    if (!declared) return null;
-    const doc = parameterDoc(declared.name, declared.value);
-    return { from: t.from, to: t.to, doc };
+    if (declared) return { from: t.from, to: t.to, doc: parameterDoc(declared.name, declared.value) };
+    const defined = declaredDefinitions(lines).find((p) => p.name.toLowerCase() === here);
+    return defined ? { from: t.from, to: t.to, doc: definitionDoc(defined.name, defined.value) } : null;
   }
 
   if (t.kind === 'function') return target(t.from, t.to, here);
@@ -803,11 +869,12 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
     case 'when':
       return prev && RULE_HEADS.includes(prevWord) ? target(prev.from, t.to, `${prevWord} when`) : null;
     case 'for':
-      return kind === 'for' && next && text(next).toLowerCase() === 'all' ? target(t.from, next.to, 'for all') : target(t.from, t.to, 'for');
+      if (kind !== 'for') return target(t.from, t.to, 'for … bars');
+      return next && text(next).toLowerCase() === 'all' ? target(t.from, next.to, 'for all') : target(t.from, t.to, 'for');
     case 'all':
       return kind === 'for' && prev ? target(prev.from, t.to, 'for all') : null;
     case 'crosses':
-      return nextWord === 'above' || nextWord === 'below' ? target(t.from, next!.to, `crosses ${nextWord}`) : null;
+      return nextWord === 'above' || nextWord === 'below' ? target(t.from, next!.to, `crosses ${nextWord}`) : target(t.from, t.to, 'crosses');
     case 'above':
     case 'below':
       return prevWord === 'crosses' ? target(prev!.from, t.to, `crosses ${here}`) : prevWord === 'is' ? target(prev!.from, t.to, here) : target(t.from, t.to, here);

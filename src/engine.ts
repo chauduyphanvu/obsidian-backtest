@@ -1213,8 +1213,13 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   };
 
   /** The open position as the rules of `side` (1 long, -1 short) read it; null when that side is not held. */
-  const position = (a: A, side: 1 | -1 = 1): PosState | null =>
-    (side > 0 ? a.shares > 0 : a.shares < 0) ? { entryIdx: a.entryIdx, entryPrice: a.entryPrice, lastPrice: a.lastEntryPrice, entries: a.made } : null;
+  const position = (a: A, side: 1 | -1 = 1): PosState | null => {
+    if (!(side > 0 ? a.shares > 0 : a.shares < 0)) return null;
+    const pos: PosState = { entryIdx: a.entryIdx, entryPrice: a.entryPrice, lastPrice: a.lastEntryPrice, entries: a.made };
+    if (side < 0) pos.short = true;
+    if (atClose) pos.atClose = true;
+    return pos;
+  };
 
   /**
    * A block that borrows, over `span` ms: the balance B = cash − short value at the last closes earns the cash rate `r`

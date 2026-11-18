@@ -96,7 +96,7 @@ test('a short\'s stop sits above its entry and its target below; a gap fills at 
   const open = run(levels, { A: ohlc([[100, 100, 100, 100], [100, 100, 98, 99], [99, 99, 96, 97]]) }).run.states[0];
   assert.equal(open.side, 'short');
   assert.ok(open.shares < 0 && near(open.levels!.stop!, 96 * 1.05, 1e-12) && open.levels!.target === 90);
-  assert.deepEqual(open.pos, { entryIdx: 1, entryPrice: 100, lastPrice: 100, entries: 1 });
+  assert.deepEqual(open.pos, { entryIdx: 1, entryPrice: 100, lastPrice: 100, entries: 1, short: true });
 });
 
 test('a 150% long borrows a third of its value and pays the margin rate on it, and its cash earns nothing meanwhile', () => {

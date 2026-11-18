@@ -82,7 +82,7 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
     case 'logic':
       return Math.max(back(e.a), back(e.b));
     case 'cmp':
-      return Math.max(back(e.a), back(e.b)) + (e.op === 'xup' || e.op === 'xdn' ? 1 : 0);
+      return Math.max(back(e.a), back(e.b)) + (e.op === 'xup' || e.op === 'xdn' || e.op === 'xany' ? 1 : 0);
     case 'neg':
     case 'not':
     case 'of':

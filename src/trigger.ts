@@ -120,6 +120,7 @@ const MAX_COVER = 64;
 const MAX_WALK = 200_000;
 /** Functions whose value at a bar depends on every bar before it rather than on a window, so a series cut short gives another value. */
 const WHOLE = ['bars_since', 'obv'];
+const SINCE_ENTRY = ['highest_since_entry', 'lowest_since_entry'];
 /** Functions given no series that read each bar's high, low and close, and those that read its volume as well. */
 const HLC = ['atr', 'stoch_k', 'stoch_d', 'adx', 'plus_di', 'minus_di', 'cci', 'williams_r', 'supertrend', 'supertrend_up', 'keltner_upper', 'keltner_lower'];
 const VOLUME: Record<string, SeriesName[]> = { mfi: ['high', 'low', 'close', 'volume'], vwap: ['high', 'low', 'close', 'volume'], obv: ['close', 'volume'] };
@@ -143,6 +144,11 @@ function readsOf(exprs: Expr[], asset: string): Map<string, Read> {
     if (e.k === 'series') note(at, lag, [e.name]);
     else if (e.k === 'column') note(at, lag, ['column']);
     else if (e.k === 'cal') note(at, lag, ['calendar']);
+    else if (e.k === 'pos') {
+      if (e.name === 'highest_since_entry') note(at, lag, ['high']);
+      if (e.name === 'lowest_since_entry') note(at, lag, ['low']);
+      if (e.name === 'position_return') note(at, lag, ['close']);
+    }
     else if (e.k === 'lag') return visit(e.a, at, lag + e.n);
     else if (e.k === 'of') return visit(e.a, e.asset, lag);
     else if (e.k === 'ind') {
@@ -285,7 +291,8 @@ function withBars(b: Bars, times: number[], close: number): Bars {
  */
 export function keptBars(spec: Spec, data: Map<string, Bars>, names: string[], exprs: Expr[]): number | null {
   let whole = false;
-  for (const e of exprs) walk(e, (x) => (whole ||= x.k === 'ind' && WHOLE.includes(x.fn)));
+  // The highest or lowest since entry reads every bar of the position, however long ago it opened.
+  for (const e of exprs) walk(e, (x) => (whole ||= (x.k === 'ind' && WHOLE.includes(x.fn)) || (x.k === 'pos' && SINCE_ENTRY.includes(x.name))));
   if (whole) return null;
   const keep = lookbackBars(spec) + 2;
   for (const name of names) {

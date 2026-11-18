@@ -162,7 +162,7 @@ test('a misspelt parameter name', () => {
   assert.equal(fixedBlock([HEAD, 'stop = 8%', 'stop loss: stp', RULE])[2], 'stop loss: stop');
   assert.equal(fixedBlock([HEAD, 'limit = 5%', 'take profit: limt', RULE])[2], 'take profit: limit');
   assert.equal(fixedBlock([HEAD, 'lag = 2', 'buy when close > close[lgg]'])[2], 'buy when close > close[lag]');
-  assert.equal(fixedBlock(['universe: SPY, QQQ, TLT', 'count = 2', 'hold: top cunt by roc(20)', RULE])[2], 'hold: top count by roc(20)');
+  assert.equal(fixedBlock(['universe: SPY, QQQ, TLT', 'picks = 2', 'hold: top pcks by roc(20)', RULE])[2], 'hold: top picks by roc(20)');
   assert.equal(fixedBlock([HEAD, 'window = 20', 'weighting: inverse volatility(windw)', RULE])[2], 'weighting: inverse volatility(window)');
   // The nearest of several wins; a parameter of another kind is not offered where it would not parse.
   assert.equal(fixedBlock([HEAD, 'fast = 50', 'slow = 200', 'buy when sma(fsat) > sma(slow)'])[3], 'buy when sma(fast) > sma(slow)');
@@ -224,7 +224,7 @@ test('the parser still gives the columns these fixes rely on', () => {
     [[HEAD, 'rebalanse: monthly', RULE], /^Unknown setting/, 'rebalanse'],
     [[HEAD, 'buy when close > smaa(200)'], /^Unknown name/, 'smaa'],
     [[HEAD, 'buy when close crosess above 1'], /^Unexpected "crosess"/, 'crosess'],
-    [[HEAD, 'buy when close crosses abov 1'], /^Expected "above" or "below"/, 'abov'],
+    [[HEAD, 'buy when close crosses abov 1'], /^Unknown name "abov"/, 'abov'],
     [[HEAD, 'rebalance: montly', RULE], /must be one of/, 'montly'],
     [[HEAD, 'buy when close > 1 && 2'], /^Unexpected character "&"/, '&'],
   ];

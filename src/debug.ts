@@ -4,7 +4,7 @@
 // bar where the run made no trade is explained by reading the rules at that bar, never by simulating again.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { children, findPos, walk, type Expr, type Written } from './dsl.ts';
+import { children, findPos, isNameText, walk, type Expr, type Written } from './dsl.ts';
 import { barAt, missingInputAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
@@ -218,13 +218,14 @@ function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: 
     order.push({ x, depth });
     if (x.k === 'logic') {
       const parts: Expr[] = [];
-      const flat = (y: Expr): void => {
-        if (y.k === 'logic' && y.op === x.op) {
+      // A definition's own name is one part, not opened into the chain it stands for.
+      const flat = (y: Expr, top = false): void => {
+        if (y.k === 'logic' && y.op === x.op && (top || !isNameText(text(y)))) {
           flat(y.a);
           flat(y.b);
         } else parts.push(y);
       };
-      flat(x);
+      flat(x, true);
       for (const p of parts) visit(p, depth + 1);
     } else if (x.k === 'not') visit(x.a, depth + 1);
   };
@@ -233,9 +234,9 @@ function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: 
   const make = (x: Expr, depth: number, whole: boolean, n: number): PlanCol => {
     const label = whole ? w.text : text(x) || `part ${n}`;
     const cmp = x.k === 'cmp' ? x : null;
-    const cross = cmp !== null && (cmp.op === 'xup' || cmp.op === 'xdn');
+    const cross = cmp !== null && (cmp.op === 'xup' || cmp.op === 'xdn' || cmp.op === 'xany');
     const kind: DebugColumn['kind'] = cmp ? (cross ? 'cross' : 'test') : x.k === 'logic' || x.k === 'not' ? 'join' : 'flag';
-    const op = cmp ? (cmp.op === 'xup' ? 'crosses above' : cmp.op === 'xdn' ? 'crosses below' : OPS[cmp.op]) : '';
+    const op = cmp ? (cmp.op === 'xup' ? 'crosses above' : cmp.op === 'xdn' ? 'crosses below' : cmp.op === 'xany' ? 'crosses' : OPS[cmp.op]) : '';
     return {
       expr: x,
       col: {
@@ -610,11 +611,12 @@ function entriesBy(tr: Trade, t: number): number {
  */
 function posOf(ix: AssetIx, tr: Trade, t: number, atClose: boolean): PosState {
   const entryIdx = barAt(ix.bars.t, tr.entryT);
-  if (!tr.entries) return { entryIdx, entryPrice: tr.entryPrice };
+  const side: Pick<PosState, 'short' | 'atClose'> = { ...(sideOf(tr) === 'short' ? { short: true as const } : {}), ...(atClose ? { atClose: true as const } : {}) };
+  if (!tr.entries) return { entryIdx, entryPrice: tr.entryPrice, ...side };
   const n = Math.max(1, entriesBy(tr, atClose ? t - 1 : t));
   const entries = tr.entries.slice(0, n);
   const average = n === 1 ? entries[0].price : tr.why?.adds?.[n - 2]?.average ?? entries.reduce((s, e) => s + e.money, 0) / entries.reduce((s, e) => s + e.shares, 0);
-  return { entryIdx, entryPrice: average, lastPrice: entries[n - 1].price, entries: n };
+  return { entryIdx, entryPrice: average, lastPrice: entries[n - 1].price, entries: n, ...side };
 }
 
 // ---------------------------------------------------------------- columns and rows
@@ -934,7 +936,7 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
     }
     if (x.k === 'ind') return whyIndicator(cx, x, a, j);
     if (x.k === 'bin' && x.op === '/') return 'divides by 0';
-    if (x.k === 'cmp' && (x.op === 'xup' || x.op === 'xdn')) return 'the bar before is unknown';
+    if (x.k === 'cmp' && (x.op === 'xup' || x.op === 'xdn' || x.op === 'xany')) return 'the bar before is unknown';
     return '';
   };
   return visit(e, asset, i);
@@ -950,6 +952,7 @@ function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j:
   if (x.src && findPos(x.src)) return x.fn === 'bars_since' ? '' : warming;
   if (x.fn === 'bars_since') return j < cx.firstEvent(x.src!, asset) ? 'the condition has not held yet' : '';
   const n = x.args[0];
+  if (x.fn === 'count') return j - n + 1 < 0 ? `fewer than ${n} bars so far` : 'the condition was unknown on one of the bars';
   const window = (series: number[], length: number): number[] | null => {
     const w = j - length + 1 < 0 ? null : series.slice(j - length + 1, j + 1);
     return w && !w.some(Number.isNaN) ? w : null;

@@ -86,7 +86,7 @@ test('setting values', () => {
 });
 
 test('inside a rule: series, functions and words', () => {
-  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'column', 'crosses above', 'crosses below']);
+  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'count', 'column', 'crosses', 'crosses above', 'crosses below']);
   assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev', 'stoch_k', 'stoch_d', 'supertrend', 'supertrend_up', 'slope']);
   assert.equal(complete(BLOCK, [], 'buy when close > sm')!.items[0].insert, 'sma(');
   assert.deepEqual(labels([], 'buy when close > sma(h'), ['high', 'highest', 'hma']);
