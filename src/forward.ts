@@ -123,8 +123,11 @@ export function pinDefaults(source: string, defaults: Defaults): string {
     ['cash rate', defaults.cashRate.trim()],
     ['data', defaults.dataSource],
   ];
-  const margin = parseSpec(source, { defaults }).spec?.margin;
-  if (margin) pins.push(['borrow fee', yearly(margin.borrowFee)], ['margin rate', yearly(margin.rate)]);
+  const spec = parseSpec(source, { defaults }).spec;
+  if (spec?.margin) {
+    if (Object.values(spec.rules).some((r) => r.short)) pins.push(['borrow fee', yearly(spec.margin.borrowFee)]);
+    pins.push(['margin rate', yearly(spec.margin.rate)]);
+  }
   const { given, scoped } = scan(source, pins.map(([key]) => key));
   const open = pins.filter(([key]) => !given.has(key));
   const body = source.replace(/\r/g, '').trimEnd();

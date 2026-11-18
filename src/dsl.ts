@@ -1664,8 +1664,10 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const borrowFee = get('borrow fee', yearly('borrow fee', 1), defaults.borrowFee ?? BORROW_FEE);
   const marginRate = get('margin rate', yearly('margin rate', 0.5), defaults.marginRate ?? MARGIN_RATE);
   const gross = rankTop !== null ? (size ?? 1) : universe.reduce((s, a) => s + a.weight, 0);
-  if (Object.values(rules).some((r) => r.short) || gross > 1 + 1e-9) {
-    spec.margin = { cap: Math.min(MAX_GROSS, Math.max(1, gross)), borrowFee, rate: marginRate, maintenance: MAINTENANCE };
+  const shorts = Object.values(rules).some((r) => r.short);
+  if (shorts || gross > 1 + 1e-9) {
+    // A block that never shorts pays no borrow fee, so a change to that setting does not change it.
+    spec.margin = { cap: Math.min(MAX_GROSS, Math.max(1, gross)), borrowFee: shorts ? borrowFee : 0, rate: marginRate, maintenance: MAINTENANCE };
   }
   if (entries !== null) spec.entries = entries;
   if (magnify !== null) spec.magnify = magnify;

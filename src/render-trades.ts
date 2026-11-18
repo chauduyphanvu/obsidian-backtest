@@ -30,7 +30,7 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     h(row, 'td', 'bt-num', pct(st.weight, 0));
     const now = positionText(st, bt.spec.entries ?? 1, intraday);
     const order = positionOrder(st, bt.spec.fill);
-    h(row, 'td', undefined, order ? `${now}, ${order}` : now);
+    wordCell(row, order ? `${now}, ${order}` : now);
     if (triggers) {
       const cell = h(row, 'td', 'bt-next-close bt-next-close-waiting', '…');
       cell.setAttribute('aria-busy', 'true');
@@ -77,9 +77,10 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
         explainButton(h(row, 'td', 'bt-why-cell'), row, bt, t, columns.length);
         h(row, 'td', undefined, t.asset);
         if (sides) h(row, 'td', undefined, sideText(t));
-        h(row, 'td', undefined, boughtText(t, intraday));
+        wordCell(row, boughtText(t, intraday));
         h(row, 'td', 'bt-num', price(t.entryPrice));
-        h(row, 'td', undefined, t.reason === 'open' ? '–' : stamp(t.exitT, intraday));
+        if (t.reason === 'open') h(row, 'td', undefined, '–');
+        else wordCell(row, stamp(t.exitT, intraday));
         h(row, 'td', 'bt-num', price(t.exitPrice));
         h(row, 'td', 'bt-num', signedPct(t.ret));
         h(row, 'td', 'bt-num', (t.pnl > 0 ? '+' : '') + minus(money(t.pnl)));
@@ -88,6 +89,15 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
     },
     { once: true },
   );
+}
+
+/** A cell whose text breaks only at its spaces, so a date in it stays whole: a browser would break it at its hyphens. */
+function wordCell(row: HTMLElement, text: string): void {
+  const cell = h(row, 'td');
+  text.split(' ').forEach((word, i) => {
+    if (i > 0) cell.append(' ');
+    h(cell, 'span', 'bt-nowrap', word);
+  });
 }
 
 /** A button that opens the trade's explanation in a row right under it, worked out on the first click. */

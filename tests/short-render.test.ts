@@ -246,8 +246,11 @@ test('the positions table says a short held, and the trades table gives each tra
   const out = run('universe: A\nfill: close\nbuy when close > 100\nshort when close < 100', { A: bars([101, 99, 101, 98]) });
   const root = new El('div');
   renderPositions(root as unknown as HTMLElement, out.backtest, false);
-  const now = root.all().filter((e) => e.tag === 'td')[2].textContent;
+  const nowCell = root.all().filter((e) => e.tag === 'td')[2];
+  const now = nowCell.textContent;
   assert.ok(now.startsWith('Short since 2020-01-04, '), now);
+  // Its date is kept whole too.
+  assert.ok(nowCell.children.some((c) => typeof c !== 'string' && c.classes().includes('bt-nowrap') && c.textContent === '2020-01-04,'));
   renderTrades(root as unknown as HTMLElement, out.backtest, false);
   const details = root.all().find((e) => e.tag === 'details')!;
   details.dispatch('toggle');
@@ -255,6 +258,10 @@ test('the positions table says a short held, and the trades table gives each tra
   assert.deepEqual(table.all().filter((e) => e.tag === 'th').map((e) => e.textContent), ['Why', 'Ticker', 'Side', 'Opened', 'At', 'Closed', 'At', 'Return', 'Profit', 'Exit']);
   const rows = table.all().filter((e) => e.tag === 'tr').slice(1).map((r) => r.children.slice(1).map((c) => (c as El).textContent));
   assert.deepEqual(rows.map((r) => [r[1], r[2], r[8]]), [['Short', '2020-01-04', 'still held'], ['Long', '2020-01-03', 'flipped to short'], ['Short', '2020-01-02', 'flipped to long'], ['Long', '2020-01-01', 'flipped to short']]);
+  // The Side column leaves the dates less room: each is kept whole, so a line breaks at a space, as in the exit, never inside a date.
+  const dates = table.all().filter((e) => e.tag === 'td' && /^\d{4}-\d\d-\d\d$/.test(e.textContent));
+  assert.equal(dates.length, 7);
+  assert.ok(dates.every((td) => td.children.length === 1 && typeof td.children[0] !== 'string' && td.children[0].classes().includes('bt-nowrap')));
   // An explanation opened under a row spans every column.
   const button = table.byClass('bt-why')[0];
   button.dispatch('click');

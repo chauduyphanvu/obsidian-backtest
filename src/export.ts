@@ -129,7 +129,7 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
           ['Total return', totalReturn(stats.totalReturn), totalReturn(b.totalReturn)],
           ['Worst drawdown', pct(stats.maxDrawdown), pct(b.maxDrawdown)],
           ['Sharpe ratio', ratio(stats.sharpe), ratio(b.sharpe)],
-          spec.margin ? ['Exposure', `${pct(stats.exposure, 0)} gross, net ${pct(average(run.netExposure ?? []), 0)}`, pct(b.exposure, 0)] : ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
+          spec.margin ? ['Exposure', `${pct(stats.exposure, 0)} gross, net ${pct(stats.netExposure ?? NaN, 0)}`, pct(b.exposure, 0)] : ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
           ['Trades', tradesText(tradeStats), '–'],
           ['Share won', pct(tradeStats.winRate, 0), '–'],
           ...(run.commission === undefined ? [] : [['Costs paid', `${money(run.costs)}, of which ${money(run.commission)} commission`, '–']]),
@@ -197,9 +197,6 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
 
 /** A trade's side as a trade list says it. */
 export const sideText = (t: Trade): string => (t.side === 'short' ? 'Short' : 'Long');
-
-/** The mean of a series, such as a run's net exposure at each close. */
-export const average = (xs: number[]): number => xs.reduce((s, x) => s + x, 0) / xs.length;
 
 const round = (x: number, digits: number): number | string => (Number.isFinite(x) ? Number(x.toFixed(digits)) : '');
 

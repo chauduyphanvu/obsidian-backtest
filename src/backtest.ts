@@ -19,6 +19,8 @@ export interface Stats {
   sortino: number;
   /** Average fraction of equity invested. */
   exposure: number;
+  /** For a run that can borrow, the average of long value less short value over equity, over the bars `exposure` covers. */
+  netExposure?: number;
 }
 
 export interface TradeStats {
@@ -82,7 +84,7 @@ export function maxDrawdown(equity: number[]): number {
  * bar `ruin` (RunResult.ruin) has nothing left to return on after it, so its returns stop there: its equity of 0 after
  * the ruin still makes the total return and CAGR -100% and the worst drawdown -100%.
  */
-export function computeStats(t: number[], equity: number[], capital: number, exposure: number[], cashReturn?: number[], ruin?: number): Stats {
+export function computeStats(t: number[], equity: number[], capital: number, exposure: number[], cashReturn?: number[], ruin?: number, netExposure?: number[]): Stats {
   if (equity.length < 2) return { totalReturn: NaN, cagr: NaN, maxDrawdown: NaN, volatility: NaN, sharpe: NaN, sortino: NaN, exposure: NaN };
   const years = (t[t.length - 1] - t[0]) / YEAR;
   const total = equity[equity.length - 1] / capital - 1;
@@ -110,6 +112,7 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
     sharpe: sdExcess >= NOISE ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
     sortino: downside >= NOISE ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
     exposure: averageExposure(exposure, ruin === undefined ? 0 : equity.length - steps + 1),
+    ...(netExposure ? { netExposure: averageExposure(netExposure, ruin === undefined ? 0 : equity.length - steps + 1) } : {}),
   };
 }
 
@@ -138,7 +141,8 @@ function measure(run: RunResult, eq: number[], ex: number[], base: number, s: nu
   const cut = (xs: number[]) => xs.slice(base, e);
   // Only the strategy's own equity can be ruined; the benchmark never borrows.
   const ruin = eq === run.equity && run.ruin ? run.t.indexOf(run.ruin.t) - base : undefined;
-  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn), ruin);
+  const net = ex === run.exposure ? run.netExposure?.slice(Math.max(s, base), e) : undefined;
+  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn), ruin, net);
 }
 
 /**

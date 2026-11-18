@@ -257,7 +257,8 @@ test('short and cover rules: heads, position values, short-only blocks and the m
 
 test('weights and size up to 200%, the margin terms, and their settings', () => {
   const spec = (src: string) => parseSpec(src).spec;
-  assert.deepEqual(spec('universe: SPY 150%, TLT 50%\nbuy when true')!.margin, { cap: 2, borrowFee: 0.005, rate: 0.06, maintenance: 0.25 });
+  // It never shorts, so it pays no borrow fee.
+  assert.deepEqual(spec('universe: SPY 150%, TLT 50%\nbuy when true')!.margin, { cap: 2, borrowFee: 0, rate: 0.06, maintenance: 0.25 });
   assert.equal(spec('universe: SPY 80%, TLT 40%\nbuy when true')!.margin!.cap, 0.8 + 0.4);
   assert.deepEqual(spec('universe: SPY, TLT\nsize: 150%\nbuy when true')!.universe.map((a) => a.weight), [0.75, 0.75]);
   assert.equal(spec('universe: SPY, TLT\nsize: 150%\nbuy when true')!.margin!.cap, 1.5);

@@ -218,7 +218,10 @@ test('the parser uses the rates of borrowing the settings imply, and a block\'s 
   const defaults = defaultsFrom(normalizeSettings({ borrowFee: '1%', marginRate: '7%' }));
   const read = (source: string) => parseSpec(source, { defaults }).spec!.margin;
   assert.deepEqual(read('universe: SPY\nshort when close < sma(200)'), { cap: 1, borrowFee: 0.01, rate: 0.07, maintenance: 0.25 });
-  assert.deepEqual(read('universe: SPY 150%\nbuy when true\nborrow fee: 2%\nmargin rate: 4.5%'), { cap: 1.5, borrowFee: 0.02, rate: 0.045, maintenance: 0.25 });
+  assert.deepEqual(read('universe: SPY 150%\nbuy when true\nshort when false\nborrow fee: 2%\nmargin rate: 4.5%'), { cap: 1.5, borrowFee: 0.02, rate: 0.045, maintenance: 0.25 });
+  // A block that never shorts pays no borrow fee, so neither the setting nor a line of its own puts one in it.
+  assert.deepEqual(read('universe: SPY 150%\nbuy when true'), { cap: 1.5, borrowFee: 0, rate: 0.07, maintenance: 0.25 });
+  assert.deepEqual(read('universe: SPY 150%\nbuy when true\nborrow fee: 2%'), { cap: 1.5, borrowFee: 0, rate: 0.07, maintenance: 0.25 });
   // A block that never borrows carries no margin terms, whatever the settings say.
   assert.equal(read('universe: SPY\nbuy when true'), undefined);
   // Without the settings, the parser's own rates.

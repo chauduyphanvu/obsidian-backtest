@@ -2,7 +2,6 @@ import type { Backtest, Segment } from './backtest.ts';
 import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
 import { colourSource, h, s } from './dom.ts';
 import type { AssetState } from './engine.ts';
-import { average } from './export.ts';
 import { hintFor } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, moneyTicks, niceStep, pct, signedPct, stamp, timeTicks } from './format.ts';
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
@@ -195,7 +194,10 @@ export function compactFacts(out: RunOutput): CompactFacts {
   const steps = out.spec.entries ?? 1;
   const one = held.length === 1 ? held[0] : null;
   const built = one && steps > 1 ? `, ${one.entries} of ${steps} entries` : '';
-  const holding = !one ? (held.length === 0 ? 'In cash' : `Holds ${held.length} of ${run.states.length}`) : `${one.side === 'short' ? 'Short' : 'Long'} ${one.name} since ${stamp(one.since!, intraday)}${built}`;
+  const shorts = held.filter((st) => st.side === 'short').length;
+  const total = run.states.length;
+  const several = shorts === 0 ? `Holds ${held.length} of ${total}` : shorts === held.length ? `Short ${shorts} of ${total}` : `Long ${held.length - shorts}, short ${shorts} of ${total}`;
+  const holding = !one ? (held.length === 0 ? 'In cash' : several) : `${one.side === 'short' ? 'Short' : 'Long'} ${one.name} since ${stamp(one.since!, intraday)}${built}`;
   const list = (names: string[], most = 2, joiner = ' and ') => (names.length <= most ? names.join(joiner) : `${names.length} tickers`);
   const phrases = (groups: [string, (st: AssetState) => boolean][], of = run.states) =>
     groups.flatMap(([verb, pick]) => {
@@ -292,7 +294,7 @@ function fillTiles(tiles: HTMLElement, bt: Backtest): void {
   tile('Worst drawdown', pct(stats.maxDrawdown), vs(pct(benchmark.stats.maxDrawdown)));
   tile('Sharpe ratio', minus(stats.sharpe.toFixed(2)), vs(minus(benchmark.stats.sharpe.toFixed(2))));
   // A block that can borrow may hold more than its equity, or short: its exposure is gross, with the net beside it.
-  if (bt.spec.margin) tile('Exposure', pct(stats.exposure, 0), `gross, net ${pct(average(bt.run.netExposure ?? []), 0)}`);
+  if (bt.spec.margin) tile('Exposure', pct(stats.exposure, 0), `gross, net ${pct(stats.netExposure ?? NaN, 0)}`);
   else tile('Time invested', pct(stats.exposure, 0), `${pct(stats.volatility)} volatility a year`);
   tile(
     'Trades',

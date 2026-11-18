@@ -41,9 +41,19 @@ test('the folded line names a short held, with the day it was sold short', () =>
   const facts = compactFacts(run('universe: A\nshort when true', { A: bars([10, 10, 12, 15]) }));
   assert.equal(facts.holding, `Short A since ${date(1)}`);
   assert.equal(facts.order, null);
-  // A long and a short held together are counted, as two longs are.
+  // Several held say which side, in the dashboard's words; only longs keep "Holds".
   const both = compactFacts(run('universe: A, B\nfor A:\nbuy when true\nfor B:\nshort when true', { A: bars([10, 10, 12]), B: bars([10, 10, 12]) }));
-  assert.equal(both.holding, 'Holds 2 of 2');
+  assert.equal(both.holding, 'Long 1, short 1 of 2');
+  const shorts = compactFacts(run('universe: A, B, C\nshort when close < 11', { A: bars([10, 10, 9]), B: bars([10, 10, 9]), C: bars([12, 12, 12]) }));
+  assert.equal(shorts.holding, 'Short 2 of 3');
+});
+
+test('a ruined run averages its net exposure over the bars its gross exposure covers', () => {
+  const out = run(LEVERED, { A: RUINED });
+  assert.ok(out.backtest.run.ruin);
+  // Long only, so net is gross at every bar up to the ruin; the bars after it, at 0, count in neither.
+  assert.ok(out.backtest.stats.exposure > 1);
+  assert.equal(out.backtest.stats.netExposure, out.backtest.stats.exposure);
 });
 
 test('the folded line says a short sale and a cover waiting for the next open', () => {
