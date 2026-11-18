@@ -4,7 +4,7 @@
 import { maxDrawdown } from './backtest.ts';
 import { closesFence, extractBlocks, fenceOf, type Block } from './blocks.ts';
 import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic } from './dsl.ts';
-import { barAt, firstAtOrAfter, type RunResult } from './engine.ts';
+import { barAt, firstAtOrAfter, isFlip, type RunResult } from './engine.ts';
 import { isoDate, localDate, median, plural, price, stamp, tidy } from './format.ts';
 import { hash } from './result-cache.ts';
 import { NOTE_CHANGED } from './rewrite.ts';
@@ -379,8 +379,8 @@ export interface LogRow {
 /**
  * The bars of a run where the rules gave an order, earliest first: each bar's orders, the close each rested on and what the
  * strategy was worth there. A buy or an add is dated at the bar its rule or ranking was read at, a sell at the bar its sell rule
- * or ranking was read at, and an order still waiting at the last bar at that bar. Stops, targets and rebalancing are left
- * out: the rules did not give them, and the run makes them by itself.
+ * or ranking was read at, and an order still waiting at the last bar at that bar. Stops, targets, margin calls and
+ * rebalancing are left out: the rules did not give them, and the run makes them by itself.
  */
 export function logRows(bt: { run: Pick<RunResult, 't' | 'equity' | 'trades' | 'states'>; data: Map<string, Bars> }): LogRow[] {
   const { run, data } = bt;
@@ -401,9 +401,10 @@ export function logRows(bt: { run: Pick<RunResult, 't' | 'equity' | 'trades' | '
   }
   const last = run.t[run.t.length - 1];
   for (const st of run.states) {
-    if (!st.pending) continue;
+    // A margin call's close is forced, as a stop's is, so it is left out too.
+    if (!st.pending || st.marginCall) continue;
     // A flip waiting: the position held closes and the other side opens at the same fill.
-    if ((st.side === 'long' && st.pending === 'short') || (st.side === 'short' && st.pending === 'buy')) give(last, st.side === 'long' ? 'sell' : 'cover', st.name);
+    if (isFlip(st)) give(last, st.side === 'long' ? 'sell' : 'cover', st.name);
     give(last, st.pending, st.name);
   }
   return [...byBar]

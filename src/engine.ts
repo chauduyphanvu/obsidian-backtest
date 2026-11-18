@@ -171,6 +171,9 @@ export interface CommissionWhy {
   exitShares: number;
 }
 
+/** An order waiting that closes the side held and opens the other: a short sale while long, or a buy while short. */
+export const isFlip = (st: Pick<AssetState, 'side' | 'pending'>): boolean => (st.side === 'long' && st.pending === 'short') || (st.side === 'short' && st.pending === 'buy');
+
 export interface AssetState {
   name: string;
   /** The configured weight. */
@@ -1261,14 +1264,22 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     call = null;
     waiting = new Set();
   };
-  /** A margin call at the close `t`: every position closes at its next open, pending orders are cancelled and every side must re-arm. */
+  const lastT = timeline[timeline.length - 1];
+  /** A ticker whose prices end before the run does: there is no open left to close a position in it at. */
+  const ended = (a: A) => a.i >= 0 && a.bars.t[a.i] < lastT && !(a.i + 1 < a.bars.t.length && a.bars.t[a.i + 1] <= lastT);
+  /**
+   * A margin call at the close `t`: every position closes at its next open, pending orders are cancelled and every side
+   * must re-arm. Positions in tickers whose prices have ended can't be closed; when they are all that is held, a call
+   * would do nothing, so none is made.
+   */
   const marginCall = (t: number, level: number, gross: number) => {
+    if (!assets.some((a) => a.shares !== 0 && !ended(a))) return;
     marginCalls++;
     call = { k: 'margin', t, equity: level, gross };
     for (const a of assets) {
       a.pending = null;
       a.owed = null;
-      a.called = a.shares !== 0;
+      a.called = a.shares !== 0 && !ended(a);
       for (const side of [a.arm.long, a.arm.short]) {
         side.armed = false;
         side.stoppedT = t;
@@ -1376,8 +1387,6 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
           a.called = false;
           close(a, t, a.bars.o[a.i], 'margin call', call);
         }
-        // A ticker whose prices have ended has no open to close at, so it no longer holds the call open.
-        for (const a of assets) if (a.called && a.i >= a.bars.t.length - 1) a.called = false;
         if (!assets.some((a) => a.called)) call = null;
       }
     }

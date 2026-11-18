@@ -468,8 +468,11 @@ const BORROWED = "Cash can't be below 0: the account holds no borrowed money";
 const spec = (source: string) => parseSpec(`universe: A\ncapital: 1000\n${source}`).spec!;
 
 test('a holding below 0 is a short, written with either minus sign', () => {
-  const { config, errors } = parseAccount('holdings: SPY -50, TLT 20; QQQ −1,200\ncash: 1\n[[A]]');
-  assert.deepEqual(errors, []);
+  const parsed = parseAccount('holdings: SPY -50, TLT 20; QQQ −1,200\ncash: 1\n[[A]]');
+  const { config, errors } = parsed;
+  // A short waits for the strategies, as a cash below 0 does.
+  assert.deepEqual(errors, [{ line: 1, message: 'SPY -50 is a short: the account holds no borrowed shares', from: 10, to: 37 }]);
+  assert.deepEqual([parsed.shorted, errorsBeforeRun(parsed)], [errors[0], []]);
   assert.deepEqual(config.holdings, [
     { ticker: 'SPY', shares: -50 },
     { ticker: 'TLT', shares: 20 },
@@ -492,6 +495,13 @@ test('cash below 0 waits for the strategies: one that can borrow allows it, and 
   assert.equal(borrowedError(parsed, [long]), parsed.borrowed);
   assert.equal(borrowedError(parsed, [long, short]), null);
   assert.equal(borrowedError(parsed, [leveraged]), null);
+  // A strategy listed at 0% gets none of the money, so it doesn't let the account borrow.
+  assert.equal(borrowedError(parsed, [{ ...long, alloc: 1 }, { ...short, alloc: 0 }]), parsed.borrowed);
+  assert.equal(borrowedError(parsed, [{ ...long, alloc: 0.9 }, { ...short, alloc: 0.1 }]), null);
+  // A short holding is lifted the same way, and with both the first line's error is the one shown.
+  const both = parseAccount('holdings: SPY -5\ncash: -2,000\n[[A]]');
+  assert.deepEqual([borrowedError(both, [long])?.line, borrowedError(both, [short])], [1, null]);
+  assert.equal(borrowedError(parseAccount('holdings: SPY -5\n[[A]]'), [leveraged]), null);
   assert.equal(parseAccount('cash: −2,000\n[[A]]').config.cash, -2000);
   // Other errors still stop the block before its strategies run; cash of 0 or more has nothing to lift.
   assert.deepEqual(errorsBeforeRun(parseAccount('cash: -1\nskip under: 1\n[[A]]')).map((e) => e.line), [2]);
@@ -617,6 +627,9 @@ test('the cash: a short sale brings it, a cover spends it and is never cut, and 
   const rounded = accountOrders(account({ cash: 10_000 }), [lev({ borrows: true }, 160)]);
   assert.deepEqual([rounded.orders[0].shares, rounded.orders[0].cut, rounded.cashAfter], [93, true, -4880]);
   assert.match(rounded.notes[0], /more than the cash, the sales and the strategies' borrowing allow/);
+  // A strategy that can borrow but is listed at 0% gets none of the money, so it lets no one borrow.
+  const idle = strat('I', 0, 1000, [], { borrows: true });
+  assert.deepEqual(accountOrders(account({ cash: 10_000 }), [lev({}), idle]).orders.map((o) => [o.shares, o.cut]), [[100, true]]);
 });
 
 test('sales and covers come before purchases and short sales, each by ticker', () => {

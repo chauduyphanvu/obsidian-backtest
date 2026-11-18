@@ -98,7 +98,9 @@ function readSetting(config: AccountConfig, key: Setting, value: string, raw: st
       const h = holdingsOf(raw, value, line);
       if (!Array.isArray(h)) return h;
       config.holdings = h;
-      return null;
+      // parseAccount names this error `shorted`: like a cash below 0, a strategy that can borrow lifts it.
+      const short = h.find((x) => x.shares < 0);
+      return short ? wrong(`${short.ticker} ${short.shares} is a short: the account holds no borrowed shares`) : null;
     }
     case 'cash': {
       const cash = amount(value.replace(NEGATIVE, ''));
@@ -155,6 +157,8 @@ export interface ParsedAccount {
    * or holds more than 100%) may use. Which can borrow is known once they have run (errorsBeforeRun, borrowedError).
    */
   borrowed: Diagnostic | null;
+  /** The error in `errors` on a holding below 0: shares borrowed, which waits for the strategies as `borrowed` does. */
+  shorted: Diagnostic | null;
 }
 
 /**
@@ -167,6 +171,7 @@ export function parseAccount(source: string): ParsedAccount {
   const entries: CompareEntry[] = [];
   const errors: Diagnostic[] = [];
   let borrowed: Diagnostic | null = null;
+  let shorted: Diagnostic | null = null;
   const seen = new Map<Setting, number>();
   source.split(/\r?\n/).forEach((raw, i) => {
     const text = raw.trim();
@@ -188,6 +193,7 @@ export function parseAccount(source: string): ParsedAccount {
       const problem = readSetting(config, key, m[2].trim(), raw, line);
       if (problem) errors.push(problem);
       if (problem && key === 'cash' && config.cash < 0) borrowed = problem;
+      if (problem && key === 'holdings' && config.holdings.some((x) => x.shares < 0)) shorted = problem;
       return;
     }
     if (!text.startsWith('[[') && !/\.md\b/i.test(text)) {
@@ -207,15 +213,21 @@ export function parseAccount(source: string): ParsedAccount {
   if (config.fills !== null && !seen.has('fills from')) {
     errors.push({ line: seen.get('fills')!, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' });
   }
-  return { config, entries, errors: errors.sort((a, b) => a.line - b.line), borrowed };
+  return { config, entries, errors: errors.sort((a, b) => a.line - b.line), borrowed, shorted };
 }
 
-/** The errors that stop a block before its strategies run: all but a cash below 0, which waits to see whether one of them borrows. */
-export const errorsBeforeRun = (p: ParsedAccount): Diagnostic[] => p.errors.filter((e) => e !== p.borrowed);
+/** The errors that stop a block before its strategies run: all but a cash or a holding below 0, which wait to see whether one of them borrows. */
+export const errorsBeforeRun = (p: ParsedAccount): Diagnostic[] => p.errors.filter((e) => e !== p.borrowed && e !== p.shorted);
 
-/** A cash below 0 when no strategy listed can borrow, once they have run; null when there is none or one can. */
-export const borrowedError = (p: ParsedAccount, runs: { out: Pick<RunOutput, 'spec'> }[]): Diagnostic | null =>
-  p.borrowed && !runs.some((r) => r.out.spec.margin) ? p.borrowed : null;
+/** Whether a strategy given some of the money can borrow (to short or to hold more than 100%); one listed at 0% gets none. */
+export const someBorrow = (runs: { out: Pick<RunOutput, 'spec'>; alloc?: number }[]): boolean => runs.some((r) => r.out.spec.margin && (r.alloc ?? 1) > 0);
+
+/** A cash or a holding below 0 (the first by line) when no strategy given money can borrow, once they have run; null when there is none or one can. */
+export function borrowedError(p: ParsedAccount, runs: { out: Pick<RunOutput, 'spec'>; alloc?: number }[]): Diagnostic | null {
+  if (someBorrow(runs)) return null;
+  const found = [p.borrowed, p.shorted].filter((d): d is Diagnostic => d !== null).sort((a, b) => a.line - b.line);
+  return found[0] ?? null;
+}
 
 /** Each entry's share of the account: its weight, or an equal share of all of it when the block gives no weights. */
 export function allocations(entries: CompareEntry[]): number[] {
@@ -411,7 +423,7 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
   const covers = orders.reduce((s, o) => s + covering.get(o)! * o.price, 0);
   const wanted = orders.reduce((s, o) => s + (o.shares > 0 ? (o.shares - covering.get(o)!) * o.price : 0), 0);
   // Where a strategy borrows, the account may too: its cash may end as far below 0 as the strategies' positions leave it.
-  const floor = strategies.some((s) => s.borrows) ? Math.min(0, managed - orders.reduce((s, o) => s + o.target * o.price, 0)) : 0;
+  const floor = strategies.some((s) => s.borrows && s.alloc > 0) ? Math.min(0, managed - orders.reduce((s, o) => s + o.target * o.price, 0)) : 0;
   const available = config.cash + sales - covers - floor;
   let bought = wanted;
   if (wanted > available) {

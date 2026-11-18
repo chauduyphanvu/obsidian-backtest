@@ -1,7 +1,7 @@
 import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountOrder } from './account.ts';
 import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
-import type { AssetState } from './engine.ts';
+import { isFlip, type AssetState } from './engine.ts';
 import { DAY, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
@@ -21,7 +21,6 @@ export const pendingTiming = (fill?: Fill): OrderTiming => (fill === 'close' ? '
 
 export const timingPhrase = (when: OrderTiming): string => `at the ${when}`;
 
-const TO_DO: Record<OrderRow['action'], string> = { buy: 'Buy', sell: 'Sell', short: 'Sell short', cover: 'Buy to cover' };
 const DONE: Record<OrderRow['action'], string> = { buy: 'Bought', sell: 'Sold', short: 'Sold short', cover: 'Bought to cover' };
 
 /**
@@ -31,7 +30,7 @@ const DONE: Record<OrderRow['action'], string> = { buy: 'Bought', sell: 'Sold', 
 export function actionWord(o: Pick<OrderRow, 'action' | 'when'> & Pick<Partial<OrderRow>, 'step'>): string {
   const done = o.when === 'last close';
   if ((o.action === 'buy' || o.action === 'short') && o.step && o.step.k > 1) return done ? 'Added' : 'Add';
-  return (done ? DONE : TO_DO)[o.action];
+  return (done ? DONE : STEP_WORDS)[o.action];
 }
 
 /** What a strategy that fills at the close needs the reader to know, said once. */
@@ -50,7 +49,7 @@ const DID = { buy: 'bought', sell: 'sold', add: 'added', short: 'sold short', co
  */
 export function positionOrder(st: AssetState, fill?: Fill): string {
   if (st.pending) {
-    const flip = (st.side === 'long' && st.pending === 'short') || (st.side === 'short' && st.pending === 'buy');
+    const flip = isFlip(st);
     return `${flip ? `${DOES[st.side === 'long' ? 'sell' : 'cover']}, then ` : ''}${DOES[st.pending]} ${timingPhrase(st.marginCall ? 'next open' : pendingTiming(fill))}`;
   }
   if (!st.filled) return '';
@@ -227,7 +226,7 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
     const closing = (action: 'sell' | 'cover', when: OrderTiming, value: number, since: number | null) =>
       orders.push({ ticker: st.name, action, when, weight: 0, value, lastClose: st.lastClose, since });
     // A flip closes the position held and opens the other side: two orders, the first entry of the new position second.
-    const flip = (st.side === 'long' && st.pending === 'short') || (st.side === 'short' && st.pending === 'buy');
+    const flip = isFlip(st);
     // A margin call closes the position at the next open even when the strategy fills at the close.
     if (st.pending === 'sell' || st.pending === 'cover' || flip) closing(st.side === 'short' ? 'cover' : 'sell', st.marginCall ? 'next open' : pending, Math.abs(st.value), st.since);
     if (st.pending === 'buy' || st.pending === 'short' || st.pending === 'add') {

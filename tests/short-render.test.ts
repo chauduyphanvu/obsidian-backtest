@@ -225,9 +225,9 @@ test('margin calls, a ruin and rules that both held are notes on the result, cou
   );
   assert.equal(root.byClass('bt-fold-mark')[0].textContent, '2 notes');
   const both = draw(run('universe: A\nbuy when true\nshort when true', { A: flat(5) }));
-  assert.deepEqual(both.byClass('bt-warning').map((w) => w.textContent), ['Buy and short rules both held on 5 bars; neither was taken.']);
+  assert.deepEqual(both.byClass('bt-warning').map((w) => w.textContent), ['Buy and short rules both held on 5 bars, so neither opened a position.']);
   const one = draw(run('universe: A\nbuy when close > 100\nshort when close > 100\nfill: close', { A: bars([100, 101, 100]) }));
-  assert.ok(one.byClass('bt-warning').some((w) => w.textContent === 'Buy and short rules both held on 1 bar; neither was taken.'));
+  assert.ok(one.byClass('bt-warning').some((w) => w.textContent === 'Buy and short rules both held on 1 bar, so neither opened a position.'));
 });
 
 test('a ruined run\'s line ends before the ruin, and the axis is not stretched to 0', () => {

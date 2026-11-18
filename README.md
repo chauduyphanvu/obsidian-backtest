@@ -364,7 +364,7 @@ cover when close > sma(200)
 
 - A short rule sells short a ticker you do not hold when its condition is true at a close. A cover rule buys the short back when its condition is true at a close. Both fill as a buy and a sell do: at the ticker's next open, or with `fill: close` at that same close.
 - A block can trade one side or both. Every ticker needs a buy rule or a short rule, and a ticker with only short rules never goes long. A cover rule needs a short rule. A block with `hold` can't have short rules: its ranking only buys.
-- From cash, a ticker goes long when its buy rule holds and its sell rule does not, and short when its short rule holds and its cover rule does not. When both would happen, neither does, and the result says on how many bars that was: "Buy and short rules both held on 12 bars; neither was taken."
+- From cash, a ticker goes long when its buy rule holds and its sell rule does not, and short when its short rule holds and its cover rule does not. When both would happen, neither does, and the result says on how many bars that was: "Buy and short rules both held on 12 bars, so neither opened a position." A position held is still closed on such a bar when the other side's rule holds (rule 68), so a long can end on its short rule with nothing opened in its place.
 - A long position is closed by its sell rule or by the short rule, a short by its cover rule or by the buy rule. The bar is then read again as if the ticker were in cash, so the other side opens at the same fill when its entry holds on its own: a flip. With only a buy rule and a short rule, as in the starter "Trend, long or short", the ticker is held from the first close its 200-day average is known, long above the average and short below it:
 
 ```strategy
@@ -855,7 +855,7 @@ From the top:
    - how many values of a FRED series came in a backfill and how they were dated (see "Where prices come from");
    - buy signals held back while a sizing or stop input warmed up, and a buy rule or `hold` score still unknown at the start of the run;
    - adds and rebalancing trades left undone because their commission would have been too large a part of them (rule 49);
-   - for a block that can borrow, each only when there is one: the borrow fees for shorts ("Borrow fees for shorts: $123."), the interest on borrowed money ("Interest on borrowed money: $456."), the margin calls ("2 margin calls: equity fell below 25% of the positions' value, and every position was closed at the next open."), a ruin ("Ruined on 2022-03-04: equity fell to zero and the run stopped there; the account owed $1,000 more.") and the bars where the buy and short rules both held ("Buy and short rules both held on 12 bars; neither was taken.");
+   - for a block that can borrow, each only when there is one: the borrow fees for shorts ("Borrow fees for shorts: $123."), the interest on borrowed money ("Interest on borrowed money: $456."), the margin calls ("2 margin calls: equity fell below 25% of the positions' value, and every position was closed at the next open."), a ruin ("Ruined on 2022-03-04: equity fell to zero and the run stopped there; the account owed $1,000 more.") and the bars where the buy and short rules both held ("Buy and short rules both held on 12 bars, so neither opened a position.");
    - with `fill: close`, that the run assumes you can trade at the close the rule read, and which other tickers a rule read a bar early or took as known at the fill (a CSV file whose columns are read says this in its own note);
    - with `magnify`, from which day each ticker was looked inside and why not earlier, how many bars with a stop or target inside them were looked inside, and how many were read whole because their smaller bars were missing or did not match;
    - when a rule reads a column of a CSV file, how its rows must be dated, and with `fill: close` which row an order at a close rests on (see "Signals from a CSV file");
@@ -1079,8 +1079,8 @@ Research/Three sleeves.md 20%
 | Setting | What it does |
 | --- | --- |
 | `name: Main brokerage` | The name at the top of the block and in the orders window. Without it, the note's name. |
-| `holdings: SPY 120, TLT 50` | What the account holds: each ticker as the strategies spell it, with its shares, separated by commas or semicolons. A negative number of shares is a short: `SPY -50`. `holdings: none` for nothing. |
-| `cash: 4,200` | Its cash, such as `4,200`, `$4,200.50` or `48k`. It can be below 0 when a listed strategy borrows. The block needs `cash`, `holdings` or both. |
+| `holdings: SPY 120, TLT 50` | What the account holds: each ticker as the strategies spell it, with its shares, separated by commas or semicolons. A negative number of shares is a short, `SPY -50`, which needs a listed strategy that can borrow, as a cash below 0 does. `holdings: none` for nothing. |
+| `cash: 4,200` | Its cash, such as `4,200`, `$4,200.50` or `48k`. It can be below 0 when a listed strategy that gets some of the money can borrow: one that shorts or holds more than 100%. A strategy at `0%` doesn't count. The block needs `cash`, `holdings` or both. |
 | `whole shares: yes` | `yes`, the default, rounds orders to whole shares. `no` trades fractions, to 8 decimals. |
 | `skip under: 1%` | Leaves out a resize worth less than this share of the money the strategies manage, however many shares it is. Opening or closing a position follows a signal and is never left out. The default, 0%, makes every order. |
 | `fills: Broker/schwab.csv` | Your broker's CSV export of trades, by its path in the vault, or as `[[Broker/schwab.csv]]`. Needs `fills from`. |

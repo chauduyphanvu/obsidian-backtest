@@ -170,7 +170,7 @@ test('ruin: equity at 0 or below closes everything, and the run is over with its
 test('when the buy and short rules both hold, neither side opens and the bar is counted', () => {
   const bt = run('universe: A\nbuy when true\nshort when true', { A: flat(5) });
   assert.deepEqual([bt.run.trades.length, bt.run.conflicts, bt.run.fills.t.length], [0, 5, 0]);
-  assert.ok(bt.notes.includes('Buy and short rules both held on 5 bars; neither was taken.'));
+  assert.ok(bt.notes.includes('Buy and short rules both held on 5 bars, so neither opened a position.'));
   // A sell rule that holds vetoes the long, so the short opens alone.
   assert.equal(run('universe: A\nbuy when true\nsell when true\nshort when true', { A: flat(5) }).run.trades[0].side, 'short');
 });
@@ -304,4 +304,23 @@ test('a margin call is not held open by a ticker whose prices have ended, so a l
   assert.deepEqual(r.trades.map((t) => [t.asset, t.reason]), [['B', 'margin call'], ['A', 'open'], ['B', 'margin call']]);
   // A can't be closed, so it is not reported as closing at the next open either.
   assert.deepEqual([r.states[0].side, r.states[0].pending, r.states[0].marginCall], ['short', null, undefined]);
+});
+
+test('a position in a ticker whose prices have ended does not set off a margin call at every close', () => {
+  // A is shorted at 100 and its prices end at 180; B is bought at 100. At day 2's close equity is 2,000 against 28,000
+  // held: the call sells B at day 3's open. A's short still leaves equity under 25% of what is held, but nothing left
+  // can be closed, so no more calls are made.
+  const A = ohlc([[100, 100, 100, 100], [100, 100, 100, 100], [100, 180, 100, 180]]);
+  const B = flat(12);
+  const r = run('universe: A 100%, B 100%\ncapital: 10000\nborrow fee: 0%\nmargin rate: 0%\nfor A:\n  short when true\nfor B:\n  buy when close > 50', { A, B }).run;
+  assert.equal(r.marginCalls, 1);
+  assert.deepEqual(r.trades.map((t) => [t.asset, t.reason, t.exitT]), [['B', 'margin call', day(3)], ['A', 'open', day(11)]]);
+});
+
+test('a ruined run averages its exposure over the bars before the ruin', () => {
+  const at = ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66], [45, 65, 45, 60], [60, 80, 60, 80], [80, 90, 80, 90]]);
+  const bt = run('universe: A 200%\ncapital: 10000\nmargin rate: 0%\nbuy when true', { A: at });
+  const ex = bt.run.exposure;
+  assert.deepEqual(ex.slice(3), [0, 0, 0]);
+  assert.ok(Math.abs(bt.stats.exposure - (ex[0] + ex[1] + ex[2]) / 3) < 1e-12, `${bt.stats.exposure}`);
 });

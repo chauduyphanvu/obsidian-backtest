@@ -214,3 +214,9 @@ test('the log of a short strategy in a note: its words, the exit before the entr
   assert.ok(log.ok);
   assert.deepEqual(revisions(log, rows), []);
 });
+
+test('a margin call waiting at the last bar is not logged: it is forced, as a stop is', () => {
+  const bt = run('universe: A 200%\ncapital: 10000\nmargin rate: 0%\nbuy when true', { A: [100, 100, 70, 66] });
+  assert.deepEqual([bt.run.states[0].pending, bt.run.states[0].marginCall], ['sell', true]);
+  assert.deepEqual(words(logRows(bt)), [['2020-01-01', ['buy A 100']]]);
+});

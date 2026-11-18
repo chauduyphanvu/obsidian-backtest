@@ -109,8 +109,14 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
     volatility: sd * Math.sqrt(perYear),
     sharpe: sdExcess >= NOISE ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
     sortino: downside >= NOISE ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
-    exposure: exposure.reduce((s, x) => s + x, 0) / exposure.length,
+    exposure: averageExposure(exposure, ruin === undefined ? 0 : equity.length - steps + 1),
   };
+}
+
+/** The average exposure, leaving out the last `after` bars: those from a ruin on, where nothing is held any more. */
+function averageExposure(exposure: number[], after: number): number {
+  const kept = exposure.length - after > 0 ? exposure.slice(0, exposure.length - after) : exposure;
+  return kept.reduce((s, x) => s + x, 0) / kept.length;
 }
 
 export function computeTradeStats(trades: Trade[]): TradeStats {
@@ -409,7 +415,7 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   }
   if (run.conflicts) {
     const n = run.conflicts;
-    notes.push(`Buy and short rules both held on ${n} ${n === 1 ? 'bar' : 'bars'}; neither was taken.`);
+    notes.push(`Buy and short rules both held on ${n} ${n === 1 ? 'bar' : 'bars'}, so neither opened a position.`);
   }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   notes.push(...insideNotes(spec, data, run, intraday));

@@ -119,7 +119,7 @@ test('a short\'s stop, target and trailing stop name the cover, and the short ru
 
 test('the buy and short rules both holding while flat is said, and so is a short rule held back by the cover rule', () => {
   const both = rowsOf(run('universe: A\nbuy when true\nshort when true', { A: bars([10, 10, 10]) }));
-  assert.deepEqual(both.map((r) => r.what), Array(3).fill('Buy and short rules both held, so neither was taken.'));
+  assert.deepEqual(both.map((r) => r.what), Array(3).fill('Buy and short rules both held, so neither opened a position.'));
   const vetoed = rowsOf(run('universe: A\nshort when true\ncover when true', { A: bars([10, 10, 10]) }));
   assert.deepEqual(vetoed.map((r) => r.what), Array(3).fill('Short rule held, but the cover rule held too, so no short sale.'));
 });

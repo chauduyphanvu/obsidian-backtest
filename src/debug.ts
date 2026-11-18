@@ -1081,7 +1081,7 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
         out.push('Short rule held, but the cover rule held too, so no short sale.');
         break;
       case 'conflict':
-        out.push('Buy and short rules both held, so neither was taken.');
+        out.push('Buy and short rules both held, so neither opened a position.');
         break;
       case 'ruined':
         out.push(`Nothing more was traded after the ruin on ${when(cx.bt.run.ruin!.t)}.`);

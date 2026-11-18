@@ -149,7 +149,10 @@ export function bucketStats(run: RunSeries, bucket: number[], count: number): Bu
   const sums = Array.from({ length: count + 1 }, () => ({ steps: 0, covered: 0, product: 1, benchSteps: 0, benchCovered: 0, benchProduct: 1, exposure: 0, net: 0, worst: 0 }));
   let stretch = -1;
   let peak = 0;
-  for (let i = 1; i < t.length; i++) {
+  // A run ruined (its equity at 0) stopped there: the steps after it are not the strategy's, in any state.
+  const ruin = equity.findIndex((x, i) => i > 0 && x <= 0);
+  const n = ruin < 0 ? t.length : ruin + 1;
+  for (let i = 1; i < n; i++) {
     const b = bucket[i - 1] < 0 ? count : bucket[i - 1];
     const s = sums[b];
     const span = t[i] - t[i - 1];
@@ -173,7 +176,7 @@ export function bucketStats(run: RunSeries, bucket: number[], count: number): Bu
   }
   return sums.map((s) => ({
     steps: s.steps,
-    share: s.steps / (t.length - 1),
+    share: s.steps / (n - 1),
     strategy: growth(s.product, s.covered),
     benchmark: s.benchSteps > 0 ? growth(s.benchProduct, s.benchCovered) : { value: NaN, perYear: false },
     exposure: s.exposure / s.steps,
@@ -246,7 +249,8 @@ export function crisisResults(run: RunSeries, crises: Crisis[]): CrisisResult[] 
   for (const crisis of crises) {
     const [peak, trough] = [Date.parse(`${crisis.peak}T00:00:00Z`), Date.parse(`${crisis.trough}T00:00:00Z`)];
     const [start, end] = endedBy(t, [peak + DAY, trough + DAY]);
-    if (start < 0 || end <= start || t[t.length - 1] < trough) continue;
+    // A run ruined before the crisis had stopped by then, as one that ended before it.
+    if (start < 0 || end <= start || t[t.length - 1] < trough || !(equity[start] > 0)) continue;
     let top = equity[start];
     let worst = 0;
     let invested = 0;
