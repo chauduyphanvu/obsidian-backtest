@@ -210,6 +210,11 @@ export interface AssetState {
   rearming?: true;
   rearmingShort?: true;
   /**
+   * A margin call made at the last close closes this position at the next open, whatever the block's `fill`: `pending` is
+   * then its sell or cover.
+   */
+  marginCall?: true;
+  /**
    * While held with a stop or target: the levels in force for the next bar, the trailing stop's moved by the last bar's
    * high (for a short, its low).
    */
@@ -1566,6 +1571,10 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       }
       if (!p.rank && !a.arm.long.armed && a.shares <= 0) st.rearming = true;
       if (!p.rank && a.sig.short && !a.arm.short.armed && a.shares >= 0) st.rearmingShort = true;
+      if (a.called) {
+        st.pending = short ? 'cover' : 'sell';
+        st.marginCall = true;
+      }
       return st;
     }),
     costs,

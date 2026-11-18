@@ -830,3 +830,28 @@ test('the closes to watch leave out a short rule re-arming, as they do the buy r
   const rows = watchRows(reportOf([trigger('A', 'rearmShort', [{ lo: 100.5, hi: null }]), trigger('B', 'short', [{ lo: null, hi: 100.5 }])]));
   assert.deepEqual(rows.map((r) => [r.ticker, r.side, r.phrase, r.now]), [['B', 'short', 'Shorts unless it closes above 100.50 (+0.5%)', true]]);
 });
+
+test('a margin call at the last close is a sell at the next open, even with fill: close, with no trigger prices', () => {
+  // 200 shares bought at 100 with 10,000: at 66 equity is 24.2% of the 13,200 held, so the next open sells everything.
+  const A = bars([100, 70, 66], { opens: [100, 100, 70], highs: [100, 100, 70], lows: [100, 70, 66] });
+  for (const fill of ['', '\nfill: close']) {
+    const out = run(`universe: A 200%\ncapital: 10000\nmargin rate: 0%${fill}\nbuy when true`, { A });
+    const st = out.backtest.run.states[0];
+    assert.deepEqual([st.side, st.pending, st.marginCall], ['long', 'sell', true]);
+    assert.equal(positionOrder(st, out.spec.fill), 'sells at the next open');
+    const s = statusFrom('n.md', 'S', out, NOW);
+    assert.deepEqual(s.orders.map((o) => [o.ticker, o.action, o.when, o.value]), [['A', 'sell', 'next open', 13200]]);
+    assert.deepEqual(s.holdings, []);
+    const report = computeTriggers(out.spec, out.data, triggerRun(out.backtest.run));
+    assert.deepEqual(report.triggers.map((t) => [t.side, t.blocked]), [['sell', 'pending']]);
+  }
+});
+
+test('a ruined run gives no trigger prices: it stopped trading', () => {
+  const A = bars([100, 70, 60, 80], { opens: [100, 100, 70, 45], highs: [100, 100, 70, 80], lows: [100, 70, 60, 45] });
+  const out = run('universe: A 200%\ncapital: 10000\nmargin rate: 0%\nbuy when true', { A });
+  assert.ok(out.backtest.run.ruin);
+  const st = out.backtest.run.states[0];
+  assert.deepEqual([st.side, st.pending, st.marginCall], [null, null, undefined]);
+  assert.deepEqual(computeTriggers(out.spec, out.data, triggerRun(out.backtest.run)).triggers, []);
+});

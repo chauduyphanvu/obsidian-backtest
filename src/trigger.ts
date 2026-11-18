@@ -53,6 +53,8 @@ export interface Trigger {
   levels?: { stop: number | null; target: number | null };
   /** Held short, so its stop lies above the last close and its target below. */
   short?: true;
+  /** A re-arm in a block that can borrow, where a margin call also makes each side's entry rule stop holding first. */
+  marginCall?: true;
   /** True when nothing about the next bar is assumed but the close; otherwise `assumptions` says what is, in words that follow "Assumes". */
   exact: boolean;
   assumptions: string[];
@@ -75,9 +77,16 @@ export interface TriggerRun {
   t: number[];
   equity: number;
   states: AssetState[];
+  /** The run was ruined (RunResult.ruin) and stopped trading, so no close can give an order. */
+  ruined?: true;
 }
 
-export const triggerRun = (run: Pick<RunResult, 't' | 'equity' | 'states'>): TriggerRun => ({ t: run.t, equity: run.equity[run.equity.length - 1], states: run.states });
+export const triggerRun = (run: Pick<RunResult, 't' | 'equity' | 'states' | 'ruin'>): TriggerRun => ({
+  t: run.t,
+  equity: run.equity[run.equity.length - 1],
+  states: run.states,
+  ...(run.ruin ? { ruined: true as const } : {}),
+});
 
 /** Whether a strategy has a next close to watch: one that ends at a `to` date has not. */
 export const watchable = (spec: Spec): boolean => spec.to === null;
@@ -411,6 +420,7 @@ export function computeTriggers(spec: Spec, data: Map<string, Bars>, run: Trigge
     decision: spec.rank ? nextDecision(run.t, spec.rebalance) : null,
     triggers: [],
   };
+  if (run.ruined) return report;
   const apart = clocksApart(spec, data);
   let reference: Evaluator | null = null;
   const full = () => (reference ??= specEvaluator(spec, data));
@@ -489,6 +499,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
     ownLast: st.lastClose,
     ...levels,
     ...short,
+    ...(spec.margin && (side === 'rearm' || side === 'rearmShort') ? { marginCall: true as const } : {}),
     ...more,
     exact: plan.assumptions.length === 0,
     assumptions: plan.assumptions,
@@ -715,7 +726,7 @@ export function rulePhrase(t: Trigger): string | null {
   if (t.side === 'rearm' || t.side === 'rearmShort') {
     const cond = condition(t, t.driver);
     const [rule, again] = t.side === 'rearm' ? ['buy', 'bought'] : ['short', 'shorted'];
-    return `After a stop or target exit, the ${rule} rule must stop holding before ${t.ticker} is ${again} again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
+    return `After a stop or target exit${t.marginCall ? ' or a margin call' : ''}, the ${rule} rule must stop holding before ${t.ticker} is ${again} again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
   }
   const cond = condition(t, who);
   return cond ? `${VERB[t.side]} ${cond}` : `The ${t.side} rule gives no order at any ${close} ${range}`;
