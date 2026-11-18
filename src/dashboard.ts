@@ -92,7 +92,7 @@ export interface DoneRow {
   maxDrawdown: number;
   sharpe: number;
   trades: number;
-  /** What it holds, such as "Long SPY", "Long 2 of 5" or "In cash". */
+  /** What it holds, such as "Long SPY", "Short SPY", "Long 2 of 5" or "In cash". */
   now: string;
   /** The tickers held now. */
   held: string[];
@@ -110,21 +110,29 @@ export type DashRow = PendingRow | FailedRow | DoneRow;
 
 const MORE_AFTER = 3;
 
+/** "Long SPY", "Short SPY", "Long 2 of 5", "Long 2, short 1 of 5" or "In cash"; a short held is listed as "SPY (short)". */
 function holding(states: AssetState[]): { now: string; held: string[] } {
-  const held = states.filter((s) => s.side === 'long').map((s) => s.name);
-  const now = held.length === 0 ? 'In cash' : held.length === 1 ? `Long ${held[0]}` : `Long ${held.length} of ${states.length}`;
-  return { now, held };
+  const on = states.filter((s) => s.side !== null);
+  const shorts = on.filter((s) => s.side === 'short').length;
+  const side = shorts === 0 ? 'Long' : shorts === on.length ? 'Short' : null;
+  const now =
+    on.length === 0 ? 'In cash' : on.length === 1 ? `${side} ${on[0].name}` : side ? `${side} ${on.length} of ${states.length}` : `Long ${on.length - shorts}, short ${shorts} of ${states.length}`;
+  return { now, held: on.map((s) => (s.side === 'short' ? `${s.name} (short)` : s.name)) };
 }
 
+/** The order the next-orders lines come in: what makes positions smaller first, as in today's orders, then what makes them larger. */
+const LINE_KINDS = ['sell', 'cover', 'buy', 'short', 'add'] as const;
+
 /**
- * "Sell TLT, GLD", "Buy SPY at the next close", "Add QQQ", "Bought SPY at the last close": sells first, as in today's
- * orders, then buys, then adds to positions held. An order for the next open, the usual one, says no time.
+ * "Sell TLT, GLD", "Buy to cover SPY", "Buy SPY at the next close", "Add QQQ", "Bought SPY at the last close": sells and
+ * covers first, then buys and short sales, then adds to positions held. An order for the next open, the usual one, says
+ * no time.
  */
-function nextLines(orders: OrderRow[]): string[] {
-  const isAdd = (o: OrderRow) => o.action === 'buy' && !!o.step && o.step.k > 1;
+export function nextLines(orders: OrderRow[]): string[] {
+  const kindOf = (o: OrderRow): string => (o.action === 'buy' && !!o.step && o.step.k > 1 ? 'add' : o.action);
   return TIMINGS.flatMap((when) =>
-    (['sell', 'buy', 'add'] as const).flatMap((kind) => {
-      const group = orders.filter((o) => o.when === when && (kind === 'add' ? isAdd(o) : o.action === kind && !isAdd(o)));
+    LINE_KINDS.flatMap((kind) => {
+      const group = orders.filter((o) => o.when === when && kindOf(o) === kind);
       if (group.length === 0) return [];
       const more = group.length - MORE_AFTER;
       const named = `${group.slice(0, MORE_AFTER).map((o) => o.ticker).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;

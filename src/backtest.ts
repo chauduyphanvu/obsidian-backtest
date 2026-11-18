@@ -2,7 +2,7 @@ import { INSIDE_BARS } from './data.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
 import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type SimParams, type Signals, type Skipped, type Trade } from './engine.ts';
 import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
-import { DAY, isIntraday, stamp, YEAR } from './format.ts';
+import { DAY, isIntraday, money, stamp, YEAR } from './format.ts';
 import { alignByEnd } from './indicators.ts';
 import { priceMemo } from './price-memo.ts';
 import { stable } from './result-cache.ts';
@@ -397,9 +397,19 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
       `${n} ${n === 1 ? 'add or rebalancing trade was' : 'adds and rebalancing trades were'} not made because the commission would have been ${SMALL_TRADE * 100}% of ${n === 1 ? 'its' : 'their'} value or more.`,
     );
   }
+  if (run.marginCalls) {
+    const n = run.marginCalls;
+    const level = `${Number((spec.margin!.maintenance * 100).toFixed(1))}%`;
+    notes.push(`${n} ${n === 1 ? 'margin call' : 'margin calls'}: equity fell below ${level} of the positions' value, and every position was closed at the next open.`);
+  }
+  if (run.ruin) {
+    // A debt under half a dollar would read as "$0 more".
+    const owed = run.ruin.deficit >= 0.5 ? `; the account owed ${money(run.ruin.deficit)} more` : '';
+    notes.push(`Ruined on ${stamp(run.ruin.t, intraday)}: equity fell to zero and the run stopped there${owed}.`);
+  }
   if (run.conflicts) {
     const n = run.conflicts;
-    notes.push(`On ${n} ${n === 1 ? 'bar' : 'bars'} the buy rule and the short rule both held, so neither side opened there.`);
+    notes.push(`Buy and short rules both held on ${n} ${n === 1 ? 'bar' : 'bars'}; neither was taken.`);
   }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   notes.push(...insideNotes(spec, data, run, intraday));

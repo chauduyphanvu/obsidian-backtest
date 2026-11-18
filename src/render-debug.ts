@@ -261,7 +261,11 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
       h(li, 'span', 'bt-debug-legend-caption', c.caption);
       h(li, 'span', c.kind === 'score' || c.kind === 'place' ? 'bt-debug-legend-text' : 'bt-debug-legend-text bt-debug-code', `${c.kind === 'score' ? 'Score: ' : ''}${c.text}`);
     }
-    h(legend, 'div', 'bt-debug-legend-key', '✓ yes, ✗ no, ? unknown, – not read (the part needs an open position and none was held, or, for an add rule, a position that can still take another entry). A shaded row is a bar where a position was held at the close; sell rule columns are dimmed on the others.');
+    const shorts = columns.some((c) => c.group === 'short' || c.group === 'cover');
+    const dimmed = shorts
+      ? 'sell rule columns are dimmed where no long was held, and cover rule columns where no short was'
+      : 'sell rule columns are dimmed on the others';
+    h(legend, 'div', 'bt-debug-legend-key', `✓ yes, ✗ no, ? unknown, – not read (the part needs an open position and none was held, or, for an add rule, a position that can still take another entry). A shaded row is a bar where a position was held at the close; ${dimmed}.`);
   }
 
   if (picker) {
@@ -316,7 +320,7 @@ function drawTable(box: HTMLElement, columns: DebugColumn[], rows: DebugRow[], f
   const body = h(table, 'tbody');
   let target: HTMLElement | null = null;
   for (const row of rows) {
-    const tr = h(body, 'tr', `bt-debug-row${row.held ? ' bt-debug-held' : ''}${row.index === focus ? ' bt-debug-focus' : ''}`);
+    const tr = h(body, 'tr', `bt-debug-row${row.held ? ' bt-debug-held' : ''}${row.side === 'short' ? ' bt-debug-held-short' : ''}${row.index === focus ? ' bt-debug-focus' : ''}`);
     if (row.index === focus) {
       target = tr;
       tr.setAttribute('aria-current', 'true');
@@ -343,16 +347,25 @@ function drawCell(tr: HTMLElement, col: DebugColumn, row: DebugRow, n: number): 
     h(tr, 'td', 'bt-num', text.main);
     return;
   }
-  const idle = col.group === 'sell' && !row.readHeld;
+  // Each exit rule is in play only while its own side is held.
+  const idle = col.group === 'sell' ? !row.readHeld || row.readSide === 'short' : col.group === 'cover' && row.readSide !== 'short';
   const td = h(tr, 'td', `bt-debug-cell bt-debug-${cell.outcome ?? 'na'}${idle ? ' bt-debug-idle' : ''}`);
   if (cell.outcome === null) {
     td.textContent = '–';
-    const why = col.group === 'add' && row.readHeld ? 'the position already had all its entries' : 'it needs an open position, and none was held';
+    const why =
+      col.group === 'add' && row.readHeld
+        ? 'the position already had all its entries'
+        : col.group === 'cover' && row.readHeld
+          ? 'it needs a short position, and a long was held'
+          : col.group === 'sell' && row.readSide === 'short'
+            ? 'it needs a long position, and a short was held'
+            : 'it needs an open position, and none was held';
     td.title = `${col.caption}: ${col.text}\nNot read: ${why}.`;
     return;
   }
   if (text.main) h(td, 'span', 'bt-debug-values', text.main);
   h(td, 'span', 'bt-debug-mark', MARK[cell.outcome]);
   if (text.detail) h(td, 'span', 'bt-debug-detail', text.detail);
-  td.title = [`${col.caption}: ${col.text}`, text.main, MARK[cell.outcome], text.detail, idle ? 'No position was held, so the sell rule was not in play.' : ''].filter(Boolean).join('\n');
+  const notInPlay = col.group === 'cover' ? 'No short was held, so the cover rule was not in play.' : row.readSide === 'short' ? 'No long was held, so the sell rule was not in play.' : 'No position was held, so the sell rule was not in play.';
+  td.title = [`${col.caption}: ${col.text}`, text.main, MARK[cell.outcome], text.detail, idle ? notInPlay : ''].filter(Boolean).join('\n');
 }

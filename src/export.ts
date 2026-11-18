@@ -1,9 +1,10 @@
 // Text a result can be kept as: CSV files, a snapshot note and note properties. Pure; the caller reads the clock and writes files.
 
 import { drawdowns, type Backtest, type Segment } from './backtest.ts';
-import type { Trade } from './engine.ts';
+import type { AssetState, Trade } from './engine.ts';
 import { csvField, isIntraday, isoDate, minus, money, pct, price, signedPct, stamp } from './format.ts';
 import { positionOrder } from './orders.ts';
+import { tradeExit } from './price-chart.ts';
 
 const SNAPSHOT_TRADES = 30;
 
@@ -12,6 +13,16 @@ export function boughtText(t: Trade, intraday: boolean): string {
   const n = t.entries?.length ?? 1;
   return n > 1 ? `${stamp(t.entryT, intraday)}, ${n} entries` : stamp(t.entryT, intraday);
 }
+
+/** What a ticker holds after the last bar, as the positions table says it: "Long since …" or "Short since …", with the entries made of a position built in `steps`, or "In cash". */
+export function positionText(st: AssetState, steps: number, intraday: boolean): string {
+  if (st.side === null) return 'In cash';
+  const built = steps > 1 ? `, ${st.entries} of ${steps} entries` : '';
+  return `${st.side === 'long' ? 'Long' : 'Short'} since ${stamp(st.since!, intraday)}${built}`;
+}
+
+/** Whether a run has a short trade, which gives its trade lists a side. */
+export const hasShorts = (trades: Trade[]): boolean => trades.some((t) => t.side === 'short');
 
 export const csvLine = (fields: (string | number)[]): string => fields.map(csvField).join(',') + '\n';
 /** Fixed decimals, without a "-0.00" for a loss too small to show. */
@@ -25,11 +36,17 @@ const trimmed = (x: number, digits: number): string => String(Number(x.toFixed(d
 /**
  * One row per trade. A strategy that builds positions in steps gets four more columns at the end: the number of entries,
  * and each entry's date, price and shares, separated by semicolons; `bought` is then the first entry and `buy_price` their
- * average.
+ * average. A run with a short trade gets a `side` column after all of them, long or short, so the others keep their
+ * places; for a short, `bought` and `buy_price` are its entry, the short sale, and `sold` and `sell_price` the cover.
  */
 export function tradesCsv(trades: Trade[], intraday: boolean): string {
   const steps = trades.some((t) => t.entries);
-  let out = csvLine(['ticker', 'bought', 'buy_price', 'sold', 'sell_price', 'return_pct', 'profit', 'bars', 'exit', ...(steps ? ['entries', 'entry_dates', 'entry_prices', 'entry_shares'] : [])]);
+  const sides = hasShorts(trades);
+  let out = csvLine([
+    'ticker', 'bought', 'buy_price', 'sold', 'sell_price', 'return_pct', 'profit', 'bars', 'exit',
+    ...(steps ? ['entries', 'entry_dates', 'entry_prices', 'entry_shares'] : []),
+    ...(sides ? ['side'] : []),
+  ]);
   for (const t of trades) {
     const open = t.reason === 'open';
     const entries = t.entries ?? [{ t: t.entryT, price: t.entryPrice, shares: NaN }];
@@ -51,6 +68,7 @@ export function tradesCsv(trades: Trade[], intraday: boolean): string {
             entries.map((e) => (Number.isNaN(e.shares) ? '' : trimmed(e.shares, 6))).join(';'),
           ]
         : []),
+      ...(sides ? [t.side ?? 'long'] : []),
     ]);
   }
   return out;
@@ -111,7 +129,7 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
           ['Total return', totalReturn(stats.totalReturn), totalReturn(b.totalReturn)],
           ['Worst drawdown', pct(stats.maxDrawdown), pct(b.maxDrawdown)],
           ['Sharpe ratio', ratio(stats.sharpe), ratio(b.sharpe)],
-          ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
+          spec.margin ? ['Exposure', `${pct(stats.exposure, 0)} gross, net ${pct(average(run.netExposure ?? []), 0)}`, pct(b.exposure, 0)] : ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
           ['Trades', tradesText(tradeStats), '–'],
           ['Share won', pct(tradeStats.winRate, 0), '–'],
           ...(run.commission === undefined ? [] : [['Costs paid', `${money(run.costs)}, of which ${money(run.commission)} commission`, '–']]),
@@ -143,24 +161,25 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
         ['Ticker', 'Weight', 'Now'],
         run.states.map((st) => {
           const order = positionOrder(st, spec.fill);
-          const built = st.side === 'long' && (spec.entries ?? 1) > 1 ? `, ${st.entries} of ${spec.entries} entries` : '';
-          return [st.name, pct(st.weight, 0), (st.side === 'long' ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash') + (order ? `, ${order}` : '')];
+          return [st.name, pct(st.weight, 0), positionText(st, spec.entries ?? 1, intraday) + (order ? `, ${order}` : '')];
         }),
         'lrl',
       ),
   );
 
   const latest = run.trades.slice(-SNAPSHOT_TRADES).reverse();
+  const sides = hasShorts(run.trades);
   const tradeRows = latest.map((t) => {
     const open = t.reason === 'open';
     return [
       t.asset,
+      ...(sides ? [sideText(t)] : []),
       boughtText(t, intraday),
       price(t.entryPrice),
       open ? '–' : stamp(t.exitT, intraday),
       open ? '–' : price(t.exitPrice),
       signedPct(t.ret),
-      open ? 'still held' : t.reason === 'signal' ? 'sell rule' : t.reason,
+      tradeExit(t, run.trades),
     ];
   });
   sections.push(
@@ -168,11 +187,19 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
       (latest.length === 0
         ? 'No trades.'
         : (latest.length < run.trades.length ? `Showing the latest ${latest.length} of ${run.trades.length}.\n\n` : '') +
-          table(['Ticker', 'Bought', 'At', 'Sold', 'At', 'Return', 'Exit'], tradeRows, 'llrlrrl')),
+          (sides
+            ? table(['Ticker', 'Side', 'Opened', 'At', 'Closed', 'At', 'Return', 'Exit'], tradeRows, 'lllrlrrl')
+            : table(['Ticker', 'Bought', 'At', 'Sold', 'At', 'Return', 'Exit'], tradeRows, 'llrlrrl'))),
   );
 
   return sections.join('\n\n') + '\n';
 }
+
+/** A trade's side as a trade list says it. */
+export const sideText = (t: Trade): string => (t.side === 'short' ? 'Short' : 'Long');
+
+/** The mean of a series, such as a run's net exposure at each close. */
+export const average = (xs: number[]): number => xs.reduce((s, x) => s + x, 0) / xs.length;
 
 const round = (x: number, digits: number): number | string => (Number.isFinite(x) ? Number(x.toFixed(digits)) : '');
 
@@ -202,7 +229,7 @@ export function propertyIds(names: (string | null)[]): string[] {
 /** Values to store in a note's properties so a Base can list strategies. `id` is from `propertyIds`. */
 export function resultProperties(bt: Backtest, now: number, id = ''): Record<string, string | number> {
   const { run, stats, tradeStats, benchmark } = bt;
-  const held = run.states.filter((s) => s.side === 'long').map((s) => s.name);
+  const held = run.states.filter((s) => s.side !== null).map((s) => (s.side === 'short' ? `${s.name} (short)` : s.name));
   const values: Record<string, string | number> = {
     return_per_year: round(stats.cagr * 100, 1),
     worst_drawdown: round(stats.maxDrawdown * 100, 1),

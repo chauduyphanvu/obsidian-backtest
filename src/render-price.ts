@@ -1,4 +1,5 @@
-// The "Prices and trades" section: a ticker's price with the strategy's holding periods, buys and sells marked.
+// The "Prices and trades" section: a ticker's price with the strategy's holding periods, buys and sells marked, and for a
+// strategy that shorts its short sales and covers too.
 
 import { h, s } from './dom.ts';
 import type { Trade } from './engine.ts';
@@ -11,7 +12,6 @@ import {
   clipBars,
   clipTrades,
   decimate,
-  exitWording,
   heldIntervals,
   heldShare,
   markerCount,
@@ -23,6 +23,7 @@ import {
   showMarkers,
   summaryLine,
   tradeAt,
+  tradeExit,
   useLog,
   type Closes,
   type WindowTrade,
@@ -53,8 +54,18 @@ interface View {
 interface Drawn {
   buys: number;
   sells: number;
+  shorts: number;
+  covers: number;
   dropped: boolean;
 }
+
+type Mark = 'buy' | 'sell' | 'short' | 'cover';
+/**
+ * Each marker points the way its order trades: a buy or a cover below the price with its tip up, a sell or a short sale
+ * above it with its tip down. A long's buy is filled and its sell hollow; a short's sale is filled and its cover hollow,
+ * in the short colour, so the four differ in shape as well as colour.
+ */
+const POINTS: Record<Mark, 'buy' | 'sell'> = { buy: 'buy', sell: 'sell', short: 'sell', cover: 'buy' };
 
 /** Appends a collapsed "Prices and trades" section to `parent`. Built the first time it is opened. Returns a cleanup function. */
 export function renderPriceCharts(parent: HTMLElement, input: PriceInput): () => void {
@@ -84,14 +95,17 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
     h(k, 'span', undefined, label);
     return k;
   };
-  const glyph = (el: HTMLElement, kind: 'buy' | 'sell') => {
+  const glyph = (el: HTMLElement, kind: Mark) => {
     const svg = s(el, 'svg', { width: 12, height: 11, class: 'bt-price-glyph' });
-    s(svg, 'path', { d: kind === 'buy' ? markerPath('buy', 6, -1) : markerPath('sell', 6, 11), class: `bt-price-${kind}` });
+    s(svg, 'path', { d: POINTS[kind] === 'buy' ? markerPath('buy', 6, -1) : markerPath('sell', 6, 11), class: `bt-price-${kind}` });
   };
   key('Price', (k) => h(k, 'span', 'bt-price-sw bt-price-sw-line'));
   const heldKey = key('Held', (k) => h(k, 'span', 'bt-price-sw bt-price-sw-band'));
+  const shortHeldKey = key('Held short', (k) => h(k, 'span', 'bt-price-sw bt-price-sw-band-short'));
   const buyKey = key('Buy', (k) => glyph(k, 'buy'));
   const sellKey = key('Sell', (k) => glyph(k, 'sell'));
+  const shortKey = key('Sell short', (k) => glyph(k, 'short'));
+  const coverKey = key('Buy to cover', (k) => glyph(k, 'cover'));
   const chart = h(body, 'div', 'bt-chart bt-price-chart');
   const tip = h(chart, 'div', 'bt-tip bt-price-tip');
   tip.hidden = true;
@@ -100,9 +114,13 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
   const redraw = () => {
     if (width <= 0) return;
     const drawn = drawPrice(chart, tip, width, current, input);
-    heldKey.hidden = current.held.length === 0;
+    const shorts = current.held.filter((w) => w.trade.side === 'short').length;
+    heldKey.hidden = current.held.length === shorts;
+    shortHeldKey.hidden = shorts === 0;
     buyKey.hidden = drawn.buys === 0;
     sellKey.hidden = drawn.sells === 0;
+    shortKey.hidden = drawn.shorts === 0;
+    coverKey.hidden = drawn.covers === 0;
     note.hidden = !drawn.dropped;
   };
   const pick = (i: number) => {
@@ -174,10 +192,14 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
   const y = priceScale(lo, hi, log, top + inset, top + plotH - inset);
   const f = (v: number) => v.toFixed(1);
 
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `${view.name} price over time, with the periods the strategy held it and its buys and sells` });
+  const shorted = held.some((w) => w.trade.side === 'short');
+  const label = shorted ? 'held it long or short, and its trades' : 'held it and its buys and sells';
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `${view.name} price over time, with the periods the strategy ${label}` });
 
-  for (const p of heldIntervals(held)) {
-    s(svg, 'rect', { x: f(x(p.from)), y: top, width: f(Math.max(1, x(p.to) - x(p.from))), height: plotH, class: 'bt-price-band' });
+  for (const short of [false, true]) {
+    for (const p of heldIntervals(held.filter((w) => (w.trade.side === 'short') === short))) {
+      s(svg, 'rect', { x: f(x(p.from)), y: top, width: f(Math.max(1, x(p.to) - x(p.from))), height: plotH, class: short ? 'bt-price-band bt-price-band-short' : 'bt-price-band' });
+    }
   }
   ticks.forEach((v, i) => {
     s(svg, 'line', { x1: left, x2: width - right, y1: f(y(v)), y2: f(y(v)), class: 'bt-grid' });
@@ -193,21 +215,23 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
   s(svg, 'path', { d: points.map((i, k) => `${k ? 'L' : 'M'}${f(x(t[i]))},${f(y(c[i]))}`).join(''), class: 'bt-price-line' });
 
   const count = markerCount(held);
-  const drawn: Drawn = { buys: 0, sells: 0, dropped: count > 0 && !showMarkers(count, plotW) };
+  const drawn: Drawn = { buys: 0, sells: 0, shorts: 0, covers: 0, dropped: count > 0 && !showMarkers(count, plotW) };
   if (count > 0 && !drawn.dropped) {
-    const buys: string[] = [];
-    const sells: string[] = [];
+    const marks: Record<Mark, string[]> = { buy: [], sell: [], short: [], cover: [] };
     for (const w of held) {
-      for (const p of buyPoints(w)) buys.push(markerPath('buy', x(p.t), y(p.price)));
-      if (w.sell) sells.push(markerPath('sell', x(w.trade.exitT), y(w.trade.exitPrice)));
+      const short = w.trade.side === 'short';
+      const [entry, exit]: Mark[] = short ? ['short', 'cover'] : ['buy', 'sell'];
+      for (const p of buyPoints(w)) marks[entry].push(markerPath(POINTS[entry], x(p.t), y(p.price)));
+      if (w.sell) marks[exit].push(markerPath(POINTS[exit], x(w.trade.exitT), y(w.trade.exitPrice)));
     }
-    drawn.buys = buys.length;
-    drawn.sells = sells.length;
+    drawn.buys = marks.buy.length;
+    drawn.sells = marks.sell.length;
+    drawn.shorts = marks.short.length;
+    drawn.covers = marks.cover.length;
     // A ring in the surface colour under each marker keeps it apart from the line.
-    if (buys.length) s(svg, 'path', { d: buys.join(''), class: 'bt-price-ring bt-price-ring-buy' });
-    if (sells.length) s(svg, 'path', { d: sells.join(''), class: 'bt-price-ring bt-price-ring-sell' });
-    if (buys.length) s(svg, 'path', { d: buys.join(''), class: 'bt-price-buy' });
-    if (sells.length) s(svg, 'path', { d: sells.join(''), class: 'bt-price-sell' });
+    const kinds: Mark[] = ['buy', 'sell', 'short', 'cover'];
+    for (const kind of kinds) if (marks[kind].length) s(svg, 'path', { d: marks[kind].join(''), class: `bt-price-ring bt-price-ring-${kind}` });
+    for (const kind of kinds) if (marks[kind].length) s(svg, 'path', { d: marks[kind].join(''), class: `bt-price-${kind}` });
   }
 
   // Hover: a crosshair on the nearest bar.
@@ -241,11 +265,12 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     const trade = tradeAt(held, t[i]);
     if (trade) {
       const open = trade.reason === 'open';
+      const short = trade.side === 'short';
       h(tip, 'div', 'bt-price-tip-sep');
-      row('Bought', boughtWording(trade, (time) => stamp(time, intraday), price));
-      row('Sold', open ? 'still held' : `${stamp(trade.exitT, intraday)} at ${price(trade.exitPrice)}`);
+      row(short ? 'Sold short' : 'Bought', boughtWording(trade, (time) => stamp(time, intraday), price));
+      row(short ? 'Bought to cover' : 'Sold', open ? 'still held' : `${stamp(trade.exitT, intraday)} at ${price(trade.exitPrice)}`);
       row(open ? 'Return so far' : 'Return', signedPct(trade.ret));
-      if (!open) row('Reason', exitWording(trade.reason));
+      if (!open) row('Reason', tradeExit(trade, input.trades));
     }
     tip.hidden = false;
     // To the right of the crosshair, or to the left when it would run off the chart. Measured from the left edge, where it has the most room.
