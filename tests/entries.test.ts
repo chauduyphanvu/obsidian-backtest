@@ -47,7 +47,7 @@ test('entries and add when: how they are written, and what is wrong without one 
   errorOf('universe: SPY\nentries: 11\nbuy when true\nadd when true', /from 1 to 10, not 11/);
   errorOf('universe: SPY\nentries: 2.5\nbuy when true\nadd when true', /not 2.5/);
   errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when true\nadd when false', /There is already a add rule|already an add rule|There is already/);
-  errorOf('universe: SPY\nentries: 2\nbuy when entries made > 0\nadd when true', /"entries made" only makes sense in a sell or add rule/);
+  errorOf('universe: SPY\nentries: 2\nbuy when entries made > 0\nadd when true', /"entries made" only makes sense in a sell, cover or add rule/);
   errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when entries > 1', /"entries" on its own is not a name. Write "entries made"/);
   errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when true\nsell when last_entry_price[1] > 1', /can't be read for an earlier bar/);
   // "last" stays free for a parameter, and the new values work in sell rules without entries.
@@ -236,7 +236,7 @@ test('an add waiting at the last bar: the positions, the folded line and today\'
   // Day 2 closes at 11, above the first entry's 10: the second of three entries waits for the next open.
   const bt = run('universe: A\ncapital: 900\nentries: 3\nadd when close > last entry price\nbuy when true', { A: bars([10, 10, 11]) });
   const st = bt.run.states[0];
-  assert.deepEqual([st.pending, st.entries, st.long], ['add', 1, true]);
+  assert.deepEqual([st.pending, st.entries, st.side === 'long'], ['add', 1, true]);
   assert.ok(near(st.targetWeight, 1 / 3));
   assert.equal(positionOrder(st), 'adds at the next open');
   assert.equal(compactFacts(output(bt)).order, 'adds to A at the next open');

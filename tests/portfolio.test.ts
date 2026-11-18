@@ -32,7 +32,7 @@ test('ranking: ties go to the earlier ticker, and only tickers whose buy rule ho
   assert.equal(run('universe: A, B, C\nhold: top 1 by close\nbuy when close < 18', RANKED()).run.trades[0].asset, 'C');
   // Two slots: each held ticker gets half.
   const two = run('universe: A, B, C\ncapital: 1000\nhold: top 2 by close', RANKED());
-  assert.deepEqual(two.run.states.map((s) => [s.name, s.long, s.weight]), [['A', true, 0.5], ['B', false, 0.5], ['C', true, 0.5]]);
+  assert.deepEqual(two.run.states.map((s) => [s.name, s.side === 'long', s.weight]), [['A', true, 0.5], ['B', false, 0.5], ['C', true, 0.5]]);
 });
 
 test('with a rebalance period, ranking decides on the last bar of each period', () => {
@@ -55,7 +55,7 @@ test('between decisions a sell rule still exits, and the slot waits for the next
   const r = run('universe: A, B\ncapital: 1000\nrebalance: monthly\nhold: top 1 by close\nsell when close < 8', { A, B });
   assert.deepEqual(trades(r), [['B', feb(3), feb(5), 'signal']]);
   assert.deepEqual(r.run.equity, [1000, 1000, 1000, 1000, 350, 350]);
-  assert.deepEqual(r.run.states.map((s) => [s.long, s.pending]), [[false, null], [false, null]]);
+  assert.deepEqual(r.run.states.map((s) => [s.side === 'long', s.pending]), [[false, null], [false, null]]);
 });
 
 /** UTC midnights from `from` to `to`, weekdays only when asked. */

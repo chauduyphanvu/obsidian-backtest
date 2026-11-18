@@ -166,6 +166,8 @@ Only universe is required. Add the others when the description asks for them or 
   costs: 5 bps                      cost of each trade, written 5 bps or 0.05% (100 bps = 1%)
   slippage: 5 bps                   how much worse each fill is than the price
   cash rate: 4%                     what cash earns a year, or a yield ticker such as ^IRX or fred:DGS3MO
+  borrow fee: 0.5%                  yearly fee on the value of short positions (0.5% unless set)
+  margin rate: 6%                   yearly interest on money borrowed (6% unless set)
   size: 80%                         share of equity to use when the tickers have no weights (default 100%)
   rebalance: monthly                never (the default), weekly, monthly, quarterly or yearly; held tickers return to their weights at the start of each period, and with hold the ranking is decided at the end of each period
   benchmark: QQQ                    ticker to compare with, bought and held

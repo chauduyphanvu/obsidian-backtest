@@ -290,13 +290,14 @@ export interface AccountPlan {
   notes: string[];
 }
 
-/** Shares a strategy holds once its orders waiting for the next bar are made, at the sizes its last close gives them. */
+/** Shares a strategy holds once its orders waiting for the next bar are made, at the sizes its last close gives them; negative for a short. */
 export function sharesAfterOrders(st: AssetState, equity: number): number {
   if (!(st.lastClose > 0)) return 0;
   const bought = (st.targetWeight * equity) / st.lastClose;
-  if (st.pending === 'sell') return 0;
+  if (st.pending === 'sell' || st.pending === 'cover') return 0;
   if (st.pending === 'buy') return bought;
-  if (st.pending === 'add') return st.shares + bought;
+  if (st.pending === 'short') return -bought;
+  if (st.pending === 'add') return st.shares + (st.shares < 0 ? -bought : bought);
   return st.shares;
 }
 
@@ -393,7 +394,7 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
   }
 
   for (const s of strategies) {
-    if (s.rebalance !== 'never' && s.states.some((st) => st.long)) {
+    if (s.rebalance !== 'never' && s.states.some((st) => st.side === 'long')) {
       notes.push(`${s.label} rebalances ${s.rebalance}. A rebalance due at the next open shows here a bar late, once its backtest has made it.`);
     }
     if (s.sizing !== 'fixed' && s.states.some((st) => st.pending === 'buy' || st.pending === 'add')) {

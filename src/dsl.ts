@@ -34,11 +34,18 @@ export type Fill = 'next open' | 'close';
 export const FILL: Fill[] = ['next open', 'close'];
 
 export interface Rules {
+  /** For a ticker with only short rules, the parser's `false`: it never goes long. */
   buy: Expr;
   sell: Expr | null;
-  /** When to make the next entry of a position built in steps; present only with an `entries` line. */
+  /** When to make the next entry of a position built in steps, on whichever side is held; present only with an `entries` line. */
   add?: Expr;
+  /** When to go short and when to cover, mirroring buy and sell; present only when written. */
+  short?: Expr;
+  cover?: Expr;
 }
+
+/** A ticker's rules in the order buy, sell, add, short, cover, without the ones it does not have. */
+export const ruleExprs = (r: Rules): Expr[] => [r.buy, r.sell, r.add, r.short, r.cover].filter((e): e is Expr => !!e);
 
 /**
  * A rule or score as the user wrote it: the whole text, with continuation lines joined by a space;
@@ -81,6 +88,23 @@ export interface Param {
   line: number;
 }
 
+/**
+ * What a block that borrows pays and may hold: gross positions (long value plus short value) up to `cap` times equity, a
+ * yearly `borrowFee` on the value of its shorts, a yearly `rate` on the money it owes, and a margin call when equity falls
+ * below `maintenance` times the gross value of its positions at a close. Rates are fractions.
+ */
+export interface Margin {
+  cap: number;
+  borrowFee: number;
+  rate: number;
+  maintenance: number;
+}
+
+/** Equity below this share of the gross value of the positions at a close brings a margin call. */
+export const MAINTENANCE = 0.25;
+/** The most a block may hold, long and short together, as a multiple of its equity. */
+export const MAX_GROSS = 2;
+
 export interface Spec {
   name: string | null;
   universe: Asset[];
@@ -108,13 +132,24 @@ export interface Spec {
   /** Absent means next open. */
   fill?: Fill;
   /** The rules and the ranking score as written, per universe asset name; null where the parser supplied the rule. */
-  written?: { rules: Record<string, { buy: Written | null; sell: Written | null; add?: Written | null }>; rank: Written | null };
+  written?: { rules: Record<string, WrittenRules>; rank: Written | null };
   /** Charged on every order besides `costBps`; absent when there is none. */
   commission?: Commission;
   /** The number of entries a position is built in; absent when the block has no `entries` line. */
   entries?: number;
   /** The smaller bar size each bar is looked inside with, for stops and targets; absent when the block has no `magnify` line. */
   magnify?: string;
+  /** Present only when the block can borrow: it has a short or cover rule, or its weights add up to more than 100%. */
+  margin?: Margin;
+}
+
+/** A ticker's rules as written; null where the parser supplied the rule, absent where the block has none of that kind. */
+export interface WrittenRules {
+  buy: Written | null;
+  sell: Written | null;
+  add?: Written | null;
+  short?: Written | null;
+  cover?: Written | null;
 }
 
 export interface Defaults {
@@ -126,7 +161,14 @@ export interface Defaults {
   dataSource: DataSource;
   /** Used when the block has no `commission` line; absent means none. */
   commission?: Commission;
+  /** Yearly rates as fractions for a block that borrows and has no `borrow fee` or `margin rate` line; absent means BORROW_FEE and MARGIN_RATE. */
+  borrowFee?: number;
+  marginRate?: number;
 }
+
+/** The yearly borrow fee on shorts and interest on money owed when neither the block nor the plugin settings give one. */
+export const BORROW_FEE = 0.005;
+export const MARGIN_RATE = 0.06;
 
 export interface ParseOptions {
   defaults?: Partial<Defaults>;
@@ -228,14 +270,14 @@ export const REBALANCE: Rebalance[] = ['never', 'weekly', 'monthly', 'quarterly'
 export const SETTINGS = [
   'name', 'universe', 'symbol', 'from', 'to', 'data', 'interval', 'capital', 'costs', 'size', 'rebalance', 'benchmark',
   'stop loss', 'trailing stop', 'take profit', 'slippage', 'cash rate', 'test from', 'hold', 'weighting', 'risk per trade', 'fill',
-  'commission', 'entries', 'magnify',
+  'commission', 'entries', 'magnify', 'borrow fee', 'margin rate',
 ];
 /** The settings a `for TICKER:` section can hold. */
 export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 
 /** Names a parameter can't take. */
 export const RESERVED = new Set([
-  'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
+  'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'short', 'cover', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
   'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
   ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
 ]);
@@ -795,7 +837,7 @@ class ExprParser {
     } else {
       return null;
     }
-    if (!this.ctx.positions) throw new SpecError(span(t, end), `"${POSITION[name]}" only makes sense in a sell or add rule`);
+    if (!this.ctx.positions) throw new SpecError(span(t, end), `"${POSITION[name]}" only makes sense in a sell, cover or add rule`);
     return { k: 'pos', name };
   }
 
@@ -1049,8 +1091,10 @@ interface SettingLine {
   valueAt: At;
 }
 
+type RuleSide = 'buy' | 'sell' | 'add' | 'short' | 'cover';
+
 interface RawRule {
-  side: 'buy' | 'sell' | 'add';
+  side: RuleSide;
   scope: string | null;
   /** The ticker's name on the `for` line. */
   scopeAt: At | null;
@@ -1070,6 +1114,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     cashRate: given.cashRate ?? BUILTIN_DEFAULTS.cashRate,
     dataSource: given.dataSource ?? BUILTIN_DEFAULTS.dataSource,
     commission: given.commission,
+    borrowFee: given.borrowFee,
+    marginRate: given.marginRate,
   };
   const errors: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
@@ -1113,7 +1159,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const name = text.slice(3, -1);
       const from = lead + 3 + name.length - name.trimStart().length;
       scopeAt = scope === null ? null : { line, from, to: from + forName.length };
-    } else if ((m = text.match(/^(buy|sell|add)\s+when\b(.*)$/i))) {
+    } else if ((m = text.match(/^(buy|sell|add|short|cover)\s+when\b(.*)$/i))) {
       const exprFrom = text.length - m[2].length;
       const rule: RawRule = { side: m[1].toLowerCase() as RawRule['side'], scope, scopeAt, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
       open = rule;
@@ -1141,7 +1187,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     } else if ((m = text.match(SETTING_NAME))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `Unknown setting "${m[1]}". Settings: ${SETTINGS.join(', ')}`));
     } else {
-      errors.push({ line, message: 'Not a setting or a rule. Rules start with "buy when" or "sell when"' });
+      errors.push({ line, message: 'Not a setting or a rule. Rules start with "buy when", "sell when", "short when" or "cover when"' });
     }
   });
 
@@ -1214,7 +1260,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
 
   const defaultSource = get('data', oneOf(DATA_SOURCES, 'data'), defaults.dataSource as Source);
-  const size = get('size', (v, w) => parsePercent(v, w, 'size', 100), null as number | null);
+  const size = get('size', (v, w) => parsePercent(v, w, 'size', MAX_GROSS * 100), null as number | null);
   const rebalance = get('rebalance', oneOf(REBALANCE, 'rebalance'), 'never' as Rebalance);
 
   let rankTop: number | null = null;
@@ -1263,7 +1309,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       universe.forEach((a, i) => (a.weight = weights[i] ?? (size ?? 1) / universe.length));
       if (universe.some((a) => a.weight <= 0)) throw new SpecError(u.valueAt, 'Weights must be above 0%');
       const total = universe.reduce((s, a) => s + a.weight, 0);
-      if (total > 1 + 1e-9) throw new SpecError(u.valueAt, `Weights add up to ${(total * 100).toFixed(1)}%. The most is 100%: this is long or flat, with no leverage`);
+      if (total > MAX_GROSS + 1e-9) {
+        throw new SpecError(u.valueAt, `Weights add up to ${(total * 100).toFixed(1)}%. The most is ${MAX_GROSS * 100}%: long and short positions together may be at most ${MAX_GROSS} times the equity`);
+      }
     });
   }
   if (hold && rankTop !== null && universe.length > 0 && rankTop > universe.length) {
@@ -1313,9 +1361,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     reported.add(at.line);
     throw new SpecError(at, `"for ${name}:" names a ticker that is not in the universe`);
   };
-  const shared: { buy?: Expr; sell?: Expr; add?: Expr } = {};
-  const own = new Map<string, { buy?: Expr; sell?: Expr; add?: Expr }>();
+  const shared: Partial<Record<RuleSide, Expr>> = {};
+  const own = new Map<string, Partial<Record<RuleSide, Expr>>>();
   const addHeads: At[] = [];
+  /** Where the short and cover rules are written, for the errors about them. */
+  const shortHeads = new Map<Expr, At>();
   const writtenOf = new Map<Expr, Written>();
   /** The columns each rule reads from its own ticker, which must be a CSV file wherever the rule applies. */
   const ownReads = new Map<Expr, { name: string; at: At }[]>();
@@ -1335,12 +1385,14 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       }
       if (target[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule${r.scope ? ` for ${r.scope}` : ''}. Join conditions with "and" or "or"`);
       r.toks.push(endTok(r.toks, r.head));
-      const parser = new ExprParser(r.toks, context(r.side !== 'buy', ruleScope));
+      // Like a buy rule, a short rule is read while flat, so it has no position to read.
+      const parser = new ExprParser(r.toks, context(r.side !== 'buy' && r.side !== 'short', ruleScope));
       const e = parser.parseCondition();
       target[r.side] = e;
       writtenOf.set(e, parser.written(e));
       ownReads.set(e, parser.ownColumns(e));
       if (r.side === 'add') addHeads.push(r.head);
+      if (r.side === 'short' || r.side === 'cover') shortHeads.set(e, r.head);
     });
   }
 
@@ -1384,19 +1436,44 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   for (const a of universe) ownColumnsOf(rankReads, a);
   const rules: Record<string, Rules> = {};
-  const writtenRules: Record<string, { buy: Written | null; sell: Written | null; add?: Written | null }> = {};
+  const writtenRules: Record<string, WrittenRules> = {};
   const noAdd: string[] = [];
+  /** The first short or cover rule a ticker reads, for the error that a ranking can't short; null when none does. */
+  let shortHead: At | null = null;
+  const coverReported = new Set<At>();
   for (const a of universe) {
-    const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true } as Expr) : undefined);
+    const short = own.get(a.name)?.short ?? shared.short;
+    const cover = own.get(a.name)?.cover ?? shared.cover;
+    // A ticker with only short rules never goes long: its buy rule is the parser's false.
+    const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true } as Expr) : short ? ({ k: 'bool', v: false } as Expr) : undefined);
     const sell = own.get(a.name)?.sell ?? shared.sell ?? null;
     const add = own.get(a.name)?.add ?? shared.add;
-    for (const e of [buy, sell, add]) if (e) ownColumnsOf(ownReads.get(e) ?? [], a);
+    for (const e of [buy, sell, add, short, cover]) if (e) ownColumnsOf(ownReads.get(e) ?? [], a);
+    shortHead ??= (short && shortHeads.get(short)) || (cover && shortHeads.get(cover)) || null;
+    if (cover && !short) {
+      const head = shortHeads.get(cover)!;
+      if (!coverReported.has(head)) {
+        coverReported.add(head);
+        errors.push(diag(head, `"cover when" closes a short, so it needs a short rule${universe.length > 1 ? ` for ${a.name}` : ''} that says when to go short, such as short when close < sma(200)`));
+      }
+    }
     if (buy) {
       rules[a.name] = add && entriesLine ? { buy, sell, add } : { buy, sell };
       writtenRules[a.name] = { buy: writtenOf.get(buy) ?? null, sell: sell ? (writtenOf.get(sell) ?? null) : null };
       if (add && entriesLine) writtenRules[a.name].add = writtenOf.get(add) ?? null;
+      if (short) {
+        rules[a.name].short = short;
+        writtenRules[a.name].short = writtenOf.get(short) ?? null;
+        if (cover) {
+          rules[a.name].cover = cover;
+          writtenRules[a.name].cover = writtenOf.get(cover) ?? null;
+        }
+      }
     } else if (errors.length === 0) errors.push({ line: 1, message: `There is no buy rule${universe.length > 1 ? ` for ${a.name}` : ''}. Add one, such as "buy when close > sma(200)"` });
     if (!add) noAdd.push(a.name);
+  }
+  if (rankTop !== null && shortHead) {
+    errors.push(diag(shortHead, 'A ranking can\'t also go short yet; remove the short and cover rules, or the "hold" line to trade each ticker by its own rules'));
   }
   if (entries !== null && entries > 1 && noAdd.length && universe.length) {
     const whom = noAdd.length === universe.length ? '' : ` for ${noAdd.join(', ')}`;
@@ -1478,6 +1555,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     trailingStop: get('trailing stop', stopLevel('trailing stop', 0.99), null as StopLevel | null),
     takeProfit: get('take profit', stopLevel('take profit', 1000), null as StopLevel | null),
   };
+  /** Where each take profit is written, for the warning about shorts. */
+  const targetAt = new Map<StopLevel, At>();
+  if (shareStops.takeProfit) targetAt.set(shareStops.takeProfit, settings.get('take profit')!.valueAt);
   const ownStops = new Map<string, Partial<Stops>>();
   const STOP_FIELD: Record<string, keyof Stops> = { 'stop loss': 'stopLoss', 'trailing stop': 'trailingStop', 'take profit': 'takeProfit' };
   for (const { scope: name, scopeAt: at, s } of scoped) {
@@ -1492,10 +1572,21 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const field = STOP_FIELD[s.key];
       if (mine[field] !== undefined) throw new SpecError(s.keyAt, `"${s.key}" is set twice for ${asset.name}`);
       mine[field] = stopLevel(s.key, s.key === 'take profit' ? 1000 : 0.99)(s.value.trim(), s.valueAt);
+      if (field === 'takeProfit') targetAt.set(mine[field]!, s.valueAt);
     });
   }
   const stops: Record<string, Stops> = {};
   for (const a of universe) stops[a.name] = { ...shareStops, ...ownStops.get(a.name) };
+  // A short gains at most 100%, when the price falls to 0, so a percentage target that far away is never reached.
+  const unreachable = new Set<At>();
+  for (const a of universe) {
+    const target = stops[a.name].takeProfit;
+    if (!rules[a.name]?.short || target?.k !== 'pct' || target.v < 1) continue;
+    const where = targetAt.get(target)!;
+    if (unreachable.has(where)) continue;
+    unreachable.add(where);
+    warnings.push(diag(where, `A short can't reach a take profit of ${Number((target.v * 100).toPrecision(6))}%: the price would have to fall to 0 or below, so its shorts never take profit. Use one under 100%, or a multiple of the average true range`));
+  }
 
   const weighting = get(
     'weighting',
@@ -1510,7 +1601,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     'risk per trade',
     (v, w): Sizing => {
       const m = v.match(new RegExp(String.raw`^(\S+?)\s+at\s+` + ATR_DISTANCE.source.slice(1), 'i'));
-      if (!m) throw new SpecError(w, 'Write it as 1% at 2 atr(14): the share of equity to lose if the price falls that many average true ranges');
+      if (!m) throw new SpecError(w, 'Write it as 1% at 2 atr(14): the share of equity to lose if the price moves that many average true ranges against the position');
       const share = percentage(m[1], w, 'risk per trade', 1);
       const mult = plain(m[2], w, 'The risk distance', '1% at 2 atr(14)');
       if (!(mult > 0)) throw new SpecError(w, 'The risk distance must be above 0');
@@ -1562,6 +1653,20 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   };
   const commission = settings.has('commission') ? get('commission', parseCommission, null) : (defaults.commission ?? null);
   if (commission) spec.commission = commission;
+  // Only a block that can borrow carries the margin terms, so a long-only one within 100% runs as it always has.
+  const yearly = (what: string, max: number) => (text: string, where: At): number => {
+    const m = text.match(/^(\d+(?:\.\d+)?|\.\d+)\s*%$/);
+    if (!m) throw new SpecError(where, `Write the ${what} as a yearly percentage, such as ${what === 'borrow fee' ? '0.5%' : '6%'}`);
+    const rate = Number(m[1]) / 100;
+    if (rate > max) throw new SpecError(where, `The ${what} must be between 0% and ${max * 100}% a year`);
+    return rate;
+  };
+  const borrowFee = get('borrow fee', yearly('borrow fee', 1), defaults.borrowFee ?? BORROW_FEE);
+  const marginRate = get('margin rate', yearly('margin rate', 0.5), defaults.marginRate ?? MARGIN_RATE);
+  const gross = rankTop !== null ? (size ?? 1) : universe.reduce((s, a) => s + a.weight, 0);
+  if (Object.values(rules).some((r) => r.short) || gross > 1 + 1e-9) {
+    spec.margin = { cap: Math.min(MAX_GROSS, Math.max(1, gross)), borrowFee, rate: marginRate, maintenance: MAINTENANCE };
+  }
   if (entries !== null) spec.entries = entries;
   if (magnify !== null) spec.magnify = magnify;
 

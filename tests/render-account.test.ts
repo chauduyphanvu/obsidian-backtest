@@ -12,8 +12,8 @@ import { bars } from './helpers.ts';
 const T = Date.UTC(2026, 10, 13);
 
 function state(name: string, o: Partial<AssetState> = {}): AssetState {
-  const st: AssetState = { name, weight: 1, long: false, since: null, pending: null, shares: 0, lastClose: 100, value: 0, targetWeight: 0, ...o };
-  st.long = st.shares > 0;
+  const st: AssetState = { name, weight: 1, side: null, since: null, pending: null, shares: 0, lastClose: 100, value: 0, targetWeight: 0, ...o };
+  st.side = st.shares > 0 ? 'long' : null;
   st.value = st.shares * st.lastClose;
   return st;
 }

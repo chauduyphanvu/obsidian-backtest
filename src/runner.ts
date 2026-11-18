@@ -1,7 +1,7 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
-import { MAX_PERIOD, paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
+import { MAX_PERIOD, paramValues, parseSpec, ruleExprs, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
@@ -105,7 +105,7 @@ export function lookbackBars(spec: Spec): number {
     return p ? Math.max(value, ...paramValues(p).filter((v) => v <= max)) : value;
   };
   let bars = MIN_LOOKBACK;
-  const exprs = Object.values(spec.rules).flatMap((r) => [r.buy, ...(r.sell ? [r.sell] : []), ...(r.add ? [r.add] : [])]);
+  const exprs = Object.values(spec.rules).flatMap(ruleExprs);
   if (spec.rank) exprs.push(spec.rank.by);
   for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest, spec.fill === 'close'));
   for (const st of Object.values(spec.stops)) {

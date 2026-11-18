@@ -1,4 +1,4 @@
-import { children, findPos, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
+import { children, findPos, ruleExprs, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { priceMemo } from './price-memo.ts';
 import type { Bars } from './types.ts';
@@ -84,8 +84,7 @@ export function columnFiles(spec: Spec): string[] {
     for (const c of children(e)) visit(c, e.k === 'of' ? e.asset : asset);
   };
   for (const a of spec.universe) {
-    const r = spec.rules[a.name];
-    for (const e of [r.buy, r.sell, r.add, spec.rank?.by]) if (e) visit(e, a.name);
+    for (const e of [...ruleExprs(spec.rules[a.name]), spec.rank?.by]) if (e) visit(e, a.name);
   }
   return [...out];
 }
@@ -169,8 +168,7 @@ export function ofReads(spec: Spec): [string, string][] {
     for (const c of children(e)) visit(c, e.k === 'of' ? e.asset : asset);
   };
   for (const a of spec.universe) {
-    const r = spec.rules[a.name];
-    for (const e of [r.buy, r.sell, r.add, spec.rank?.by]) if (e) visit(e, a.name);
+    for (const e of [...ruleExprs(spec.rules[a.name]), spec.rank?.by]) if (e) visit(e, a.name);
   }
   return [...out.values()];
 }

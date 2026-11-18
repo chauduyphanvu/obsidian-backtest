@@ -517,7 +517,7 @@ class Explainer {
         this.facts.sellRule = rule.result;
         rows.push(...rule.rows);
       }
-    } else {
+    } else if (exit.k === 'rank') {
       rows.push(row(`At the ranking made at ${this.closeOf(exit.rank.decision.t)}:`));
       rows.push(...this.ranking(exit.rank));
     }

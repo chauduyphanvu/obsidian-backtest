@@ -67,7 +67,7 @@ const tradeStats = (o: Partial<TradeStats> = {}): TradeStats => ({ count: 2, ope
 const state = (name: string, long: boolean, o: Partial<AssetState> = {}): AssetState => ({
   name,
   weight: 0.5,
-  long,
+  side: long ? 'long' : null,
   since: long ? utc(2020, 1, 7) : null,
   pending: null,
   shares: 0,

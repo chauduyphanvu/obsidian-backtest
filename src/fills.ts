@@ -653,7 +653,8 @@ function modelTrades(strategies: Followed[], opts: MatchOptions, asTraded: (k: n
       held.set(asset, log.sharesAfter[j]);
       const day = Math.floor(log.t[j] / DAY) * DAY;
       if (day < opts.from || change === 0 || scale === 0) continue;
-      const at = log.kind[j] === 'stop' ? 'stop' : s.closeFill ? 'close' : 'open';
+      // A margin call's or ruin's close is a moment of its own, like a stop's: it is not where the strategy's orders fill.
+      const at = log.kind[j] === 'stop' || log.kind[j] === 'margin' ? 'stop' : s.closeFill ? 'close' : 'open';
       const key = `${asset}\u0000${log.t[j]}\u0000${at}`;
       let m = moments.get(key);
       if (!m) moments.set(key, (m = { ticker: asset, day, parts: [] }));
