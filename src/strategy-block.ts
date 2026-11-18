@@ -10,6 +10,7 @@ import { renderActions } from './render-actions.ts';
 import { renderDebug } from './render-debug.ts';
 import { renderLuck } from './render-luck.ts';
 import { renderPriceCharts } from './render-price.ts';
+import { renderRegimes } from './render-regimes.ts';
 import { renderSweep } from './render-sweep.ts';
 import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type Section } from './render.ts';
 import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
@@ -121,6 +122,15 @@ export class StrategyBlocks {
         const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
         return [
           // Regimes and crises: right after "More statistics".
+          (root) =>
+            renderRegimes(root, {
+              run: { t: bt.run.t, equity: bt.run.equity, exposure: bt.run.exposure, benchmark: bt.benchmark.equity },
+              benchmarkLabel: bt.benchmark.label,
+              intraday,
+              universe: shown.spec.universe,
+              saved: (refs, from, lookback) => this.host.results.runner().savedExtras(refs, from, lookback),
+              load: (refs, from, lookback) => this.host.results.runner().loadExtras(refs, from, lookback),
+            }),
           (root) =>
             renderPriceCharts(root, {
               data: shown.data,
