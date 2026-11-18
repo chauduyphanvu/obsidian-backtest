@@ -1,27 +1,34 @@
 import type { EditorView } from '@codemirror/view';
-import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
-import { compareCurves, parseCompare } from './compare.ts';
+import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
+import { runAccount } from './account.ts';
+import { compareCurves, parseCompare, type CompareHost } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
+import { withoutQueries } from './data.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
-import { HOUR } from './format.ts';
+import { HOUR, isoDate } from './format.ts';
+import { makeForward, writeLog, type ForwardStart } from './forward.ts';
 import { GalleryModal } from './gallery-modal.ts';
+import { Ledgers, mergeLedgers, parseLedger, type Ledger } from './ledger.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { drawHeld } from './live-core.ts';
 import { LiveView, VIEW_TYPE_LIVE, liveEditorExtension, openLivePanel, pokeLiveViews, type LiveHost } from './live-view.ts';
-import { ordersSavePlan, scanOrders, type ScanHost } from './orders.ts';
+import { ordersSavePlan, scanAccounts, scanOrders, type AccountScanHost, type ScanHost } from './orders.ts';
 import { OrdersBadge } from './orders-badge.ts';
 import { OrdersModal } from './orders-view.ts';
 import { PriceStore } from './price-store.ts';
+import { renderAccount, type AccountHost } from './render-account.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
-import { blockStateKey } from './render.ts';
+import { renderForward, type ForwardHost } from './render-forward.ts';
+import { blockKeyPrefix, blockStateKey } from './render.ts';
 import { Results } from './results.ts';
-import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
+import { findBlock, setParamValues, setSettingInNote, setWeightsInNote, writeBlockInNote, writeInNote, writeValuesInNote } from './rewrite.ts';
+import { JsonStore } from './store.ts';
 import { StrategyBlocks, type StrategyOptions } from './strategy-block.ts';
 import { SymbolLookup } from './symbols.ts';
-import { createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
+import { createNote, createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
 import { shutdownWorkers } from './worker-client.ts';
 import { BacktestSettingTab } from './settings.ts';
 import { defaultsFrom, normalizeSettings, type Settings } from './settings-core.ts';
@@ -40,12 +47,23 @@ export default class BacktestBlocks extends Plugin {
     files: this.app.vault.adapter,
     cacheDir: normalizePath(`${this.manifest.dir}/cache`),
     normalize: normalizePath,
-    fetchText: async (url) => {
-      const res = await requestUrl({ url, throw: false });
+    fetchText: async (url, headers) => {
+      let res;
+      try {
+        res = await requestUrl({ url, headers, throw: false });
+      } catch (e) {
+        // FRED takes its key in the query, and a network error can quote the address.
+        throw new Error(withoutQueries(e instanceof Error ? e.message : String(e)));
+      }
       // The services explain a bad ticker in a JSON body, which the parsers turn into a message.
       if (res.status >= 400 && !res.text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
       return res.text;
     },
+    secret: (service) => {
+      const name = service === 'fred' ? this.settings.fredSecret : this.settings.tiingoSecret;
+      return name ? this.app.secretStorage.getSecret(name) : null;
+    },
+    tiingoFallback: () => this.settings.tiingoFallback,
   });
   private results = new Results({
     deps: () => this.prices.deps(),
@@ -60,21 +78,38 @@ export default class BacktestBlocks extends Plugin {
     runSource: (source, opts) => this.results.runSource(source, opts),
     notice: (text) => void new Notice(text),
   });
+  /** Each strategy block's record of tries and versions, one file for each block in the plugin's folder. */
+  private ledgerFiles = new JsonStore<Ledger>({
+    files: this.app.vault.adapter,
+    dir: `${this.manifest.dir}/ledger`,
+    normalize: normalizePath,
+    parse: parseLedger,
+    merge: mergeLedgers,
+  });
+  private ledgers = new Ledgers(this.ledgerFiles);
   /** The strategy blocks on screen. */
   private blocks = new StrategyBlocks({
     results: this.results,
+    ledgers: this.ledgers,
     settings: () => this.settings,
     saveFile: (title, ext, text) => this.saveFile(title, ext, text),
     scheduleProperties: (notePath) => {
       const file = this.app.vault.getAbstractFileByPath(notePath);
       if (file instanceof TFile) this.properties.scheduleProperties(file);
     },
+    startForward: (input) => this.startForward(input),
   });
-  /** The scan of the vault for today's orders. */
+  /** The scan of the vault for today's orders, with each result's trigger prices worked out before its runs close. */
   private orders: ScanHost = {
     clear: () => this.results.clear(),
     find: () => this.findStrategies(),
-    run: (source, opts) => this.results.runSource(source, opts),
+    run: (source, opts) => this.results.runSource(source, { ...opts, triggers: true }),
+    triggers: (out) => this.results.triggers(out),
+  };
+  /** The vault's account blocks for the orders window, run after the strategies so their kept results are reused. */
+  private accountScan: AccountScanHost = {
+    find: () => this.findStrategies('account'),
+    strategies: (note) => ({ ...this.compareHost(note), run: (source) => this.results.runSource(source, { background: true }) }),
   };
   private ordersBadge: OrdersBadge | null = null;
   private symbolLookup: SymbolLookup | null = null;
@@ -92,13 +127,23 @@ export default class BacktestBlocks extends Plugin {
     this.registerMarkdownCodeBlockProcessor('compare', (source, el, ctx) => {
       const child = new MarkdownRenderChild(el);
       ctx.addChild(child);
-      void this.renderComparison(source, el, child, ctx.sourcePath);
+      void this.renderComparison(source, el, child, ctx);
+    });
+    this.registerMarkdownCodeBlockProcessor('account', (source, el, ctx) => {
+      const child = new MarkdownRenderChild(el);
+      ctx.addChild(child);
+      child.register(renderAccount(el, source, this.accountHost(source, el, ctx)));
     });
 
     this.registerMarkdownCodeBlockProcessor('backtests', (source, el, ctx) => {
       const child = new MarkdownRenderChild(el);
       ctx.addChild(child);
       child.register(renderDashboard(el, source, this.dashboardHost()));
+    });
+    this.registerMarkdownCodeBlockProcessor('forward', (source, el, ctx) => {
+      const child = new MarkdownRenderChild(el);
+      ctx.addChild(child);
+      child.register(renderForward(el, source, this.forwardHost(el, ctx)));
     });
     this.registerView(VIEW_TYPE_LIVE, (leaf) => new LiveView(leaf, this.liveHost()));
     this.registerEditorExtension(liveEditorExtension(pokeLiveViews));
@@ -115,6 +160,14 @@ export default class BacktestBlocks extends Plugin {
 
     this.registerEvent(this.app.vault.on('delete', (file) => this.prices.forgetColumns(file.path)));
     this.registerEvent(this.app.vault.on('rename', (_file, oldPath) => this.prices.forgetColumns(oldPath)));
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        // Only notes hold blocks, and folders hold notes.
+        if (file instanceof TFile && file.extension !== 'md') return;
+        const folder = file instanceof TFolder;
+        void this.ledgers.rename(blockKeyPrefix(oldPath, folder), blockKeyPrefix(file.path, folder));
+      }),
+    );
 
     this.addCommand({
       id: 'insert-strategy',
@@ -182,6 +235,9 @@ export default class BacktestBlocks extends Plugin {
     this.blocks.checkDefaults.cancel();
     shutdownWorkers();
     this.properties.cancel();
+    // Obsidian does not wait for onunload, which returns nothing, so the writes can only be started here: flush queues the
+    // write of every changed record before it returns.
+    void this.ledgerFiles.flush();
   }
 
   async saveSettings(): Promise<void> {
@@ -213,24 +269,25 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** What a strategy block can do because of where it sits in its note: write values back into it, and have its open or folded state remembered. */
-  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'stateKey'> {
+  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'restore' | 'stateKey' | 'blockKey'> {
     const info = ctx.getSectionInfo(el);
     const found = info ? findBlock(info.text, info.lineStart, source) : null;
     if (!found) return {};
     const stateKey = blockStateKey(ctx.sourcePath, found.block.name, found.index);
     const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-    if (!(file instanceof TFile)) return { stateKey };
+    if (!(file instanceof TFile)) return { stateKey, blockKey: stateKey };
     // The block's line is asked for again now: the note may have moved it since it was drawn.
     const apply = (values: Record<string, number>): Promise<void> => writeValuesInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, values);
-    return { stateKey, apply };
+    const restore = (text: string): Promise<void> => writeBlockInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, text);
+    return { stateKey, blockKey: stateKey, apply, restore };
   }
 
   private liveHost(): LiveHost {
     return {
       // One drawing at a time: a newer edit or closing the panel aborts `signal`, which stops the run, and a draw that fails lets go of it too.
-      show: (source, el, { notePath, apply, signal }) => {
+      show: (source, el, { notePath, blockKey, apply, signal }) => {
         const child = new MarkdownRenderChild(el);
-        return drawHeld(() => this.blocks.renderStrategy(source, el, child, { notePath, apply, compact: false, panel: true }), () => this.blocks.dispose(child), signal);
+        return drawHeld(() => this.blocks.renderStrategy(source, el, child, { notePath, blockKey, apply, compact: false, panel: true }), () => this.blocks.dispose(child), signal);
       },
       pricesReady: (source) => this.pricesReady(source),
       errors: (source) => this.results.runner().parse(source).errors,
@@ -261,6 +318,48 @@ export default class BacktestBlocks extends Plugin {
     };
   }
 
+  /** What a `forward` block needs: its note, the frozen rules run like any block's, and the one write it can make, to its log. */
+  private forwardHost(el: HTMLElement, ctx: MarkdownPostProcessorContext): ForwardHost {
+    const file = () => {
+      const found = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+      return found instanceof TFile ? found : null;
+    };
+    return {
+      note: async () => {
+        const f = file();
+        return f ? { text: await this.app.vault.read(f), line: ctx.getSectionInfo(el)?.lineStart } : null;
+      },
+      run: (source, force) => this.results.runSource(source, { force }),
+      append: async (rows, through) => {
+        const f = file();
+        if (!f) return { ok: false, message: 'This note can no longer be found, so nothing was written.' };
+        // The block's line is asked for again now: the note may have moved it since it was drawn.
+        const written = await writeLog((edit) => this.app.vault.process(f, edit), ctx.getSectionInfo(el)?.lineStart, rows, through, Date.now());
+        if (written.ok) new Notice(written.added > 0 ? `Added ${written.added} ${written.added === 1 ? 'bar' : 'bars'} to the log.` : 'The log is checked through the last bar.');
+        return written;
+      },
+      open: (target) => void this.app.workspace.openLinkText(target, ctx.sourcePath, false),
+    };
+  }
+
+  /** Writes a note for a forward test of the strategy to the "Forward" folder under the results folder, and opens it in a new tab. */
+  private async startForward(input: ForwardStart): Promise<void> {
+    const made = makeForward(input);
+    if (!made.ok) {
+      new Notice(made.message);
+      return;
+    }
+    const { vault } = this.app;
+    const files = { exists: (path: string) => vault.adapter.exists(path), createFolder: (path: string) => vault.createFolder(path), create: (path: string, text: string) => vault.create(path, text) };
+    try {
+      const path = await createNote(files, normalizePath(`${this.settings.snapshotFolder}/Forward`), `${input.name} forward test ${isoDate(input.started)}`, made.note);
+      new Notice(`Started a forward test in ${path}`);
+      void this.app.workspace.openLinkText(path, '', true);
+    } catch (e) {
+      new Notice(`Couldn't start the forward test: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   /** Writes text to a dated file in the results folder and says where it went. */
   private saveFile(title: string, ext: string, text: string): Promise<void> {
     const { vault } = this.app;
@@ -268,7 +367,43 @@ export default class BacktestBlocks extends Plugin {
     return saveDatedFile(files, normalizePath(this.settings.snapshotFolder), title, ext, text, (message) => new Notice(message));
   }
 
-  private async renderComparison(source: string, el: HTMLElement, child: MarkdownRenderChild, notePath: string): Promise<void> {
+  /** How a `compare` or `account` block in the note at `notePath` finds and runs the strategies it lists. */
+  private compareHost(notePath: string): CompareHost<TFile> {
+    return {
+      note: (link) => this.app.metadataCache.getFirstLinkpathDest(link, notePath),
+      read: (file) => this.app.vault.cachedRead(file),
+      run: (source) => this.results.runSource(source),
+    };
+  }
+
+  /**
+   * Writes a change into the block drawn in `el` through the NOTE_CHANGED guard (writeInNote): `change` gets the note's
+   * text and the block's line. Null when the block is not in a note that can be written.
+   */
+  private blockWriter(el: HTMLElement, ctx: MarkdownPostProcessorContext): ((change: (note: string, line: number) => string | null) => Promise<void>) | null {
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    if (!(file instanceof TFile) || !ctx.getSectionInfo(el)) return null;
+    // The block's line is asked for again at each write: the note may have moved it since it was drawn.
+    return (change) => writeInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, change);
+  }
+
+  /** What an `account` block needs: its strategies run, the broker's file, prices as they traded, and the two writes it can make to itself. */
+  private accountHost(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): AccountHost {
+    const write = this.blockWriter(el, ctx);
+    return {
+      run: (entries) => runAccount(entries, this.compareHost(ctx.sourcePath)),
+      read: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(normalizePath(path)) ?? this.app.metadataCache.getFirstLinkpathDest(path, ctx.sourcePath);
+        if (!(file instanceof TFile)) throw new Error(`There is no file ${path} in this vault. Write its path from the vault's top folder, such as Broker/schwab.csv.`);
+        return this.app.vault.cachedRead(file);
+      },
+      raw: (refs) => this.results.runner().loadRaw(refs),
+      weights: write ? (weights) => write((note, line) => setWeightsInNote(note, line, source, 'account', weights)) : null,
+      setting: write ? (key, value) => write((note, line) => setSettingInNote(note, line, source, 'account', key, value)) : null,
+    };
+  }
+
+  private async renderComparison(source: string, el: HTMLElement, child: MarkdownRenderChild, ctx: MarkdownPostProcessorContext): Promise<void> {
     const { entries, errors } = parseCompare(source);
     if (errors.length) {
       renderCompareErrors(el, errors, source);
@@ -276,31 +411,33 @@ export default class BacktestBlocks extends Plugin {
     }
     renderCompareMessage(el, `Running ${entries.length} strategies…`);
     try {
-      const curves = await compareCurves(entries, {
-        note: (link) => this.app.metadataCache.getFirstLinkpathDest(link, notePath),
-        read: (file) => this.app.vault.cachedRead(file),
-        run: (source) => this.results.runSource(source),
-      });
+      const curves = await compareCurves(entries, this.compareHost(ctx.sourcePath));
       el.replaceChildren();
       const weights = entries.every((e) => e.weight !== null) ? entries.map((e) => e.weight!) : null;
-      child.register(renderCompare(el, { curves, weights, capital: this.settings.capital }));
+      const write = this.blockWriter(el, ctx);
+      const use = write ? (percents: number[]) => write((note, line) => setWeightsInNote(note, line, source, 'compare', entries.map((e, i) => ({ line: e.line, percent: percents[i] })))) : null;
+      child.register(renderCompare(el, { curves, weights, capital: this.settings.capital, use }));
     } catch (e) {
       el.replaceChildren();
       renderCompareMessage(el, e instanceof Error ? e.message : String(e));
     }
   }
 
-  /** Every strategy block in the vault. Notes Obsidian has already read and found no code in are not read again here. */
-  private findStrategies(): Promise<FoundStrategy[]> {
+  /** Every strategy block in the vault, or every block of `lang`. Notes Obsidian has already read and found no code in are not read again here. */
+  private findStrategies(lang = 'strategy'): Promise<FoundStrategy[]> {
     const { vault, metadataCache } = this.app;
-    return findInNotes(vault.getMarkdownFiles(), {
-      sections: (file) => {
-        const cache = metadataCache.getFileCache(file);
-        return cache ? (cache.sections ?? []).map((section) => section.type) : null;
+    return findInNotes(
+      vault.getMarkdownFiles(),
+      {
+        sections: (file) => {
+          const cache = metadataCache.getFileCache(file);
+          return cache ? (cache.sections ?? []).map((section) => section.type) : null;
+        },
+        read: (file) => vault.cachedRead(file),
+        pause: idle,
       },
-      read: (file) => vault.cachedRead(file),
-      pause: idle,
-    });
+      lang,
+    );
   }
 
   private openOrders(): void {
@@ -310,6 +447,7 @@ export default class BacktestBlocks extends Plugin {
         this.ordersBadge?.show(list);
         return list;
       },
+      accounts: () => scanAccounts(this.accountScan),
       now: () => Date.now(),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       save: async (markdown) => {

@@ -3,3 +3,4 @@ dist/
 .worktrees/
 .scratch/
 ci/local.env
+.claude/worktrees/

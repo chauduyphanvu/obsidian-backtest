@@ -1,7 +1,10 @@
+import { accountOrders, accountStrategy, parseAccount, runAccount, type AccountOrder } from './account.ts';
+import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
-import { DAY, isoDate, money, price, signedPct, stamp } from './format.ts';
+import { DAY, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
+import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
 
 /**
  * When an order applies: at the next open (a pending order of a strategy that fills at the next open), at the next
@@ -63,6 +66,25 @@ export interface HoldingRow {
   gain: number | null;
 }
 
+/** A close at the next bar that would make a rule give an order (trigger.ts), for the reader to watch. */
+export interface WatchRow {
+  ticker: string;
+  side: 'buy' | 'sell' | 'add';
+  /** The rule's part in words, such as "Buys if it closes above 512.30 (+1.2%)", and when its order fills, such as "at the following open". */
+  phrase: string;
+  when: string;
+  /**
+   * The ticker whose close it is about (trigger.ts Trigger.driver), its last close, and the signed share of that to the
+   * nearest price where the outcome changes (NaN when none was found, or when the driver is a series of values, whose
+   * changes are not shares of it).
+   */
+  driver: string;
+  lastClose: number;
+  distance: number;
+  /** It gives its order at an unchanged close. */
+  now: boolean;
+}
+
 export interface StrategyStatus {
   /** Vault path of the note. */
   note: string;
@@ -85,6 +107,8 @@ export interface StrategyStatus {
    * 3 bars old for shorter ones, and more than 2 bars old for bars of a week or longer.
    */
   stale: boolean;
+  /** The closes to watch at the next bar, nearest first (watchRows); absent when no trigger prices were worked out. */
+  watch?: WatchRow[];
 }
 
 const STALE_DAYS = 4;
@@ -122,11 +146,45 @@ function localDay(t: number): number {
   return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY;
 }
 
-function localDate(t: number): string {
-  return isoDate(localDay(t) * DAY);
+/** A trigger is worth watching within this share of the last close, and always for a strategy with `fill: close`. */
+export const WATCH_WITHIN = 0.02;
+
+/** How near a watch row is, for listing the nearest first: 0 for one that fires at an unchanged close, last for one with no share to go by. */
+const nearness = (w: WatchRow) => (w.now ? 0 : Number.isNaN(w.distance) ? Infinity : Math.abs(w.distance));
+
+/**
+ * The trigger prices worth watching at the next close: those that give an order at an unchanged close or within
+ * WATCH_WITHIN of it, and every one of a strategy that fills at the close, whose orders have to be placed before it.
+ * A rule solved for a series of values has no close to be within a share of, so it is watched only in the other two cases.
+ */
+export function watchRows(report: TriggerReport): WatchRow[] {
+  const rows: WatchRow[] = [];
+  for (const t of report.triggers) {
+    const phrase = rulePhrase(t);
+    const near = nearest(t);
+    if (t.side === 'rearm' || phrase === null || near === null) continue;
+    if (!report.closeFill && !near.now && (t.values || !(Math.abs(near.distance) <= WATCH_WITHIN))) continue;
+    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), driver: t.driver, lastClose: t.last, distance: t.values ? NaN : near.distance, now: near.now });
+  }
+  return rows.sort((a, b) => nearness(a) - nearness(b) || compare(a.ticker, b.ticker));
 }
 
-export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS): StrategyStatus {
+/** The last close a row to watch is about, with the ticker named when its rule reads another's: "512.30", "512.30 (SPY)". */
+export const watchClose = (row: WatchRow): string => `${minus(price(row.lastClose))}${row.driver === row.ticker ? '' : ` (${row.driver})`}`;
+
+/** Every strategy's rows to watch as one list, nearest first. */
+export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row: WatchRow }[] {
+  return list
+    .flatMap((status) => (status.watch ?? []).map((row) => ({ status, row })))
+    .sort((a, b) => nearness(a.row) - nearness(b.row) || compare(a.status.note, b.status.note) || compare(a.row.ticker, b.row.ticker));
+}
+
+export const WATCH_HEADING = 'Watch at the next close';
+
+/** Said under the closes to watch. */
+export const WATCH_NOTE = `Closes at the next bar that would make a rule give an order, worked out from the rules as they stand: those within ${WATCH_WITHIN * 100}% of the last close or that give one at an unchanged close, and every one of a strategy with fill: close, whose order has to be placed before that close.`;
+
+export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS, triggers: TriggerReport | null = null): StrategyStatus {
   const { run } = out.backtest;
   const { interval } = out.spec;
   const closeFill = out.spec.fill === 'close';
@@ -178,6 +236,7 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
       : barMs(interval) >= 7 * DAY
         ? now - asOf > STALE_LONG_BARS * barMs(interval)
         : localDay(now) - Math.floor(asOf / DAY) > staleDays,
+    ...(triggers ? { watch: watchRows(triggers) } : {}),
   };
 }
 
@@ -271,7 +330,7 @@ export function problemsOf(s: StrategyStatus): string[] {
 const heldText = (h: HoldingRow) => `${h.ticker} ${share(h.weight)}${h.gain === null ? '' : ` (${signedPct(h.gain)})`}`;
 
 /** The wikilink text for a strategy; a table cell needs the alias separator escaped. */
-function link(s: StrategyStatus, inTable: boolean): string {
+function link(s: Pick<StrategyStatus, 'note' | 'strategy'>, inTable: boolean): string {
   const target = s.note.replace(/\.md$/i, '');
   const name = s.strategy.replace(/[[\]|]/g, ' ').replace(/\s+/g, ' ').trim();
   return `[[${target}${inTable ? '\\|' : '|'}${name}]]`;
@@ -321,6 +380,8 @@ export interface ScanHost {
   find(): Promise<{ note: string; name: string; source: string }[]>;
   /** Runs a block's text (Results.runSource). */
   run(source: string, opts: { freshForMs?: number; background: boolean }): Promise<RunOutput>;
+  /** The trigger prices of a result `run` gave (Results.triggers); absent, or null for a result, when there are none. */
+  triggers?(out: RunOutput): Promise<TriggerReport | null> | null;
 }
 
 /** Every strategy in the vault, run and read as today's orders. `force` refetches every price once. */
@@ -336,7 +397,10 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
     let status: StrategyStatus;
     try {
       const freshForMs = force ? Date.now() - started : undefined;
-      status = statusFrom(f.note, f.name, await host.run(f.source, { freshForMs, background: true }), Date.now());
+      const out = await host.run(f.source, { freshForMs, background: true });
+      // A strategy is listed without its closes to watch when those could not be worked out.
+      const triggers = (await host.triggers?.(out)?.catch(() => null)) ?? null;
+      status = statusFrom(f.note, f.name, out, Date.now(), undefined, triggers);
     } catch (e) {
       status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
     }
@@ -345,8 +409,61 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
   });
 }
 
+// --- Accounts ---------------------------------------------------------------------------------------------------------
+
+/** One `account` block's orders: what the account trades at the next open to hold what its strategies hold together. */
+export interface AccountStatus {
+  note: string;
+  /** The block's `name:`, else its note's name. */
+  name: string;
+  /** Its orders with shares to trade, sales first. */
+  orders: AccountOrder[];
+  /** The latest of its strategies' last bars; null when they did not run. */
+  asOf: number | null;
+  error: string | null;
+}
+
+/** What the scan of the vault's accounts needs from the plugin. */
+export interface AccountScanHost {
+  /** Every `account` block in the vault. */
+  find(): Promise<{ note: string; name: string; source: string }[]>;
+  /** How the block in `note` finds and runs the strategies it lists; runs already kept are reused. */
+  strategies(note: string): CompareHost<{ basename: string }>;
+}
+
+export const ACCOUNTS_HEADING = 'Accounts';
+export const ACCOUNTS_NOTE =
+  "What each account block trades at the next open, in shares: its strategies' orders netted together at the account's size, with each holding brought to their positions. The block shows where each order comes from.";
+
+/** Every account block in the vault, its strategies run (from the kept results where the strategies were just run) and netted into orders. */
+export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus[]> {
+  const found = await host.find();
+  return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
+    const status: AccountStatus = { note: f.note, name: f.name, orders: [], asOf: null, error: null };
+    const { config, entries, errors } = parseAccount(f.source);
+    if (errors.length) return { ...status, error: `Line ${errors[0].line}: ${errors[0].message}` };
+    try {
+      const runs = await runAccount(entries, host.strategies(f.note));
+      const strategies = runs.map((r) => accountStrategy(r.label, r.alloc, r.out));
+      const plan = accountOrders(config, strategies);
+      return { ...status, orders: plan.orders.filter((o) => o.shares !== 0), asOf: Math.max(...strategies.map((s) => s.asOf)) };
+    } catch (e) {
+      return { ...status, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+}
+
+/** An account's order in words: "Buy 12 shares", "Sell all 30 shares". */
+export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind'>): string {
+  const n = Math.abs(o.shares);
+  return `${o.shares > 0 ? 'Buy' : o.kind === 'close' ? 'Sell all' : 'Sell'} ${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`;
+}
+
+/** Accounts by name, as the window and the note list them. */
+export const sortAccounts = (list: AccountStatus[]): AccountStatus[] => [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+
 /** A note body for today's orders; the date is the reader's today. */
-export function ordersMarkdown(list: StrategyStatus[], now: number): string {
+export function ordersMarkdown(list: StrategyStatus[], now: number, accounts: AccountStatus[] = []): string {
   const lines = ['---', `${ORDERS_MARKER}: true`, '---', '', `# Today's orders, ${localDate(now)}`, ''];
   if (list.length === 0) return [...lines, 'No strategy blocks found.', ''].join('\n');
 
@@ -363,6 +480,30 @@ export function ordersMarkdown(list: StrategyStatus[], now: number): string {
     for (const { status, order } of rows) {
       const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
       lines.push(`| ${link(status, true)} | ${actionWord(order)} | ${order.ticker} | ${orderSize(order)} | ${price(order.lastClose)} | ${basisCell} |`);
+    }
+    lines.push('');
+  }
+
+  if (accounts.length) {
+    lines.push(`## ${ACCOUNTS_HEADING}`, '', ACCOUNTS_NOTE, '');
+    const sortedAccounts = sortAccounts(accounts);
+    const trading = sortedAccounts.filter((a) => a.orders.length);
+    if (trading.length) {
+      lines.push('| Account | Order | Ticker | Last close |', '| --- | --- | --- | ---: |');
+      for (const a of trading) for (const o of a.orders) lines.push(`| ${link({ note: a.note, strategy: a.name }, true)} | ${accountOrderText(o)} | ${o.ticker} | ${price(o.price)} |`);
+      lines.push('');
+    }
+    const rest = sortedAccounts.filter((a) => !a.orders.length);
+    for (const a of rest) lines.push(`- ${link({ note: a.note, strategy: a.name }, false)}: ${a.error === null ? 'nothing to trade' : `couldn't be worked out. ${a.error}`}`);
+    if (rest.length) lines.push('');
+  }
+
+  const watching = watchList(sorted);
+  if (watching.length) {
+    lines.push(`## ${WATCH_HEADING}`, '', WATCH_NOTE, '', '| Strategy | Ticker | Watch for | Last close | Based on |', '| --- | --- | --- | ---: | --- |');
+    for (const { status, row } of watching) {
+      const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
+      lines.push(`| ${link(status, true)} | ${row.ticker} | ${row.phrase}, ${row.when} | ${watchClose(row)} | ${basisCell} |`);
     }
     lines.push('');
   }

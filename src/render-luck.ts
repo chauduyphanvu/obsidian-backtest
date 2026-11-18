@@ -1,11 +1,14 @@
-// The "Was it luck?" section: reshuffled history, random entries and walk-forward, each with a plain verdict first.
+// The "Was it luck?" section: how many tries the block has had, reshuffled history, random entries and walk-forward, each
+// with a plain verdict first.
 
 import type { Backtest } from './backtest.ts';
 import type { Param } from './dsl.ts';
 import { h, s } from './dom.ts';
-import { isoDate, money, moneyTicks, niceStep, pct, plural, tidy, timeTicks } from './format.ts';
+import { isoDate, localDate, minus, money, moneyTicks, niceStep, pct, plural, tidy, timeTicks } from './format.ts';
 import type { JobOf, Kind, Results } from './jobs.ts';
+import { follow, trialOf, trialSpread, type BlockLedger, type Ledger } from './ledger.ts';
 import { monthOfBars, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
+import { deflatedSharpe, excessReturns, stepSharpe, stepsPerYear, type Deflated } from './overfit.ts';
 import { formatParam } from './render-params.ts';
 import { CHAR, observe, placeTip, progressBar, valuesText, did, WAITING, type Life, type SweepInput } from './render-sweep.ts';
 import { METRICS, sweepParams } from './sweep.ts';
@@ -23,9 +26,11 @@ export function renderLuck(parent: HTMLElement, input: SweepInput): () => void {
   const blocks = new Map<HTMLElement, Life>();
   const details = h(parent, 'details', 'bt-details bt-luck');
   h(details, 'summary', undefined, 'Was it luck?');
-  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-luck-body'), input, life, blocks, jobs), { once: true });
+  let stopTries = () => {};
+  details.addEventListener('toggle', () => (stopTries = build(h(details, 'div', 'bt-luck-body'), input, life, blocks, jobs)), { once: true });
   return () => {
     life.gone = true;
+    stopTries();
     jobs.close();
     for (const b of blocks.values()) for (const o of b.observers) o.disconnect();
   };
@@ -53,7 +58,8 @@ export function valuesUsed(params: Param[]): string | null {
   return `These checks test the run shown, with ${list((p) => p.value)}. The block says ${list((p) => p.declared)}.`;
 }
 
-function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTMLElement, Life>, jobs: BlockJobs): void {
+/** Fills the section; returns what stops its count of tries from following the record. */
+function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTMLElement, Life>, jobs: BlockJobs): () => void {
   const bt = input.backtest;
   const ranged = sweepParams(bt.spec).length > 0;
   h(
@@ -67,6 +73,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
   const used = valuesUsed(bt.spec.params);
   const ours = used ? SHOWN : NOTE;
   if (used) h(body, 'p', 'bt-note', used);
+  const stopTries = input.ledger ? triesBlock(h(body, 'div'), input.ledger, bt) : () => {};
   const controls = h(body, 'div', 'bt-run-row');
   const run = h(controls, 'button', 'bt-button mod-cta', 'Run checks');
   const progress = progressBar(controls);
@@ -147,6 +154,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
         walk.replaceChildren();
         try {
           const w = await step({ kind: 'walk' }, 'Walk-forward…', (d, n) => `Walk-forward: ${d} of ${n} backtests`);
+          if (w) void input.ledger?.add(w.trials);
           if (life.gone) return;
           if (w) walkBlock(walk, lifeOf(walk), w, ours);
           else {
@@ -176,6 +184,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
       busy(false);
     }
   });
+  return stopTries;
 }
 
 function check(el: HTMLElement, title: string): HTMLElement {
@@ -200,6 +209,136 @@ function legend(parent: HTMLElement, items: [string, string][]): void {
     h(k, 'span', `bt-swatch ${cls}`);
     h(k, 'span', undefined, label);
   }
+}
+
+// ---------------------------------------------------------------- how many tries
+
+/** What "How many tries" reads for the run on screen. */
+export interface Tries {
+  /** Distinct tries of the block counted: sets of rules and values that ran and traded. */
+  n: number;
+  /** When the count began: when it was last started again, or else the first try; null before any. */
+  since: number | null;
+  /** The run's Sharpe ratio a year. */
+  sharpe: number;
+  /** The deflated Sharpe ratio, and SR₀ a year as `bar`; null when it can't be told, `why` saying why. */
+  deflated: (Deflated & { bar: number }) | null;
+  why: 'no trades' | 'flat' | 'short' | 'shape' | null;
+}
+
+export function triesOf(ledger: Ledger, bt: Backtest): Tries {
+  const trials = Object.values(ledger.trials);
+  let first = Infinity;
+  for (const t of trials) first = Math.min(first, t[2]);
+  const since = ledger.resetAt > 0 ? ledger.resetAt : trials.length ? first : null;
+  const base = { n: trials.length, since, sharpe: bt.stats.sharpe };
+  if (bt.run.trades.length === 0) return { ...base, deflated: null, why: 'no trades' };
+  const shape = stepSharpe(excessReturns(bt.run.equity, bt.run.cashReturn));
+  if (!shape) return { ...base, deflated: null, why: 'flat' };
+  const perYear = stepsPerYear(bt.run.t);
+  const spread = trialSpread(ledger, perYear);
+  // The run on screen is a try even before its count has been written.
+  const d = deflatedSharpe(shape, Math.max(1, spread.trials), spread.variance);
+  if (!d) return { ...base, deflated: null, why: shape.steps < 3 ? 'short' : 'shape' };
+  return { ...base, deflated: { ...d, bar: d.sr0 * Math.sqrt(perYear) }, why: null };
+}
+
+const chance = (p: number) => (p > 0.995 ? 'over 99%' : p < 0.005 ? 'under 1%' : `about ${pct(p, 0)}`);
+const ratio = (x: number) => minus(x.toFixed(2));
+const sinceText = (t: Tries) => (t.since === null ? '' : ` since ${localDate(t.since)}`);
+const counted = (t: Tries) =>
+  t.n === 1 ? `1 try of this block has been counted${sinceText(t)}` : `${plural(t.n, 'try', 'tries')} of this block have been counted${sinceText(t)}`;
+
+/** The verdict of "How many tries", in words. */
+export function triesWords(t: Tries): string {
+  const cannot: Record<NonNullable<Tries['why']>, string> = {
+    'no trades': 'The run shown never traded, so it is not one of them, and it has no Sharpe ratio to judge.',
+    flat: 'The run shown barely moves against cash, so it has no Sharpe ratio to judge.',
+    short: 'The run shown has too few bars to judge its Sharpe ratio.',
+    shape: "Can't tell: the run's returns are so lopsided or heavy-tailed that its Sharpe ratio has no usable margin of error.",
+  };
+  if (!t.deflated) return `${counted(t)}. ${cannot[t.why ?? 'shape']}`;
+  const d = t.deflated;
+  const verdict =
+    d.dsr >= 0.95
+      ? 'That is strong evidence of an edge, as far as these tries can tell.'
+      : d.dsr >= 0.5
+        ? 'That is not strong evidence: the result could be luck.'
+        : 'The result is more likely luck than an edge.';
+  if (t.n <= 1) {
+    return `Only the run shown has been counted${sinceText(t)}, so there are no other tries to allow for. Given the length and shape of its returns, the chance that its Sharpe ratio of ${ratio(t.sharpe)} reflects a real edge is ${chance(d.dsr)}. ${verdict}`;
+  }
+  return (
+    `${counted(t)}. With no edge at all, the best of ${plural(t.n, 'try', 'tries')} like these would typically show a Sharpe ratio of about ${ratio(d.bar)}; the run shown has ${ratio(t.sharpe)}. ` +
+    `Allowing for that, the chance that its Sharpe ratio reflects a real edge, rather than the luck of keeping the best try, is ${chance(d.dsr)}. ${verdict}`
+  );
+}
+
+/** Why the count overstates the tries. */
+export const upperBound = (n: number) =>
+  `${n.toLocaleString('en-US')} is an upper bound: neighbouring variants are alike, so they make fewer independent tries than their count, and the chance above errs on the low side.`;
+
+/** The line under the result's figures; null when there is nothing to allow for. */
+export function triesNote(t: Tries): string | null {
+  if (t.n <= 1) return null;
+  const see = 'See "How many tries" under "Was it luck?".';
+  return t.deflated
+    ? `${plural(t.n, 'try', 'tries')} of this block counted so far. Allowing for them, the chance that this Sharpe ratio reflects a real edge is ${chance(t.deflated.dsr)}. ${see}`
+    : `${plural(t.n, 'try', 'tries')} of this block counted so far. ${see}`;
+}
+
+export const RESET = 'Start the count again';
+
+/** Draws the count of tries, following the record as it changes; returns what stops it following. */
+function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => void {
+  let gone = false;
+  const draw = (l: Ledger) => {
+    if (gone) return;
+    const sec = check(el, 'How many tries');
+    const t = triesOf(l, bt);
+    h(sec, 'p', 'bt-luck-verdict', triesWords(t));
+    if (t.n > 1) h(sec, 'p', 'bt-note', upperBound(t.n));
+    if (t.n > 0) {
+      const row = h(sec, 'div', 'bt-run-row bt-ledger-reset');
+      const ask = h(row, 'button', 'bt-button', RESET);
+      ask.addEventListener('click', () => {
+        row.replaceChildren();
+        h(row, 'span', 'bt-ledger-ask', `Forget the ${plural(t.n, 'try', 'tries')} counted so far and count from now?`);
+        const yes = h(row, 'button', 'bt-button mod-warning', 'Start again');
+        const no = h(row, 'button', 'bt-button', 'Keep the count');
+        no.addEventListener('click', () => draw(l));
+        yes.addEventListener('click', async () => {
+          yes.disabled = no.disabled = true;
+          await ledger.reset();
+          // The run on screen is the first try of the new count.
+          await ledger.add([trialOf(bt.spec, bt)]);
+        });
+      });
+    }
+    how(
+      sec,
+      'every run shown in the note or the preview panel counts, with each slider position and each variant of a sweep or walk-forward, once for each set of rules and values that traded: two blocks that trade alike count once, however they are written. The deflated Sharpe ratio (Bailey and López de Prado, 2014) works out the best Sharpe ratio that this many tries with no edge would typically show, from how much their Sharpe ratios differ, and asks how likely the run shown is to be above it, given how long its history is and how lopsided and heavy-tailed its returns are.',
+      'tries made anywhere else are not counted: in another program, in an earlier copy of the block, or ideas dropped before they were run. Nor are the reshuffles and random entries of these checks, or the runs of the orders window and of compare and backtests blocks. The count belongs to the block: a new name line, or moving a block that has none, starts a new one.',
+    );
+  };
+  const unwatch = follow(ledger, draw);
+  return () => {
+    gone = true;
+    unwatch();
+  };
+}
+
+/** Writes the line under the result's figures, following the record as it changes; returns what stops it following. */
+export function renderTriesNote(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => void {
+  let gone = false;
+  const draw = (l: Ledger) => {
+    if (!gone) el.textContent = triesNote(triesOf(l, bt)) ?? '';
+  };
+  const unwatch = follow(ledger, draw);
+  return () => {
+    gone = true;
+    unwatch();
+  };
 }
 
 // ---------------------------------------------------------------- reshuffled history

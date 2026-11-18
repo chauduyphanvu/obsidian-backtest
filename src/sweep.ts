@@ -2,7 +2,10 @@
 
 import { runBacktest, type Backtest, type Stats } from './backtest.ts';
 import { paramValues, parseSpec, type ParseResult, type Spec } from './dsl.ts';
-import { tidy } from './format.ts';
+import { median, tidy } from './format.ts';
+import { trialHash, type TrialRun } from './ledger.ts';
+import { pbo, stepBlocks, stepsPerYear, type Pbo, type StepBlocks } from './overfit.ts';
+import { priceMemo } from './price-memo.ts';
 import type { Bars } from './types.ts';
 
 export type Metric = 'cagr' | 'sharpe' | 'sortino' | 'maxDrawdown' | 'totalReturn';
@@ -43,6 +46,13 @@ export interface SweepPoint {
   after: Stats | null;
   trades: number;
   error: string | null;
+  /** The variant's trial (ledger.ts trialHash), for counting the block's tries; null when it did not run. */
+  trial: string | null;
+  /** Steps a year of its run, to turn `stats.sharpe` back into a Sharpe ratio per step; null when it did not run. */
+  perYear: number | null;
+  /** Steps of its run, and its excess returns summed over stretches of them, for the overfitting check (overfit.ts pbo). */
+  steps: number;
+  blocks: StepBlocks | null;
 }
 
 export interface SweepResult {
@@ -99,7 +109,7 @@ export function valuesAt(params: SweepParam[], index: number[]): Record<string, 
 
 /** One variant: parsed with the overrides and run on the same prices. Problems are recorded, not thrown. */
 export function runVariant(parse: Parse, data: Map<string, Bars>, values: Record<string, number>, index: number[]): { point: SweepPoint; backtest: Backtest | null } {
-  const point: SweepPoint = { values, index, stats: null, before: null, after: null, trades: 0, error: null };
+  const point: SweepPoint = { values, index, stats: null, before: null, after: null, trades: 0, error: null, trial: null, perYear: null, steps: 0, blocks: null };
   const parsed = parse(values);
   if (!parsed.spec) {
     point.error = parsed.errors[0]?.message ?? 'These values make the block invalid';
@@ -111,6 +121,11 @@ export function runVariant(parse: Parse, data: Map<string, Bars>, values: Record
     point.before = bt.segments?.[0].stats ?? null;
     point.after = bt.segments?.[1].stats ?? null;
     point.trades = bt.run.trades.length;
+    point.trial = trialHash(parsed.spec);
+    point.perYear = stepsPerYear(bt.run.t);
+    const { steps, blocks } = stepBlocks(bt.run.equity, bt.run.cashReturn);
+    point.steps = steps;
+    point.blocks = blocks;
     return { point, backtest: bt };
   } catch (e) {
     point.error = e instanceof Error ? e.message : String(e);
@@ -145,6 +160,7 @@ export async function runSweep(
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
+  priceMemo.share(data);
   const result: SweepResult = { params, points: [], tried: 0, total, stopped: false };
   for (const index of grid(params)) {
     if (opts.shouldStop?.()) {
@@ -157,6 +173,16 @@ export async function runSweep(
     if (result.tried % BATCH === 0 && result.tried < total) await wait();
   }
   return result;
+}
+
+/** The variants that ran and traded, as the block's tries count them. */
+export function sweepTrials(result: SweepResult): TrialRun[] {
+  return result.points.flatMap((p) => (p.error === null && p.trades > 0 && p.trial !== null && p.stats && p.perYear !== null ? [{ hash: p.trial, sharpe: p.stats.sharpe, perYear: p.perYear }] : []));
+}
+
+/** The probability that picking the best variant here is overfitting, from the variants that ran and traded. */
+export function sweepPbo(result: SweepResult): Pbo {
+  return pbo(result.points.flatMap((p) => (p.error === null && p.trades > 0 && p.blocks ? [{ steps: p.steps, blocks: p.blocks }] : [])));
 }
 
 /** The metric for one part of a variant's run; NaN when it has none. */
@@ -172,10 +198,6 @@ export function quantile(sorted: number[], q: number): number {
   const pos = (sorted.length - 1) * q;
   const lo = Math.floor(pos);
   return pos === lo ? sorted[lo] : sorted[lo] + (sorted[lo + 1] - sorted[lo]) * (pos - lo);
-}
-
-function median(xs: number[]): number {
-  return quantile([...xs].sort((a, b) => a - b), 0.5);
 }
 
 /**

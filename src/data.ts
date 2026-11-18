@@ -1,15 +1,24 @@
 import { intervalMs, YAHOO_INSIDE_DAYS } from './dsl.ts';
-import { DAY } from './format.ts';
-import { columnName, emptyBars, MAX_COLUMNS, sliceBars, type AssetRef, type Bars, type Column, type UnreadColumn } from './types.ts';
+import { DAY, isoDate } from './format.ts';
+import { parseFred, type FredSeries } from './fred.ts';
+import { columnName, emptyBars, MAX_COLUMNS, sliceBars, type AssetRef, type Bars, type Column, type KeyedService, type Source, type UnreadColumn } from './types.ts';
 
 const FRESH_FOR = 6 * 3_600_000;
 /** Yahoo hosts in the order they are tried, with the wait before each retry. */
 const YAHOO_HOSTS = ['query1', 'query2', 'query1'];
 const YAHOO_WAITS = [500, 1500];
+/** With "When Yahoo fails, use Tiingo", a saved Yahoo copy younger than this is used before Tiingo is asked. */
+const YAHOO_SAVED_FIRST = 3 * DAY;
+/** The first day asked of Tiingo, so its answer is a ticker's whole history. */
+const TIINGO_START = '1900-01-01';
+
+/** The settings that choose each service's API key, as the settings tab names them. */
+export const KEY_SETTING: Record<KeyedService, string> = { tiingo: 'Tiingo API key', fred: 'FRED API key' };
+const SERVICE: Record<KeyedService, string> = { tiingo: 'Tiingo', fred: 'FRED' };
 
 export interface DataDeps {
-  /** GET a URL and return its body; rejects on a network error or a non-2xx status. */
-  fetchText(url: string): Promise<string>;
+  /** GET a URL with any extra headers and return its body; rejects on a network error or a non-2xx status. */
+  fetchText(url: string, headers?: Record<string, string>): Promise<string>;
   /** Reads a vault file, or null when it does not exist. */
   readVaultFile(path: string): Promise<string | null>;
   cacheRead(key: string): Promise<string | null>;
@@ -17,13 +26,20 @@ export interface DataDeps {
   now(): number;
   /** Waits between retries; without it retries go out straight away. */
   sleep?: (ms: number) => Promise<void>;
+  /** The API key of a service, read from the user's secret storage when a request is about to go out; null when none is set. */
+  secret?: (service: KeyedService) => string | null;
+  /** Whether a Yahoo ticker that fails to load may come from Tiingo instead: the setting "When Yahoo fails, use Tiingo". */
+  tiingoFallback?: () => boolean;
 }
 
 export interface Loaded {
   bars: Bars;
-  /** Set when the network failed and older cached bars were used instead. */
+  /** Set when the network failed and older cached bars were used instead, or when Tiingo stood in for Yahoo. */
   warning: string | null;
-  source: 'yahoo' | 'stooq' | 'binance' | 'csv';
+  /** What the reader should know about how the bars are dated, which needs no new download (fred.ts); null for nothing. */
+  note: string | null;
+  /** Where the bars came from: Tiingo, when it stood in for a Yahoo ticker. */
+  source: Source;
   /** Time of the last bar. */
   through: number;
   /** When these bars were fetched (csv: now). */
@@ -35,11 +51,16 @@ export interface Loaded {
 /** A failure that no other host, source or saved copy can fix, such as a ticker that does not exist. */
 class NoPrices extends Error {}
 
+/** A service that needs an API key has none set; its message names the setting. */
+class MissingKey extends Error {}
+
 interface Cached {
   fetched: number;
   /** The `since` the bars were fetched for. */
   since: number;
   bars: Bars;
+  /** The note that came with a FRED series (Loaded.note). */
+  note?: string;
 }
 
 function push(bars: Bars, t: number, o: number, h: number, l: number, c: number, v: number): void {
@@ -81,12 +102,41 @@ function exchangeDay(timeZone: unknown, fallbackOffsetMs: number): (ms: number) 
  * Today's daily bar counts once the regular session it belongs to has closed.
  */
 export function parseYahoo(json: string, now: number, weekly = false): Bars {
+  return yahooBars(json, now, weekly, (r, i, c) => (r.adj[i] != null ? r.adj[i]! / c : 1));
+}
+
+/**
+ * Yahoo chart JSON to daily bars as they traded that day, for comparing a broker's fills with: Yahoo's prices are adjusted
+ * for splits but not for dividends ("Close price adjusted for splits", its historical data page says), so each bar is
+ * multiplied back by the splits after it, from the chart's split events.
+ */
+export function parseYahooRaw(json: string, now: number): Bars {
+  return yahooBars(json, now, false, (r, i) => {
+    let f = 1;
+    for (const s of r.splits) if (s.t > r.ts[i] * 1000 && s.numerator > 0 && s.denominator > 0) f *= s.numerator / s.denominator;
+    return f;
+  });
+}
+
+interface YahooChart {
+  ts: number[];
+  adj: (number | null)[];
+  splits: { t: number; numerator: number; denominator: number }[];
+}
+
+/** Yahoo chart JSON to bars, each price of row `i` (close `c`) multiplied by `factor`, without a bar that is still trading. */
+function yahooBars(json: string, now: number, weekly: boolean, factor: (r: YahooChart, i: number, c: number) => number): Bars {
   const body = JSON.parse(json);
   const result = body?.chart?.result?.[0];
   if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo returned no data');
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
-  const adj: (number | null)[] = result.indicators?.adjclose?.[0]?.adjclose ?? [];
+  const splits = Object.values((result.events?.splits ?? {}) as Record<string, { date?: number; numerator?: number; denominator?: number }>).map((s) => ({
+    t: Number(s.date) * 1000,
+    numerator: Number(s.numerator),
+    denominator: Number(s.denominator),
+  }));
+  const chart: YahooChart = { ts, adj: result.indicators?.adjclose?.[0]?.adjclose ?? [], splits };
   const localDay = exchangeDay(result.meta?.exchangeTimezoneName, (result.meta?.gmtoffset ?? 0) * 1000);
   const today = localDay(now);
   const span = weekly ? 7 * DAY : DAY;
@@ -98,7 +148,7 @@ export function parseYahoo(json: string, now: number, weekly = false): Bars {
     if (day + span > today && !(closedToday && day === today)) break;
     const c = q.close?.[i];
     if (c == null) continue;
-    const f = adj[i] != null ? adj[i]! / c : 1;
+    const f = factor(chart, i, c);
     push(bars, day, q.open?.[i] * f, q.high?.[i] * f, q.low?.[i] * f, c * f, q.volume?.[i] ?? 0);
   }
   return bars;
@@ -150,6 +200,87 @@ export function parseYahooInside(json: string, now: number, step: number): Bars 
     for (let k = 0; k < kept.t.length; k++) push(bars, kept.t[k], kept.o[k], kept.h[k], kept.l[k], kept.c[k], kept.v[k]);
   }
   return bars;
+}
+
+/** Minutes after midnight in New York when the US exchanges' regular session ends. */
+const US_CLOSE = 16 * 60;
+
+const NEW_YORK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
+
+/** The day in New York at the moment `ms`, as midnight UTC of that date, and the minutes since midnight there. */
+function newYork(ms: number): { day: number; minutes: number } {
+  const parts = NEW_YORK.formatToParts(ms);
+  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return { day: Date.UTC(part('year'), part('month') - 1, part('day')), minutes: part('hour') * 60 + part('minute') };
+}
+
+/** A number Tiingo sent, or NaN for none. */
+const field = (x: unknown): number => (typeof x === 'number' ? x : typeof x === 'string' && x.trim() !== '' ? Number(x) : NaN);
+
+/**
+ * Daily bars to weekly ones stamped as Yahoo stamps its own: at the Monday that starts the week, a holiday or not, with the
+ * first open, the highest high, the lowest low, the last close and the volume of the week's days. A week counts from the
+ * Monday after it, `today` being the day in New York, as parseYahoo counts Yahoo's.
+ */
+function weeksOf(daily: Bars, today: number): Bars {
+  const out = emptyBars();
+  for (let i = 0; i < daily.t.length; ) {
+    const day = Math.floor(daily.t[i] / DAY);
+    // Day 0 of the epoch was a Thursday.
+    const monday = (day - ((((day + 3) % 7) + 7) % 7)) * DAY;
+    const next = monday + 7 * DAY;
+    if (next > today) break;
+    let [h, l, v, j] = [-Infinity, Infinity, 0, i];
+    for (; j < daily.t.length && daily.t[j] < next; j++) {
+      h = Math.max(h, daily.h[j]);
+      l = Math.min(l, daily.l[j]);
+      v += daily.v[j];
+    }
+    push(out, monday, daily.o[i], h, l, daily.c[j - 1], v);
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * Tiingo's daily prices JSON to bars adjusted for splits and dividends (its adjOpen, adjHigh, adjLow, adjClose and
+ * adjVolume, or the raw value scaled by adjClose / close where one is missing), each dated by its exchange day. Today's row
+ * counts once the regular session in New York has closed. Weekly bars are made from the daily ones (weeksOf).
+ */
+export function parseTiingo(json: string, now: number, weekly = false): Bars {
+  const daily = emptyBars();
+  const ny = tiingoRows(json, now, (r, t) => {
+    const close = field(r.close);
+    const f = field(r.adjClose) > 0 && close > 0 ? field(r.adjClose) / close : 1;
+    const price = (adjusted: string, raw: string) => (Number.isFinite(field(r[adjusted])) ? field(r[adjusted]) : field(r[raw]) * f);
+    const volume = Number.isFinite(field(r.adjVolume)) ? field(r.adjVolume) : field(r.volume);
+    push(daily, t, price('adjOpen', 'open'), price('adjHigh', 'high'), price('adjLow', 'low'), price('adjClose', 'close'), volume);
+  });
+  return weekly ? weeksOf(daily, ny.day) : daily;
+}
+
+/** Tiingo's daily prices JSON to bars as they traded that day: its open, high, low and close, which no later dividend or split changes. */
+export function parseTiingoRaw(json: string, now: number): Bars {
+  const daily = emptyBars();
+  tiingoRows(json, now, (r, t) => push(daily, t, field(r.open), field(r.high), field(r.low), field(r.close), field(r.volume)));
+  return daily;
+}
+
+/** Calls `row` for each row of Tiingo's daily prices whose New York session has closed, with its exchange day; gives the time in New York. */
+function tiingoRows(json: string, now: number, row: (r: Record<string, unknown>, t: number) => void): ReturnType<typeof newYork> {
+  const rows: unknown = JSON.parse(json);
+  if (!Array.isArray(rows)) {
+    const detail = (rows as { detail?: unknown } | null)?.detail;
+    throw new Error(typeof detail === 'string' ? detail : 'Tiingo returned no data');
+  }
+  const ny = newYork(now);
+  const last = ny.minutes >= US_CLOSE ? ny.day : ny.day - DAY;
+  for (const r of rows as Record<string, unknown>[]) {
+    const m = typeof r?.date === 'string' ? r.date.match(/^(\d{4})-(\d{2})-(\d{2})/) : null;
+    const t = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
+    if (t <= last) row(r, t);
+  }
+  return ny;
 }
 
 /** Binance kline rows to bars, without the kline that has not closed yet. */
@@ -395,7 +526,7 @@ export function parseCsv(text: string): Bars {
 /** The pieces parseCsv reads a file with, for code that has to agree with it exactly. */
 export { SLASHED as CSV_SLASHED_DATE, detectSeparator as detectCsvSeparator, parseTime as parseCsvTime, slashedDatesAreDayFirst, splitLine as splitCsvLine };
 
-async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Promise<Bars> {
+async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw = false): Promise<Bars> {
   const now = Math.floor(deps.now() / 1000);
   // Intraday bars come for a recent window only, asked for whole (see insideReach).
   const days = YAHOO_INSIDE_DAYS[interval];
@@ -420,7 +551,8 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Prom
       continue;
     }
     try {
-      return days ? parseYahooInside(text, deps.now(), intervalMs(interval)) : parseYahoo(text, deps.now(), interval === '1w');
+      if (days) return parseYahooInside(text, deps.now(), intervalMs(interval));
+      return raw ? parseYahooRaw(text, deps.now()) : parseYahoo(text, deps.now(), interval === '1w');
     } catch (e) {
       if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Check the ticker.`);
       throw e;
@@ -450,32 +582,181 @@ async function fetchBinance(ref: AssetRef, interval: string, since: number, have
   }
 }
 
-function loaded(source: Loaded['source'], bars: Bars, fetched: number, warning: string | null = null, stale = false): Loaded {
-  return { bars, warning, source, through: bars.t[bars.t.length - 1], fetched, stale };
+/** A message with the query taken off every web address in it, so no key a request carried in its URL is shown. */
+export const withoutQueries = (text: string): string => text.replace(/\b(https?:\/\/[^\s?#"'<>]*)\?[^\s"'<>]*/gi, '$1');
+
+/** The API key a request to `service` needs, or a MissingKey error that names the setting to choose it with. */
+function keyFor(service: KeyedService, ref: AssetRef, deps: DataDeps): string {
+  const key = deps.secret?.(service)?.trim();
+  if (!key) throw new MissingKey(`${SERVICE[service]} needs an API key to load ${ref.name}. Choose the secret that holds it under "${KEY_SETTING[service]}" in the plugin settings.`);
+  return key;
+}
+
+/** Runs a request that carries `key`, so that no error it ends in holds the key or a web address's query. */
+async function keyed<T>(key: string, request: () => Promise<T>): Promise<T> {
+  try {
+    return await request();
+  } catch (e) {
+    if (e instanceof NoPrices) throw e;
+    throw new Error(withoutQueries(message(e).split(key).join('…')));
+  }
+}
+
+/** The text of a field of a JSON body, or undefined. */
+function said(text: string, name: string): string | undefined {
+  try {
+    const v = (JSON.parse(text) as Record<string, unknown> | null)?.[name];
+    return typeof v === 'string' ? v.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A ticker's whole daily history from Tiingo, with the key in the Authorization header only. */
+async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps, raw = false): Promise<Bars> {
+  const key = keyFor('tiingo', ref, deps);
+  return keyed(key, async () => {
+    const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ref.id)}/prices?startDate=${TIINGO_START}&resampleFreq=daily`;
+    const text = await deps.fetchText(url, { Authorization: `Token ${key}` });
+    if (!/^\s*[[{]/.test(text)) throw new Error('Tiingo sent something other than price data');
+    try {
+      return raw ? parseTiingoRaw(text, deps.now()) : parseTiingo(text, deps.now(), interval === '1w');
+    } catch (e) {
+      const detail = said(text, 'detail');
+      if (detail === undefined) throw e;
+      if (/not\s*found/i.test(detail)) throw new NoPrices(`Tiingo has no prices for ${ref.name}. Check the ticker.`);
+      if (/token|api key|auth/i.test(detail)) throw new Error(`Tiingo did not accept the API key. Check the secret chosen under "${KEY_SETTING.tiingo}" in the plugin settings`);
+      throw new Error(`Tiingo said: ${detail}`);
+    }
+  });
+}
+
+/** Publication days one first-release answer covers: FRED refuses a real-time period with more than 2,000. */
+const FRED_DAYS_AT_ONCE = 1500;
+
+/**
+ * A FRED series, each value dated by its first release (fred.ts): the days ALFRED has it published on; the series as it
+ * stood on the first of them, which holds its history from before ALFRED; then each later observation as first released
+ * (`output_type=4`, which never repeats what the first day held), a window of days at a time. FRED takes the key only
+ * in the query, so every error is cleaned of it.
+ */
+async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
+  const key = keyFor('fred', ref, deps);
+  return keyed(key, async () => {
+    const ask = async (path: string, query: string): Promise<Record<string, unknown>> => {
+      const text = await deps.fetchText(
+        `https://api.stlouisfed.org/fred/series/${path}?series_id=${encodeURIComponent(ref.id)}&api_key=${encodeURIComponent(key)}&file_type=json${query}`,
+      );
+      if (!text.trimStart().startsWith('{')) throw new Error('FRED sent something other than series data');
+      const error = said(text, 'error_message');
+      if (error !== undefined) {
+        if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series called ${ref.name}. Check the series ID, such as T10Y2Y.`);
+        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Check the secret chosen under "${KEY_SETTING.fred}" in the plugin settings`);
+        throw new Error(`FRED said: ${error.replace(/\s+/g, ' ')}`);
+      }
+      return JSON.parse(text) as Record<string, unknown>;
+    };
+    const rows = (body: Record<string, unknown>): unknown[] => (Array.isArray(body.observations) ? body.observations : []);
+
+    const days: string[] = [];
+    for (;;) {
+      const page = await ask('vintagedates', `&limit=10000&offset=${days.length}`);
+      const got = Array.isArray(page.vintage_dates) ? page.vintage_dates.filter((d): d is string => typeof d === 'string') : [];
+      days.push(...got);
+      if (got.length === 0 || days.length >= Number(page.count)) break;
+    }
+    if (days.length === 0) throw new Error(`FRED gives no day ${ref.name} was published on, so its values can't be dated`);
+    const asked = [`&realtime_start=${days[0]}&realtime_end=${days[0]}`];
+    for (let i = 0; i < days.length; i += FRED_DAYS_AT_ONCE) {
+      const end = i + FRED_DAYS_AT_ONCE < days.length ? days[i + FRED_DAYS_AT_ONCE - 1] : '9999-12-31';
+      asked.push(`&output_type=4&realtime_start=${days[i]}&realtime_end=${end}`);
+    }
+    const answers = await Promise.all(asked.map((query) => ask('observations', query)));
+    return parseFred(JSON.stringify({ observations: answers.flatMap(rows) }), ref.name);
+  });
+}
+
+/** A ticker Tiingo can stand in for: a Yahoo ticker of a US listing, with no `^`, dot suffix, `=` or currency after a dash. */
+const US_LISTING = /^[A-Z0-9]+(?:-[A-Z]{1,2})?$/;
+
+function tiingoStandsIn(ref: AssetRef, interval: string, deps: DataDeps): boolean {
+  return ref.source === 'yahoo' && (interval === '1d' || interval === '1w') && US_LISTING.test(ref.id) && deps.tiingoFallback?.() === true;
+}
+
+const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+function loaded(source: Source, bars: Bars, fetched: number, warning: string | null = null, stale = false, note: string | null = null): Loaded {
+  // Whether bars are values and not prices is the source's to say, never a saved file's.
+  let own = bars;
+  if (source === 'fred' && !bars.values) own = { ...bars, values: true };
+  else if (source !== 'fred' && bars.values) {
+    const { values: _, ...prices } = bars;
+    own = prices;
+  }
+  return { bars: own, warning, note, source, through: own.t[own.t.length - 1], fetched, stale };
+}
+
+async function fetchBars(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps, raw = false): Promise<{ bars: Bars; note: string | null }> {
+  switch (ref.source) {
+    case 'yahoo':
+      return { bars: await fetchYahoo(ref, interval, deps, raw), note: null };
+    case 'binance':
+      return { bars: await fetchBinance(ref, interval, since, cached?.bars ?? null, deps), note: null };
+    case 'tiingo':
+      return { bars: await fetchTiingo(ref, interval, deps, raw), note: null };
+    case 'fred':
+      return fetchFred(ref, deps);
+    case 'csv':
+      throw new Error('A CSV file is read from the vault, not downloaded');
+  }
+}
+
+interface RefreshOptions {
+  keepFrom?: number;
+  freshForMs?: number;
+  force?: boolean;
+  /** False keeps Tiingo from standing in for Yahoo, as for magnify's smaller bars. */
+  fallback?: boolean;
+  /** Prices as they traded, unadjusted (parseYahooRaw, parseTiingoRaw), for Yahoo and Tiingo. */
+  raw?: boolean;
 }
 
 /**
  * Fetches, saves and returns fresh bars; on failure falls back to the saved copy when there is one. Bars before `keepFrom`
- * are not kept, so a saved series that grows at every refresh stays within it.
+ * are not kept, so a saved series that grows at every refresh stays within it. With "When Yahoo fails, use Tiingo", a
+ * Yahoo ticker that fails takes its saved copy while that is under YAHOO_SAVED_FIRST old, then Tiingo, then an older copy.
  */
-async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null, keepFrom = -Infinity): Promise<Loaded> {
+async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null, o: RefreshOptions = {}): Promise<Loaded> {
+  const keepFrom = o.keepFrom ?? -Infinity;
   try {
-    let bars = ref.source === 'yahoo' ? await fetchYahoo(ref, interval, deps) : await fetchBinance(ref, interval, since, cached?.bars ?? null, deps);
-    if (keepFrom > -Infinity) bars = barsFrom(bars, keepFrom);
+    const got = await fetchBars(ref, interval, since, cached, deps, o.raw);
+    const bars = keepFrom > -Infinity ? barsFrom(got.bars, keepFrom) : got.bars;
     if (bars.t.length === 0) throw new Error('no bars returned');
     const fetched = deps.now();
-    await deps.cacheWrite(key, JSON.stringify({ fetched, since: Math.max(cached?.since ?? since, keepFrom), bars } satisfies Cached));
-    return loaded(ref.source, bars, fetched);
+    await deps.cacheWrite(key, JSON.stringify({ fetched, since: Math.max(cached?.since ?? since, keepFrom), bars, ...(got.note ? { note: got.note } : {}) } satisfies Cached));
+    return loaded(ref.source, bars, fetched, null, false, got.note);
   } catch (e) {
     if (e instanceof NoPrices) throw e;
-    const why = e instanceof Error ? e.message : String(e);
-    if (cached) {
-      const day = new Date(cached.fetched).toISOString().slice(0, 10);
-      return loaded(ref.source, cached.bars, cached.fetched, `Couldn't refresh ${ref.name} (${why}); using prices saved on ${day}.`, true);
+    const why = message(e);
+    let tiingo = '';
+    if (o.fallback !== false && !(cached && deps.now() - cached.fetched < YAHOO_SAVED_FIRST) && tiingoStandsIn(ref, interval, deps)) {
+      try {
+        const t = await loadBars({ ...ref, source: 'tiingo' }, interval, since, deps, o.force, { freshForMs: o.freshForMs, fallback: false });
+        if (!t.stale) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}); using Tiingo's prices instead.` };
+        if (!cached) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}) or Tiingo; using Tiingo's prices saved on ${isoDate(t.fetched)}.` };
+        tiingo = 'it has only an older saved copy';
+      } catch (f) {
+        tiingo = message(f).replace(`Couldn't load ${ref.name} from tiingo: `, '');
+      }
     }
-    throw new Error(`Couldn't load ${ref.name} from ${ref.source}: ${why}`);
+    if (cached) {
+      return loaded(ref.source, cached.bars, cached.fetched, `Couldn't refresh ${ref.name} (${why}); using prices saved on ${isoDate(cached.fetched)}.`, true, cached.note ?? null);
+    }
+    if (e instanceof MissingKey) throw new Error(e.message);
+    throw new Error(`Couldn't load ${ref.name} from ${ref.source}: ${why}${tiingo ? `. Tiingo could not stand in: ${tiingo}` : ''}`);
   }
 }
+
 
 const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
 
@@ -490,7 +771,7 @@ export async function loadBars(
   since: number,
   deps: DataDeps,
   force = false,
-  opts?: { freshForMs?: number; keepFrom?: number; key?: string },
+  opts?: { freshForMs?: number; keepFrom?: number; key?: string; fallback?: boolean; raw?: boolean },
 ): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
@@ -513,9 +794,10 @@ export async function loadBars(
   } catch {
     saved = null;
   }
-  // A cache that starts after `since` was built for a shorter run and can't serve this one.
-  const cached = saved !== null && saved.bars.t.length > 0 && (ref.source === 'yahoo' || saved.since <= since) ? saved : null;
-  if (cached && !force && deps.now() - cached.fetched < (opts?.freshForMs ?? FRESH_FOR)) return loaded(ref.source, cached.bars, cached.fetched);
+  // A cache that starts after `since` was built for a shorter run and can't serve this one. Only Binance is asked for less
+  // than a whole history.
+  const cached = saved !== null && saved.bars.t.length > 0 && (ref.source !== 'binance' || saved.since <= since) ? saved : null;
+  if (cached && !force && deps.now() - cached.fetched < (opts?.freshForMs ?? FRESH_FOR)) return loaded(ref.source, cached.bars, cached.fetched, null, false, cached.note ?? null);
 
   let byKey = running.get(deps);
   if (!byKey) running.set(deps, (byKey = new Map()));
@@ -524,14 +806,26 @@ export async function loadBars(
   let download = byKey.get(slot);
   if (!download) {
     const map = byKey;
-    download = refresh(ref, interval, since, deps, key, cached, opts?.keepFrom).finally(() => map.delete(slot));
+    download = refresh(ref, interval, since, deps, key, cached, { keepFrom: opts?.keepFrom, freshForMs: opts?.freshForMs, force, fallback: opts?.fallback, raw: opts?.raw }).finally(() =>
+      map.delete(slot),
+    );
     byKey.set(slot, download);
   }
   return download;
 }
 
-/** The name a source's bars of one ticker and interval are saved under. */
-const cacheKey = (ref: AssetRef, interval: string): string => `${ref.source}-${ref.id}-${interval}`.replace(/[^A-Za-z0-9._-]/g, '_');
+/**
+ * A Yahoo or Tiingo ticker's daily bars as they traded each day, unadjusted for later dividends and splits, to compare a
+ * broker's fills with. They are saved apart from the adjusted bars, under the same name with `raw-` in front, and Tiingo
+ * never stands in for Yahoo here.
+ */
+export function loadRawBars(ref: AssetRef, deps: DataDeps, opts: { freshForMs?: number } = {}): Promise<Loaded> {
+  return loadBars(ref, '1d', 0, deps, false, { freshForMs: opts.freshForMs, key: `raw-${cacheKey(ref, '1d')}`, fallback: false, raw: true });
+}
+
+/** The name a source's bars of one ticker and interval are saved under. A FRED series is the same whatever the interval. */
+const cacheKey = (ref: AssetRef, interval: string): string =>
+  (ref.source === 'fred' ? `fred-${ref.id}` : `${ref.source}-${ref.id}-${interval}`).replace(/[^A-Za-z0-9._-]/g, '_');
 
 /** The bars at or after `since`. */
 export function barsFrom(bars: Bars, since: number): Bars {
@@ -571,5 +865,5 @@ export function loadInsideBars(ref: AssetRef, interval: string, since: number, d
   const binance = ref.source === 'binance';
   const keepFrom = binance ? insideReach('binance', interval, deps.now()) : undefined;
   const key = binance ? `${cacheKey(ref, interval)}-inside` : undefined;
-  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom, key });
+  return loadBars({ ...ref, name: `the ${interval} bars of ${ref.name}` }, interval, since, deps, force, { ...opts, keepFrom, key, fallback: false });
 }

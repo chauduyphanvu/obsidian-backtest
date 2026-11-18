@@ -49,10 +49,10 @@ export class BacktestSettingTab extends PluginSettingTab {
     );
     new Setting(containerEl)
       .setName('Where plain tickers come from')
-      .setDesc('Used for tickers written without a prefix such as binance:.')
+      .setDesc('Used for tickers written without a prefix such as binance:. Tiingo needs its API key below.')
       .addDropdown((d) =>
         d
-          .addOptions({ yahoo: 'Yahoo', binance: 'Binance' })
+          .addOptions({ yahoo: 'Yahoo', binance: 'Binance', tiingo: 'Tiingo' })
           .setValue(settings.dataSource)
           .onChange(async (v) => {
             settings.dataSource = v as Settings['dataSource'];
@@ -87,6 +87,36 @@ export class BacktestSettingTab extends PluginSettingTab {
             b.setDisabled(false);
             new Notice(`Could not clear saved prices: ${e instanceof Error ? e.message : String(e)}`);
           }
+        }),
+      );
+    const stored = 'Choose or add a secret in Obsidian’s keychain. Only the secret’s name is saved here.';
+    new Setting(containerEl)
+      .setName('Tiingo API key')
+      .setDesc(`Needed for tiingo: tickers, data: tiingo and the setting below. ${stored} It is sent to api.tiingo.com in a request header.`)
+      .addComponent((el) =>
+        new SecretComponent(this.app, el).setValue(settings.tiingoSecret).onChange(async (name) => {
+          settings.tiingoSecret = name ?? '';
+          await this.host.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName('FRED API key')
+      .setDesc(`Needed for fred: series. ${stored} FRED takes it only in the web address of each request to api.stlouisfed.org.`)
+      .addComponent((el) =>
+        new SecretComponent(this.app, el).setValue(settings.fredSecret).onChange(async (name) => {
+          settings.fredSecret = name ?? '';
+          await this.host.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName('When Yahoo fails, use Tiingo')
+      .setDesc(
+        'When a US ticker cannot be loaded from Yahoo and its saved copy is more than 3 days old, or there is none, load it from Tiingo instead, and say so in the result. Not for tickers that start with ^ or end in a suffix such as .L, -USD or =X. Needs the Tiingo API key.',
+      )
+      .addToggle((t) =>
+        t.setValue(settings.tiingoFallback).onChange(async (v) => {
+          settings.tiingoFallback = v;
+          await this.host.saveSettings();
         }),
       );
 
@@ -138,7 +168,7 @@ export class BacktestSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Look tickers up while writing')
       .setDesc(
-        "Suggests matching tickers and marks ones that do not exist. What you type where a ticker goes, and the Yahoo tickers named in strategy blocks on screen, are sent to Yahoo's search, one ticker at a time. Starting what you type with binance: or csv: keeps it from being sent. Binance's list of markets is downloaded without sending anything. Nothing else from your notes is sent.",
+        "Suggests matching tickers and marks ones that do not exist. What you type where a ticker goes, and the Yahoo tickers named in strategy blocks on screen, are sent to Yahoo's search, one ticker at a time. Starting what you type with binance:, csv:, tiingo: or fred: keeps it from being sent, and so does a block whose tickers come from Tiingo. Binance's list of markets is downloaded without sending anything. Nothing else from your notes is sent.",
       )
       .addToggle((t) =>
         t.setValue(settings.tickerLookup).onChange(async (v) => {

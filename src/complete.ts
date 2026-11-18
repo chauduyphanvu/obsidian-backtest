@@ -2,6 +2,7 @@ import { docFor, shortOf, valueId, FIXED_VALUES } from './docs.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
 import { commentStart, declaredParams, lineKind, settingKey, TICKER_SETTINGS } from './highlight.ts';
 import type { Suggestion } from './symbols.ts';
+import { SOURCE_PREFIX } from './types.ts';
 
 export interface Completion {
   label: string;
@@ -38,6 +39,7 @@ const VALUE_HINTS: Record<string, Completion[]> = {
   'cash rate': [
     { label: '4%', insert: '4%', detail: 'a fixed yearly rate' },
     { label: '^IRX', insert: '^IRX', detail: '13-week Treasury bill yield, from Yahoo' },
+    { label: 'fred:DGS3MO', insert: 'fred:DGS3MO', detail: '3-month Treasury bill yield, from FRED' },
   ],
   'test from': [{ label: '2019-01-01', insert: '2019-01-01', detail: 'results before and from this day are shown apart' }],
   hold: [{ label: 'top 3 by roc(126)', insert: 'top 3 by roc(126)', detail: 'the 3 tickers with the highest score' }],
@@ -62,6 +64,8 @@ export const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'colu
 const functionDetail = (f: string) => `${docFor(f)!.signature} \u00b7 ${shortOf(f)}`;
 
 const POSITION_WORDS: Completion[] = Object.values(POSITION).map((p) => entry(p));
+/** The prefixes of the sources that need a key, as `fred:` before `T10Y2Y`, offered where a ticker is being typed. */
+const PREFIXES: Completion[] = [entry('tiingo:'), entry('fred:')];
 const CALENDAR_WORDS: Completion[] = CALENDAR.map((c) => entry(c));
 
 const WORDS: Completion[] = [
@@ -86,7 +90,7 @@ export function tickers(lines: string[], keys: string[] = ['universe', 'symbol',
       const ref = part.trim().split(/\s+/)[0];
       if (!ref) continue;
       const csv = /^csv:/i.test(ref);
-      const id = ref.replace(/^(yahoo|binance|csv):/i, '');
+      const id = ref.replace(SOURCE_PREFIX, '');
       const name = csv ? id.split('/').pop()!.replace(/\.csv$/i, '') : id.toUpperCase();
       if (name && !out.includes(name)) out.push(name);
     }
@@ -182,7 +186,7 @@ export function complete(block: string[], above: string[], before: string, colum
       );
       return items.length === 0 || (items.length === 1 && items[0].insert === typed) ? null : { from: before.length - inColumn.length, items };
     }
-    if (/\bof\s+$/i.test(head)) return match(names('', 'read this ticker instead'), true);
+    if (/\bof\s+$/i.test(head)) return match([...names('', 'read this ticker instead'), ...(word ? PREFIXES : [])], true);
     if (/\bcrosses\s+$/i.test(head)) return match([{ label: 'above', insert: 'above ', detail: '' }, { label: 'below', insert: 'below ', detail: '' }], true);
     if (/^\d/.test(word) || /[\d.]$/.test(head)) return null;
     const spanning = phraseMatch(before, [...(positions ? POSITION_WORDS : []), ...WORDS]);
@@ -286,9 +290,12 @@ export function localTickers(block: string[], pos: TickerPosition, taken: string
       .map((p) => ({ label: `csv:${p}`, insert: `csv:${p}`, detail: 'file in your vault' }));
   }
   const used = new Set(taken.map((t) => t.toLowerCase()));
-  return writtenTickers(block)
+  const own = writtenTickers(block)
     .filter((t) => t.toLowerCase().startsWith(word) && !used.has(t.toLowerCase()))
     .map((t) => ({ label: t, insert: t, detail: 'in this block' }));
+  // A FRED series can only be read, so its prefix is not offered where a traded ticker goes; `cash rate` has its own hint.
+  const prefixes = word ? PREFIXES.filter((p) => p.label !== 'fred:' && p.label.startsWith(word) && p.label !== word) : [];
+  return [...own, ...prefixes];
 }
 
 /** Lookup hits as completions: the ticker as the block needs it, then its name and exchange. */

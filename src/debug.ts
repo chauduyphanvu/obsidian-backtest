@@ -5,7 +5,7 @@
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { children, findPos, walk, type Expr, type Written } from './dsl.ts';
-import { barAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
+import { barAt, missingInputAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
 import { csvLine } from './export.ts';
@@ -387,18 +387,10 @@ class Ctx {
 
   /**
    * The first input a buy needs that is unknown at bar `bar`: the check the engine makes before it buys (engine.ts
-   * missingInput), repeated here to say where the signals it counted in `run.skipped` were.
+   * missingInputAt), made here again to say where the signals it counted in `run.skipped` were.
    */
   missingInput(ix: AssetIx, bar: number): { input: WarmupInput; n: number } | null {
-    const { sizing } = this.bt.spec;
-    if (sizing.k === 'risk' && Number.isNaN(this.atr(ix, sizing.n)[bar])) return { input: 'risk per trade', n: sizing.n };
-    if (sizing.k === 'invvol' && Number.isNaN(this.vol(ix, sizing.n)[bar])) return { input: 'inverse volatility', n: sizing.n };
-    const stops = this.bt.spec.stops[ix.name];
-    if (!stops) return null;
-    for (const [input, level] of [['stop loss', stops.stopLoss], ['trailing stop', stops.trailingStop], ['take profit', stops.takeProfit]] as const) {
-      if (level?.k === 'atr' && Number.isNaN(this.atr(ix, level.n)[bar])) return { input, n: level.n };
-    }
-    return null;
+    return missingInputAt(this.bt.spec.sizing, this.bt.spec.stops[ix.name], (n) => this.atr(ix, n)[bar], (n) => this.vol(ix, n)[bar]);
   }
 
   /** Whether a ranking decides at the timeline time `t`. */

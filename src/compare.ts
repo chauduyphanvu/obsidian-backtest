@@ -1,6 +1,7 @@
 // Comparing and combining strategies: the `compare` block's syntax, putting equity curves on one timeline,
 // a rebalanced portfolio of them, and how alike they move. Pure; the caller hands in how to read notes and run strategies.
 
+import { computeStats, type Stats } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
 import type { Diagnostic } from './dsl.ts';
 import { isoDate } from './format.ts';
@@ -36,16 +37,18 @@ function span(raw: string, token: string): { from: number; to: number } {
   return { from, to: from + token.length };
 }
 
-/** A weight such as `40%` as a fraction, or the problem with it. */
+/** A weight such as `40%` as a fraction, or the problem with it. 0% lists a strategy without giving it any of the money. */
 function weightOf(raw: string, line: number, token: string): number | Diagnostic {
   const m = token.match(WEIGHT);
   if (!m) return { line, message: 'After the note, only a weight such as 40% can follow', ...span(raw, token) };
-  const w = Number(m[1]) / 100;
-  if (!(w > 0)) return { line, message: 'A weight must be above 0%', ...span(raw, token) };
+  // Adding 0 turns the -0 of "-0%" into 0.
+  const w = Number(m[1]) / 100 + 0;
+  if (!(w >= 0)) return { line, message: "A weight can't be below 0%", ...span(raw, token) };
   return w;
 }
 
-function parseLine(raw: string, line: number): CompareEntry | Diagnostic {
+/** Reads one line naming a strategy: a wikilink or a vault path ending in .md, then optionally a weight. */
+export function parseLine(raw: string, line: number): CompareEntry | Diagnostic {
   const text = raw.trim();
   let target: string;
   let label: string | null = null;
@@ -86,6 +89,34 @@ function parseLine(raw: string, line: number): CompareEntry | Diagnostic {
 
 const duplicateKey = (e: CompareEntry) => `${e.link.replace(/\.md$/i, '').toLowerCase()}#${(e.block ?? '').toLowerCase()}`;
 
+/** An error on every line that lists a strategy an earlier line already lists, however it is spelled. */
+export function duplicateEntries(entries: CompareEntry[]): Diagnostic[] {
+  const errors: Diagnostic[] = [];
+  const seen = new Map<string, number>();
+  for (const e of entries) {
+    const key = duplicateKey(e);
+    const first = seen.get(key);
+    if (first === undefined) seen.set(key, e.line);
+    else errors.push({ line: e.line, message: `This strategy is already listed on line ${first}` });
+  }
+  return errors;
+}
+
+/** What is wrong with the weights of a list of strategies: some given and some not, every one 0%, or more than 100% in all. */
+export function weightProblems(entries: CompareEntry[]): Diagnostic[] {
+  const weighted = entries.filter((e) => e.weight !== null);
+  if (weighted.length > 0 && weighted.length < entries.length) {
+    const odd = entries.find((e) => (e.weight === null) !== (entries[0].weight === null))!;
+    return [{ line: odd.line, message: 'Give every strategy a weight, or none of them' }];
+  }
+  const sum = weighted.reduce((s, e) => s + e.weight!, 0);
+  if (weighted.length > 0 && sum === 0) return [{ line: entries[entries.length - 1].line, message: 'Give at least one strategy a weight above 0%' }];
+  if (sum > 1 + EPS) {
+    return [{ line: entries[entries.length - 1].line, message: `The weights add up to ${Number((sum * 100).toFixed(2))}%, and they can't add up to more than 100%` }];
+  }
+  return [];
+}
+
 /** Reads the lines of a `compare` block. `entries` holds every line that parsed, even when `errors` is not empty. */
 export function parseCompare(source: string): { entries: CompareEntry[]; errors: Diagnostic[] } {
   const entries: CompareEntry[] = [];
@@ -98,29 +129,13 @@ export function parseCompare(source: string): { entries: CompareEntry[]; errors:
     else entries.push(r);
   });
 
-  const seen = new Map<string, number>();
-  for (const e of entries) {
-    const key = duplicateKey(e);
-    const first = seen.get(key);
-    if (first === undefined) seen.set(key, e.line);
-    else errors.push({ line: e.line, message: `This strategy is already listed on line ${first}` });
-  }
+  errors.push(...duplicateEntries(entries));
   if (entries.length > MAX_ENTRIES) errors.push({ line: entries[MAX_ENTRIES].line, message: `A comparison holds at most ${MAX_ENTRIES} strategies` });
   // A line that failed to parse would make these checks report problems that are not there.
   if (entries.length < MIN_ENTRIES && errors.length === 0) {
     errors.push({ line: entries.length ? entries[entries.length - 1].line : 1, message: `Add at least ${MIN_ENTRIES} strategies to compare` });
   }
-
-  const weighted = entries.filter((e) => e.weight !== null);
-  if (weighted.length > 0 && weighted.length < entries.length) {
-    const odd = entries.find((e) => (e.weight === null) !== (entries[0].weight === null))!;
-    errors.push({ line: odd.line, message: 'Give every strategy a weight, or none of them' });
-  } else if (weighted.length > 0) {
-    const sum = weighted.reduce((s, e) => s + e.weight!, 0);
-    if (sum > 1 + EPS) {
-      errors.push({ line: entries[entries.length - 1].line, message: `The weights add up to ${Number((sum * 100).toFixed(2))}%, and they can't add up to more than 100%` });
-    }
-  }
+  errors.push(...weightProblems(entries));
   return { entries, errors: errors.sort((a, b) => a.line - b.line) };
 }
 
@@ -133,7 +148,6 @@ export interface Curve {
   cash?: number[];
 }
 
-/** The growth of cash as an index starting at 1, from a run's cash return per step (`cashReturn[i]` is what cash earned from step i - 1 to i). */
 /** What resolving a compare block's entries needs from the plugin. */
 export interface CompareHost<F extends { basename: string }> {
   /** The note a link points at from the compare block's own note, or null. */
@@ -144,32 +158,45 @@ export interface CompareHost<F extends { basename: string }> {
   run(source: string): Promise<RunOutput>;
 }
 
+/** An entry's strategy, run: the name it goes by (the entry's label, else the block's `name:`, else the note's name) and the output. */
+export interface EntryRun {
+  label: string;
+  out: RunOutput;
+}
+
 /**
- * The curve of each entry's strategy, in the order of the entries, run one after another. Rejects with a message that
- * names the line of the first entry whose note, strategy or run is missing.
+ * Finds the strategy block an entry names and runs it. Rejects with a message that names the entry's line when its note,
+ * strategy or run is missing.
  */
+export async function runEntry<F extends { basename: string }>(entry: CompareEntry, host: CompareHost<F>): Promise<EntryRun> {
+  const file = host.note(entry.link.replace(/\.md$/i, ''));
+  if (!file) throw new Error(`Line ${entry.line}: there is no note called "${entry.link}".`);
+  const blocks = extractBlocks(await host.read(file));
+  const block = entry.block === null ? blocks[0] : blocks.find((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
+  if (!block) {
+    throw new Error(entry.block === null ? `Line ${entry.line}: "${file.basename}" has no strategy block.` : `Line ${entry.line}: "${file.basename}" has no strategy named "${entry.block}".`);
+  }
+  let out: RunOutput;
+  try {
+    out = await host.run(block.source);
+  } catch (e) {
+    throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return { label: entry.label ?? block.name ?? file.basename, out };
+}
+
+/** The curve of each entry's strategy, in the order of the entries, run one after another. Rejects as `runEntry` does, at the first entry that fails. */
 export async function compareCurves<F extends { basename: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<Curve[]> {
   const curves: Curve[] = [];
   for (const entry of entries) {
-    const file = host.note(entry.link.replace(/\.md$/i, ''));
-    if (!file) throw new Error(`Line ${entry.line}: there is no note called "${entry.link}".`);
-    const blocks = extractBlocks(await host.read(file));
-    const block = entry.block === null ? blocks[0] : blocks.find((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
-    if (!block) {
-      throw new Error(entry.block === null ? `Line ${entry.line}: "${file.basename}" has no strategy block.` : `Line ${entry.line}: "${file.basename}" has no strategy named "${entry.block}".`);
-    }
-    let out: RunOutput;
-    try {
-      out = await host.run(block.source);
-    } catch (e) {
-      throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
-    }
+    const { label, out } = await runEntry(entry, host);
     const { run } = out.backtest;
-    curves.push({ label: entry.label ?? block.name ?? file.basename, t: run.t, equity: run.equity, cash: cashIndex(run.cashReturn) });
+    curves.push({ label, t: run.t, equity: run.equity, cash: cashIndex(run.cashReturn) });
   }
   return curves;
 }
 
+/** The growth of cash as an index starting at 1, from a run's cash return per step (`cashReturn[i]` is what cash earned from step i - 1 to i). */
 export function cashIndex(cashReturn: number[]): number[] {
   const out: number[] = [];
   let level = 1;
@@ -233,19 +260,40 @@ const monthOf = (t: number) => {
   return d.getUTCFullYear() * 12 + d.getUTCMonth();
 };
 
+/** The indexes where a new calendar month (UTC) starts: each point whose month differs from the point before. The first point is not one. */
+export function monthStarts(t: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < t.length; i++) if (monthOf(t[i]) !== monthOf(t[i - 1])) out.push(i);
+  return out;
+}
+
+/** What weights add up to, once they are known to be one for each curve, none negative and not above 100% in all. */
+function checkWeights(weights: number[], curves: number): number {
+  if (weights.length !== curves) throw new Error('There must be one weight for each curve');
+  if (weights.some((w) => !(w >= 0))) throw new Error('Weights cannot be negative');
+  const invested = weights.reduce((s, w) => s + w, 0);
+  if (invested > 1 + EPS) throw new Error(`Weights add up to ${Number((invested * 100).toFixed(2))}%; they cannot add up to more than 100%`);
+  return invested;
+}
+
 /**
  * A portfolio holding the aligned curves at the given weights (fractions summing to <= 1; the rest is cash earning nothing),
  * brought back to those weights at the first point of each calendar month (UTC). Starts at 1.
  * The first point of a month is valued with the weights drifted up to it, then the portfolio is reset to its weights from there.
  */
 export function combine(aligned: Pick<Aligned, 't' | 'series'>, weights: number[]): number[] {
-  if (weights.length !== aligned.series.length) throw new Error('There must be one weight for each curve');
-  if (weights.some((w) => !(w >= 0))) throw new Error('Weights cannot be negative');
-  const invested = weights.reduce((s, w) => s + w, 0);
-  if (invested > 1 + EPS) throw new Error(`Weights add up to ${Number((invested * 100).toFixed(2))}%; they cannot add up to more than 100%`);
+  checkWeights(weights, aligned.series.length);
+  return rebalanced(aligned, () => weights);
+}
 
+/**
+ * `combine` with weights that may change from month to month: `weightsAt(i)` gives the weights set at point i. It is
+ * asked at the first point, then at the first point of each later month, in order.
+ */
+export function rebalanced(aligned: Pick<Aligned, 't' | 'series'>, weightsAt: (i: number) => number[]): number[] {
   const { t, series } = aligned;
-  const cashShare = Math.max(0, 1 - invested);
+  let weights = weightsAt(0);
+  let cashShare = Math.max(0, 1 - checkWeights(weights, series.length));
   const sleeves = [...weights];
   let cash = cashShare;
   const out = [1];
@@ -256,12 +304,19 @@ export function combine(aligned: Pick<Aligned, 't' | 'series'>, weights: number[
       total += sleeves[k];
     }
     if (monthOf(t[i]) !== monthOf(t[i - 1])) {
+      weights = weightsAt(i);
+      cashShare = Math.max(0, 1 - checkWeights(weights, series.length));
       for (let k = 0; k < sleeves.length; k++) sleeves[k] = weights[k] * total;
       cash = cashShare * total;
     }
     out.push(total);
   }
   return out;
+}
+
+/** The figures of one line of a comparison. The Sharpe ratio counts only what the line earned above cash, as it does in the strategy's own block. */
+export function lineStats(t: number[], values: number[], cashReturn: number[]): Stats {
+  return computeStats(t, values, values[0], t.map(() => 1), cashReturn);
 }
 
 /** Correlation of per-step returns between every pair; 1 on the diagonal; NaN when a series never moves. */

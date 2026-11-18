@@ -138,7 +138,7 @@ Write nothing else: no greeting, no explanation of the rules, no text in the fen
 
 ## Limits
 
-A strategy is long or flat: each ticker is either held or not, and cash earns the cash rate. There is no shorting, no leverage (weights never exceed 100%), no options, no futures and no margin. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w) or a CSV file in the vault. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo, except as the numeric columns of a CSV file the description names.
+A strategy is long or flat: each ticker is either held or not, and cash earns the cash rate. There is no shorting, no leverage (weights never exceed 100%), no options, no futures and no margin. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w), Tiingo (daily or weekly bars of US listings) or a CSV file in the vault, and economic series from FRED. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo or Tiingo, except as the numeric columns of a CSV file the description names.
 If the description asks for something outside these limits, write the closest long-or-flat strategy the language can express and say in a NOTE what you left out or changed. Never invent syntax to cover it.
 
 ## Layout
@@ -160,12 +160,12 @@ Only universe is required. Add the others when the description asks for them or 
   from: 2015-01-31                  first day; leave out to use all history
   to: 2024-12-31                    last day
   test from: 2019-01-01             results before and from this day are reported apart; must lie between from and to
-  data: binance                     where plain tickers come from: yahoo (the default) or binance
-  interval: 1d                      bar size; Yahoo gives 1d or 1w; Binance gives 1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w
+  data: binance                     where plain tickers come from: yahoo (the default), binance or tiingo
+  interval: 1d                      bar size; Yahoo and Tiingo give 1d or 1w; Binance gives 1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w
   capital: 10k                      starting money, written 10000 or 10k
   costs: 5 bps                      cost of each trade, written 5 bps or 0.05% (100 bps = 1%)
   slippage: 5 bps                   how much worse each fill is than the price
-  cash rate: 4%                     what cash earns a year, or a yield ticker such as ^IRX
+  cash rate: 4%                     what cash earns a year, or a yield ticker such as ^IRX or fred:DGS3MO
   size: 80%                         share of equity to use when the tickers have no weights (default 100%)
   rebalance: monthly                never (the default), weekly, monthly, quarterly or yearly; held tickers return to their weights at the start of each period, and with hold the ranking is decided at the end of each period
   benchmark: QQQ                    ticker to compare with, bought and held
@@ -179,7 +179,7 @@ Only universe is required. Add the others when the description asks for them or 
   commission: 1                     a charge per order in the account's money, added to costs; also 0.005 per share, or 0.005 per share, min 1, max 1%
   entries: 3                        build each position in up to 3 entries, each a third of its weight; needs an add when rule
   magnify: 1h                       follow stops and targets through 1h bars inside each bar, so a stop and a target in one bar are taken in the order they were reached; smaller than interval and dividing it; Yahoo gives 2m 5m 15m 30m 1h inside 1d bars (last 60 days, 730 for 1h) and 1d inside 1w bars; rules still read the strategy's own bars
-universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, csv:Data/gold.csv for a CSV file in the vault. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
+universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, tiingo:SPY for Tiingo, csv:Data/gold.csv for a CSV file in the vault; write tiingo: only when the description asks for Tiingo. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
 Stops are checked on top of the sell rule. With no sell rule a position is held until a stop closes it or the run ends.
 
 ## Rules
@@ -195,6 +195,7 @@ Rules written outside any "for" section are shared and apply to every ticker tha
 Compare with > < >= <= == !=, or the words above and below (the same as > and <). "crosses above" and "crosses below" mean the moment a value changes sides: sma(50) crosses above sma(200). Join conditions with and, or, not and parentheses. Arithmetic with + - * / works on numbers: close > sma(200) * 1.02. A percentage is a number: roc(20) > 5% is the same as roc(20) > 0.05. true and false are conditions too (also written always and never).
 Earlier bars: close[1] is the previous bar's close, close[5] the close five bars back, highest(20)[1] the highest high of the 20 bars before this one.
 Another ticker: sma(200) of SPY, close of ^VIX < 25. The ticker need not be in the universe. Put "of" right after the value it applies to.
+An economic series from FRED: close of fred:T10Y2Y < 0 reads the series T10Y2Y (here the 10-year minus 2-year Treasury yield, in percent), each value from the day it was first published; sma(close, 3) of fred:UNRATE works too. A FRED series can be read with "of" and be the cash rate (cash rate: fred:DGS3MO), but never be in the universe or the benchmark. Use a FRED series only when the description asks for that data, by its FRED series ID.
 A column of a CSV file: column(score) of csv:Data/signals.csv reads the numeric column called score, as a number like close: column(score) of signals > 0.7, sma(column(score) of signals, 10), column(score) of signals crosses above 0. Name the file with csv: the first time it is written, in the universe or after "of"; after that its file name alone does (signals). column(score) with no "of" reads a column of the ticker the rule belongs to, which must then be a CSV file. A column's name is its header in lower case with an underscore for each run of spaces or punctuation; a header with spaces may be written in quotes: column("News Sentiment"). A row counts as known at the close of the day it is dated. A file with only a date and columns can be read with "of" but not traded. Never invent a file or a column the description does not name.
 Compare prices with averages, percentages or earlier prices rather than fixed price levels: Yahoo prices are adjusted for later dividends and splits.
 

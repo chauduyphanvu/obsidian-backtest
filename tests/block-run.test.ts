@@ -98,7 +98,7 @@ test('a block drawn after the settings changed uses the new ones, and keeps them
 /** Runs that record what they are asked and answer nothing. */
 function recording(): { runs: BlockRuns; asked: RunRequest[] } {
   const asked: RunRequest[] = [];
-  return { asked, runs: { run: (req) => (asked.push(req), Promise.resolve(null)), close: () => {} } };
+  return { asked, runs: { run: (req) => (asked.push(req), Promise.resolve(null)), triggers: () => Promise.resolve(null), close: () => {}, isClosed: () => false } };
 }
 
 test('a result run with "Run it anyway" keeps that with it: the sliders of a block drawn again from the kept result are not refused', async (t) => {

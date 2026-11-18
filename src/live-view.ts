@@ -4,8 +4,10 @@ import { ItemView, MarkdownView, type App, type WorkspaceLeaf } from 'obsidian';
 import { h } from './dom.ts';
 import type { Diagnostic } from './dsl.ts';
 import { hintFor } from './fixes.ts';
-import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, waitFor, type Choice, type Shown } from './live-core.ts';
+import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, viewText, waitFor, type Choice, type Shown } from './live-core.ts';
+import { blockStateKey } from './render.ts';
 import { debounce } from './result-cache.ts';
+import { findBlock, writeValuesInNote } from './rewrite.ts';
 
 export const VIEW_TYPE_LIVE = 'backtest-live';
 
@@ -16,7 +18,7 @@ export interface LiveHost {
    * when the run fails. When `signal` aborts before then, the run is stopped and the draw resolves with nothing drawn. A draw
    * that fails lets go of what it held.
    */
-  show(source: string, el: HTMLElement, opts: { notePath: string; apply: (values: Record<string, number>) => Promise<void>; signal: AbortSignal }): Promise<() => void>;
+  show(source: string, el: HTMLElement, opts: { notePath: string; blockKey?: string; apply: (values: Record<string, number>) => Promise<void>; signal: AbortSignal }): Promise<() => void>;
   /** True when the block parses and every ticker's prices are already saved, so running it needs no download. */
   pricesReady(source: string): Promise<boolean>;
   /** The block's problems, empty when it can run. */
@@ -133,6 +135,12 @@ export class LiveView extends ItemView {
     this.registerEvent(workspace.on('active-leaf-change', () => this.poke()));
     this.registerEvent(workspace.on('file-open', () => this.poke()));
     this.registerEvent(workspace.on('layout-change', () => this.poke()));
+    // A note in reading mode changes without its editor: by a button of a result, a sync, or another pane.
+    this.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        if (file.path === this.followed?.file?.path) this.poke();
+      }),
+    );
     workspace.onLayoutReady(() => this.poke());
     void this.refresh();
   }
@@ -175,7 +183,7 @@ export class LiveView extends ItemView {
     const { editor } = view;
     // Reading mode has no cursor to follow.
     const cursor = view.getMode() === 'source' ? editor.getCursor('head').line : null;
-    const choice = chooseBlock(editor.getValue().split('\n'), cursor, this.lastIndex.get(file.path) ?? null);
+    const choice = chooseBlock(viewText(view).split('\n'), cursor, this.lastIndex.get(file.path) ?? null);
     return choice ? { kind: 'block', view, note: file.path, noteName: file.basename, choice } : { kind: 'no-block' };
   }
 
@@ -242,7 +250,7 @@ export class LiveView extends ItemView {
       el.remove();
     };
     try {
-      dispose = await this.host.show(selected.text, el, { notePath: reading.note, apply: (values) => this.apply(reading, selected, values), signal });
+      dispose = await this.host.show(selected.text, el, { notePath: reading.note, blockKey: this.blockKeyOf(reading, selected), apply: (values) => this.apply(reading, selected, values), signal });
       if (id !== this.runId) return drop();
       if (this.result && this.sameBlock(selected)) restoreOpen(el, openDetails(this.result.el));
       await settle();
@@ -259,6 +267,14 @@ export class LiveView extends ItemView {
     this.problem = null;
     this.arrived(reading, selected);
     this.body.scrollTop = scroll;
+  }
+
+  /** The key the note's own drawing of this block has (main.ts placeInNote), so both count as one block. */
+  private blockKeyOf(reading: BlockReading, selected: Shown): string | undefined {
+    const lines = viewText(reading.view).split('\n');
+    const at = locateBlock(lines, selected.text, selected.index);
+    const found = at ? findBlock(lines.join('\n'), at.first - 1, selected.text) : null;
+    return found ? blockStateKey(reading.note, found.block.name, found.index) : undefined;
   }
 
   private showProblem(reading: BlockReading, selected: Shown, problem: Problem): void {
@@ -360,6 +376,13 @@ export class LiveView extends ItemView {
   private async apply(reading: BlockReading, selected: Shown, values: Record<string, number>): Promise<void> {
     const { view } = reading;
     if (view.file?.path !== reading.note) throw new Error('That note is no longer open in its editor. Open it again, then write the values.');
+    if (view.getMode() !== 'source') {
+      // The editor of a note in reading mode is not saved, so the file is changed instead.
+      const file = view.file;
+      const at = locateBlock(viewText(view).split('\n'), selected.text, selected.index);
+      await writeValuesInNote((edit) => this.app.vault.process(file, edit), at ? at.first - 1 : undefined, selected.text, values);
+      return;
+    }
     const lines = view.editor.getValue().split('\n');
     const at = locateBlock(lines, selected.text, selected.index);
     if (!at) throw new Error('The block has changed since this result was drawn. Wait for the panel to update, then write the values again.');

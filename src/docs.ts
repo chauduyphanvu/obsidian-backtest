@@ -1,5 +1,6 @@
 import { BINANCE_INTERVALS, CALENDAR, INDICATORS, NUM, POSITION, REBALANCE, SERIES } from './dsl.ts';
 import { commentStart, declaredParams, lineKinds, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
+import { DATA_SOURCES, SOURCE_PREFIX } from './types.ts';
 
 export type DocKind = 'setting' | 'value' | 'function' | 'series' | 'calendar' | 'position' | 'word' | 'unit' | 'parameter';
 
@@ -21,7 +22,7 @@ export interface Doc {
 /** The settings a value can be chosen from, with the values the language accepts for each. */
 export const FIXED_VALUES: Record<string, readonly string[]> = {
   rebalance: REBALANCE,
-  data: ['yahoo', 'binance'],
+  data: DATA_SOURCES,
   interval: BINANCE_INTERVALS,
   fill: ['next open', 'close'],
 };
@@ -51,16 +52,16 @@ setting('from', 'from: 2015-01-31', 'first day, as 2015-01-31', 'The first day o
 setting('to', 'to: 2024-12-31', 'last day, as 2024-12-31', 'The last day of the run, whole day included, and it must come after from. Without it the run ends on the last day with prices.', 'to: 2024-12-31');
 setting(
   'data',
-  'data: yahoo | binance',
-  'where plain tickers come from: yahoo or binance',
-  'Where tickers written without a prefix come from. Without it the plugin setting decides, and yahoo:, binance: or csv: in front of a ticker picks that ticker’s own source.',
+  'data: yahoo | binance | tiingo',
+  'where plain tickers come from: yahoo, binance or tiingo',
+  'Where tickers written without a prefix come from, the plugin setting deciding without it, though a plain ticker that starts with ^, such as ^VIX or ^IRX, comes from Yahoo whatever data says. yahoo:, binance:, tiingo:, fred: or csv: in front of a ticker picks that ticker’s own source.',
   'data: binance',
 );
 setting(
   'interval',
   'interval: 1d | 1w | …',
   'bar size: 1d, 1w, or 1h and others on Binance',
-  'The bar size, 1d unless you say otherwise. Yahoo gives 1d and 1w, Binance gives 1m up to 1w, and one interval applies to every ticker.',
+  'The bar size, 1d unless you say otherwise. Yahoo and Tiingo give 1d and 1w, Binance gives 1m up to 1w, and one interval applies to every ticker.',
   'interval: 1w',
 );
 setting('capital', 'capital: 10000', 'starting money, as 10000 or 10k', 'The starting money, written 10000 or 10k (m is millions). Without it the plugin’s Starting money setting is used.', 'capital: 10k');
@@ -118,7 +119,7 @@ setting(
   'cash rate',
   'cash rate: 4% | ^IRX',
   'what cash earns: 4% a year, or a yield ticker such as ^IRX',
-  'What cash earns a year, written 4%, or a ticker whose close is a yearly yield, such as ^IRX. A rate needs its percent sign and must be at most 50%.',
+  'What cash earns a year, written 4%, or a ticker whose close is a yearly yield, such as ^IRX or fred:DGS3MO. A rate needs its percent sign and must be at most 50%.',
   'cash rate: 4%',
 );
 setting(
@@ -546,6 +547,20 @@ word(
   'buy when close > sma(200) and close of ^VIX < 25',
 );
 word(
+  'tiingo:',
+  'tiingo:TICKER',
+  'a ticker from Tiingo, such as tiingo:SPY',
+  'Takes this ticker’s daily prices from Tiingo, adjusted for splits and dividends, with the key chosen under Tiingo API key in the plugin settings. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
+  'universe: tiingo:SPY',
+);
+word(
+  'fred:',
+  'fred:SERIES',
+  'an economic series from FRED, such as fred:T10Y2Y',
+  'A series from FRED, each value counted from the day it was first published, with the key chosen under FRED API key in the plugin settings. Rules read it with of, as in close of fred:T10Y2Y, and cash rate takes a yield such as fred:DGS3MO, but it cannot be traded or be the benchmark.',
+  'buy when close of fred:T10Y2Y > 0',
+);
+word(
   '[n]',
   'value[n]',
   'the value n bars earlier: close[5]',
@@ -595,7 +610,13 @@ value(
   'Plain tickers come from Yahoo, spelt the way Yahoo spells them, such as SPY, BRK-B, BTC-USD or ^GSPC. Yahoo gives 1d and 1w bars.',
   'data: yahoo',
 );
-value('data=binance', 'Binance market symbols, such as BTCUSDT', 'Plain tickers are Binance market symbols, such as BTCUSDT. Binance gives bars from 1m up to 1w.', 'data: binance');
+value('data=binance', 'Binance market symbols, such as BTCUSDT', 'Plain tickers are Binance market symbols, such as BTCUSDT, though one that starts with ^, such as ^VIX, still comes from Yahoo. Binance gives bars from 1m up to 1w.', 'data: binance');
+value(
+  'data=tiingo',
+  'Tiingo prices, adjusted for splits and dividends',
+  'Plain tickers come from Tiingo, with the key chosen under Tiingo API key in the plugin settings, though one that starts with ^, such as ^VIX or the cash rate ^IRX, still comes from Yahoo, which alone has them. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
+  'data: tiingo',
+);
 for (const v of BINANCE_INTERVALS) {
   const [, count, unit] = v.match(PERIOD)!;
   const both = v === '1d' || v === '1w';
@@ -604,7 +625,7 @@ for (const v of BINANCE_INTERVALS) {
     `interval=${v}`,
     both ? `${bars} bars` : `${bars} bars, Binance only`,
     both
-      ? `${bars[0].toUpperCase()}${bars.slice(1)} bars, from Yahoo or Binance.${v === '1w' ? ' A weekly bar is used once its week is over.' : ''}`
+      ? `${bars[0].toUpperCase()}${bars.slice(1)} bars, from Yahoo, Tiingo or Binance.${v === '1w' ? ' A weekly bar is used once its week is over.' : ''}`
       : `${count}-${UNIT_NAME[unit as keyof typeof UNIT_NAME]} bars. Only Binance gives them, so the block needs data: binance or a binance: ticker.`,
     both ? `interval: ${v}` : `data: binance\ninterval: ${v}`,
   );
@@ -718,6 +739,10 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
     return null;
   }
   if (t.kind === 'operator') return here === '..' ? target(t.from, t.to, 'in … step') : null;
+  if (t.kind === 'ticker') {
+    const prefix = here.match(SOURCE_PREFIX);
+    return prefix && here.length > prefix[0].length ? target(t.from, t.to, prefix[0]) : null;
+  }
   if (t.kind === 'value') {
     if (kind === 'setting') return settingKey(line) === 'weighting' ? target(t.from, t.to, 'weighting') : null;
     return target(t.from, t.to, WORD_ALIASES[here] ?? here);

@@ -5,6 +5,8 @@ import { parseSpec } from './dsl.ts';
 import { firstAtOrAfter, simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
 import { specEvaluator, type BarRule } from './evaluate.ts';
 import { tidy, YEAR } from './format.ts';
+import type { TrialRun } from './ledger.ts';
+import { priceMemo } from './price-memo.ts';
 import { makeRng, shuffle, type Rng } from './rng.ts';
 import { baseSpec, BATCH, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
 import type { Bars } from './types.ts';
@@ -454,6 +456,8 @@ export interface WalkForwardResult {
   hindsight: WalkLine & { values: Record<string, number> };
   /** Test stretches whose pick differs from the one before. */
   changes: number;
+  /** The variants that ran and traded, as the block's tries count them. */
+  trials: TrialRun[];
 }
 
 /**
@@ -487,6 +491,7 @@ export async function walkForward(
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
+  priceMemo.share(data);
 
   const key = (index: number[]) => index.join(',');
   const declaredIndex = params.map((p) => p.values.indexOf(value(p.name)));
@@ -502,10 +507,12 @@ export async function walkForward(
   let done = 0;
   const scored: { index: number[]; train: number[]; whole: number }[] = [];
   let idle = 0;
+  const trials: TrialRun[] = [];
   for (const index of grid(params)) {
     if (opts.shouldStop?.()) return null;
-    const { backtest } = runVariant(parse, data, valuesAt(params, index), index);
+    const { point, backtest } = runVariant(parse, data, valuesAt(params, index), index);
     const run = backtest?.run;
+    if (run && run.trades.length > 0) trials.push({ hash: point.trial!, sharpe: backtest.stats.sharpe, perYear: point.perYear! });
     if (run && run.trades.length === 0) idle++;
     else if (run && run.t.length === t.length && run.t[0] === t[0] && run.t[t.length - 1] === t[t.length - 1]) {
       const whole = backtest.stats[metric];
@@ -578,5 +585,6 @@ export async function walkForward(
     declared: stitch(() => declared.backtest!.run),
     hindsight: { ...stitch(() => runs.get(key(hindsight.index))!), values: valuesAt(params, hindsight.index) },
     changes: picks.filter((p, k) => k > 0 && key(p?.index ?? declaredIndex) !== key(pickIndex(k - 1))).length,
+    trials,
   };
 }

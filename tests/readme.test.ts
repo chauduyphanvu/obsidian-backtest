@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { parseAccount } from '../src/account.ts';
 import { runBacktest } from '../src/backtest.ts';
 import { parseCompare } from '../src/compare.ts';
 import { parseDashboard } from '../src/dashboard.ts';
@@ -9,10 +10,14 @@ import { CSV_ASK_BYTES, CSV_MAX_BYTES } from '../src/debug.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, YAHOO_INSIDE_DAYS, parseSpec } from '../src/dsl.ts';
 import { SMALL_TRADE } from '../src/engine.ts';
 import { resultProperties } from '../src/export.ts';
+import { forwardChanged, parseForward } from '../src/forward.ts';
 import { STARTERS } from '../src/gallery.ts';
 import { LIMITS, LimitError, anywayLabel, sizeRefusal } from '../src/limits.ts';
 import { notOurNoteMessage, ORDERS_MARKER } from '../src/orders.ts';
-import { valuesUsed } from '../src/render-luck.ts';
+import { MAX_VERSIONS } from '../src/ledger.ts';
+import { PBO_MIN_STEPS_PER_GROUP, PBO_MIN_VARIANTS, STRETCHES } from '../src/overfit.ts';
+import { RESET, upperBound, valuesUsed } from '../src/render-luck.ts';
+import { RESTORE } from '../src/render-versions.ts';
 import { WAITING, WRITTEN } from '../src/render-sweep.ts';
 import { NOTE_CHANGED } from '../src/rewrite.ts';
 import { bars } from './helpers.ts';
@@ -75,6 +80,26 @@ test('every compare block in the README parses without errors', () => {
   for (const b of found) {
     const { errors } = parseCompare(b.body);
     assert.deepEqual(errors, [], `the compare block on README line ${b.line} ("${first(b.body)}") has errors`);
+  }
+});
+
+test('every account block in the README parses without errors', () => {
+  const found = blocks.filter((b) => b.lang === 'account');
+  assert.ok(found.length >= 1, 'no account block found');
+  for (const b of found) {
+    const { errors } = parseAccount(b.body);
+    assert.deepEqual(errors, [], `the account block on README line ${b.line} ("${first(b.body)}") has errors`);
+  }
+});
+
+test('every forward block in the README parses without errors, its check holds and its strategy runs', () => {
+  const found = blocks.filter((b) => b.lang === 'forward');
+  assert.ok(found.length >= 1, 'no forward block found');
+  for (const b of found) {
+    const { forward, errors } = parseForward(b.body);
+    assert.deepEqual(errors, [], `the forward block on README line ${b.line} ("${first(b.body)}") has errors`);
+    assert.equal(forwardChanged(forward!), false, `the check of the forward block on README line ${b.line} does not match its text`);
+    assert.deepEqual(parseSpec(forward!.source).errors, [], `the strategy in the forward block on README line ${b.line} has errors`);
   }
 });
 
@@ -279,4 +304,27 @@ test('the licence is MIT, 2026, held by the manifest author, and the description
   assert.ok(licence.includes(`Copyright (c) 2026 ${manifest.author}\n`));
   const d = manifest.description;
   assert.ok(d.length < 250 && d.endsWith('.') && !/obsidian|plugin/i.test(d), d);
+});
+
+test('the README words the tries, the overfitting check and the versions as the plugin does, with its numbers', () => {
+  const luck = read('src/render-luck.ts');
+  const sweep = read('src/render-sweep.ts');
+  const versions = read('src/render-versions.ts');
+  for (const [file, text] of [
+    [luck, 'How many tries'],
+    [luck, 'Start again'],
+    [luck, 'Keep the count'],
+    [sweep, 'How often the best fell back'],
+    [versions, 'Versions'],
+    [versions, 'Show the changes'],
+    [versions, 'Show the text'],
+  ] as const) {
+    assert.ok(file.includes(`'${text}'`) && readme.includes(`"${text}"`), text);
+  }
+  for (const text of [RESET, RESTORE]) assert.ok(readme.includes(`"${text}"`), text);
+  const bound = 'is an upper bound: neighbouring variants are alike, so they make fewer independent tries than their count';
+  assert.ok(upperBound(7).startsWith(`7 ${bound}`) && readme.includes(`N ${bound}`));
+  assert.ok(readme.includes(`summed over ${STRETCHES} equal stretches`));
+  assert.ok(readme.includes(`needs at least ${PBO_MIN_VARIANTS} of them and ${PBO_MIN_STEPS_PER_GROUP} bars in each part`));
+  assert.ok(readme.includes(`The first version and the latest ${MAX_VERSIONS} are kept.`));
 });

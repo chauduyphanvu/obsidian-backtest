@@ -7,6 +7,7 @@ import { benchFor, runBlock, runJob, serve, stoppedResult, withInputs, type Benc
 import { blockFor, bootstrap, randomEntries, walkForward } from '../src/luck.ts';
 import { makeRng } from '../src/rng.ts';
 import { runSweep, type Parse } from '../src/sweep.ts';
+import { computeTriggers, triggerRun } from '../src/trigger.ts';
 import type { Bars } from '../src/types.ts';
 import { bars } from './helpers.ts';
 
@@ -317,4 +318,38 @@ test('a single run is not kept in the worker, and the luck checks there still fi
   for (let fast = 5; fast <= 15; fast += 5) await handle({ type: 'run', id: fast, data: 1, block: { source: TIMING, defaults: DEFAULTS, overrides: { fast } } });
   await handle({ type: 'job', id: 20, data: 1, block: { source: TIMING, defaults: DEFAULTS, overrides: {} }, job: { kind: 'reshuffle', seed: 1, runs: 10 } });
   assert.deepEqual(out.map((m) => m.type), ['ran', 'ran', 'ran', 'done']);
+});
+
+test('trigger prices in the worker are exactly what they are here, as plain data, from the strategy and the end of its run', async () => {
+  let priced = 0;
+  for (const { name, source, data: make } of VARIED) {
+    const data = make();
+    const { spec } = parseSpec(source, { defaults: DEFAULTS });
+    const bt = runBacktest(spec!, data);
+    const expected = computeTriggers(spec!, data, triggerRun(bt.run));
+    const out: FromWorker[] = [];
+    const handle = serve((m) => out.push(structuredClone(m)), 0);
+    await handle(structuredClone({ type: 'data', id: 1, data } satisfies ToWorker));
+    await handle(structuredClone({ type: 'triggers', id: 4, data: 1, spec: spec!, run: triggerRun(bt.run) } satisfies ToWorker));
+    assert.equal(out.length, 1, name);
+    assert.equal(out[0].type, 'triggered', `${name}: ${JSON.stringify(out[0])}`);
+    const got = (out[0] as { result: unknown }).result;
+    assert.deepStrictEqual(got, expected, name);
+    assertPlain(got);
+    assert.deepEqual(undefinedFields(expected), [], name);
+    priced += expected.triggers.filter((t) => t.fires.length > 0).length;
+  }
+  assert.ok(priced >= 3, `only ${priced} tickers had a price`);
+});
+
+test('trigger prices that fail in the worker send their message', async () => {
+  const data = prices(['A'], 200, 1);
+  const out: FromWorker[] = [];
+  const handle = serve((m) => out.push(m), 0);
+  await handle({ type: 'data', id: 1, data });
+  const { spec } = parseSpec('universe: A\nbuy when close > sma(5)', { defaults: DEFAULTS });
+  const run = triggerRun(runBacktest(spec!, data).run);
+  await handle({ type: 'triggers', id: 2, data: 1, spec: { ...spec!, universe: [...spec!.universe, { name: 'B', source: 'yahoo', id: 'B', weight: 1 }] }, run });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].type, 'error');
 });

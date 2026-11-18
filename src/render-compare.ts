@@ -1,8 +1,9 @@
 // The comparison of several strategies: legend, equity chart, figures table and how alike they move.
 
-import { computeStats, type Stats } from './backtest.ts';
-import { alignCurves, cashReturns, combine, correlations, weightedCashReturn, type Aligned, type Curve } from './compare.ts';
+import { alignCurves, cashReturns, combine, correlations, lineStats, weightedCashReturn, type Aligned, type Curve } from './compare.ts';
 import { h, s } from './dom.ts';
+import { weightDecimals } from './allocate.ts';
+import { renderSplit } from './render-split.ts';
 import type { Diagnostic } from './dsl.ts';
 import { isIntraday, minus, money, moneyTicks, pct, stamp, timeTicks } from './format.ts';
 
@@ -13,10 +14,12 @@ export interface CompareInput {
   weights: number[] | null;
   /** The value every line starts from, such as 10000. */
   capital: number;
+  /** Writes whole percentages, one per entry, into the block's weights; null when the block's place in its note is not known. */
+  use?: ((percents: number[]) => Promise<void>) | null;
 }
 
 /** A line in the chart. Identity is carried by the swatch colour and by `mark`, which is also printed at the line's end. */
-interface Line {
+export interface Line {
   mark: string;
   label: string;
   /** Sets the series colour as `--c`. */
@@ -38,9 +41,10 @@ export function renderCompareMessage(parent: HTMLElement, text: string): void {
   h(h(parent, 'div', 'bt-root'), 'div', 'bt-note', text);
 }
 
-export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], source: string): void {
+/** The block's problems, each with its line; `title` names what can't run, as "This comparison can't run yet". */
+export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], source: string, title = "This comparison can't run yet"): void {
   const root = h(parent, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? "This comparison can't run yet" : `This comparison can't run yet: ${errors.length} problems`);
+  h(root, 'div', 'bt-error-title', errors.length === 1 ? title : `${title}: ${errors.length} problems`);
   const lines = source.split('\n');
   const list = h(root, 'ul', 'bt-errors');
   for (const e of errors) {
@@ -63,11 +67,7 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
   }
   const { t } = aligned;
   const intraday = isIntraday(t);
-  const cash = cashReturns(aligned);
-  const lines: Line[] = aligned.series.map((values, i) => ({ mark: String(i + 1), label: input.curves[i].label, cls: `bt-cmp-c${i + 1}`, values, cashReturn: cash[i], combined: false }));
-  const combined: Line | null = input.weights
-    ? { mark: 'C', label: 'Combined', cls: 'bt-cmp-all', values: combine(aligned, input.weights), cashReturn: weightedCashReturn(cash, input.weights), combined: true }
-    : null;
+  const { lines, combined } = compareLines(input, aligned);
   // Combined first wherever lines are listed, and drawn last so it sits on top of the chart.
   const listed = combined ? [combined, ...lines] : lines;
 
@@ -95,19 +95,32 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
   });
   observer.observe(chart);
 
-  if (combined && input.weights) {
-    const cash = 1 - input.weights.reduce((a, w) => a + w, 0);
-    h(
-      root,
-      'div',
-      'bt-note',
-      `Combined: ${input.weights.every((w) => w === input.weights![0]) ? `each strategy at ${share(input.weights[0])}` : lines.map((l, i) => `${l.mark} at ${share(input.weights![i])}`).join(', ')}. It goes back to those weights on the first date of each month.${cash > 1e-9 ? ` The other ${share(cash)} is cash that earns nothing.` : ''}`,
-    );
-  }
+  if (combined && input.weights) h(root, 'div', 'bt-note', combinedNote(lines, input.weights));
 
   figures(root, listed, t);
   alike(root, lines, aligned);
+  if (input.weights) renderSplit(root, { aligned, labels: lines.map((l) => `${l.mark} ${l.label}`), weights: input.weights, decimals: weightDecimals(input.weights), use: input.use ?? null });
   return () => observer.disconnect();
+}
+
+/** One line for each strategy, drawn whatever its weight, and Combined when the block gives weights, which holds each at its weight: one at 0% not at all. */
+export function compareLines(input: Pick<CompareInput, 'curves' | 'weights'>, aligned: Aligned): { lines: Line[]; combined: Line | null } {
+  const cash = cashReturns(aligned);
+  const lines: Line[] = aligned.series.map((values, i) => ({ mark: String(i + 1), label: input.curves[i].label, cls: `bt-cmp-c${i + 1}`, values, cashReturn: cash[i], combined: false }));
+  const combined: Line | null = input.weights
+    ? { mark: 'C', label: 'Combined', cls: 'bt-cmp-all', values: combine(aligned, input.weights), cashReturn: weightedCashReturn(cash, input.weights), combined: true }
+    : null;
+  return { lines, combined };
+}
+
+/** What Combined holds, said under the chart: the weights, the strategies listed at 0%, and the cash. */
+export function combinedNote(lines: Pick<Line, 'mark'>[], weights: number[]): string {
+  const held = lines.flatMap((l, i) => (weights[i] > 0 ? [{ mark: l.mark, w: weights[i] }] : []));
+  const out = held.every((x) => x.w === held[0].w) && held.length === lines.length ? `each strategy at ${share(held[0].w)}` : held.map((x) => `${x.mark} at ${share(x.w)}`).join(', ');
+  const zero = lines.filter((_, i) => weights[i] === 0).map((l) => l.mark);
+  const listed = zero.length ? ` ${zero.join(', ')} ${zero.length === 1 ? 'is' : 'are'} listed at 0%: drawn, but not in Combined.` : '';
+  const cash = 1 - weights.reduce((a, w) => a + w, 0);
+  return `Combined: ${out}. It goes back to those weights on the first date of each month.${listed}${cash > 1e-9 ? ` The other ${share(cash)} is cash that earns nothing.` : ''}`;
 }
 
 /** The colour swatch and the number that stand for a line wherever its name is listed. */
@@ -119,10 +132,7 @@ function mark(parent: HTMLElement, l: Line): void {
 /** Two decimals, with no "-0.00" for a value too small to show. */
 const ratio = (x: number) => minus((Math.round(x * 100) / 100 || 0).toFixed(2));
 
-/** The figures in the table for one line. The Sharpe ratio counts only what the line earned above cash, as it does in the strategy's own block. */
-export function lineStats(t: number[], values: number[], cashReturn: number[]): Stats {
-  return computeStats(t, values, values[0], t.map(() => 1), cashReturn);
-}
+export { lineStats };
 
 function figures(root: HTMLElement, listed: Line[], t: number[]): void {
   const wrap = h(root, 'div', 'bt-scroll bt-cmp-scroll');

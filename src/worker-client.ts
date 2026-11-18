@@ -11,6 +11,7 @@ import { benchWith, jobOverrides, runBlock, runJob, stoppedResult, withInputs, t
 import { LIMITS, LimitError, runSize, sizeRefusal, timeMessage, type RunSize } from './limits.ts';
 import { lookbackBars, Runner, type RunOutput } from './runner.ts';
 import { pause, type Parse } from './sweep.ts';
+import { computeTriggers, type TriggerReport, type TriggerRun } from './trigger.ts';
 import type { Bars } from './types.ts';
 
 /** The worker's bundled code, put in by esbuild.config.mjs. Read only when a worker starts, so the unit tests never need it. */
@@ -81,6 +82,16 @@ export interface RunResult {
   hereMs: number | null;
 }
 
+/** The trigger prices of a run (trigger.ts), worked out on the prices it ran on. */
+export interface TriggersRequest {
+  spec: Spec;
+  prices: Map<string, Bars>;
+  run: TriggerRun;
+  /** The run's size: on the main thread, a run too large for it gets no trigger prices. */
+  size: RunSize;
+  background?: boolean;
+}
+
 /** One block's single runs. `close` stops them and lets the workers drop the prices once nobody else uses them. */
 export interface BlockRuns {
   /**
@@ -88,7 +99,14 @@ export interface BlockRuns {
    * long, and otherwise with the run's own error.
    */
   run(req: RunRequest): Promise<RunResult | null>;
+  /**
+   * The trigger prices of a run, on the same lane as the runs. Null when the runs were closed first, when they would take
+   * too long, or when they would run on the main thread for a run larger than its limits; rejects with their own error.
+   */
+  triggers(req: TriggersRequest): Promise<TriggerReport | null>;
   close(): void;
+  /** Whether close() was called, so a null from them may mean they were stopped rather than out of time. */
+  isClosed(): boolean;
 }
 
 export interface JobClient {
@@ -153,7 +171,16 @@ interface RunTask extends Common {
   reject: (e: Error) => void;
 }
 
-type Task = JobTask | RunTask;
+interface TriggersTask extends Common {
+  type: 'triggers';
+  spec: Spec;
+  run: TriggerRun;
+  size: RunSize;
+  resolve: (r: TriggerReport | null) => void;
+  reject: (e: Error) => void;
+}
+
+type Task = JobTask | RunTask | TriggersTask;
 
 const BACKGROUND = 1;
 
@@ -234,8 +261,13 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     else queue.splice(at, 0, task);
   }
 
-  /** Settles a single run that is too large for where it would run; true when it did. */
+  /** Settles a single run that is too large for where it would run, or trigger prices of one too large for the main thread; true when it did. */
   function refused(task: Task, where: 'worker' | 'here'): boolean {
+    if (task.type === 'triggers') {
+      if (where === 'worker' || sizeRefusal(task.size, 'here') === null) return false;
+      settle(task, null);
+      return true;
+    }
     if (task.type !== 'run' || task.anyway) return false;
     const why = sizeRefusal(task.size, where);
     if (why === null) return false;
@@ -251,7 +283,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
         if (l.worker) l.idleTimer = setTimeout(() => kill(l), idleMs);
         return;
       }
-      let there = (task.type === 'run' || task.input.defaults !== undefined) && !noWorker;
+      let there = (task.type !== 'job' || task.input.defaults !== undefined) && !noWorker;
       if (refused(task, there ? 'worker' : 'here')) continue;
       if (there && !start(l)) {
         there = false;
@@ -297,8 +329,9 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     const l = task.lane;
     if (l.current !== task || task.settled) return;
     kill(l);
-    const message = timeMessage(task.budgetMs, task.type === 'run' ? task.size : null);
-    settle(task, null, new LimitError('time', message, task.type === 'run' && !task.anyway));
+    // Trigger prices only add to a result, so going past their time leaves them out rather than failing anything.
+    if (task.type === 'triggers') settle(task, null);
+    else settle(task, null, new LimitError('time', timeMessage(task.budgetMs, task.type === 'run' ? task.size : null), task.type === 'run' && !task.anyway));
     next(l);
   }
 
@@ -310,6 +343,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
       l.sent.add(task.data);
     }
     if (task.type === 'run') w.post({ type: 'run', id: task.id, data: task.data, block: task.block });
+    else if (task.type === 'triggers') w.post({ type: 'triggers', id: task.id, data: task.data, spec: task.spec, run: task.run });
     else w.post({ type: 'job', id: task.id, data: task.data, block: { source: task.input.source, defaults: task.input.defaults!, overrides: overridesOf(task) }, job: task.job });
     arm(task);
   }
@@ -327,8 +361,9 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
         const backtest = runBlock(task.block, task.prices);
         return { backtest, hereMs: performance.now() - started } satisfies RunResult;
       };
-    }
-    else {
+    } else if (task.type === 'triggers') {
+      work = async () => (task.stopped ? null : computeTriggers(task.spec, task.prices, task.run));
+    } else {
       const bench = benchOf(task);
       work = () =>
         task.stopped
@@ -371,6 +406,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     }
     if (m.type === 'error') settle(task, null, new Error(m.message));
     else if (m.type === 'ran') settle(task, { backtest: m.result, hereMs: null } satisfies RunResult);
+    else if (m.type === 'triggered') settle(task, m.result);
     else settle(task, m.result);
     next(l);
   }
@@ -494,15 +530,19 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     /** The prices this block's runs last used, held in the workers until it runs on others or closes. */
     let held: number | null = null;
     let closed = false;
+    const hold = (prices: Map<string, Bars>): number => {
+      const data = idOf(prices);
+      if (held !== data) {
+        use(data);
+        if (held !== null) release(held);
+        held = data;
+      }
+      return data;
+    };
     return {
       run(req) {
         if (closed) return Promise.resolve(null);
-        const data = idOf(req.prices);
-        if (held !== data) {
-          use(data);
-          if (held !== null) release(held);
-          held = data;
-        }
+        const data = hold(req.prices);
         const { promise, resolve, reject } = deferred<RunResult>();
         const task: RunTask = {
           type: 'run',
@@ -527,6 +567,34 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
         pump(short);
         return promise;
       },
+      triggers(req) {
+        if (closed) return Promise.resolve(null);
+        const data = hold(req.prices);
+        const { promise, resolve, reject } = deferred<TriggerReport>();
+        const task: TriggersTask = {
+          type: 'triggers',
+          id: ++lastTask,
+          lane: short,
+          prices: req.prices,
+          data,
+          priority: req.background ? BACKGROUND : 0,
+          here: false,
+          stopped: false,
+          settled: false,
+          budgetMs: LIMITS.runMs,
+          mine,
+          spec: req.spec,
+          run: req.run,
+          size: req.size,
+          resolve,
+          reject,
+        };
+        mine.add(task);
+        enqueue(task);
+        pump(short);
+        return promise;
+      },
+      isClosed: () => closed,
       close() {
         if (closed) return;
         closed = true;
@@ -677,10 +745,10 @@ export class BlockDrawing {
 
   /** Loads the prices of `spec`, the block's text read with `overrides`, and runs it. Null when the runs were closed first. */
   async run(spec: Spec, o: { force?: boolean; overrides?: Record<string, number> } = {}): Promise<RunOutput | null> {
-    const { data, warnings, prices } = await this.runner.loadPrices(spec, o.force ?? false);
+    const { data, warnings, notes, prices } = await this.runner.loadPrices(spec, o.force ?? false);
     const backtest = await this.backtest(spec, data, o.overrides);
     if (!backtest) return null;
-    const out = { spec, backtest, data, warnings, prices };
+    const out = { spec, backtest, data, warnings, notes, prices };
     if (this.anyway) ranAnyway.add(out);
     return out;
   }

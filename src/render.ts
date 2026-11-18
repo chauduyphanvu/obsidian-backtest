@@ -10,6 +10,8 @@ import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts
 import { renderDeepStats } from './render-stats.ts';
 import { renderPositions, renderTrades } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
+import type { Source } from './types.ts';
+import type { TriggerReport } from './trigger.ts';
 
 /** The strategy as written: the block replaces its own text, so the result has to show it. */
 function source(el: HTMLElement, text: string): void {
@@ -149,11 +151,23 @@ export interface ResultView {
   remember?: { get(): boolean | undefined; set(open: boolean): void };
   /** Sliders for the strategy's parameters; ignored when it declares none. */
   params?: ParamsHook;
+  /** Fills a line under the figures for the run on screen; returns a cleanup function when it keeps watching something. */
+  figuresNote?: (el: HTMLElement, out: RunOutput) => (() => void) | void;
+  /**
+   * The trigger prices of a run on screen, asked for when its positions are drawn: for the block as written and for a
+   * slider once let go, never while it is dragged. Null when the run has none to show.
+   */
+  triggers?: (out: RunOutput) => Promise<TriggerReport | null> | null;
 }
 
 /** Keys the remembered state of a block: its note and its name, or its place among the note's blocks when it has no name. */
 export function blockStateKey(notePath: string, name: string | null, index: number): string {
-  return `${notePath}\u0000${name ? `name:${name.toLowerCase()}` : `block:${index}`}`;
+  return `${blockKeyPrefix(notePath, false)}${name ? `name:${name.toLowerCase()}` : `block:${index}`}`;
+}
+
+/** The start of the key of every block in the note at `path`, or with `folder`, in every note under the folder at `path`. */
+export function blockKeyPrefix(path: string, folder: boolean): string {
+  return folder ? `${path}/` : `${path}\u0000`;
 }
 
 export interface CompactFacts {
@@ -203,7 +217,7 @@ export function compactFacts(out: RunOutput): CompactFacts {
 function notesOf(view: ResultView, out: RunOutput): string[] {
   const { spec, warnings, backtest: bt } = out;
   const first = bt.run.t[0];
-  const notes = [...warnings, ...bt.notes, ...view.notes.map((n) => `Line ${n.line}: ${n.message}`)];
+  const notes = [...warnings, ...(out.notes ?? []), ...bt.notes, ...view.notes.map((n) => `Line ${n.line}: ${n.message}`)];
   if (spec.from !== null && first - spec.from > 7 * DAY) {
     notes.push(`The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
   }
@@ -267,8 +281,10 @@ function fillLegend(legend: HTMLElement, bt: Backtest): void {
   key('bt-swatch-benchmark', bt.benchmark.label, bt.benchmark.equity[bt.benchmark.equity.length - 1]);
 }
 
+const PRICES_FROM: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'your CSV files', tiingo: 'Tiingo', fred: 'FRED' };
+
 /** The parts of a result that are heavy to draw or rarely needed. Returns what to run when they are drawn again or go away. */
-function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() => void)[] {
+function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], triggers: Promise<TriggerReport | null> | null): (() => void)[] {
   const { spec, backtest: bt, prices } = out;
   const { run } = bt;
   const intraday = isIntraday(bt.run.t);
@@ -281,12 +297,12 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() =
   const traded = prices.filter((p) => spec.universe.some((a) => a.name === p.name));
   if (traded.length) {
     const through = Math.min(...traded.map((p) => p.through));
-    const sources = [...new Set(traded.map((p) => ({ yahoo: 'Yahoo', binance: 'Binance', stooq: 'Stooq', csv: 'your CSV files' })[p.source]))].join(' and ');
+    const sources = [...new Set(traded.map((p) => PRICES_FROM[p.source]))].join(' and ');
     h(root, 'div', 'bt-note', `Prices through ${stamp(through, intraday)}, from ${sources}.`);
   }
 
   segments(root, bt);
-  renderPositions(root, bt, intraday);
+  renderPositions(root, bt, intraday, triggers);
   renderTrades(root, bt, intraday);
   stops.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: bt.benchmark.equity, benchmarkLabel: bt.benchmark.label, cashReturn: run.cashReturn }));
   for (const section of sections) {
@@ -341,6 +357,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
 
     const notes = h(body, 'div', 'bt-notes');
     const tiles = h(h(body, 'div', 'bt-tiles-box'), 'div', 'bt-tiles');
+    const figuresNote = h(body, 'div', 'bt-figures-note');
     const legend = h(body, 'div', 'bt-legend');
     const chart = h(body, 'div', 'bt-chart');
     const tip = h(chart, 'div', 'bt-tip');
@@ -379,9 +396,11 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
       for (const text of notesOf(view, out)) h(notes, 'div', 'bt-warning', text);
       paint(out);
       stopRest();
+      figuresNote.replaceChildren();
+      const watching = view.figuresNote?.(figuresNote, out);
       rest.replaceChildren();
       rest.classList.remove('bt-stale');
-      stops = fillRest(rest, out, view.sections?.(out) ?? []);
+      stops = [...fillRest(rest, out, view.sections?.(out) ?? [], view.triggers?.(out) ?? null), ...(watching ? [watching] : [])];
     };
     // Between two frames of a drag only what is at the top is worth redrawing; the rest says it is out of date.
     show = (out, settled) => {

@@ -1,5 +1,5 @@
 import { runBacktest, type Backtest } from './backtest.ts';
-import { barsFrom, insideReach, loadBars, loadInsideBars, type DataDeps, type Loaded } from './data.ts';
+import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
 import { MAX_PERIOD, paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
@@ -122,6 +122,8 @@ export interface RunOutput {
   data: Map<string, Bars>;
   /** Things the reader should know that did not stop the run, such as stale prices. */
   warnings: string[];
+  /** How the prices loaded were dated, such as a FRED series' backfill (fred.ts); unlike `warnings`, nothing to put right. */
+  notes?: string[];
   prices: PriceInfo[];
 }
 
@@ -152,7 +154,7 @@ export class Runner {
     return parseSpec(source, { defaults: this.defaults, overrides });
   }
 
-  async loadPrices(spec: Spec, force = false): Promise<{ data: Map<string, Bars>; warnings: string[]; prices: PriceInfo[] }> {
+  async loadPrices(spec: Spec, force = false): Promise<{ data: Map<string, Bars>; warnings: string[]; notes: string[]; prices: PriceInfo[] }> {
     const refs = new Map<string, AssetRef>();
     const cash = spec.cash.k === 'ticker' ? [spec.cash.ref] : [];
     for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...cash]) {
@@ -162,11 +164,11 @@ export class Runner {
     const sinceFor = (step: number) => (spec.from === null ? 0 : spec.from - Math.ceil(lookback * (step >= DAY ? NON_TRADING : 1)) * step);
     const since = sinceFor(Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)]);
     /**
-     * A CSV file's bars are the size its rows are, which `interval` does not set, so its lookback is worked out from its own
-     * rows: from the shortest gap between them as for a download, and at least `lookback` rows, which counts the nights and
-     * weekends of intraday rows. A daily file keeps what the daily interval gave it.
+     * A CSV file's bars, and a FRED series' rows, are the size their rows are, which `interval` does not set, so their
+     * lookback is worked out from their own rows: from the shortest gap between them as for a download, and at least
+     * `lookback` rows, which counts the nights and weekends of intraday rows. A daily file keeps what the daily interval gave it.
      */
-    const csvSince = (t: number[]): number => {
+    const rowsSince = (t: number[]): number => {
       if (spec.from === null) return 0;
       let gap = Infinity;
       for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) gap = Math.min(gap, t[i] - t[i - 1]);
@@ -185,17 +187,18 @@ export class Runner {
         throw new Error(`${why} It is the ticker the cash rate is read from: the block's "cash rate" line, or without one the plugin's "Interest on cash" setting.`);
       }
     };
-    const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, csv: r.source === 'csv', ...(await load(r)) })));
+    const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, rows: r.source === 'csv' || r.source === 'fred', ...(await load(r)) })));
     const warnings = loaded.flatMap((l) => (l.warning ? [l.warning] : []));
+    const notes = loaded.flatMap((l) => (l.note ? [l.note] : []));
     // Saved prices can reach further back than this run asks for; the same block must give the same answer.
-    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, l.csv ? csvSince(l.bars.t) : since)]));
+    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, l.rows ? rowsSince(l.bars.t) : since)]));
     if (spec.magnify) {
       for (const inside of await this.loadInside(spec, spec.magnify, force)) {
         if (inside.warning) warnings.push(inside.warning);
         if (inside.bars) data.set(insideKey(inside.name, spec.magnify), inside.bars);
       }
     }
-    return { data, warnings, prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })) };
+    return { data, warnings, notes, prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })) };
   }
 
   /**
@@ -208,7 +211,7 @@ export class Runner {
     const now = this.deps.now();
     return Promise.all(
       spec.universe
-        .filter((a) => a.source !== 'csv')
+        .filter((a) => a.source === 'yahoo' || a.source === 'binance')
         .map(async (a) => {
           const since = Math.max(spec.from ?? 0, insideReach(a.source, interval, now));
           if (spec.to !== null && spec.to < since) return { name: a.name, bars: emptyBars(), warning: null };
@@ -224,7 +227,64 @@ export class Runner {
   }
 
   async run(spec: Spec, force = false): Promise<RunOutput> {
-    const { data, warnings, prices } = await this.loadPrices(spec, force);
-    return { spec, backtest: runBacktest(spec, data), data, warnings, prices };
+    const { data, warnings, notes, prices } = await this.loadPrices(spec, force);
+    return { spec, backtest: runBacktest(spec, data), data, warnings, notes, prices };
   }
+
+  /**
+   * Daily prices of tickers a run neither trades nor reads, for the regimes section: from `lookback` bars before `from`,
+   * counted in calendar days as loadPrices counts a daily lookback, and saved and refreshed like any ticker's. They come back
+   * on their own and are never added to a run's data, so a block gives the same result whether or not they were loaded.
+   */
+  async loadExtras(refs: AssetRef[], from: number, lookback: number, force = false): Promise<Extras> {
+    const since = from - Math.ceil(lookback * NON_TRADING) * DAY;
+    const loaded = await Promise.all(refs.map(async (r) => ({ name: r.name, ...(await loadBars(r, '1d', since, this.deps, force, { freshForMs: this.freshForMs })) })));
+    return {
+      data: new Map(loaded.map((l) => [l.name, barsFrom(l.bars, since)])),
+      warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
+      prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })),
+    };
+  }
+
+  /**
+   * Daily prices as they traded of Yahoo and Tiingo tickers, whose usual prices are adjusted for later dividends and
+   * splits, to compare a broker's fills with; other sources' prices are as traded already and are not asked for. A ticker
+   * that can't be loaded gives a warning and is left out. Like loadExtras, they are never added to a run's data.
+   */
+  async loadRaw(refs: AssetRef[]): Promise<{ data: Map<string, Bars>; warnings: string[] }> {
+    const wanted = refs.filter((r) => r.source === 'yahoo' || r.source === 'tiingo');
+    const loaded = await Promise.all(
+      wanted.map(async (r) => {
+        try {
+          const l = await loadRawBars(r, this.deps, { freshForMs: this.freshForMs });
+          return { name: r.name, bars: l.bars, warning: l.warning };
+        } catch (e) {
+          const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
+          return { name: r.name, bars: null, warning: `${why}. ${r.name}'s fills are not compared on price.` };
+        }
+      }),
+    );
+    return {
+      data: new Map(loaded.flatMap((l) => (l.bars ? [[l.name, l.bars] as const] : []))),
+      warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
+    };
+  }
+
+  /** The prices loadExtras gives, from the saved files alone; null when loading them would download, because one is missing or no longer fresh. */
+  async savedExtras(refs: AssetRef[], from: number, lookback: number): Promise<Extras | null> {
+    const offline: DataDeps = { ...this.deps, fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
+    try {
+      const saved = await new Runner(offline, this.defaults, { freshForMs: this.freshForMs }).loadExtras(refs, from, lookback);
+      return saved.prices.every((p) => !p.stale) && saved.warnings.length === 0 ? saved : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Prices loaded apart from a run (Runner.loadExtras), keyed by ticker name. */
+export interface Extras {
+  data: Map<string, Bars>;
+  warnings: string[];
+  prices: PriceInfo[];
 }

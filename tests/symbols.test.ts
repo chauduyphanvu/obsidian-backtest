@@ -336,6 +336,18 @@ test('suggest: the block’s source first, the other one adding a few, written t
   assert.deepEqual(await lookup.suggest('', 'yahoo'), []);
 });
 
+test('suggest: a plain ^ word is looked up at Yahoo in a block whose tickers come from Tiingo or Binance, and written plain', async () => {
+  const n = net();
+  const lookup = new SymbolLookup(n.deps);
+  for (const block of ['tiingo', 'binance'] as const) {
+    const found = await lookup.suggest('^GSPC', block);
+    assert.ok(found.length > 0 && found[0].hit.source === 'yahoo', JSON.stringify(found));
+    assert.equal(found[0].written, found[0].hit.ticker.startsWith('^') ? found[0].hit.ticker : `yahoo:${found[0].hit.ticker}`);
+  }
+  assert.ok(n.urls.some((u) => u.includes('q=%5EGSPC')));
+  assert.deepEqual(await lookup.suggest('SPY', 'tiingo'), [], 'a plain Tiingo word is still not looked up');
+});
+
 test('peekSuggest gives the same list once every search it needs has been made', async () => {
   const n = net();
   const lookup = new SymbolLookup(n.deps);

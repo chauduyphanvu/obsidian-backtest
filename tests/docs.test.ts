@@ -123,6 +123,7 @@ test('texts say what the README says, in its words, where it states a rule', () 
     ['rebalance=weekly', 'Weeks start on Monday'],
     ['data=yahoo', 'SPY, BRK-B, BTC-USD'],
     ['data=binance', 'BTCUSDT'],
+    ['data', 'comes from Yahoo whatever data says'],
   ];
   const lower = (x: string) => x.toLowerCase();
   const missing = same.filter(([id, phrase]) => !lower(docFor(id)!.text).includes(lower(phrase)) || !lower(readme).includes(lower(phrase)));

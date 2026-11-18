@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { actionWord, barLabel, basisOf, CLOSE_FILL_NOTE, failedStatus, LAST_CLOSE_NOTE, mapLimit, notOurNoteMessage, orderSize, ordersMarkdown, ordersSavePlan, positionOrder, problemsOf, sortStatuses, statusFrom, todoGroups, todoRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
+import { actionWord, barLabel, basisOf, CLOSE_FILL_NOTE, failedStatus, LAST_CLOSE_NOTE, mapLimit, notOurNoteMessage, orderSize, ordersMarkdown, ordersSavePlan, positionOrder, problemsOf, scanOrders, sortStatuses, statusFrom, todoGroups, todoRows, WATCH_NOTE, watchClose, watchList, watchRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
+import { computeTriggers, triggerRun, type Trigger, type TriggerReport } from '../src/trigger.ts';
 import type { AssetState } from '../src/engine.ts';
 import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
@@ -600,4 +601,111 @@ test('an add the position has no room for is not an order, and one only the cash
   assert.ok(cash > 0 && cash < aaa.targetWeight * equity, `${cash} in cash`);
   assert.ok(Math.abs(aaa.targetWeight - (0.5 - aaa.value / equity)) < 1e-12);
   assert.deepEqual(statusFrom('n', 's', out, NOW).orders.map((o) => [o.action, o.ticker, o.step]), [['buy', 'AAA', { k: 2, n: 2 }]]);
+});
+
+// --- closes to watch ----------------------------------------------------------------------------------------------
+
+const trigger = (ticker: string, side: Trigger['side'], fires: Trigger['fires'], more: Partial<Trigger> = {}): Trigger => ({
+  ticker,
+  side,
+  driver: ticker,
+  last: 100,
+  range: { lo: 80, hi: 120 },
+  fires,
+  ownLast: 100,
+  exact: true,
+  assumptions: [],
+  ...more,
+});
+const reportOf = (triggers: Trigger[], closeFill = false): TriggerReport => ({ next: SAMPLE_ASOF + DAY, intraday: false, closeFill, decision: null, triggers });
+const SAMPLE_TRIGGERS = [
+  // Each band from its first close to its last that give the order, as the search finds them just inside a shown price.
+  trigger('A', 'buy', [{ lo: 101.501, hi: null }]),
+  trigger('B', 'sell', [{ lo: null, hi: 94.999 }]),
+  trigger('C', 'sell', [{ lo: null, hi: 102 }]),
+  trigger('D', 'rearm', [{ lo: null, hi: 99.499 }]),
+  trigger('E', 'buy', []),
+  trigger('F', 'buy', [], { blocked: 'pending' }),
+  trigger('G', 'add', [{ lo: 98.001, hi: 98.999 }]),
+];
+
+test('the closes to watch: those that give an order unchanged or within 2%, nearest first, and every one with fill: close', () => {
+  const rows = watchRows(reportOf(SAMPLE_TRIGGERS));
+  assert.deepEqual(rows.map((r) => [r.ticker, r.side, r.now]), [['C', 'sell', true], ['G', 'add', false], ['A', 'buy', false]]);
+  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', when: 'at the following open', driver: 'A', lastClose: 100, distance: 101.501 / 100 - 1, now: false });
+  assert.deepEqual([watchClose(rows[2]), watchClose({ ...rows[2], driver: 'SPY' })], ['100.00', '100.00 (SPY)']);
+  assert.equal(rows[0].phrase, 'Sells unless it closes above 102.00 (+2.0%)');
+  const close = watchRows(reportOf(SAMPLE_TRIGGERS, true));
+  assert.deepEqual(close.map((r) => r.ticker), ['C', 'G', 'A', 'B']);
+  assert.equal(close[0].when, 'at that close');
+});
+
+test('a rule solved for a series of values is watched when it gives its order at an unchanged value, or with fill: close, after the closes', () => {
+  // Within 0.01 of a value of 0.05 is no share of a close, so it is not "within 2%".
+  const spread = (ticker: string, fires: Trigger['fires']) => trigger(ticker, 'buy', fires, { driver: 'T10Y2Y', last: -0.05, range: { lo: -0.2, hi: 0.1 }, values: true });
+  const triggers = [...SAMPLE_TRIGGERS, spread('X', [{ lo: -0.04, hi: null }]), spread('Y', [{ lo: null, hi: -0.04 }])];
+  const rows = watchRows(reportOf(triggers));
+  assert.deepEqual(rows.map((r) => [r.ticker, r.now]), [['C', true], ['Y', true], ['G', false], ['A', false]]);
+  assert.equal(rows[1].phrase, "Buys unless T10Y2Y's next value is above −0.04 (+0.01)");
+  assert.equal(watchClose(rows[1]), '−0.05 (T10Y2Y)');
+  assert.deepEqual(watchRows(reportOf(triggers, true)).map((r) => r.ticker), ['C', 'Y', 'G', 'A', 'B', 'X']);
+});
+
+test('a status carries its closes to watch only when trigger prices were worked out', () => {
+  const out = run('universe: A\ncapital: 1000\nbuy when close > sma(3)', { A: bars([10, 10, 10, 10, 9.8]) });
+  assert.ok(!('watch' in statusFrom('n.md', 'S', out, NOW)));
+  const report = computeTriggers(out.spec, out.data, triggerRun(out.backtest.run));
+  const s = statusFrom('n.md', 'S', out, NOW, undefined, report);
+  // sma(3) at the next bar is (10 + 9.8 + x) / 3: it buys above 9.9, 1.0% up.
+  assert.deepEqual(s.watch!.map((w) => [w.ticker, w.phrase]), [['A', 'Buys if it closes above 9.90 (+1.0%)']]);
+});
+
+test('a scan gives each strategy the trigger prices of its result, and lists it without them when they fail', async () => {
+  const good = run('universe: A\ncapital: 1000\nbuy when close > sma(3)', { A: bars([10, 10, 10, 10, 9.8]) });
+  const asked: string[] = [];
+  const list = await scanOrders(
+    {
+      clear: () => {},
+      find: async () => [
+        { note: 'a.md', name: 'A', source: 'good' },
+        { note: 'b.md', name: 'B', source: 'bad' },
+      ],
+      run: async () => good,
+      triggers: (out) => {
+        asked.push(out === good ? 'good' : '?');
+        return asked.length === 1 ? Promise.resolve(computeTriggers(out.spec, out.data, triggerRun(out.backtest.run))) : Promise.reject(new Error('stopped'));
+      },
+    },
+    false,
+    () => {},
+  );
+  assert.deepEqual(asked, ['good', 'good']);
+  assert.equal(list[0].watch!.length, 1);
+  assert.deepEqual([list[1].error, 'watch' in list[1]], [null, false]);
+});
+
+test('the Markdown lists the closes to watch after the orders, nearest first', () => {
+  const list = [status('Strategies/Trend.md', 'Trend following', [], { asOf: SAMPLE_ASOF, watch: watchRows(reportOf(SAMPLE_TRIGGERS)) })];
+  const text = ordersMarkdown(list, SAMPLE_NOW);
+  const at = text.indexOf('## Watch at the next close');
+  assert.ok(at > text.indexOf('## To do') && at < text.indexOf('## Nothing to do'));
+  assert.ok(
+    text.includes(
+      [
+        '## Watch at the next close',
+        '',
+        WATCH_NOTE,
+        '',
+        '| Strategy | Ticker | Watch for | Last close | Based on |',
+        '| --- | --- | --- | ---: | --- |',
+        '| [[Strategies/Trend\\|Trend following]] | C | Sells unless it closes above 102.00 (+2.0%), at the following open | 100.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Trend\\|Trend following]] | G | Adds if it closes between 98.00 (−2.0%) and 99.00 (−1.0%), at the following open | 100.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Trend\\|Trend following]] | A | Buys if it closes above 101.50 (+1.5%), at the following open | 100.00 | Close of 2026-11-16 |',
+        '',
+      ].join('\n'),
+    ),
+    text,
+  );
+  assert.ok(!ordersMarkdown([status('a.md', 'A', [], { asOf: SAMPLE_ASOF, watch: [] })], SAMPLE_NOW).includes('Watch at the next close'));
+  assert.deepEqual(watchList(list).map((w) => w.row.ticker), ['C', 'G', 'A']);
 });

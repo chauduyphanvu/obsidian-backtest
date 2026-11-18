@@ -1,5 +1,5 @@
 import { DAY } from './format.ts';
-import { columnName, type Asset, type AssetRef, type Source } from './types.ts';
+import { columnName, DATA_SOURCES, plainSource, SOURCE_PREFIX, type Asset, type AssetRef, type DataSource, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
 export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn';
@@ -123,7 +123,7 @@ export interface Defaults {
   slippageBps: number;
   /** Text of a `cash rate` setting, such as "0%" or "^IRX". */
   cashRate: string;
-  dataSource: 'yahoo' | 'binance';
+  dataSource: DataSource;
   /** Used when the block has no `commission` line; absent means none. */
   commission?: Commission;
 }
@@ -452,7 +452,7 @@ export function ownColumns(e: Expr): Extract<Expr, { k: 'column' }>[] {
   return e.k === 'of' ? [] : children(e).flatMap(ownColumns);
 }
 
-const SOURCE_NAME: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'a CSV file' };
+const SOURCE_NAME: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'a CSV file', tiingo: 'Tiingo', fred: 'FRED' };
 const COLUMN_EXAMPLE = 'column(score) of csv:Data/signals.csv';
 
 /** Why a column cannot be read from a ticker whose prices come from `source`. */
@@ -877,9 +877,10 @@ class ExprParser {
 }
 
 function parseRef(text: string, defaultSource: Source, where: At): AssetRef {
-  const m = text.match(/^(yahoo|binance|csv):(.+)$/i);
-  const source = m ? (m[1].toLowerCase() as Source) : defaultSource;
-  const raw = m ? m[2] : text;
+  const prefix = text.match(SOURCE_PREFIX);
+  const m = prefix && text.length > prefix[0].length ? prefix : null;
+  const source = m ? (m[1].toLowerCase() as Source) : plainSource(text, defaultSource);
+  const raw = m ? text.slice(m[0].length) : text;
   if (source === 'csv') {
     const base = raw.split('/').pop()!.replace(/\.csv$/i, '');
     if (!base) throw new SpecError(where, `"${text}" is not a CSV path`);
@@ -888,6 +889,11 @@ function parseRef(text: string, defaultSource: Source, where: At): AssetRef {
   if (!/^[A-Za-z0-9^._=-]+$/.test(raw)) throw new SpecError(where, `"${raw}" is not a ticker`);
   const id = raw.toUpperCase();
   return { name: id, source, id };
+}
+
+/** Why a FRED series cannot `role`: it holds values, not prices a position could be bought or held at. */
+function notPrices(ref: AssetRef, role: string): string {
+  return `fred:${ref.id} is a series of values from FRED, not prices, so it cannot ${role}. A rule can read it instead, as in close of fred:${ref.id} > 0`;
 }
 
 /** The error for a ref whose name is already taken by a different source or file; null when there is no clash. */
@@ -916,6 +922,9 @@ function magnifyProblem(size: string, interval: string, sources: Source[]): stri
   }
   if (big % small !== 0) return `A ${interval} bar does not hold a whole number of ${size} bars. Use a size that divides it${such}`;
   if (sources.every((s) => s === 'csv')) return 'magnify looks inside bars with smaller bars from Yahoo or Binance, and CSV files have none';
+  if (sources.every((s) => s === 'csv' || s === 'tiingo')) {
+    return `magnify looks inside bars with smaller bars from Yahoo or Binance, and ${sources.includes('csv') ? 'Tiingo and CSV files have' : 'Tiingo has'} none here`;
+  }
   if (sources.includes('yahoo')) {
     if (interval === '1w' && size !== '1d') return `Yahoo can look inside weekly bars with 1d bars only, not ${size}`;
     const offered = Object.keys(YAHOO_INSIDE_DAYS);
@@ -1204,7 +1213,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     return { k: 'atr', mult, n: period(n, where, 'atr()', 1), ...periodParam(n) };
   };
 
-  const defaultSource = get('data', oneOf(['yahoo', 'binance'] as const, 'data'), defaults.dataSource as Source);
+  const defaultSource = get('data', oneOf(DATA_SOURCES, 'data'), defaults.dataSource as Source);
   const size = get('size', (v, w) => parsePercent(v, w, 'size', 100), null as number | null);
   const rebalance = get('rebalance', oneOf(REBALANCE, 'rebalance'), 'never' as Rebalance);
 
@@ -1237,6 +1246,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
         const m = part.match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)\s*%)?$/);
         if (!m) throw new SpecError(partAt, `Can't read "${part}". Write a ticker and an optional weight, such as SPY 60%`);
         const ref = parseRef(m[1], defaultSource, partAt);
+        if (ref.source === 'fred') throw new SpecError(partAt, notPrices(ref, 'be traded'));
         if (universe.some((a) => a.name.toLowerCase() === ref.name.toLowerCase())) throw new SpecError(partAt, `${ref.name} is listed twice`);
         universe.push({ ...ref, weight: 0 });
         weights.push(m[2] === undefined ? null : Number(m[2]) / 100);
@@ -1403,6 +1413,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     'benchmark',
     (v, w) => {
       const ref = parseRef(v, defaultSource, w);
+      if (ref.source === 'fred') throw new SpecError(w, notPrices(ref, 'be the benchmark'));
       const problem = clash(ref, [...universe, ...extras]);
       if (problem) throw new SpecError(w, problem);
       return ref;
@@ -1432,11 +1443,14 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const cashClash = cash.k === 'ticker' ? clash(cash.ref, [...universe, ...extras, ...(benchmark ? [benchmark] : [])]) : null;
   if (cashClash) errors.push(diag(cashSetting?.valueAt ?? { line: 1 }, cashClash));
 
-  // The cash-rate ticker is left out: a yield only needs daily closes, which Yahoo serves for any interval.
+  // The cash-rate ticker is left out: a yield only needs daily closes, which Yahoo serves for any interval. A FRED series,
+  // like a CSV file, has rows of its own size.
   const sources = new Set([...universe, ...extras, ...(benchmark ? [benchmark] : [])].map((a) => a.source));
   const intervalAt = settings.get('interval')?.valueAt ?? { line: 1 };
   if (sources.has('yahoo') && !YAHOO_INTERVALS.includes(interval)) {
     errors.push(diag(intervalAt, `Yahoo data comes as 1d or 1w bars, not "${interval}"`));
+  } else if (sources.has('tiingo') && !YAHOO_INTERVALS.includes(interval)) {
+    errors.push(diag(intervalAt, `Tiingo data comes as 1d or 1w bars, not "${interval}"`));
   } else if (sources.has('binance') && !BINANCE_INTERVALS.includes(interval)) {
     errors.push(diag(intervalAt, `Binance intervals: ${BINANCE_INTERVALS.join(', ')}`));
   }
@@ -1511,15 +1525,17 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     errors.push(diag(riskLine!.keyAt, `"risk per trade" sizes each position once, when it is bought, so it can't be combined with "rebalance: ${rebalance}". Remove one of them`));
   }
 
-  // Yahoo adjusts prices for dividends and splits, but not index levels (tickers starting with ^).
-  const adjusted = (name: string) => [...universe, ...extras].some((a) => a.name === name && a.source === 'yahoo' && !a.id.startsWith('^'));
+  // Yahoo and Tiingo adjust prices for dividends and splits, but Yahoo not index levels (tickers starting with ^).
+  const adjustedBy = (name: string) => [...universe, ...extras].find((a) => a.name === name && (a.source === 'yahoo' || a.source === 'tiingo') && !a.id.startsWith('^'))?.source;
   const seen = new Set<string>();
   for (const c of priceChecks) {
     const names = c.asset !== null ? [c.asset] : c.scope !== null ? [c.scope] : universe.map((a) => a.name);
     const key = `${c.at.line}:${c.at.from}:${c.at.to}`;
-    if (seen.has(key) || !names.some(adjusted)) continue;
+    const by = new Set(names.map(adjustedBy).filter((s) => s !== undefined));
+    if (seen.has(key) || by.size === 0) continue;
     seen.add(key);
-    warnings.push(diag(c.at, 'This compares a price with a fixed number. Yahoo prices are adjusted for later dividends and splits, so old prices are lower than what actually traded.'));
+    const whose = by.has('yahoo') ? (by.has('tiingo') ? 'Yahoo and Tiingo' : 'Yahoo') : 'Tiingo';
+    warnings.push(diag(c.at, `This compares a price with a fixed number. ${whose} prices are adjusted for later dividends and splits, so old prices are lower than what actually traded.`));
   }
 
   const spec: Spec = {

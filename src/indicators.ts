@@ -37,19 +37,11 @@ export function stdev(src: number[], n: number): number[] {
 }
 
 export function highest(src: number[], n: number): number[] {
-  return rolling(src, n, (s, e) => {
-    let m = -Infinity;
-    for (let i = s; i <= e; i++) if (src[i] > m) m = src[i];
-    return m;
-  });
+  return extreme(src, n, 1);
 }
 
 export function lowest(src: number[], n: number): number[] {
-  return rolling(src, n, (s, e) => {
-    let m = Infinity;
-    for (let i = s; i <= e; i++) if (src[i] < m) m = src[i];
-    return m;
-  });
+  return extreme(src, n, -1);
 }
 
 /** Exponential smoothing seeded with the simple average of the first `n` values. */
@@ -116,7 +108,11 @@ export function returns(src: number[]): number[] {
   return src.map((x, i) => (i > 0 ? x / src[i - 1] - 1 : NaN));
 }
 
-/** The highest (`sign` 1) or lowest (-1) of each full window of `n` known values, in one pass with a queue of candidates. */
+/**
+ * The highest (`sign` 1) or lowest (-1) of each full window of `n` known values, in one pass with a queue of candidates.
+ * Of equal candidates the oldest is kept, so a window holding both 0 and -0 gives the one that came first, as a scan of
+ * the window from its start does.
+ */
 function extreme(src: number[], n: number, sign: 1 | -1): number[] {
   const out = filled(src.length);
   const keep: number[] = [];
@@ -131,7 +127,7 @@ function extreme(src: number[], n: number, sign: 1 | -1): number[] {
       continue;
     }
     valid++;
-    while (keep.length > head && sign * src[keep[keep.length - 1]] <= sign * x) keep.pop();
+    while (keep.length > head && sign * src[keep[keep.length - 1]] < sign * x) keep.pop();
     keep.push(i);
     if (keep[head] <= i - n) head++;
     if (valid >= n) out[i] = src[keep[head]];
@@ -483,20 +479,31 @@ export function monthKey(t: number): number {
 }
 
 /**
- * 1 on the last bar of each period: the next bar falls in another one. Past the final bar the next
- * bar is one step on (the smallest gap in the series), skipping weekends unless the series has
- * weekend bars, so the final bar of a month is known to end it on its own calendar.
+ * Where the bar after one starting at a given time would start, in a series whose bars start at `t`: one step on (the
+ * smallest gap in the series, a day when it has fewer than two bars), skipping weekends unless the series has weekend bars.
  */
-export function periodEnds(t: number[], key: (t: number) => number): number[] {
+export function barStepper(t: number[]): (x: number) => number {
   let step = Infinity;
   for (let i = 1; i < t.length; i++) step = Math.min(step, t[i] - t[i - 1]);
   if (!Number.isFinite(step)) step = DAY;
   const weekends = t.some(isWeekend);
-  return t.map((x, i) => {
-    let next = i + 1 < t.length ? t[i + 1] : x + step;
-    if (i + 1 === t.length) while (!weekends && isWeekend(next)) next += DAY;
-    return key(next) !== key(x) ? 1 : 0;
-  });
+  return (x) => {
+    let next = x + step;
+    while (!weekends && isWeekend(next)) next += DAY;
+    return next;
+  };
+}
+
+/** When the bar after the last of `t` would start (barStepper). */
+export const nextBarTime = (t: number[]): number => barStepper(t)(t[t.length - 1]);
+
+/**
+ * 1 on the last bar of each period: the next bar falls in another one. Past the final bar the next bar is the one
+ * nextBarTime expects, so the final bar of a month is known to end it on its own calendar.
+ */
+export function periodEnds(t: number[], key: (t: number) => number): number[] {
+  const after = t.length > 0 ? nextBarTime(t) : NaN;
+  return t.map((x, i) => (key(i + 1 < t.length ? t[i + 1] : after) !== key(x) ? 1 : 0));
 }
 
 /**
@@ -567,7 +574,8 @@ export function clockOf(source: string, t: number[]): string {
   // Day 0 of the epoch was a Thursday.
   for (const x of t) count[(((Math.floor(x / DAY) + 4) % 7) + 7) % 7]++;
   const weekdays = count.flatMap((n, d) => (n > 0 && n >= TRADING_DAY * t.length ? [d] : [])).join('');
-  return `${source} ${length} ${weekdays}`;
+  // Tiingo dates a listing's bars by its exchange day, as Yahoo does, so the two keep one clock.
+  return `${source === 'tiingo' ? 'yahoo' : source} ${length} ${weekdays}`;
 }
 
 /** 1 on the first bar of each period; unknown on the series' first bar, whose period may have begun earlier. */

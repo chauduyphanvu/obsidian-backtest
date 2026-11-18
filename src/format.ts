@@ -13,6 +13,12 @@ export const pct = (x: number, digits = 1) => (Number.isFinite(x) ? minus((x * 1
 export const signedPct = (x: number, digits = 1) => (x > 0 ? '+' : '') + pct(x, digits);
 export const isoDate = (t: number) => new Date(t).toISOString().slice(0, 10);
 
+/** The calendar day of a time on the reader's clock, so "today" means their today. */
+export function localDate(t: number): string {
+  const d = new Date(t);
+  return isoDate(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
 export function money(x: number): string {
   const a = Math.abs(x);
   const trim = (v: number, d: number) => String(Number(v.toFixed(d)));
@@ -89,6 +95,13 @@ export function timeTicks(t0: number, t1: number, width: number): { t: number; l
 
 /** A number to 12 significant digits, which drops the floating-point tail of a sum such as 0.1 + 0.2. */
 export const tidy = (x: number) => Number(x.toPrecision(12));
+
+/** The middle value, or the mean of the two middle ones; NaN for none. */
+export function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
 
 /** A count and its word: "1 run", "1,000 runs"; `many` for a word whose plural is not an added "s". */
 export const plural = (n: number, word: string, many = `${word}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? word : many}`;

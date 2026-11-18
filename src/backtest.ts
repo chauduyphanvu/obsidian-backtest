@@ -1,9 +1,11 @@
 import { INSIDE_BARS } from './data.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
-import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
+import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type SimParams, type Signals, type Skipped, type Trade } from './engine.ts';
 import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
 import { DAY, isIntraday, stamp, YEAR } from './format.ts';
 import { alignByEnd } from './indicators.ts';
+import { priceMemo } from './price-memo.ts';
+import { stable } from './result-cache.ts';
 import type { Asset, Bars } from './types.ts';
 
 export interface Stats {
@@ -113,6 +115,26 @@ export function computeTradeStats(trades: Trade[]): TradeStats {
     winRate: closed.length ? closed.filter((t) => t.ret > 0).length / closed.length : NaN,
     avgReturn: closed.length ? closed.reduce((s, t) => s + t.ret, 0) / closed.length : NaN,
   };
+}
+
+/**
+ * Statistics of the run's bars s to e - 1, with growth measured from the close of bar `base`, or
+ * from the series' first value when it starts later.
+ */
+function measure(run: RunResult, eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats {
+  while (base < e && Number.isNaN(eq[base])) base++;
+  const cut = (xs: number[]) => xs.slice(base, e);
+  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
+}
+
+/**
+ * The run's bars s to e - 1 measured on their own, for the strategy and the benchmark. Growth runs from the last close
+ * before the part, so parts that follow one another multiply to the whole run.
+ */
+export function spanStats(bt: { run: RunResult; benchmark: { equity: number[] } }, s: number, e: number): { stats: Stats; benchmarkStats: Stats } {
+  const { run } = bt;
+  const base = Math.max(0, s - 1);
+  return { stats: measure(run, run.equity, run.exposure, base, s, e), benchmarkStats: measure(run, bt.benchmark.equity, run.t.map(() => 1), base, s, e) };
 }
 
 /** A rule unknown for more bars than this at the start of the run gets a note. */
@@ -284,6 +306,10 @@ function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intrad
   if (csv.length) {
     notes.push(`${list(csv)} ${csv.length === 1 ? 'is a CSV file, which has' : 'are CSV files, which have'} no smaller bars, so ${csv.length === 1 ? 'its' : 'their'} bars are read whole.`);
   }
+  const tiingo = spec.universe.filter((a) => a.source === 'tiingo').map((a) => a.name);
+  if (tiingo.length) {
+    notes.push(`${list(tiingo)} ${tiingo.length === 1 ? 'comes' : 'come'} from Tiingo, which gives no smaller bars here, so ${tiingo.length === 1 ? 'its' : 'their'} bars are read whole.`);
+  }
   return notes;
 }
 
@@ -320,25 +346,31 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     : spec.rank
       ? spec.universe.map((a) => ({ ...a, weight: (a.weight * spec.rank!.top) / n }))
       : spec.universe;
-  const always = new Map<string, Signals>(held.map((a) => [a.name, { buy: data.get(a.name)!.t.map(() => 1), sell: null, score: null }]));
-  const bench = simulate(
-    {
-      assets: held,
-      from: run.t[0],
-      to: run.t[run.t.length - 1],
-      capital: spec.capital,
-      costBps: spec.costBps,
-      slippageBps: spec.slippageBps,
-      rebalance: spec.rebalance,
-      stops: {},
-      cash: spec.cash,
-      sizing: { k: 'fixed' },
-      rank: null,
-      fill: spec.fill,
-      commission: spec.commission,
-    },
+  const params: SimParams = {
+    assets: held,
+    from: run.t[0],
+    to: run.t[run.t.length - 1],
+    capital: spec.capital,
+    costBps: spec.costBps,
+    slippageBps: spec.slippageBps,
+    rebalance: spec.rebalance,
+    stops: {},
+    cash: spec.cash,
+    sizing: { k: 'fixed' },
+    rank: null,
+    fill: spec.fill,
+    commission: spec.commission,
+  };
+  // Every input of the run is in its key, so variants that hold the same (a ranking's top k changes the weights) share it.
+  const bench = priceMemo.get(
     data,
-    always,
+    `benchmark\u0000${stable(params)}`,
+    () => {
+      const always = new Map<string, Signals>(held.map((a) => [a.name, { buy: data.get(a.name)!.t.map(() => 1), sell: null, score: null }]));
+      const { t, equity } = simulate(params, data, always);
+      return { t, equity };
+    },
+    (b) => b.t.length + b.equity.length,
   );
   // A named benchmark can trade on other days or bars than the strategy: carry the value of its
   // latest bar that had ended by the end of each of the strategy's bars.
@@ -346,16 +378,6 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   const at = alignByEnd(bench.t, run.t);
   const benchEquity = run.t.map((t, i) => (at[i] >= 0 ? bench.equity[at[i]] : t >= bench.t[0] ? spec.capital : NaN));
   const benchExposure = run.t.map(() => 1);
-  /**
-   * Statistics of the run's bars s to e - 1, with growth measured from the close of bar `base`, or
-   * from the series' first value when it starts later.
-   */
-  const measure = (eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats => {
-    while (base < e && Number.isNaN(eq[base])) base++;
-    const cut = (xs: number[]) => xs.slice(base, e);
-    return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
-  };
-
   const intraday = isIntraday(run.t);
   const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec, data)];
   if (run.smallTrades) {
@@ -376,13 +398,11 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     const cut = run.t.findIndex((t) => t >= split);
     const k = cut < 0 ? run.t.length : cut;
     const day = new Date(split).toISOString().slice(0, 10);
-    // Each part's growth runs from the last close before it, so the parts multiply to the whole run.
     const part = (label: string, s: number, e: number, mine: (t: Trade) => boolean): Segment => ({
       label,
       from: s < e ? run.t[s] : split,
       to: s < e ? run.t[e - 1] : split,
-      stats: measure(run.equity, run.exposure, Math.max(0, s - 1), s, e),
-      benchmarkStats: measure(benchEquity, benchExposure, Math.max(0, s - 1), s, e),
+      ...spanStats({ run, benchmark: { equity: benchEquity } }, s, e),
       tradeStats: computeTradeStats(run.trades.filter(mine)),
     });
     segments = [
@@ -395,14 +415,14 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     spec,
     data,
     run,
-    stats: measure(run.equity, run.exposure, 0, 0, run.t.length, spec.capital),
+    stats: measure(run, run.equity, run.exposure, 0, 0, run.t.length, spec.capital),
     tradeStats: computeTradeStats(run.trades),
     drawdown: drawdowns(run.equity),
     benchmark: {
       label: spec.benchmark ? `${spec.benchmark.name} buy & hold` : spec.rank ? 'Equal-weight buy & hold' : 'Buy & hold',
       equity: benchEquity,
       drawdown: drawdowns(benchEquity),
-      stats: measure(benchEquity, benchExposure, 0, 0, run.t.length, spec.capital),
+      stats: measure(run, benchEquity, benchExposure, 0, 0, run.t.length, spec.capital),
     },
     interest: run.interest,
     cashRateNote: cashRateNote(spec),
