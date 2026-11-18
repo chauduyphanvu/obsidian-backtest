@@ -48,7 +48,7 @@ function periodName(p: PeriodReturn): string {
 }
 
 /** A value with a quieter note after it, such as "+31.2% (2019)". */
-function cell(row: HTMLElement, value: string, note: string | null): void {
+export function cell(row: HTMLElement, value: string, note: string | null): void {
   const td = h(row, 'td', 'bt-num', value);
   if (note) {
     td.append(' ');

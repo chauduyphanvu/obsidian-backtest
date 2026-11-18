@@ -227,4 +227,37 @@ export class Runner {
     const { data, warnings, prices } = await this.loadPrices(spec, force);
     return { spec, backtest: runBacktest(spec, data), data, warnings, prices };
   }
+
+  /**
+   * Daily prices of tickers a run neither trades nor reads, for the regimes section: from `lookback` bars before `from`,
+   * counted in calendar days as loadPrices counts a daily lookback, and saved and refreshed like any ticker's. They come back
+   * on their own and are never added to a run's data, so a block gives the same result whether or not they were loaded.
+   */
+  async loadExtras(refs: AssetRef[], from: number, lookback: number, force = false): Promise<Extras> {
+    const since = from - Math.ceil(lookback * NON_TRADING) * DAY;
+    const loaded = await Promise.all(refs.map(async (r) => ({ name: r.name, ...(await loadBars(r, '1d', since, this.deps, force, { freshForMs: this.freshForMs })) })));
+    return {
+      data: new Map(loaded.map((l) => [l.name, barsFrom(l.bars, since)])),
+      warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
+      prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })),
+    };
+  }
+
+  /** The prices loadExtras gives, from the saved files alone; null when loading them would download, because one is missing or no longer fresh. */
+  async savedExtras(refs: AssetRef[], from: number, lookback: number): Promise<Extras | null> {
+    const offline: DataDeps = { ...this.deps, fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
+    try {
+      const saved = await new Runner(offline, this.defaults, { freshForMs: this.freshForMs }).loadExtras(refs, from, lookback);
+      return saved.prices.every((p) => !p.stale) && saved.warnings.length === 0 ? saved : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Prices loaded apart from a run (Runner.loadExtras), keyed by ticker name. */
+export interface Extras {
+  data: Map<string, Bars>;
+  warnings: string[];
+  prices: PriceInfo[];
 }
