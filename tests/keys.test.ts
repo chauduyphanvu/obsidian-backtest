@@ -9,7 +9,7 @@ import { tokenizeBlock } from '../src/highlight.ts';
 import { SYSTEM_PROMPT } from '../src/llm.ts';
 import { PriceStore, type PriceFiles } from '../src/price-store.ts';
 import { Runner } from '../src/runner.ts';
-import { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings } from '../src/settings-core.ts';
+import { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, validateSetting } from '../src/settings-core.ts';
 import { SymbolLookup, blockSource, blockTickers } from '../src/symbols.ts';
 import type { AssetRef, KeyedService } from '../src/types.ts';
 import { DAY } from './helpers.ts';
@@ -233,6 +233,28 @@ test('a saved copy used after a failed refresh says why without the key', async 
   );
   const r = await loadBars(FRED, '1d', 0, later.d);
   assert.equal(r.warning, "Couldn't refresh T10Y2Y (timeout https://api.stlouisfed.org/fred/series/observations); using prices saved on 2025-03-12.");
+});
+
+test("a FRED series keeps the history its rules need counted in its own rows, as a CSV file does", async () => {
+  // A monthly series from 1990, first published 14 days after each month: a daily run's 250 bars of history would hold
+  // only a dozen of its rows.
+  const months: [string, string, string][] = Array.from({ length: 420 }, (_, i) => [iso(Date.UTC(1990, i, 1)), iso(Date.UTC(1990, i + 1, 14)), String(4 + (i % 5))]);
+  const { d } = recording(async () => fredJson(months));
+  const { spec, errors } = parseSpec('universe: SPY\nfrom: 2020-01-01\nbuy when sma(close, 12) of fred:UNRATE < 6');
+  assert.deepEqual(errors, []);
+  const spy = JSON.stringify({ fetched: NOW, since: 0, bars: { t: [Date.UTC(2019, 0, 2), Date.UTC(2020, 0, 2)], o: [1, 1], h: [1, 1], l: [1, 1], c: [1, 1], v: [1, 1] } });
+  const { data } = await new Runner({ ...d, cacheRead: async (k) => (k === 'yahoo-SPY-1d' ? spy : null) }).loadPrices(spec!);
+  const rows = data.get('UNRATE')!;
+  assert.equal(rows.values, true);
+  assert.ok(rows.t.filter((t) => t < spec!.from!).length >= 250, `${rows.t.length} rows`);
+  // Prices are cut at the run's own lookback as before.
+  assert.equal(data.get('SPY')!.t.length, 2);
+});
+
+test('the plugin setting for interest on cash takes a FRED yield', () => {
+  assert.equal(validateSetting('cashRate', 'fred:DGS3MO'), null);
+  assert.equal(normalizeSettings({ cashRate: 'fred:DGS3MO' }).cashRate, 'fred:DGS3MO');
+  assert.match(validateSetting('cashRate', 'fred:') ?? '', /is not a ticker/);
 });
 
 test('withoutQueries takes the query off every web address in a message and leaves the rest', () => {

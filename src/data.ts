@@ -628,7 +628,7 @@ function loaded(source: Source, bars: Bars, fetched: number, warning: string | n
   return { bars: own, warning, note, source, through: own.t[own.t.length - 1], fetched, stale };
 }
 
-async function download(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps): Promise<{ bars: Bars; note: string | null }> {
+async function fetchBars(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps): Promise<{ bars: Bars; note: string | null }> {
   switch (ref.source) {
     case 'yahoo':
       return { bars: await fetchYahoo(ref, interval, deps), note: null };
@@ -659,7 +659,7 @@ interface RefreshOptions {
 async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null, o: RefreshOptions = {}): Promise<Loaded> {
   const keepFrom = o.keepFrom ?? -Infinity;
   try {
-    const got = await download(ref, interval, since, cached, deps);
+    const got = await fetchBars(ref, interval, since, cached, deps);
     const bars = keepFrom > -Infinity ? barsFrom(got.bars, keepFrom) : got.bars;
     if (bars.t.length === 0) throw new Error('no bars returned');
     const fetched = deps.now();
