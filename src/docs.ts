@@ -552,6 +552,15 @@ calendar('weekday', 'weekday', '1 = Monday to 7 = Sunday', 'The day of the week:
 calendar('year', 'year', 'the year, as 2024', 'The year, such as 2024.', 'buy when year >= 2010');
 calendar('month_start', 'month_start', 'first bar of a month', 'A condition: the first bar of a month.', 'buy when month_start');
 calendar('month_end', 'month_end', 'last bar of a month', 'A condition: the last bar of a month.', 'buy when month_end');
+calendar('quarter', 'quarter', 'quarter of the bar, 1 to 4', 'The quarter of the year of the bar, 1 to 4.', 'buy when quarter == 4');
+calendar('week_start', 'week_start', 'first bar of a week', 'A condition: the first bar of a week, which starts on Monday.', 'buy when week_start');
+calendar('week_end', 'week_end', 'last bar of a week', 'A condition: the last bar of a week, which starts on Monday.', 'sell when week_end');
+calendar('quarter_start', 'quarter_start', 'first bar of a quarter', 'A condition: the first bar of a quarter.', 'buy when quarter_start');
+calendar('quarter_end', 'quarter_end', 'last bar of a quarter', 'A condition: the last bar of a quarter.', 'sell when quarter_end');
+calendar('year_start', 'year_start', 'first bar of a year', 'A condition: the first bar of a year.', 'buy when year_start');
+calendar('year_end', 'year_end', 'last bar of a year', 'A condition: the last bar of a year.', 'sell when year_end');
+calendar('trading_day', 'trading_day', 'number of the day in its month, counting days with a bar', 'The number of the bar’s day within its month, counting the days that have a bar: 1 on the month’s first such day, the same for every bar of a day, and unknown in the data’s first month, which may have begun before it.', 'sell when trading_day == 3');
+calendar('trading_days_left', 'trading_days_left', 'days with a bar left in the month', 'The days with a bar left in the month after the bar’s day, 0 on the month’s last such day, counting past the last bar the days it would go on to have, so a holiday it does not know of is counted.', 'buy when trading_days_left == 3');
 
 const BELONGS = 'Only sell, cover and add rules can read it, and not inside a function, with [n] or with of.';
 add(

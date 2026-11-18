@@ -4,7 +4,9 @@ import { columnName, DATA_SOURCES, plainSource, SOURCE_PREFIX, type Asset, type 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
 export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn';
 /** Values read from the bar's UTC date. */
-export type CalName = 'month' | 'day' | 'weekday' | 'year' | 'month_start' | 'month_end';
+export type CalName =
+  | 'month' | 'day' | 'weekday' | 'year' | 'month_start' | 'month_end'
+  | 'quarter' | 'week_start' | 'week_end' | 'quarter_start' | 'quarter_end' | 'year_start' | 'year_end' | 'trading_day' | 'trading_days_left';
 /** Values that belong to the open position, so only sell and add rules can read them. */
 export type PosName = 'bars_held' | 'entry_price' | 'last_entry_price' | 'entries_made';
 
@@ -259,7 +261,12 @@ export const INDICATORS: Record<string, IndicatorDef> = {
 export const CONDITIONS = ['supertrend_up'];
 
 export const SERIES: SeriesName[] = ['open', 'high', 'low', 'close', 'volume'];
-export const CALENDAR: CalName[] = ['month', 'day', 'weekday', 'year', 'month_start', 'month_end'];
+export const CALENDAR: CalName[] = [
+  'month', 'day', 'weekday', 'year', 'month_start', 'month_end',
+  'quarter', 'week_start', 'week_end', 'quarter_start', 'quarter_end', 'year_start', 'year_end', 'trading_day', 'trading_days_left',
+];
+/** The calendar values that are conditions, so a rule can be written with them alone. */
+const CALENDAR_CONDITIONS: CalName[] = ['month_start', 'month_end', 'week_start', 'week_end', 'quarter_start', 'quarter_end', 'year_start', 'year_end'];
 /** How each position value is written. */
 export const POSITION: Record<PosName, string> = { bars_held: 'bars held', entry_price: 'entry price', last_entry_price: 'last entry price', entries_made: 'entries made' };
 export const BINANCE_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -410,7 +417,7 @@ export function isBool(e: Expr): boolean {
     case 'not':
       return true;
     case 'cal':
-      return e.name === 'month_start' || e.name === 'month_end';
+      return CALENDAR_CONDITIONS.includes(e.name);
     case 'ind':
       return CONDITIONS.includes(e.fn);
     case 'lag':

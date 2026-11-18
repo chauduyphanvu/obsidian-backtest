@@ -261,6 +261,24 @@ function calendar(name: CalName, t: number[]): number[] {
       return ind.periodStarts(t, ind.monthKey);
     case 'month_end':
       return ind.periodEnds(t, ind.monthKey);
+    case 'quarter':
+      return each((d) => Math.floor(d.getUTCMonth() / 3) + 1);
+    case 'week_start':
+      return ind.periodStarts(t, ind.weekKey);
+    case 'week_end':
+      return ind.periodEnds(t, ind.weekKey);
+    case 'quarter_start':
+      return ind.periodStarts(t, ind.quarterKey);
+    case 'quarter_end':
+      return ind.periodEnds(t, ind.quarterKey);
+    case 'year_start':
+      return ind.periodStarts(t, ind.yearKey);
+    case 'year_end':
+      return ind.periodEnds(t, ind.yearKey);
+    case 'trading_day':
+      return ind.tradingDay(t);
+    case 'trading_days_left':
+      return ind.tradingDaysLeft(t);
   }
 }
 

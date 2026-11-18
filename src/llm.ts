@@ -256,8 +256,10 @@ Functions, written with parentheses. A period is a plain number or a parameter, 
   Example: hold: top 5 by (exp(slope(log(close), 90) * 252) - 1) * rsquared(log(close), 90)
   Example: buy when (rsi(3) + rsi(streak(), 2) + percent_rank(roc(1), 100)) / 3 < 10
 Calendar values, read from each bar's date:
-  month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), year such as 2024
-  month_start and month_end are conditions: the first and the last bar of a month
+  month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), quarter 1 to 4, year such as 2024
+  month_start and month_end are conditions: the first and the last bar of a month; week_start, week_end (weeks start on Monday), quarter_start, quarter_end, year_start and year_end are too
+  trading_day is the number of the bar's day in its month counting days that have a bar (1 on the first); trading_days_left is how many days with a bar are left in the month after this one, 0 on the last
+  Example: buy when trading_days_left == 3, sell when trading_day == 3
 Position values, in sell, cover and add rules only (written with a space, not inside functions, not with [n] or "of"):
   bars held          completed bars since the buy or short sale filled, 0 on that bar
   entry price        the price the position was bought at, or for a short sold at; with several entries, their average

@@ -14,6 +14,8 @@ const BARS_SINCE_REACH = 250;
 /** How far back `streak` counts, and how far back `psar` starts before its trend is taken to have settled, on top of what they read. */
 const STREAK_REACH = 250;
 const PSAR_REACH = 250;
+/** Before a run's first bar, the data must begin by this much for `trading_day` to be known there: a month, and a week more for the days the month before may lack. */
+const MONTH_REACH = 38 * DAY;
 /** Daily and longer bars skip weekends and holidays, so a run of trading bars spans more calendar time. */
 const NON_TRADING = 1.6;
 
@@ -22,10 +24,11 @@ type Widest = (value: number, param: string | null | undefined, max?: number) =>
 
 /**
  * Bars of history an expression reads before its current bar: nested windows add, and so do lags. With `fill: close`,
- * correl may take this ticker's closes a bar early (evaluate.ts), which needs one bar more.
+ * correl may take this ticker's closes a bar early (evaluate.ts), which needs one bar more. `month` is the bars of the
+ * run's interval that reach back far enough for `trading_day` to be known (see lookbackBars).
  */
-function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
-  const back = (x: Expr) => exprLookback(x, w, closeFill);
+function exprLookback(e: Expr, w: Widest, closeFill: boolean, month: number): number {
+  const back = (x: Expr) => exprLookback(x, w, closeFill, month);
   switch (e.k) {
     case 'num':
     case 'bool':
@@ -34,7 +37,8 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
     case 'pos':
       return 0;
     case 'cal':
-      return e.name === 'month_start' ? 1 : 0;
+      if (e.name === 'trading_day') return month;
+      return e.name.endsWith('_start') ? 1 : 0;
     case 'ind': {
       const src = e.src ? back(e.src) : 0;
       const [a, b, c] = e.args.map((v, k) => w(v, e.params?.[k], MAX_PERIOD));
@@ -120,7 +124,9 @@ export function lookbackBars(spec: Spec): number {
   let bars = MIN_LOOKBACK;
   const exprs = Object.values(spec.rules).flatMap(ruleExprs);
   if (spec.rank) exprs.push(spec.rank.by);
-  for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest, spec.fill === 'close'));
+  const step = Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)];
+  const month = Math.ceil(MONTH_REACH / (step * (step >= DAY ? NON_TRADING : 1)));
+  for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest, spec.fill === 'close', month));
   for (const st of Object.values(spec.stops)) {
     for (const level of [st.stopLoss, st.trailingStop, st.takeProfit]) if (level?.k === 'atr') bars = Math.max(bars, 1 + SETTLE * widest(level.n, level.nParam, MAX_PERIOD));
   }

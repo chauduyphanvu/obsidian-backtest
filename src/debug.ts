@@ -928,6 +928,7 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
       return k < 0 ? `${x.asset} had no finished bar yet` : visit(x.a, x.asset, k);
     }
     if (x.k === 'lag') return j - x.n < 0 ? 'looks back past the first bar' : visit(x.a, a, j - x.n);
+    if (x.k === 'cal') return x.name === 'trading_day' ? "its month began before the data's first bar" : x.name.endsWith('_start') ? "it is the data's first bar" : '';
     if (x.k === 'math' && x.fn === 'if') {
       const c = value(x.args[0], a, j);
       return visit(x.args[Number.isNaN(c) ? 0 : c === 1 ? 1 : 2], a, j);

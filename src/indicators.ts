@@ -673,6 +673,11 @@ export function monthKey(t: number): number {
   return d.getUTCFullYear() * 12 + d.getUTCMonth();
 }
 
+/** The Monday-to-Sunday week of `t` as a number that rises by 1 each Monday, as `rebalance: weekly` counts weeks. */
+export const weekKey = (t: number): number => Math.floor((Math.floor(t / DAY) + 3) / 7);
+export const quarterKey = (t: number): number => Math.floor(monthKey(t) / 3);
+export const yearKey = (t: number): number => new Date(t).getUTCFullYear();
+
 /**
  * Where the bar after one starting at a given time would start, in a series whose bars start at `t`: one step on (the
  * smallest gap in the series, a day when it has fewer than two bars), skipping weekends unless the series has weekend bars.
@@ -699,6 +704,52 @@ export const nextBarTime = (t: number[]): number => barStepper(t)(t[t.length - 1
 export function periodEnds(t: number[], key: (t: number) => number): number[] {
   const after = t.length > 0 ? nextBarTime(t) : NaN;
   return t.map((x, i) => (key(i + 1 < t.length ? t[i + 1] : after) !== key(x) ? 1 : 0));
+}
+
+/**
+ * The number of each bar's day within its month, counting the days that have a bar: 1 on the month's first such day, the same
+ * for every bar of a day. Unknown through the series' first month, which may have begun before its first bar.
+ */
+export function tradingDay(t: number[]): number[] {
+  const month = t.map(monthKey);
+  let [count, day] = [0, NaN];
+  return t.map((x, i) => {
+    const today = Math.floor(x / DAY);
+    if (i === 0 || month[i] !== month[i - 1]) count = 1;
+    else if (today !== day) count++;
+    day = today;
+    return month[i] === month[0] ? NaN : count;
+  });
+}
+
+/**
+ * The days with a bar after each bar's day in its month: 0 on the month's last such day. Past the final bar they are the days
+ * the series would go on to have, stepping as nextBarTime does, so a holiday after the last price is not known.
+ */
+export function tradingDaysLeft(t: number[]): number[] {
+  const out = filled(t.length);
+  if (t.length === 0) return out;
+  const month = t.map(monthKey);
+  const days = t.map((x) => Math.floor(x / DAY));
+  const last = t.length - 1;
+  const step = barStepper(t);
+  let [left, day, next] = [0, days[last], step(t[last])];
+  while (monthKey(next) === month[last]) {
+    const today = Math.floor(next / DAY);
+    if (today !== day) [left, day] = [left + 1, today];
+    // The rest of this day's bars add no day, so go on from its end. A series with repeated times has a step of 0.
+    const after = step(Math.max(next, (today + 1) * DAY - 1));
+    if (after <= next) break;
+    next = after;
+  }
+  for (let i = last; i >= 0; i--) {
+    if (i < last) {
+      if (month[i + 1] !== month[i]) left = 0;
+      else if (days[i + 1] !== days[i]) left++;
+    }
+    out[i] = left;
+  }
+  return out;
 }
 
 /**

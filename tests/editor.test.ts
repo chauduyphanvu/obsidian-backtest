@@ -161,7 +161,7 @@ test('completions: position values in sell rules only, calendar values and param
   assert.deepEqual(labels(['sell when close > 1'], '  or en', V2), ['entry price', 'entries made']);
   assert.equal(labels(['buy when close > 1'], '  or en', V2), null);
   assert.deepEqual(labels([], 'buy when month_', V2), ['month_start', 'month_end']);
-  assert.deepEqual(labels([], 'buy when we', V2), ['weekday']);
+  assert.deepEqual(labels([], 'buy when we', V2), ['weekday', 'week_start', 'week_end']);
   const fast = complete(V2, [], 'buy when close > sma(fa')!.items;
   assert.deepEqual(fast.map((i) => [i.label, i.detail]), [['fast', 'parameter: 50 in 20..100 step 10']]);
   assert.deepEqual(labels([], 'hold: top 3 by ro', V2), ['roc']);
