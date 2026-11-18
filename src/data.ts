@@ -676,7 +676,7 @@ async function refresh(ref: AssetRef, interval: string, since: number, deps: Dat
         if (!cached) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}) or Tiingo; using Tiingo's prices saved on ${isoDay(t.fetched)}.` };
         tiingo = 'it has only an older saved copy';
       } catch (f) {
-        tiingo = message(f);
+        tiingo = message(f).replace(`Couldn't load ${ref.name} from tiingo: `, '');
       }
     }
     if (cached) {
