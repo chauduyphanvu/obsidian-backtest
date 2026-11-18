@@ -101,14 +101,14 @@ test('anything that can change a trade changes the trial', () => {
   assert.equal(hashOf(`${base}\ncosts: 2 bps`, { defaults: { costBps: 2 } }), hashOf(`${base}\ncosts: 2 bps`, { defaults: { costBps: 3 } }));
 });
 
-test('a trial counts each run, keeps when it was first seen, and ignores runs with no Sharpe ratio', () => {
+test('a trial counts once, with the figures it was first counted with, and runs with no Sharpe ratio do not count', () => {
   let l = emptyLedger();
   l = addTrial(l, 'a1', 1.2, 252, 100);
   l = addTrial(l, 'b2', 0.4, 252, 200);
-  l = addTrial(l, 'a1', 1.3, 251.5, 300);
-  assert.deepEqual(l.trials, { a1: [1.3, 251.5, 100], b2: [0.4, 252, 200] });
-  assert.equal(l.total, 3);
   const before = l;
+  // Drawing the block again, on newer prices, changes nothing, so nothing is written.
+  assert.equal(addTrial(l, 'a1', 1.3, 251.5, 300), before);
+  assert.deepEqual(l.trials, { a1: [1.2, 252, 100], b2: [0.4, 252, 200] });
   assert.equal(addTrial(l, 'c3', NaN, 252, 400), before);
   assert.equal(addTrial(l, 'c3', 1, 0, 400), before);
   assert.equal(addTrial(l, 'c3', 1, Infinity, 400), before);
@@ -123,7 +123,6 @@ test('starting the count again drops the trials and keeps the versions', () => {
   l = addVersion(l, { text: 'universe: SPY', defaults: {}, at: 100, figures: { cagr: 0.1, maxDrawdown: -0.2, sharpe: 1, trades: 3 } });
   const r = resetTrials(l, 500);
   assert.deepEqual(r.trials, {});
-  assert.equal(r.total, 0);
   assert.equal(r.resetAt, 500);
   assert.equal(r.versions, l.versions);
   assert.equal(resetTrials(r, 400).resetAt, 500, 'a reset never moves back');
@@ -158,27 +157,27 @@ test('versions are kept oldest first, the very first and the latest 100', () => 
 });
 
 /** A record with the given trials and versions (by text and time). */
-function ledger(trials: Record<string, [number, number, number]>, versions: [string, number][], total: number, resetAt = 0): Ledger {
-  let l: Ledger = { ...emptyLedger(), trials, total, resetAt };
+function ledger(trials: Record<string, [number, number, number]>, versions: [string, number][], resetAt = 0): Ledger {
+  let l: Ledger = { ...emptyLedger(), trials, resetAt };
   for (const [text, at] of versions) l = addVersion(l, { text, defaults: {}, at, figures });
   return l;
 }
 
 test('two copies merge as the union of their trials and versions', () => {
-  const disk = ledger({ a1: [1, 252, 10], b2: [0.5, 252, 20] }, [['x', 10], ['y', 30]], 7);
-  const mine = ledger({ a1: [1.1, 252, 15], c3: [0.2, 52, 40] }, [['y', 25], ['z', 40]], 5);
+  const disk = ledger({ a1: [1, 252, 10], b2: [0.5, 252, 20] }, [['x', 10], ['y', 30]]);
+  const mine = ledger({ a1: [1.1, 252, 15], c3: [0.2, 52, 40] }, [['y', 25], ['z', 40]]);
   const m = mergeLedgers(disk, mine);
-  // a1 keeps its earliest first sight and this session's figures.
-  assert.deepEqual(m.trials, { a1: [1.1, 252, 10], b2: [0.5, 252, 20], c3: [0.2, 52, 40] });
-  assert.equal(m.total, 7);
+  // a1 keeps its earlier sight, figures and all, whichever copy had it.
+  assert.deepEqual(m.trials, { a1: [1, 252, 10], b2: [0.5, 252, 20], c3: [0.2, 52, 40] });
+  assert.deepEqual(mergeLedgers(mine, disk).trials, m.trials);
   assert.deepEqual(m.versions.map((v) => [v.text, v.at]), [['x', 10], ['y', 25], ['z', 40]]);
   assert.equal(m.resetAt, 0);
 });
 
 test('merging is idempotent, so a record written again and again does not grow', () => {
-  const a = ledger({ a1: [1, 252, 10], b2: [0.5, 252, 20] }, [['x', 10], ['y', 30]], 9, 5);
+  const a = ledger({ a1: [1, 252, 10], b2: [0.5, 252, 20] }, [['x', 10], ['y', 30]], 5);
   assert.deepEqual(mergeLedgers(a, a), a);
-  const b = ledger({ c3: [2, 252, 50] }, [['z', 60]], 3, 5);
+  const b = ledger({ c3: [2, 252, 50] }, [['z', 60]], 5);
   const once = mergeLedgers(a, b);
   assert.deepEqual(mergeLedgers(once, b), once);
   assert.deepEqual(mergeLedgers(a, once), once);
@@ -186,25 +185,22 @@ test('merging is idempotent, so a record written again and again does not grow',
   assert.deepEqual(mergeLedgers(a, mergeLedgers(a, b)), once);
 });
 
-test('the later reset wins: older trials and the old total go', () => {
-  const disk = ledger({ a1: [1, 252, 10], b2: [0.5, 252, 120] }, [['x', 10]], 40, 0);
-  const mine = ledger({ c3: [0.2, 252, 150] }, [['y', 150]], 1, 100);
+test('the later reset wins: trials first seen before it go, versions stay', () => {
+  const disk = ledger({ a1: [1, 252, 10], b2: [0.5, 252, 120] }, [['x', 10]], 0);
+  const mine = ledger({ c3: [0.2, 252, 150] }, [['y', 150]], 100);
   const m = mergeLedgers(disk, mine);
   assert.deepEqual(m.trials, { b2: [0.5, 252, 120], c3: [0.2, 252, 150] });
   assert.equal(m.resetAt, 100);
-  // The disk's 40 runs were counted before the reset; at least the trials kept are counted.
-  assert.equal(m.total, 2);
   assert.deepEqual(m.versions.map((v) => v.text), ['x', 'y']);
   // The same, the other way round.
   assert.deepEqual(mergeLedgers(mine, disk).trials, m.trials);
-  assert.equal(mergeLedgers(mine, disk).total, 2);
   // A trial first seen exactly at the reset is kept.
-  assert.ok('d4' in mergeLedgers(ledger({ d4: [1, 252, 100] }, [], 1), mine).trials);
+  assert.ok('d4' in mergeLedgers(ledger({ d4: [1, 252, 100] }, []), mine).trials);
 });
 
 test('merged versions keep the very first and the latest 100', () => {
-  const disk = ledger({}, Array.from({ length: 80 }, (_, i): [string, number] => [`d${i}`, i * 2]), 0);
-  const mine = ledger({}, Array.from({ length: 80 }, (_, i): [string, number] => [`m${i}`, i * 2 + 1]), 0);
+  const disk = ledger({}, Array.from({ length: 80 }, (_, i): [string, number] => [`d${i}`, i * 2]));
+  const mine = ledger({}, Array.from({ length: 80 }, (_, i): [string, number] => [`m${i}`, i * 2 + 1]));
   const m = mergeLedgers(disk, mine);
   assert.equal(m.versions.length, MAX_VERSIONS + 1);
   assert.equal(m.versions[0].text, 'd0');
@@ -222,7 +218,7 @@ test('a record survives a trip through JSON', () => {
 });
 
 test('a malformed record is rejected, and unknown fields are dropped', () => {
-  const good = JSON.parse(JSON.stringify(ledger({ a1: [1, 252, 10] }, [['x', 10]], 1))) as Record<string, unknown>;
+  const good = JSON.parse(JSON.stringify(ledger({ a1: [1, 252, 10] }, [['x', 10]]))) as Record<string, unknown>;
   assert.notEqual(parseLedger(good), null);
   const bad = (change: (r: Record<string, any>) => void) => {
     const r = structuredClone(good) as Record<string, any>;
@@ -232,8 +228,6 @@ test('a malformed record is rejected, and unknown fields are dropped', () => {
   for (const raw of [null, 3, 'x', [], {}]) assert.equal(parseLedger(raw), null);
   assert.equal(bad((r) => delete r.trials), null);
   assert.equal(bad((r) => (r.trials = [])), null);
-  assert.equal(bad((r) => (r.total = -1)), null);
-  assert.equal(bad((r) => (r.total = 1.5)), null);
   assert.equal(bad((r) => (r.resetAt = null)), null);
   assert.equal(bad((r) => (r.resetAt = -5)), null);
   assert.equal(bad((r) => (r.versions = {})), null);
@@ -242,7 +236,9 @@ test('a malformed record is rejected, and unknown fields are dropped', () => {
   assert.equal(bad((r) => (r.trials.a1 = [null, 252, 10])), null);
   assert.equal(bad((r) => (r.trials.a1 = { 0: 1, 1: 252, 2: 10 })), null);
   assert.equal(bad((r) => (r.trials['A-1'] = [1, 252, 10])), null);
-  assert.equal(parseLedger(JSON.parse('{"trials":{"__proto__":[1,252,10]},"total":1,"versions":[],"resetAt":0}')), null);
+  assert.equal(parseLedger(JSON.parse('{"trials":{"__proto__":[1,252,10]},"versions":[],"resetAt":0}')), null);
+  // A record from before the count kept only distinct tries had a total, which is dropped.
+  assert.deepEqual(parseLedger({ ...good, total: 7 }), parseLedger(good));
   // A key that is also a name on every object is held as the record's own, and nothing else.
   const own = bad((r) => (r.trials.constructor = [1, 252, 10]))!;
   assert.deepEqual(own.trials.constructor, [1, 252, 10]);
@@ -347,6 +343,7 @@ test('records kept by a JsonStore merge with a copy a sync brought in', async ()
     write: async (p, text) => void files.set(p, text),
     mkdir: async () => undefined,
     remove: async (p) => void files.delete(p),
+    list: async () => ({ files: [...files.keys()] }),
   };
   const options = { files: io, dir: 'plugin/ledger', parse: parseLedger, merge: mergeLedgers, setTimer: () => 0, clearTimer: () => undefined };
   const here = new JsonStore<Ledger>(options);

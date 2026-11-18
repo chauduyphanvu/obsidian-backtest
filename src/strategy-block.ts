@@ -6,13 +6,15 @@ import type { Defaults } from './dsl.ts';
 import { equityCsv, snapshotMarkdown, tradesCsv } from './export.ts';
 import { isIntraday } from './format.ts';
 import { forwardLink, type ForwardStart } from './forward.ts';
+import { trialOf, versionFigures, type Ledgers } from './ledger.ts';
 import { LimitError } from './limits.ts';
 import { renderActions } from './render-actions.ts';
 import { renderDebug } from './render-debug.ts';
-import { renderLuck } from './render-luck.ts';
+import { renderLuck, renderTriesNote } from './render-luck.ts';
 import { renderPriceCharts } from './render-price.ts';
 import { renderRegimes } from './render-regimes.ts';
 import { renderSweep } from './render-sweep.ts';
+import { renderVersions } from './render-versions.ts';
 import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type Section } from './render.ts';
 import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
 import type { Results } from './results.ts';
@@ -33,6 +35,8 @@ export interface StrategyOptions {
   force?: boolean;
   /** Writes parameter values (fractions for percentages) into the block's text. Absent where the block can't be edited. */
   apply?: (values: Record<string, number>) => Promise<void>;
+  /** Writes a whole text in place of the block's, for restoring a version. Absent where the block can't be edited. */
+  restore?: (text: string) => Promise<void>;
   /** Keys the block's remembered open or folded state; without one it is not remembered. */
   stateKey?: string;
   /** Which block of which note this is (render.ts blockStateKey), the same in the note and in the preview panel; absent when that can't be told. */
@@ -53,6 +57,8 @@ export interface BlocksHost {
   saveFile(title: string, ext: string, text: string): Promise<void>;
   /** Writes the properties of the note at `notePath` a moment after the last of its blocks has rendered. */
   scheduleProperties(notePath: string): void;
+  /** Each block's record of tries and versions, by its `blockKey`. */
+  ledgers?: Ledgers;
   /** Writes a forward test note for the strategy and opens it, or says why it could not. */
   startForward(input: ForwardStart): Promise<void>;
 }
@@ -115,12 +121,15 @@ export class StrategyBlocks {
       if (!out || this.disposers.get(child) !== stop) return;
       // A result that was run without the size limits is shown with its sliders without them too.
       drawing.follow(out);
+      // What the block has been through; a block with no key of its own records nothing.
+      const ledger = opts.blockKey ? this.host.ledgers?.forBlock(opts.blockKey) : undefined;
+      void ledger?.add([trialOf(out.spec, out.backtest)], { text: source, defaults: drawing.defaults, figures: versionFigures(out.backtest) });
       const sections = (shown: RunOutput): Section[] => {
         const bt = shown.backtest;
         const intraday = isIntraday(bt.run.t);
         const name = shown.spec.name ?? 'Backtest';
         // The sweep and the luck checks start from the block's own text and put values on top of it.
-        const tryValues = { source, backtest: bt, parse: drawing.parse, defaults: drawing.defaults, apply: opts.apply };
+        const tryValues = { source, backtest: bt, parse: drawing.parse, defaults: drawing.defaults, apply: opts.apply, ledger };
         // A kept note carries the values that made its result.
         const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
         return [
@@ -147,6 +156,7 @@ export class StrategyBlocks {
           (root) => renderSweep(root, tryValues),
           (root) => renderLuck(root, tryValues),
           // Versions: after the luck checks.
+          ...(ledger ? [(root: HTMLElement) => renderVersions(root, { ledger, source, defaults: drawing.defaults, restore: opts.restore })] : []),
           (root) =>
             renderActions(root, [
               { label: 'Save trades as CSV', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
@@ -172,7 +182,18 @@ export class StrategyBlocks {
             ]),
         ];
       };
-      const sliders = drawing.sliders(out);
+      const asDrawn = drawing.sliders(out);
+      // Every result a slider shows is a try.
+      const sliders = ledger
+        ? {
+            ...asDrawn,
+            rerun: async (values: Record<string, number>, settled: boolean) => {
+              const next = await asDrawn.rerun(values, settled);
+              if (next) void ledger.add([trialOf(next.spec, next.backtest)]);
+              return next;
+            },
+          }
+        : asDrawn;
       // The panel keeps its own view of a block, apart from the note's folded or open state.
       const stateKey = opts.panel ? undefined : (opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined));
       const drawn = renderResult(el, {
@@ -184,6 +205,7 @@ export class StrategyBlocks {
         compact: opts.compact ?? this.host.settings().resultView === 'compact',
         remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
         params: spec.params.length > 0 ? { ...sliders, apply: opts.apply } : undefined,
+        figuresNote: ledger ? (note, now) => renderTriesNote(note, ledger, now.backtest) : undefined,
         triggers: (shown) => this.host.results.triggers(shown, runs),
       });
       this.onScreen.set(child, { source, drawn: drawing.defaults, say: renderDefaultsChanged(el, () => redraw({ force: false })) });

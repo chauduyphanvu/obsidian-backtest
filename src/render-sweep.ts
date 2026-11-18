@@ -5,6 +5,8 @@ import type { Backtest, Stats } from './backtest.ts';
 import { h, s } from './dom.ts';
 import type { Defaults } from './dsl.ts';
 import { minus, niceStep, ordinal, pct, plural, tidy } from './format.ts';
+import type { BlockLedger } from './ledger.ts';
+import type { Pbo } from './overfit.ts';
 import {
   METRICS,
   isDeclared,
@@ -13,6 +15,8 @@ import {
   summarize,
   sweepLimit,
   sweepParams,
+  sweepPbo,
+  sweepTrials,
   type Metric,
   type Parse,
   type Period,
@@ -34,6 +38,8 @@ export interface SweepInput {
    * resolves once written; a rejection means nothing was written, and its message says why in words fit to show.
    */
   apply?: Apply;
+  /** The block's record of tries, which the variants run here count in; absent for a block that can't be told apart. */
+  ledger?: BlockLedger;
 }
 
 export type Apply = (values: Record<string, number>) => Promise<void>;
@@ -206,6 +212,7 @@ function build(body: HTMLElement, input: SweepInput, params: SweepParam[], life:
         },
       );
       const result = await running.done;
+      if (result) void input.ledger?.add(sweepTrials(result));
       if (life.gone) return;
       if (result) showResults(results, input, result, life);
       if (!result || result.stopped) {
@@ -249,6 +256,9 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
   const periodRow = h(results, 'div', 'bt-pickers');
   const content = h(results, 'div');
   const pick = input.apply ? picking(h(results, 'div', 'bt-sweep-picked'), result, input.apply) : null;
+  const overfit = h(results, 'div', 'bt-sweep-pbo');
+  h(overfit, 'div', 'bt-sweep-pbo-title', 'How often the best fell back');
+  h(overfit, 'p', 'bt-sweep-pbo-text', pboWords(sweepPbo(result)));
 
   const draw = () => {
     for (const o of life.observers.splice(0)) o.disconnect();
@@ -315,6 +325,27 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
     `The pick never saw the later prices, so this is the best guide here to what choosing values this way is worth.${declared ? ' The values in the note are only as clean as how they were chosen: if they were picked by looking at the whole run, their later result is not a fair test either.' : ''}`,
   ];
   h(box, 'p', 'bt-sweep-split-text', lines.join(' '));
+}
+
+/**
+ * The probability of backtest overfitting in words: how often the variant with the best Sharpe ratio on half of the
+ * history ranked in the bottom half on the other half.
+ */
+export function pboWords(p: Pbo): string {
+  const left = p.leftOut ? ` ${plural(p.leftOut, 'variant')} that ran over a different number of bars ${p.leftOut === 1 ? 'is' : 'are'} left out.` : '';
+  if (p.short === 'variants') return `This needs at least 5 variants that traded, and this sweep has ${p.variants}.${left}`;
+  if (p.short === 'steps') return `This needs at least 20 bars in each of the ${p.groups} parts the history is cut into, ${(20 * p.groups).toLocaleString('en-US')} in all, and these runs have ${p.steps.toLocaleString('en-US')}.${left}`;
+  const share = p.pbo!;
+  const reading =
+    share < 0.2
+      ? 'Picking the best here mostly held up on the half it had not seen.'
+      : share < 0.5
+        ? 'Picking the best here often did not hold up on the half it had not seen.'
+        : 'Picking the best here did no better on the half it had not seen than picking at random.';
+  return (
+    `The history was cut into ${p.groups} parts and split into two halves in all ${p.splits.toLocaleString('en-US')} ways. In ${pct(share, 0)} of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other. ${reading} ` +
+    `This is the probability of backtest overfitting (Bailey, Borwein, López de Prado and Zhu). It swings widely from one sweep to the next, since every split reuses the same history, so take it as a rough sign, not a measure.${left}`
+  );
 }
 
 function reading(el: HTMLElement, result: SweepResult, sum: SweepSummary, benchLabel: string, bench: Stats): void {

@@ -1,0 +1,104 @@
+/* The block's tries and versions: the line under the figures, the overfitting check of a sweep, and the Versions section. */
+
+.bt-root {
+  --bt-diff-added: #2a78d6;
+  --bt-diff-removed: #e34948;
+}
+.theme-dark .bt-root {
+  --bt-diff-added: #3987e5;
+  --bt-diff-removed: #e66767;
+}
+
+.bt-figures-note {
+  margin: -6px 0 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.bt-figures-note:empty {
+  display: none;
+}
+
+.bt-ledger-reset {
+  flex-wrap: wrap;
+}
+.bt-ledger-ask {
+  flex: 1 1 220px;
+}
+
+.bt-sweep-pbo {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+.bt-sweep-pbo-title {
+  font-weight: var(--font-semibold);
+}
+.bt-sweep-pbo-text {
+  margin: 6px 0 0;
+}
+
+.bt-root ol.bt-versions-list {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+.bt-version {
+  padding: 10px 0;
+  border-top: 1px solid var(--background-modifier-border);
+  min-width: 0;
+}
+.bt-version-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.bt-version-when {
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.bt-version-tag {
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-version-figures {
+  margin-top: 2px;
+}
+.bt-version-change {
+  color: var(--text-muted);
+}
+.bt-version .bt-run-row {
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.bt-root pre.bt-version-diff {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  white-space: pre;
+}
+.bt-root pre.bt-version-diff[hidden] {
+  display: none;
+}
+.bt-diff-line {
+  display: block;
+}
+.bt-diff-added {
+  color: var(--bt-diff-added);
+  background: color-mix(in srgb, var(--bt-diff-added) 10%, transparent);
+}
+.bt-diff-removed {
+  color: var(--bt-diff-removed);
+  background: color-mix(in srgb, var(--bt-diff-removed) 10%, transparent);
+}
+.bt-diff-same {
+  color: var(--text-muted);
+}

@@ -1,8 +1,9 @@
 // What a block has been through: every variant of it that was run (its trials, which the deflated Sharpe ratio counts)
 // and every version of its text. One record per block, kept in the plugin's folder by a JsonStore.
 
+import type { Backtest } from './backtest.ts';
 import type { Spec } from './dsl.ts';
-import { perStep } from './overfit.ts';
+import { perStep, stepsPerYear } from './overfit.ts';
 import { hash, stable } from './result-cache.ts';
 import { lookbackBars } from './runner.ts';
 
@@ -29,10 +30,8 @@ export interface Version {
 }
 
 export interface Ledger {
-  /** By trial hash. */
+  /** By trial hash: each variant that ran and traded, once. */
   trials: Record<string, Trial>;
-  /** Runs counted since the count was last started again, a variant run twice counting twice. */
-  total: number;
   /** Oldest first. */
   versions: Version[];
   /** When the count was last started again; 0 for never. Trials first seen before it are not counted. */
@@ -43,7 +42,7 @@ export interface Ledger {
 export const MAX_VERSIONS = 100;
 
 export function emptyLedger(): Ledger {
-  return { trials: {}, total: 0, versions: [], resetAt: 0 };
+  return { trials: {}, versions: [], resetAt: 0 };
 }
 
 const hashText = (text: string) => hash(text).toString(36);
@@ -81,15 +80,14 @@ export function versionHash(text: string, defaults: unknown): string {
   return hashText(`${stable(defaults)}\u0000${text}`);
 }
 
-/** Counts a run. A run whose Sharpe ratio or steps a year is not a number is not counted, and the record is returned as it was. */
+/**
+ * Counts a trial once. One already counted keeps the figures it was first counted with, and a run whose Sharpe ratio or
+ * steps a year is not a number is not counted: either way the record is returned as it was, so drawing a block again
+ * changes nothing.
+ */
 export function addTrial(ledger: Ledger, trial: string, sharpeAnnual: number, perYear: number, at: number): Ledger {
-  if (!Number.isFinite(sharpeAnnual) || !(Number.isFinite(perYear) && perYear > 0)) return ledger;
-  const known = Object.hasOwn(ledger.trials, trial) ? ledger.trials[trial] : null;
-  return {
-    ...ledger,
-    trials: { ...ledger.trials, [trial]: [sharpeAnnual, perYear, known ? known[2] : at] },
-    total: ledger.total + 1,
-  };
+  if (Object.hasOwn(ledger.trials, trial) || !Number.isFinite(sharpeAnnual) || !(Number.isFinite(perYear) && perYear > 0)) return ledger;
+  return { ...ledger, trials: { ...ledger.trials, [trial]: [sharpeAnnual, perYear, at] } };
 }
 
 const figure = (x: number) => (Number.isFinite(x) ? x : null);
@@ -114,7 +112,7 @@ export function addVersion(
 
 /** Starts the count of trials again from `at`. The versions stay. */
 export function resetTrials(ledger: Ledger, at: number): Ledger {
-  return { ...ledger, trials: {}, total: 0, resetAt: Math.max(at, ledger.resetAt) };
+  return { ...ledger, trials: {}, resetAt: Math.max(at, ledger.resetAt) };
 }
 
 function sortVersions(versions: Version[]): Version[] {
@@ -128,15 +126,14 @@ function capVersions(versions: Version[]): Version[] {
 
 /**
  * One record from the copy on disk and this session's, for JsonStore: every trial and version either holds, by hash,
- * less the trials first seen before the later of the two resets. A trial in both keeps its earliest first sight and
- * this session's figures; a version in both keeps its earliest. The total is the one counted since the later reset.
+ * less the trials first seen before the later of the two resets. A trial or version in both keeps its earlier sight.
  */
 export function mergeLedgers(disk: Ledger, mine: Ledger): Ledger {
   const resetAt = Math.max(disk.resetAt, mine.resetAt);
   const both = new Map(Object.entries(disk.trials));
   for (const [id, t] of Object.entries(mine.trials)) {
     const other = both.get(id);
-    both.set(id, other ? [t[0], t[1], Math.min(t[2], other[2])] : t);
+    if (!other || t[2] < other[2]) both.set(id, t);
   }
   const trials = Object.fromEntries([...both].filter(([, t]) => t[2] >= resetAt));
   const byHash = new Map<string, Version>();
@@ -144,10 +141,8 @@ export function mergeLedgers(disk: Ledger, mine: Ledger): Ledger {
     const other = byHash.get(v.hash);
     if (!other || v.at < other.at) byHash.set(v.hash, v);
   }
-  const counted = disk.resetAt === mine.resetAt ? Math.max(disk.total, mine.total) : disk.resetAt > mine.resetAt ? disk.total : mine.total;
   return {
     trials,
-    total: Math.max(counted, Object.keys(trials).length),
     versions: capVersions(sortVersions([...byHash.values()])),
     resetAt,
   };
@@ -161,7 +156,7 @@ const HASH = /^[0-9a-z]{1,11}$/;
 
 /** A record read from a file, or null when it is not one. Only the fields a record has are kept. */
 export function parseLedger(raw: unknown): Ledger | null {
-  if (!isObject(raw) || !isObject(raw.trials) || !isCount(raw.total) || !Array.isArray(raw.versions) || !isNumber(raw.resetAt) || raw.resetAt < 0) return null;
+  if (!isObject(raw) || !isObject(raw.trials) || !Array.isArray(raw.versions) || !isNumber(raw.resetAt) || raw.resetAt < 0) return null;
   const trials: [string, Trial][] = [];
   for (const [id, t] of Object.entries(raw.trials)) {
     if (!HASH.test(id) || !Array.isArray(t) || t.length !== 3 || !t.every(isNumber) || !(t[1] > 0)) return null;
@@ -175,7 +170,7 @@ export function parseLedger(raw: unknown): Ledger | null {
     if (!isFigure(f.cagr) || !isFigure(f.maxDrawdown) || !isFigure(f.sharpe) || !isCount(f.trades)) return null;
     versions.push({ hash: v.hash, text: v.text, defaults: v.defaults, at: v.at, figures: { cagr: f.cagr, maxDrawdown: f.maxDrawdown, sharpe: f.sharpe, trades: f.trades } });
   }
-  return { trials: Object.fromEntries(trials), total: raw.total, versions, resetAt: raw.resetAt };
+  return { trials: Object.fromEntries(trials), versions, resetAt: raw.resetAt };
 }
 
 /**
@@ -189,6 +184,103 @@ export function trialSpread(ledger: Ledger, perYear: number): { trials: number; 
   if (n < 2) return { trials: n, variance: 0 };
   const mean = srs.reduce((s, x) => s + x, 0) / n;
   return { trials: n, variance: srs.reduce((s, x) => s + (x - mean) ** 2, 0) / (n - 1) };
+}
+
+/** One run as the block's tries count it. */
+export interface TrialRun {
+  hash: string;
+  /** Its Sharpe ratio a year, as computeStats gives it. */
+  sharpe: number;
+  perYear: number;
+}
+
+/** A run shown for the block as a try; null when it never traded, since a run that stays in cash is no version of the strategy. */
+export function trialOf(spec: Spec, bt: Backtest): TrialRun | null {
+  if (bt.run.trades.length === 0) return null;
+  return { hash: trialHash(spec), sharpe: bt.stats.sharpe, perYear: stepsPerYear(bt.run.t) };
+}
+
+/** A version not yet in the record: the block's text, the defaults it was run with, and the figures of that run. */
+export interface NewVersion {
+  text: string;
+  defaults: unknown;
+  figures: { cagr: number; maxDrawdown: number; sharpe: number; trades: number };
+}
+
+/** The figures a version is listed with, from the run of its text. */
+export function versionFigures(bt: Backtest): NewVersion['figures'] {
+  return { cagr: bt.stats.cagr, maxDrawdown: bt.stats.maxDrawdown, sharpe: bt.stats.sharpe, trades: bt.run.trades.length };
+}
+
+/** Where the records are kept: store.ts JsonStore. */
+export interface LedgerStore {
+  get(key: string): Promise<Ledger | null>;
+  update(key: string, change: (current: Ledger | null) => Ledger): Promise<Ledger>;
+  renamePrefix(from: string, to: string): Promise<void>;
+}
+
+/** One block's record, as the drawings of the block use it. */
+export interface BlockLedger {
+  /** The record as it is now; an empty one when the block has none yet. */
+  read(): Promise<Ledger>;
+  /** Counts the runs not counted before (null ones are not) and adds `version` when it is new. Nothing is written when nothing is new. */
+  add(runs: readonly (TrialRun | null)[], version?: NewVersion): Promise<void>;
+  /** Starts the count of tries again from now. */
+  reset(): Promise<void>;
+  /** Calls `listener` with the record after each change made through any drawing of the block; returns a function that stops it. */
+  watch(listener: (ledger: Ledger) => void): () => void;
+}
+
+/** Every block's record, by the block's key (render.ts blockStateKey). */
+export class Ledgers {
+  private store: LedgerStore;
+  private now: () => number;
+  private listeners = new Set<{ key: string; fn: (ledger: Ledger) => void }>();
+  /** Keys moved this session, in order, so a block drawn before its note was renamed still writes to its new key. */
+  private moved: [string, string][] = [];
+
+  constructor(store: LedgerStore, now: () => number = Date.now) {
+    this.store = store;
+    this.now = now;
+  }
+
+  private current(key: string): string {
+    for (const [from, to] of this.moved) if (key.startsWith(from)) key = to + key.slice(from.length);
+    return key;
+  }
+
+  /** Moves every record whose key starts with `from` (a note or a folder that was renamed) to start with `to`. */
+  async rename(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    this.moved.push([from, to]);
+    await this.store.renamePrefix(from, to);
+  }
+
+  forBlock(key: string): BlockLedger {
+    const change = async (edit: (ledger: Ledger) => Ledger): Promise<void> => {
+      const at = this.current(key);
+      const now = (await this.store.get(at)) ?? emptyLedger();
+      if (edit(now) === now) return;
+      const next = await this.store.update(at, (l) => edit(l ?? emptyLedger()));
+      for (const w of this.listeners) if (this.current(w.key) === at) w.fn(next);
+    };
+    return {
+      read: async () => (await this.store.get(this.current(key))) ?? emptyLedger(),
+      add: (runs, version) =>
+        change((ledger) => {
+          const at = this.now();
+          let next = ledger;
+          for (const r of runs) if (r) next = addTrial(next, r.hash, r.sharpe, r.perYear, at);
+          return version ? addVersion(next, { ...version, at }) : next;
+        }),
+      reset: () => change((ledger) => resetTrials(ledger, this.now())),
+      watch: (fn) => {
+        const w = { key, fn };
+        this.listeners.add(w);
+        return () => void this.listeners.delete(w);
+      },
+    };
+  }
 }
 
 export type DiffLine = { op: 'same' | 'added' | 'removed'; text: string };
