@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { accountOrders, accountStrategy, allocations, parseAccount, runAccount, sharesAfterOrders, type AccountConfig, type AccountStrategy } from '../src/account.ts';
+import {
+  accountOrders,
+  accountStrategy,
+  allocations,
+  borrowedError,
+  errorsBeforeRun,
+  orderSteps,
+  parseAccount,
+  runAccount,
+  sharesAfterOrders,
+  type AccountConfig,
+  type AccountStrategy,
+} from '../src/account.ts';
 import { runBacktest } from '../src/backtest.ts';
 import type { CompareHost } from '../src/compare.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { AssetState } from '../src/engine.ts';
+import { accountOrderText, scanAccounts } from '../src/orders.ts';
+import type { RunOutput } from '../src/runner.ts';
 import { bars, near } from './helpers.ts';
 
 const PLAN_BLOCK = `name: Main brokerage
@@ -170,7 +184,7 @@ const T = Date.UTC(2026, 10, 13);
 
 function state(name: string, o: Partial<AssetState> = {}): AssetState {
   const st: AssetState = { name, weight: 1, side: null, since: null, pending: null, shares: 0, lastClose: 100, value: 0, targetWeight: 0, ...o };
-  st.side = st.shares > 0 ? 'long' : null;
+  st.side = st.shares > 0 ? 'long' : st.shares < 0 ? 'short' : null;
   st.value = st.shares * st.lastClose;
   return st;
 }
@@ -446,4 +460,229 @@ test('buys cut to the cash get whole shares back, largest remainder first, while
     ['DDD', 1],
   ]);
   assert.equal(two.cashAfter, 40);
+});
+
+// --- Shorts and borrowed money -------------------------------------------------------------------------------------
+
+const BORROWED = "Cash can't be below 0: the account holds no borrowed money";
+const spec = (source: string) => parseSpec(`universe: A\ncapital: 1000\n${source}`).spec!;
+
+test('a holding below 0 is a short, written with either minus sign', () => {
+  const { config, errors } = parseAccount('holdings: SPY -50, TLT 20; QQQ −1,200\ncash: 1\n[[A]]');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(config.holdings, [
+    { ticker: 'SPY', shares: -50 },
+    { ticker: 'TLT', shares: 20 },
+    { ticker: 'QQQ', shares: -1200 },
+  ]);
+  assert.deepEqual(parseAccount('holdings: SPY -0\n[[A]]').errors, [{ line: 1, message: 'SPY has no shares: leave it out instead', from: 10, to: 16 }]);
+  assert.match(parseAccount('holdings: SPY -10k\n[[A]]').errors[0].message, /"SPY -10k" is not a holding/);
+  assert.match(parseAccount('holdings: SPY --5\n[[A]]').errors[0].message, /"SPY --5" is not a holding/);
+});
+
+test('cash below 0 waits for the strategies: one that can borrow allows it, and without one the error stands', () => {
+  const parsed = parseAccount('cash: -2,000\n[[Lev]]');
+  assert.equal(parsed.config.cash, -2000);
+  assert.deepEqual(parsed.errors, [{ line: 1, message: BORROWED, from: 6, to: 12 }]);
+  assert.equal(parsed.borrowed, parsed.errors[0]);
+  assert.deepEqual(errorsBeforeRun(parsed), []);
+  const long = { out: { spec: spec('buy when true') } };
+  const short = { out: { spec: spec('short when close > 11') } };
+  const leveraged = { out: { spec: parseSpec('universe: A 150%\nbuy when true').spec! } };
+  assert.equal(borrowedError(parsed, [long]), parsed.borrowed);
+  assert.equal(borrowedError(parsed, [long, short]), null);
+  assert.equal(borrowedError(parsed, [leveraged]), null);
+  assert.equal(parseAccount('cash: −2,000\n[[A]]').config.cash, -2000);
+  // Other errors still stop the block before its strategies run; cash of 0 or more has nothing to lift.
+  assert.deepEqual(errorsBeforeRun(parseAccount('cash: -1\nskip under: 1\n[[A]]')).map((e) => e.line), [2]);
+  assert.deepEqual([parseAccount('cash: -0\n[[A]]').errors, parseAccount('cash: -0\n[[A]]').config.cash], [[], 0]);
+  const words = parseAccount('cash: -lots\n[[A]]');
+  assert.deepEqual([words.errors.map((e) => e.message), words.borrowed], [['"-lots" is not an amount of cash. Write it as 4,200 or 4200.50'], null]);
+  assert.equal(borrowedError(parseAccount('cash: 5\n[[A]]'), [long]), null);
+});
+
+test("a strategy's shares on the short side once its waiting orders are made", () => {
+  // A short at 40% of 1,000 at a last close of 50 is 8 shares; a flip ends on the other side; an add adds to the short.
+  assert.equal(sharesAfterOrders(state('A', { pending: 'short', targetWeight: 0.4, lastClose: 50 }), 1000), -8);
+  assert.equal(sharesAfterOrders(state('A', { shares: 7, pending: 'short', targetWeight: 0.4, lastClose: 50 }), 1000), -8);
+  assert.equal(sharesAfterOrders(state('A', { shares: -7, pending: 'buy', targetWeight: 0.4, lastClose: 50 }), 1000), 8);
+  assert.equal(sharesAfterOrders(state('A', { shares: -3, pending: 'add', targetWeight: 0.4, lastClose: 50 }), 1000), -11);
+  assert.equal(sharesAfterOrders(state('A', { shares: -5, pending: 'cover' }), 1000), 0);
+  assert.equal(sharesAfterOrders(state('A', { shares: -5 }), 1000), -5);
+});
+
+test('a long strategy and a short one on the same ticker net into one order, and what that spares adds up', () => {
+  // A buys SPY with all of its 1,000 and B shorts it with half of its 1,000; the account's 20,000 is split equally.
+  const A = strat('A', 0.5, 1000, [state('SPY', { pending: 'buy', targetWeight: 1 })], { cost: 0.001 });
+  const B = strat('B', 0.5, 1000, [state('SPY', { pending: 'short', targetWeight: 0.5 })], { cost: 0.003, borrows: true });
+  const plan = accountOrders(account({ cash: 20_000 }), [A, B]);
+  const [spy] = plan.orders;
+  // A's 10,000 long and B's 5,000 short come to 5,000 long: 50 shares bought, and 10,000 of trades spared.
+  assert.deepEqual(spy.parts, [10_000, -5_000]);
+  assert.deepEqual([spy.kind, spy.target, spy.shares], ['open', 50, 50]);
+  assert.equal(spy.saved, 10_000);
+  // At the strategies' costs weighted by what each trades: 10 and 15 on 15,000.
+  assert.ok(near(spy.savedCost, 10_000 * (25 / 15_000), 1e-9));
+  assert.ok(near(spy.parts[0] + spy.parts[1] + spy.drift, (spy.target - spy.holding) * spy.price, 1e-9));
+  // B short all of its equity cancels A out: nothing to trade, and all 20,000 spared.
+  const even = accountOrders(account({ cash: 20_000 }), [A, strat('B', 0.5, 1000, [state('SPY', { pending: 'short', targetWeight: 1 })], { borrows: true })]);
+  assert.deepEqual(even.orders.map((o) => [o.kind, o.target, o.shares, o.saved]), [['open', 0, 0, 20_000]]);
+  assert.deepEqual(even.notes, []);
+  // With three quarters of the account, B's short outweighs A's long: the account sells short 100 shares.
+  const shorter = accountOrders(account({ cash: 20_000 }), [{ ...A, alloc: 0.25 }, strat('B', 0.75, 1000, [state('SPY', { pending: 'short', targetWeight: 1 })], { borrows: true })]);
+  assert.deepEqual(shorter.orders.map((o) => [o.target, o.shares, o.saved]), [[-100, -100, 10_000]]);
+  assert.deepEqual(orderSteps(shorter.orders[0]), [{ action: 'short', shares: 100 }]);
+  // A short sale brings cash.
+  assert.equal(shorter.cashAfter, 30_000);
+});
+
+test('a flip takes the holding through 0: it sells all and sells short, or covers all and buys', () => {
+  // 7,000 in cash and 30 SPY at 100 make 10,000. The strategy, long, flips to a short of half its equity: 50 shares.
+  const toShort = strat('S', 1, 1000, [state('SPY', { shares: 10, pending: 'short', targetWeight: 0.5 })], { borrows: true });
+  const plan = accountOrders(account({ cash: 7000, holdings: [{ ticker: 'SPY', shares: 30 }] }), [toShort]);
+  const [spy] = plan.orders;
+  assert.deepEqual([spy.kind, spy.holding, spy.target, spy.shares, spy.skipped], ['flip', 30, -50, -80, false]);
+  assert.deepEqual(orderSteps(spy), [
+    { action: 'sell', shares: 30 },
+    { action: 'short', shares: 50 },
+  ]);
+  assert.equal(plan.cashAfter, 15_000);
+  // A fraction held is sold whole, and the short is in whole shares.
+  const fraction = accountOrders(account({ cash: 6950, holdings: [{ ticker: 'SPY', shares: 30.5 }] }), [toShort]);
+  assert.deepEqual(orderSteps(fraction.orders[0]), [
+    { action: 'sell', shares: 30.5 },
+    { action: 'short', shares: 50 },
+  ]);
+  // Short 20 with 12,000 in cash, 10,000 managed; the strategy flips to a long of 60%: 20 covered, then 60 bought.
+  const toLong = strat('S', 1, 1000, [state('SPY', { shares: -5, pending: 'buy', targetWeight: 0.6 })], { borrows: true });
+  const back = accountOrders(account({ cash: 12_000, holdings: [{ ticker: 'SPY', shares: -20 }] }), [toLong]);
+  assert.equal(back.managed, 10_000);
+  assert.deepEqual([back.orders[0].kind, back.orders[0].shares, back.orders[0].cut], ['flip', 80, false]);
+  assert.deepEqual(orderSteps(back.orders[0]), [
+    { action: 'cover', shares: 20 },
+    { action: 'buy', shares: 60 },
+  ]);
+  assert.equal(back.cashAfter, 4000);
+  // A short of under half a share is not made: the flip only sells.
+  const tiny = accountOrders(account({ cash: 7000, holdings: [{ ticker: 'SPY', shares: 30 }] }), [strat('S', 1, 1000, [state('SPY', { shares: 10, pending: 'short', targetWeight: 0.004 })], { borrows: true })]);
+  assert.deepEqual(orderSteps(tiny.orders[0]), [{ action: 'sell', shares: 30 }]);
+  assert.ok(tiny.notes.includes("SPY: the strategies' position comes to under half a share, so it is not sold short."));
+});
+
+test('whole shares on the short side: a cover never goes past 0, and the band and rounding work as for a long', () => {
+  // Short 10.6 shares where the strategy is short 0.004 of a share: a cover rounded to 11 is cut to the 10.6 owed.
+  const plan = accountOrders(account({ cash: 2060, holdings: [{ ticker: 'SPY', shares: -10.6 }] }), [strat('S', 1, 1000, [state('SPY', { shares: -0.004 })], { borrows: true })]);
+  assert.deepEqual([plan.orders[0].kind, plan.orders[0].shares], ['resize', 10.6]);
+  assert.equal(plan.cashAfter, 1000);
+  // Short 50 in an account of 10,000 where the strategy is short 50.6: 60 to sell short is under a band of 1%, and without it rounds to 1 share.
+  const S = strat('S', 1, 1000, [state('SPY', { shares: -5.06 })], { borrows: true });
+  const holdings = [{ ticker: 'SPY', shares: -50 }];
+  assert.deepEqual(accountOrders(account({ cash: 15_000, holdings, skipUnder: 0.01 }), [S]).orders.map((o) => [o.skipped, o.shares]), [[true, 0]]);
+  assert.deepEqual(accountOrders(account({ cash: 15_000, holdings }), [S]).orders.map((o) => [o.skipped, o.shares]), [[false, -1]]);
+  // A new short rounds to whole shares; one under half a share is not made, and says so.
+  const open = (targetWeight: number) => accountOrders(account({ cash: 1000 }), [strat('S', 1, 1000, [state('SPY', { pending: 'short', targetWeight })], { borrows: true })]);
+  assert.equal(open(0.26).orders[0].shares, -3);
+  assert.equal(open(0.03).orders[0].shares, 0);
+  assert.deepEqual(open(0.03).notes, ["SPY: the strategies' position comes to under half a share, so it is not sold short."]);
+  // In fractions the short is as it is.
+  assert.ok(near(accountOrders(account({ cash: 1000, wholeShares: false }), [strat('S', 1, 1000, [state('SPY', { pending: 'short', targetWeight: 0.26 })])]).orders[0].shares, -2.6, 1e-12));
+});
+
+test('the cash: a short sale brings it, a cover spends it and is never cut, and a strategy that borrows lets it go below 0', () => {
+  // Short 50 SPY with 9,000 in cash: 4,000 managed. The strategy covers SPY and buys QQQ at 130 with all of its equity:
+  // 30.77 shares, rounded to 31, which cost 4,030.
+  const S = strat('S', 1, 1000, [state('SPY', { shares: -5, pending: 'cover' }), state('QQQ', { pending: 'buy', targetWeight: 1, lastClose: 130 })], { borrows: true });
+  const plan = accountOrders(account({ cash: 9000, holdings: [{ ticker: 'SPY', shares: -50 }] }), [S]);
+  // The cover's 5,000 is paid in full, which leaves 4,000 for QQQ: 30 shares.
+  assert.deepEqual(plan.orders.map((o) => [o.ticker, o.kind, o.shares, o.cut]), [
+    ['SPY', 'close', 50, false],
+    ['QQQ', 'open', 30, true],
+  ]);
+  assert.equal(plan.cashAfter, 100);
+  assert.ok(plan.notes.includes('The buys come to $4,030, more than the cash and the sales bring after the covers ($4,000), so each is cut to fit.'), plan.notes.join('|'));
+  // Selling 5 SPY short brings 500, which with the 1,000 of cash pays for 14 QQQ.
+  const proceeds = accountOrders(account({ cash: 1000 }), [strat('S', 1, 1000, [state('SPY', { pending: 'short', targetWeight: 0.5 }), state('QQQ', { pending: 'buy', targetWeight: 1.4 })], { borrows: true })]);
+  assert.deepEqual(proceeds.orders.map((o) => [o.ticker, o.shares, o.cut]), [
+    ['QQQ', 14, false],
+    ['SPY', -5, false],
+  ]);
+  assert.equal(proceeds.cashAfter, 100);
+  // A strategy at 150% borrows half of the 10,000: the account buys 150 shares and ends 5,000 below 0.
+  const lev = (o: Partial<AccountStrategy>, lastClose = 100) => strat('L', 1, 1000, [state('SPY', { pending: 'buy', targetWeight: 1.5, lastClose })], o);
+  const borrowed = accountOrders(account({ cash: 10_000 }), [lev({ borrows: true })]);
+  assert.deepEqual([borrowed.orders[0].shares, borrowed.orders[0].cut, borrowed.cashAfter], [150, false, -5000]);
+  // A strategy that does not borrow is held to the cash, as before.
+  assert.deepEqual(accountOrders(account({ cash: 10_000 }), [lev({})]).orders.map((o) => [o.shares, o.cut]), [[100, true]]);
+  // Rounding past what the strategy borrows is cut, as rounding past the cash is: 93.75 shares at 160 round to 94, which is 15,040.
+  const rounded = accountOrders(account({ cash: 10_000 }), [lev({ borrows: true }, 160)]);
+  assert.deepEqual([rounded.orders[0].shares, rounded.orders[0].cut, rounded.cashAfter], [93, true, -4880]);
+  assert.match(rounded.notes[0], /more than the cash, the sales and the strategies' borrowing allow/);
+});
+
+test('sales and covers come before purchases and short sales, each by ticker', () => {
+  // 10,000 in cash, 10 SPY and 10 TLT short. The strategy sells SPY, covers TLT, buys QQQ and sells IWM short.
+  const S = strat('S', 1, 1000, [
+    state('QQQ', { pending: 'buy', targetWeight: 0.3 }),
+    state('IWM', { pending: 'short', targetWeight: 0.3 }),
+    state('TLT', { shares: -1, pending: 'cover' }),
+    state('SPY', { shares: 1, pending: 'sell' }),
+  ], { borrows: true });
+  const plan = accountOrders(account({ cash: 10_000, holdings: [{ ticker: 'SPY', shares: 10 }, { ticker: 'TLT', shares: -10 }] }), [S]);
+  assert.deepEqual(plan.orders.map((o) => [o.ticker, o.shares]), [
+    ['SPY', -10],
+    ['TLT', 10],
+    ['IWM', -30],
+    ['QQQ', 30],
+  ]);
+  assert.equal(plan.managed, 10_000);
+  assert.equal(plan.cashAfter, 10_000);
+});
+
+test('notes: a strategy that holds a short rebalances, and one that sizes sizes its short sales too', () => {
+  const S = strat('Shorts', 1, 1000, [state('SPY', { shares: -5 }), state('TLT', { pending: 'short', targetWeight: 0.2 })], { rebalance: 'monthly', sizing: 'invvol' });
+  assert.deepEqual(accountOrders(account({ cash: 1000 }), [S]).notes, [
+    'Shorts rebalances monthly. A rebalance due at the next open shows here a bar late, once its backtest has made it.',
+    'Shorts sizes positions by inverse volatility, so the size of a new one here is an estimate from the last close.',
+  ]);
+});
+
+test('an order in words on the short side, for the orders window', () => {
+  assert.equal(accountOrderText({ shares: -5, kind: 'open', holding: 0 }), 'Sell short 5 shares');
+  assert.equal(accountOrderText({ shares: -2, kind: 'resize', holding: -5 }), 'Sell short 2 shares');
+  assert.equal(accountOrderText({ shares: 1, kind: 'resize', holding: -5 }), 'Buy to cover 1 share');
+  assert.equal(accountOrderText({ shares: 5, kind: 'close', holding: -5 }), 'Buy to cover all 5 shares');
+  assert.equal(accountOrderText({ shares: -80, kind: 'flip', holding: 30 }), 'Flip: sell 30 shares, then sell short 50 shares');
+  assert.equal(accountOrderText({ shares: 80, kind: 'flip', holding: -20 }), 'Flip: buy to cover 20 shares, then buy 60 shares');
+  assert.equal(accountOrderText({ shares: -30, kind: 'flip', holding: 30 }), 'Sell all 30 shares');
+});
+
+const FENCE = '```';
+const BORROWING: Record<string, string> = {
+  Short: `${FENCE}strategy\nuniverse: A\ncapital: 1000\nshort when close > 11\ncover when close < 9\n${FENCE}`,
+  Lev: `${FENCE}strategy\nuniverse: A 150%\ncapital: 1000\nbuy when true\n${FENCE}`,
+  Hold: `${FENCE}strategy\nuniverse: A\ncapital: 1000\nbuy when true\n${FENCE}`,
+};
+
+test("the vault's accounts: cash below 0 is allowed where a strategy borrows, and a short strategy's order is a short sale", async () => {
+  const data = new Map([['A', bars([10, 11, 12])]]);
+  const run = async (source: string): Promise<RunOutput> => {
+    const s = parseSpec(source).spec!;
+    return { spec: s, backtest: runBacktest(s, data), data, warnings: [], prices: [] };
+  };
+  const host = (sources: string[]) => ({
+    find: async () => sources.map((source, i) => ({ note: `${i}.md`, name: String(i), source })),
+    strategies: (): CompareHost<{ basename: string; text: string }> => ({
+      note: (link) => (link in BORROWING ? { basename: link, text: BORROWING[link] } : null),
+      read: async (f) => f.text,
+      run,
+    }),
+  });
+  const [lev, plain, short] = await scanAccounts(host(['cash: -500\nholdings: A 100\n[[Lev]]', 'cash: -500\nholdings: A 100\n[[Hold]]', 'cash: 2,000\n[[Short]]']));
+  assert.equal(lev.error, null);
+  assert.equal(plain.error, `Line 1: ${BORROWED}`);
+  // Short all of 2,000 at the last close of 12: 166.67 shares, rounded to 167.
+  assert.deepEqual(short.orders.map((o) => [o.ticker, o.kind, o.shares, accountOrderText(o)]), [['A', 'open', -167, 'Sell short 167 shares']]);
+  const s = accountStrategy('Short', 1, await run(BORROWING.Short.split('\n').slice(1, -1).join('\n')));
+  assert.equal(s.borrows, true);
+  assert.equal(accountStrategy('Hold', 1, await run(BORROWING.Hold.split('\n').slice(1, -1).join('\n'))).borrows, false);
 });
