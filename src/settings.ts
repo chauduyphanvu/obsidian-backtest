@@ -47,6 +47,22 @@ export class BacktestSettingTab extends PluginSettingTab {
       (v) => validateSetting('cashRate', v),
       (v) => (settings.cashRate = v.trim()),
     );
+    this.field(
+      'Borrow fee for shorts',
+      'A yearly fee on the value of each short position, such as 0.5%. Strategies can override it with a borrow fee line.',
+      settings.borrowFee,
+      '0.5%',
+      (v) => validateSetting('borrowFee', v),
+      (v) => (settings.borrowFee = v.trim()),
+    );
+    this.field(
+      'Interest on borrowed money',
+      'A yearly rate on the money a strategy owes when it holds more than its equity, such as 6%. Strategies can override it with a margin rate line.',
+      settings.marginRate,
+      '6%',
+      (v) => validateSetting('marginRate', v),
+      (v) => (settings.marginRate = v.trim()),
+    );
     new Setting(containerEl)
       .setName('Where plain tickers come from')
       .setDesc('Used for tickers written without a prefix such as binance:. Tiingo needs its API key below.')

@@ -79,17 +79,37 @@ test('every starter runs on synthetic prices and makes trades', () => {
   }
 });
 
-test('nothing in a starter suggests shorting or leverage', () => {
-  const words = /\b(short|shorts|shorting|shorted|leverage|leveraged|margin|options?|puts?|calls?|borrow\w*|inverse (etf|fund)s?|2x|3x)\b/i;
+/** The one starter that shorts. */
+const LONG_SHORT = 'Trend, long or short';
+
+test('nothing in a starter suggests shorting or leverage, except that one starter shorts', () => {
+  const shorting = /\b(short|shorts|shorting|shorted)\b/i;
+  const words = /\b(leverage|leveraged|margin|options?|puts?|calls?|borrow\w*|inverse (etf|fund)s?|2x|3x)\b/i;
   const leveraged = /\b(TQQQ|SQQQ|UPRO|SPXU|SPXS|SDS|SSO|QLD|QID|SH|PSQ|UVXY|SVXY|TMF|TMV|TNA|TZA|SOXL|SOXS)\b/;
   for (const s of [...STARTERS, EMPTY]) {
     const all = `${s.title}\n${s.description}\n${s.text}`;
+    if (s.title !== LONG_SHORT) assert.doesNotMatch(all, shorting, s.title);
     assert.doesNotMatch(all, words, s.title);
     assert.doesNotMatch(all, leveraged, s.title);
     const { spec } = parseSpec(s.text);
     const held = spec!.rank ? spec!.universe.slice(0, spec!.rank.top) : spec!.universe;
     assert.ok(held.reduce((sum, a) => sum + a.weight, 0) <= 1 + 1e-9, s.title);
+    assert.equal(Object.values(spec!.rules).some((r) => r.short), s.title === LONG_SHORT, `${s.title}: only ${LONG_SHORT} has a short rule`);
   }
+});
+
+test('the long or short starter flips between the two sides on its 200-day average', () => {
+  const starter = STARTERS.find((s) => s.title === LONG_SHORT)!;
+  const { spec } = parseSpec(starter.text);
+  assert.equal(spec!.universe.map((a) => a.name).join(), 'SPY');
+  assert.equal(spec!.from, Date.UTC(2005, 0, 1));
+  assert.equal(spec!.costBps, 5);
+  assert.deepEqual(spec!.margin, { cap: 1, borrowFee: 0.005, rate: 0.06, maintenance: 0.25 });
+  const trades = run(starter).run.trades;
+  assert.ok(trades.some((t) => t.side === 'short') && trades.some((t) => t.side !== 'short'), 'it trades both sides');
+  // Each crossing closes one side and opens the other at the same fill.
+  const flips = trades.filter((t, i) => i > 0 && t.entryT === trades[i - 1].exitT && (t.side === 'short') !== (trades[i - 1].side === 'short'));
+  assert.ok(flips.length >= 5, `${flips.length} flips`);
 });
 
 test('together the starters show the main parts of the language', () => {

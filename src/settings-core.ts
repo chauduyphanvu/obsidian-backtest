@@ -1,4 +1,4 @@
-import { parseSpec, type Defaults, type Spec } from './dsl.ts';
+import { BORROW_FEE, MARGIN_RATE, parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { DEFAULT_MODEL } from './llm.ts';
 import { DATA_SOURCES, type DataSource } from './types.ts';
 
@@ -12,6 +12,9 @@ export interface Settings {
   commission: string;
   /** A yearly rate or a yield ticker, such as "4%" or "^IRX". */
   cashRate: string;
+  /** Yearly rates for a strategy that borrows, such as "0.5%" and "6%": the fee on the value of its shorts, and the interest on money it owes. */
+  borrowFee: string;
+  marginRate: string;
   dataSource: DataSource;
   /** How long saved prices count as fresh. */
   cacheHours: number;
@@ -50,6 +53,8 @@ export const DEFAULT_SETTINGS: Settings = {
   slippage: '0 bps',
   commission: '0',
   cashRate: '0%',
+  borrowFee: '0.5%',
+  marginRate: '6%',
   dataSource: 'yahoo',
   cacheHours: 6,
   tiingoSecret: '',
@@ -84,21 +89,38 @@ export function providerText(provider: Settings['llmProvider']): { address: { de
   };
 }
 
-type TextKey = 'costs' | 'slippage' | 'commission' | 'cashRate';
+type TextKey = 'costs' | 'slippage' | 'commission' | 'cashRate' | 'borrowFee' | 'marginRate';
 
-const SETTING_LINE: Record<TextKey, string> = { costs: 'costs', slippage: 'slippage', commission: 'commission', cashRate: 'cash rate' };
-const EXAMPLE: Record<TextKey, string> = { costs: '5 bps or 0.05%', slippage: '5 bps or 0.05%', commission: '1, 0.005 per share, min 1, or 0 for none', cashRate: '4% or ^IRX' };
+const SETTING_LINE: Record<TextKey, string> = {
+  costs: 'costs',
+  slippage: 'slippage',
+  commission: 'commission',
+  cashRate: 'cash rate',
+  borrowFee: 'borrow fee',
+  marginRate: 'margin rate',
+};
+const EXAMPLE: Record<TextKey, string> = {
+  costs: '5 bps or 0.05%',
+  slippage: '5 bps or 0.05%',
+  commission: '1, 0.005 per share, min 1, or 0 for none',
+  cashRate: '4% or ^IRX',
+  borrowFee: '0.5%',
+  marginRate: '6%',
+};
 /** A block that reads cleanly on its own, so any problem found after adding one setting line is that line's. */
 const VALID_BLOCK = 'universe: SPY\nbuy when true';
+/** The same, for the rates of borrowing: only a block that can borrow carries them in its spec. */
+const BORROWING_BLOCK = `${VALID_BLOCK}\nshort when false`;
 
-/** Reads one text setting as the language would read it on a `costs:`, `slippage:`, `commission:` or `cash rate:` line. */
+/** Reads one text setting as the language would read it on its line, such as `costs:` or `borrow fee:`. */
 function read(key: TextKey, text: string): { spec: Spec } | { error: string } {
   const value = text.trim();
   if (/[\r\n]/.test(value)) return { error: 'Use a single line.' };
   if (!value) return { error: `Enter a value, such as ${EXAMPLE[key]}.` };
   // In a strategy a comment would be dropped; here the text is stored as it is.
   if (/(^|\s)(#|\/\/)/.test(value)) return { error: 'Leave out comments here.' };
-  const { spec, errors } = parseSpec(`${VALID_BLOCK}\n${SETTING_LINE[key]}: ${value}`);
+  const block = key === 'borrowFee' || key === 'marginRate' ? BORROWING_BLOCK : VALID_BLOCK;
+  const { spec, errors } = parseSpec(`${block}\n${SETTING_LINE[key]}: ${value}`);
   return spec ? { spec } : { error: errors[0]?.message ?? 'This value cannot be read.' };
 }
 
@@ -108,7 +130,7 @@ export function validateSetting(key: TextKey, text: string): string | null {
   return 'error' in result ? result.error : null;
 }
 
-/** The parser defaults these settings imply (costs, slippage and commission read from their text; text that cannot be read counts as none). */
+/** The parser defaults these settings imply (costs, slippage, commission and the rates of borrowing read from their text; text that cannot be read counts as none, or as the parser's own rate). */
 export function defaultsFrom(settings: Settings): Defaults {
   const bps = (key: 'costs' | 'slippage'): number => {
     const result = read(key, settings[key]);
@@ -116,6 +138,14 @@ export function defaultsFrom(settings: Settings): Defaults {
   };
   const charge = read('commission', settings.commission);
   const commission = 'spec' in charge ? charge.spec.commission : undefined;
+  const margin = (key: 'borrowFee' | 'marginRate') => {
+    const result = read(key, settings[key]);
+    return 'spec' in result ? result.spec.margin : undefined;
+  };
+  const borrowFee = margin('borrowFee')?.borrowFee ?? BORROW_FEE;
+  const marginRate = margin('marginRate')?.rate ?? MARGIN_RATE;
+  // At the parser's own rates they are left out, as a commission of none is, so that with these settings as they come
+  // the defaults, which go into every result's key and every version, are what they were before the settings existed.
   return {
     capital: settings.capital,
     costBps: bps('costs'),
@@ -123,6 +153,8 @@ export function defaultsFrom(settings: Settings): Defaults {
     cashRate: settings.cashRate.trim(),
     dataSource: settings.dataSource,
     ...(commission ? { commission } : {}),
+    ...(borrowFee !== BORROW_FEE ? { borrowFee } : {}),
+    ...(marginRate !== MARGIN_RATE ? { marginRate } : {}),
   };
 }
 
@@ -142,6 +174,8 @@ export function normalizeSettings(saved: unknown): Settings {
     slippage: readable('slippage'),
     commission: readable('commission'),
     cashRate: readable('cashRate'),
+    borrowFee: readable('borrowFee'),
+    marginRate: readable('marginRate'),
     dataSource: (DATA_SOURCES as readonly unknown[]).includes(given.dataSource) ? (given.dataSource as DataSource) : d.dataSource,
     cacheHours: typeof hours === 'number' && Number.isFinite(hours) ? Math.min(CACHE_HOURS_MAX, Math.max(CACHE_HOURS_MIN, Math.round(hours))) : d.cacheHours,
     tiingoSecret: text('tiingoSecret'),
