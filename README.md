@@ -23,9 +23,10 @@ The plugin also gives you:
 - backtests, parameter sweeps and luck checks, which all run in the background, with limits on how large and how slow one may be;
 - `compare` blocks, which chart several strategies together, and `backtests` blocks, which list every strategy in the vault;
 - today's orders, as a window and as a count in the status bar;
+- forward tests, which freeze a strategy in a note of its own and measure only the bars that come after, with a log of the orders its rules gave;
 - saved results, and results written to note properties.
 
-This README is the full guide to the plugin. Every `strategy`, `compare` and `backtests` block in it is checked by the plugin's own parser when the tests run.
+This README is the full guide to the plugin. Every `strategy`, `compare`, `backtests` and `forward` block in it is checked by the plugin's own parser when the tests run.
 
 ## What it is not
 
@@ -772,7 +773,7 @@ From the top:
 17. **Was it luck?** A button that runs three checks. *Reshuffled history* resamples the run's returns in blocks, to give a range for return per year and for worst drawdown. It shows how much the path and the drawdown depended on the order of the returns; it says nothing about whether the average return will persist, because every version is made from the run's own returns. *Random entries* makes the same number and length of trades at random times, to see how often random timing does as well, with the strategy's costs, commission and slippage. A position built in `entries` keeps how many it made and puts the later ones the same number of bars after its first. For a `hold` strategy this check is *Random picks*: it runs the strategy's rules, stops and add rule but ranks the tickers they allow at random. *Walk-forward* runs only when a parameter has a range: it picks the best values on a training window, applies them to the next unseen window, and repeats. Each window is measured from the last close before it, so the test windows' growth multiplies to the line's. When a slider under "Parameters" has moved, the checks test the run shown, with the slider's values, and a line above them says so ("These checks test the run shown, with fast 25. The block says fast 10."); walk-forward then draws "Values shown" instead of "Values in the note". "Try other parameter values" always ranks the values written in the block.
 18. **Save buttons.** "Save trades as CSV", "Save value history as CSV" and "Keep this result as a note" (see "Saving results").
 
-Every backtest runs in the background, so the note stays usable while it runs: a block's own run, its sliders, the strategy preview, a `compare` block, "Today's orders", the count in the status bar and a `backtests` block. These runs have a background worker of their own, so they never wait for a sweep, and the runs of blocks on screen go before those of the vault's scans. The variants and the checks run in a second worker. A bar shows how far they have got, and "Stop" ends them at once. A stopped sweep shows the variants it had finished, and a stopped check says it stopped; "Run checks again" runs them again. When several blocks run checks at once they take turns, and a block that waits says "Waiting for another run to finish…". A worker that has not started after 5 seconds is ended and its run happens in the foreground; the next run tries a new one. Where Obsidian cannot start a background worker (one fails to start, or two in a row are that slow), everything runs in the foreground, and Obsidian does not respond while a backtest runs (see "When a backtest is too large"); the variants and checks then run a few backtests at a time between repaints.
+Every backtest runs in the background, so the note stays usable while it runs: a block's own run, its sliders, the strategy preview, a `compare` block, a `forward` block, "Today's orders", the count in the status bar and a `backtests` block. These runs have a background worker of their own, so they never wait for a sweep, and the runs of blocks on screen go before those of the vault's scans. The variants and the checks run in a second worker. A bar shows how far they have got, and "Stop" ends them at once. A stopped sweep shows the variants it had finished, and a stopped check says it stopped; "Run checks again" runs them again. When several blocks run checks at once they take turns, and a block that waits says "Waiting for another run to finish…". A worker that has not started after 5 seconds is ended and its run happens in the foreground; the next run tries a new one. Where Obsidian cannot start a background worker (one fails to start, or two in a row are that slow), everything runs in the foreground, and Obsidian does not respond while a backtest runs (see "When a backtest is too large"); the variants and checks then run a few backtests at a time between repaints.
 
 A result is kept in memory (the latest 40, and no more than about 100 MB of them), so scrolling or switching views does not run it again. It runs again when the block's text or the plugin's defaults change, when the modified time of a CSV file it reads changes (or the file goes missing), when the prices it was worked out from are older than the "Keep saved prices for" time, or when you press Refresh prices. Prices a failed download left on their saved copy count from when the result was worked out, so a result made offline is not run again at every drawing. "Refresh prices" in the orders window and "Run again" under a `backtests` block count prices as fresh only from when they began, so they reuse no result worked out from older ones, even one that finished after they began.
 
@@ -835,7 +836,7 @@ Both have a button that runs the block as it is: "Run it anyway" after a size re
 
 Where Obsidian cannot start a background worker, a run cannot be stopped and Obsidian does not respond while it runs, so the limits are stricter: 200,000 bars, 4 million rule values, and 200 million prices read by functions, where `sma(200)` on 1,000 bars reads 200,000. The message then starts "Backtests run in the foreground here".
 
-A strategy that hits a limit in "Today's orders", the status bar count, a `backtests` block or a `compare` block is listed as one that could not run, with the same message, and the others still run. The strategy preview shows the message with its button. A sweep or a luck check that goes 2 minutes without finishing one backtest is stopped and says so.
+A strategy that hits a limit in "Today's orders", the status bar count, a `backtests` block or a `compare` block is listed as one that could not run, with the same message, and the others still run. The strategy preview shows the message with its button, and a `forward` block shows it with "Try again". A sweep or a luck check that goes 2 minutes without finishing one backtest is stopped and says so.
 
 ## Comparing and combining strategies
 
@@ -925,9 +926,74 @@ A few seconds after Obsidian starts, the plugin runs every strategy in the vault
 - The setting "Check for orders when Obsidian starts" turns this off. Turning it off hides the count and stops the checks at once. Turning it on starts them again after a few seconds. With it off, the status bar stays empty, even when you open the orders window; the window and the ribbon icon still work.
 - Like the window, the check fetches prices for every strategy's tickers (see "Network requests").
 
+## Forward tests
+
+A backtest runs rules over prices that were already there when you wrote them, so the prices may have shaped the rules. A forward test starts a clock instead. It freezes the rules and the day, and measures only the bars that come after that day, which the rules could not have been chosen on. It places no order and holds no money: it is a backtest of the frozen rules, read from the first bar after the start.
+
+**Starting one.** "Start a forward test", in the row of buttons under a result, writes a note of its own to the folder `Forward` inside the "Folder for saved results" (`Backtests/Forward` by default) and opens it in a new tab. The note is named `<name> forward test <date>`, the date being the last bar the result had, with `-2`, `-3` and so on when that name is taken. It starts from the text on screen, with the slider values written into it as "Keep this result as a note" does. A block in the strategy preview panel has no button. A strategy with a `to` line is refused, with "This strategy stops at a "to" date, so it never sees a new bar. Take the "to" line out before starting a forward test.", and so is one that cannot run.
+
+The note holds the property `backtest_forward: true`, a heading, a `forward` block and an empty `## Log` section:
+
+```forward
+started: 2026-11-13
+from: [[Trend following#Trend following]]
+check: 1myl6jgligj
+---
+name: Trend following
+universe: SPY
+from: 2005-01-01
+costs: 5 bps
+
+buy  when close > sma(200)
+sell when close < sma(200)
+
+# Pinned when the forward test began, so a later change to the plugin settings cannot move it.
+capital: 10000
+slippage: 0 bps
+commission: 0
+cash rate: 0%
+data: yahoo
+```
+
+- `started` is the last bar the result had: a date, or for bars shorter than a day a date and a time in UTC, such as `2026-11-13 15:30`. Only bars after it count.
+- `from` is a link to the strategy the test was started from. It is only shown, and clicking it opens that note. The test runs the text below the line.
+- `check` is a short code worked out from the frozen text (see below).
+- A line with `---` ends the three settings. What follows is the strategy, frozen.
+
+**Pinned defaults.** The plugin's defaults would change a strategy that leaves a setting out whenever you changed them, so the frozen text writes down each of `capital`, `costs`, `slippage`, `commission`, `cash rate` and `data` that the strategy leaves out, as lines at the end under a comment. `commission: 0` is written when there is none. A setting the strategy writes itself stays as it is, since a second line would be an error. If the strategy ends inside a `for` section, where settings are refused, `for all:` is written first. The lines go at the end so that no line of the strategy moves. Read with any defaults, the frozen text is the very same strategy as the one on screen was with the defaults it had; the tests compare what the parser makes of both.
+
+**The check.** The `check` line holds a code made from the frozen text. Blank lines at its end and the kind of line ending do not count; any other change does. When it no longer matches, the block says "The rules were changed after the forward test began, so this is no longer a forward test." and shows nothing else, no figures and no log button. It is there to catch a slip. It protects nothing: whoever edits the text can write a new code. To go on, put the rules back as they were, or start a new test.
+
+**The figures.** The block runs the frozen text as any strategy block runs, with the same prices, the same kept results and a "Refresh prices" button. It is not part of "Today's orders", the count in the status bar or the note properties. It shows four figures and what they are set against:
+
+- **Since the start.** The strategy's growth from the close of the last bar at or before `started` to the last bar, with the benchmark's under it.
+- **Worst fall.** The largest fall from a high since the start, measured from the close of the bar before the first new one, so a fall that began earlier is not counted. The benchmark's is under it.
+- **Bars.** How many bars have come after `started`.
+- **Time invested.** The average share of equity invested over those bars.
+
+Under the figures, once there are enough bars, two sentences set the gain and the fall against earlier stretches: "The gain beat 67% of the 15 earlier stretches of 5 bars. The middle one gained +3.9%." and "The worst fall, −0.9%, was milder than in 53% of them. The middle one fell −0.9%." An earlier stretch is any run of as many bars as the test has had, that ends on or before `started`. A stretch that did exactly as well counts half. The sentences appear from 5 bars after the start, and only when there are at least 3 times as many bars before the start as after it; until then the block says how many more bars it needs, such as "Earlier periods are compared from 5 bars on: 2 more bars to go." The stretches overlap, and they are the period the rules may have been chosen on, so the comparison flatters the rules. It sets the figures in context and tests nothing.
+
+**The log.** Under `## Log`, the note keeps a line `Checked through:` with the last bar looked at, and a table of the bars where the rules gave an order:
+
+| Bar | Orders | Closes | Value | Logged |
+| --- | --- | --- | ---: | --- |
+| 2026-11-16 | Sell TLT; Buy SPY | TLT 91.20; SPY 5,123.46 | $10,420.35 | 2026-11-17 |
+
+Each row is a bar, its orders in words (sells first, "Add" for a later entry of a position built in steps), the close each order rested on, what the strategy was worth at that close, and the day the row was logged, on your own calendar. Nothing is written when Obsidian starts or when a block is drawn. The button under the log, "Add 3 new bars to the log" (with the number of bars that gave orders since the last logged one), writes the rows, and moves `Checked through` up to the last bar. When no bar gave an order, the button reads "Mark the log checked through" and the day, so the log can say that nothing was due. With nothing to add and the day recorded, there is no button.
+
+The button edits the note in one step. It adds only the bars after the last logged one, so pressing it again adds nothing, and it never rewrites a row, whatever you did to one. `Checked through` never moves back. It writes nothing, and says why, when the note has no `backtest_forward` property (a note the plugin did not make), when the frozen rules were changed, when there is no `## Log` heading, or when the table was changed by hand so that the bar of its last row cannot be read: its rule row is gone or a bar is not a date. A note with Windows line endings keeps them.
+
+**What is in the log, and what is not.** The log lists the orders the rules gave, read from the run's own record of each trade:
+
+- A buy or an add is dated at the bar its rule was read at (a ranking's decision is dated at the bar it was made). A sell by the sell rule or by a ranking is dated at the bar it was read at. With the default fill at the next open, that is the bar before the fill; with `fill: close` it is the bar of the fill itself.
+- An order still waiting after the last bar is listed at that bar.
+- Exits by a stop, a trailing stop or a take profit are left out, and so are rebalancing trades. The rules did not give them: the run makes them by itself, at levels you set or at the start of a period.
+
+**Revisions.** Prices from Yahoo are adjusted for dividends and splits after the fact, so a run made today can give different orders for a bar than the one the log was written from. The block compares the orders in the log with the orders today's run gives for the same bars, from the start to the last bar checked, and lists each bar where they differ: "The log says Buy SPY on 2026-12-03; today's prices give no order there." It compares orders and never closes, which change with every dividend. A bar that gave an order today and has none in the log says "The log has no order on 2026-12-03; today's prices give Buy SPY there." The log is never changed to match: it keeps what it said.
+
 ## Saving results
 
-Three buttons under a result write files to the "Folder for saved results" (default `Backtests`), created if needed. The table "Rule values, bar by bar" has a "Save as CSV" button of its own that writes there too. A file is named `<name> trades|value|result <date>`, where `<name>` is the block's `name` (or "Backtest") with characters that Obsidian cannot use in a file name replaced by spaces, and `<date>` is the day it was saved, in UTC. If the file exists, ` (2)`, ` (3)` and so on are added. A notice shows the path.
+Three buttons under a result write files to the "Folder for saved results" (default `Backtests`), created if needed. A fourth, "Start a forward test", writes a note to the `Forward` folder inside it (see "Forward tests"). The table "Rule values, bar by bar" has a "Save as CSV" button of its own that writes there too. A file is named `<name> trades|value|result <date>`, where `<name>` is the block's `name` (or "Backtest") with characters that Obsidian cannot use in a file name replaced by spaces, and `<date>` is the day it was saved, in UTC. If the file exists, ` (2)`, ` (3)` and so on are added. A notice shows the path.
 
 - **Save trades as CSV** has the columns `ticker`, `bought`, `buy_price`, `sold`, `sell_price`, `return_pct`, `profit`, `bars` and `exit`. Open positions have no `sold` or `sell_price`. `exit` is `signal`, `stop loss`, `trailing stop`, `take profit` or `open`. A strategy with `entries` above 1 has four more columns at the end: `entries`, the number of entries, and `entry_dates`, `entry_prices` and `entry_shares`, each entry's value separated by semicolons; `bought` is then the first entry and `buy_price` the average.
 - **Save value history as CSV** has the columns `date`, `strategy`, the benchmark's label (such as `SPY buy & hold`) and `drawdown_pct`, one row for each step of the run. The benchmark's field is empty before its first price.
@@ -1124,7 +1190,7 @@ More forms: `column(score) of signals crosses above 0.5`, and `hold: top 3 by co
 
 Prices from Yahoo and Binance are saved in `<plugin folder>/cache`, one JSON file for each source, ticker and interval. The plugin folder is `<vault>/.obsidian/plugins/backtest-blocks/`. The smaller bars of `magnify` are saved the same way, under their own bar size. Binance's are kept in a file of their own, apart from a block's own bars of that size, and cut to the latest 100,000 each time they are refreshed. The files are treated as fresh for the "Keep saved prices for" time (6 hours by default). After that the plugin fetches again. If the fetch fails and a saved copy exists, the copy is used and the result says: "Couldn't refresh X (reason); using prices saved on DATE." If you sync the `.obsidian` folder, the saved prices go with it. "Clear saved prices" removes the folder.
 
-The plugin's settings are in `data.json` in the plugin folder. Results are kept in memory only.
+The plugin's settings are in `data.json` in the plugin folder. Results are kept in memory only. A forward test is a note in your vault, not a file in the plugin folder (see "Forward tests").
 
 ### Network requests
 
@@ -1133,6 +1199,7 @@ The plugin contacts these hosts, and no others:
 - `query1.finance.yahoo.com` and `query2.finance.yahoo.com`, when a block uses a Yahoo ticker. The request holds the ticker, the bar size and a start and end time.
 - `data-api.binance.vision`, when a block uses a Binance ticker. The request holds the market symbol, the bar size and a start time.
 - A block with `magnify` makes the same requests for its smaller bars, to the same two hosts.
+- A `forward` block runs its frozen rules like a `strategy` block, so it makes the same requests as a block with those tickers, when it is drawn and when you press "Refresh prices".
 - The "Regimes and crises" section makes the same requests as a block with those tickers, to the same hosts, for the daily bars of SPY, `^VIX` and `^TNX` from Yahoo, or of `BTCUSDT` from Binance for a strategy that trades only there, and only when you press its button "Load SPY, ^VIX, ^TNX from Yahoo" (or "Load BTCUSDT from Binance"). It asks for nothing before you open the section, and nothing when those prices are already saved and fresh.
 - `api.anthropic.com`, only when you draft a strategy with the Anthropic provider and no server address.
 - The server address you enter, only when you draft a strategy. That can be a server on your own machine.
@@ -1154,6 +1221,7 @@ Nothing else leaves your vault. There is no telemetry, no analytics, no update c
 - Unit tests cover the language, the indicators (the newer ones each against a second implementation written from its definition), the engine's rules (fills, costs, commission, slippage, stops, gaps, rebalancing, ranking, sizing, positions built in entries, looking inside bars with `magnify`, warm-up, interest, reading other tickers and CSV columns by when their bars or rows end, the test split), the lookback, the statistics, the comparison, the Yahoo, Binance and CSV readers with saved responses, the saved-price logic with a fake network, orders and the status bar count, the `backtests` block, the explanation of each trade, the bar-by-bar table (against every trade of varied runs), rewriting parameter values in a note, the background jobs with a fake worker, the size and time limits, the starter strategies and the CSV helper, hover help, fixes and the ticker lookup with a fake network, exports, settings and drafting with a fake model.
 - A cross-check against a second backtester. `xcheck/` generates nine synthetic tickers over 3,000 days and runs 36 strategy pairs and 55 indicator expressions through this engine and through Rearview, a separate backtester that is not part of this repository. It compares the indicator values on every bar, every trade's days, prices, reason and bars held, the equity curve and exposure day by day, and the totals and pending orders. Six of the 36 cases fill at the close, against Rearview's `fill same_close`, three charge a `commission` (a fixed one, one per share with a minimum, and one on rebalancing trades), and four build positions in `entries` (with a stop and target, a trailing stop, and filled at the close), where each entry's day and price is compared. The check found one real bug (a bar that opened above the take-profit and then fell through the stop was booked as a stop loss), which is fixed. The two engines differ by design in some rules, and the check explains a difference only when it matches one of them: sizing (money here, shares there), the re-arm rule, a halted ticker, the trailing stop on the entry bar (and, with `fill: close`, where it starts), slipped targets, the timing of a rebalance, how bars held are counted, a sell rule while flat, the first ATR (which also moves `keltner_upper`, `keltner_lower` and `supertrend` by a bar), how interest counts days, the Sharpe ratio, and adds and rebalancing trades too small for their commission (rule 49), which Rearview makes. The table is in `xcheck/README.md`. Of the 22 functions added after the first twelve, 20 are compared with Rearview's on every bar of every ticker, to 1e-9: `obv` through a sum of signed volume and `vwap` through Rearview's `vwma` of the typical price, and `correl` only on tickers that have every day. The check is run by hand and is not part of `npm test`. It passes with the code of this release.
 - The "Regimes and crises" section has unit tests on hand-built prices, with the figures worked out by hand: that a state is read only from daily bars that had ended, so the step into the bar where a state turns is not put in the state it created, on daily, weekly and hourly runs; that a tenfold change in the scale of `^TNX` makes its state unknown until it is 126 bars behind; the share, compounded return, the benchmark's return over the same steps, exposure and worst drawdown of each state, including a fall in one stretch not being carried into another; when a return is per year; which falls a run covers, at the day and at the bar edges, for daily, weekly and hourly runs; the day equity got back to its earlier high; the Binance-only and CSV-only cases; and that loading the market's prices leaves a run's own prices and result as they were.
+- Forward tests have unit tests with figures worked out by hand: that the frozen text reads back as the very same strategy (compared with what the parser makes of each) under any defaults, whether the strategy writes none, some or all of the pinned settings, ends inside a `for` section, or has a commission; the refusal of a `to` line; that the check follows the text and ignores trailing blank lines and line endings; every problem a block can have, with its line; the gain and the fall of a forward test against earlier stretches of the same length on a series worked out by hand, ties, and the wait for 5 bars and for 3 times as many before; the fast window method against working every window out on its own, on random and flat series; which bar each order of a run is dated at, against the bar each trade really filled at, with fills at the next open and at the close, entries, rankings, stops and rebalancing; appending to the log (once, never rewriting a row, only after the last logged bar, a table changed by hand refused, Windows and Unix line endings, with and without a final line break); and revisions. The `forward` block in this file is parsed and its check verified. The write goes through a stand-in for Obsidian's `vault.process`.
 - An independent review of the engine and the statistics, which confirmed each finding with a script. It found defects that are now fixed, each with a test: on mixed calendars (stocks with crypto) a ticker could miss its rebalance and a ranking buy could leave its slot in cash; a ticker with longer bars, a daily benchmark or a daily yield on shorter bars could be read before its bar had ended; entries were sized or left without their ATR stop while those inputs warmed up; and results could depend on which prices happened to be saved. It also corrected statistics (a benchmark whose prices start later, Sharpe and Sortino made of rounding noise, the `test from` split, two different Sortino ratios), and runs of more than about 125,000 bars no longer fail. A review finds what it looks for; this one does not show that no other defects remain.
 - A trial in a running desktop Obsidian 1.15, with live prices, of the parts that depend on Obsidian itself, made before this release. These worked: the Parameters bar and its sliders; writing values into the block from the bar and from a sweep, in reading view and in live preview, including right after typing in the note; "Explain this trade"; the sweep in the background worker; the strategy preview panel as the cursor, the text and the problems change; "Fix the problem at the cursor" and the underlines; the `backtests` block; the starter strategies window; the CSV helper's file list and its reading of a file; folded results with the Compact setting; and the count in the status bar.
 - A second trial in the same desktop Obsidian 1.15, with live prices, of parts of this release. These worked: a strategy with `commission` and `entries` with an `add when` rule (the result, its costs line and the colouring of the add rule); a strategy using `supertrend_up`, `adx` and `zscore`; a `magnify: 1h` strategy on a Yahoo ticker, with its note; a strategy reading `column(score)` from a signals CSV file, with its dating note; the time limit of 10 seconds stopping a slow strategy on one-minute Binance bars, with its message and button; and the "Rule values, bar by bar" table opening, moving to a trade and showing the buy, sell and add columns.
@@ -1164,6 +1232,7 @@ Nothing else leaves your vault. There is no telemetry, no analytics, no update c
 
 The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only:
 
+- Forward tests: the comparison with earlier stretches is arithmetic with no second implementation, and the `forward` block, its buttons and the note they write have not been tried in a running Obsidian. A forward test shows how rules did on bars they were not chosen on; a few bars, or a few weeks, say little about them. The log is dated from the run's own record of its orders, and a revision to adjusted prices can still change what a past bar would have given.
 - `magnify`: Rearview reads each bar whole.
 - A column of a CSV file as a value in a rule.
 - A commission's `max`, and adds or rebalancing trades left undone for their commission.
@@ -1225,14 +1294,15 @@ Layout of `src/`:
 - `overfit.ts`: the maths of the overfitting checks: the normal distribution, the deflated Sharpe ratio, and the probability of backtest overfitting by combinatorially symmetric cross-validation.
 - `ledger.ts`: each block's record of the variants it ran and the versions of its text, how two copies of a record merge, and the lines that changed between two versions.
 - `llm.ts`, `llm-modal.ts`: drafting.
-- `forward.ts`: forward tests: the note made from a strategy with the plugin defaults pinned in its text, reading its `forward` block and checking that the rules were not edited, the figures since the start against earlier stretches of the same length, and the log of orders with its appending and its comparison with today's prices.
+- `forward.ts`: forward tests: the note made from a strategy with the plugin defaults pinned in its text, reading its `forward` block and checking that the rules were not edited, the figures since the start against earlier stretches of the same length, the bars where a run's rules gave an order, and the log of orders with its appending and its comparison with today's prices.
+- `render-forward.ts`: drawing the `forward` block: its figures, the sentences under them, the revisions, the log line and the button that adds to the log.
 - `gallery.ts`, `gallery-modal.ts`, `csv-import.ts`, `csv-modal.ts`: the starter strategies and the CSV helper, each with its logic and its window.
 - `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.
 - `render.ts`, `render-params.ts`, `render-trades.ts`, `render-stats.ts`, `render-price.ts`, `price-chart.ts`, `render-debug.ts`, `render-sweep.ts`, `render-luck.ts`, `render-compare.ts`, `render-dashboard.ts`, `render-actions.ts`, `orders-view.ts`, `dom.ts`: drawing results, charts, tables and windows. `render-params.ts` draws the Parameters bar, `render-debug.ts` the bar-by-bar table, `render-sweep.ts` and `render-luck.ts` the sweep and luck sections, `render-compare.ts` the compare block and `render-dashboard.ts` the `backtests` block.
 - `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `types.ts`: the plugin itself, settings and shared types.
 - `format.ts`: how numbers, dates and times are written, and the ticks of chart axes, for the logic and the drawing alike.
 
-`styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy`, `compare` and `backtests` block in this file.
+`styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy`, `compare`, `backtests` and `forward` block in this file.
 
 ## Licence
 

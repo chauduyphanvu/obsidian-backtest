@@ -141,6 +141,12 @@ function fenced(text: string, lang: string): string {
 
 const WIKILINK = /^\[\[[^[\]\r\n]+\]\]$/;
 
+/** The link to a strategy for the `from:` line: the note's path without `.md`, and `#Name` when the strategy has a name a link can hold. */
+export function forwardLink(notePath: string, name: string | null): string {
+  const note = notePath.replace(/\.md$/i, '');
+  return name && !/[[\]|\r\n]/.test(name) ? `[[${note}#${name}]]` : `[[${note}]]`;
+}
+
 /**
  * The text of a new forward test note: its property, the `forward` block with the frozen strategy, and an empty log.
  * Refuses a strategy that does not run, and one with a `to:` date, which never sees a new bar.
@@ -564,6 +570,27 @@ export function appendLog(note: string, forwardBlockLine: number | undefined, ro
   else if (newTable.length > 0 && checked >= 0) insertAfter(out, checked, newTable, cr);
   if (checked < 0) insertAfter(out, heading, [checkedText, ...(newTable.length > 0 ? ['', ...newTable] : [])], cr);
   return { ok: true, note: out.join('\n'), added: added.length };
+}
+
+/**
+ * Adds to the log of a note through `process`, which edits the note's text in place (Obsidian's `vault.process`), so the
+ * note is read and written in one step. The line is the one the block is on now, asked for again at the time of writing.
+ * Says what was written, or why nothing was.
+ */
+export async function writeLog(
+  process: (edit: (note: string) => string) => Promise<unknown>,
+  forwardBlockLine: number | undefined,
+  rows: LogRow[],
+  checkedThrough: number,
+  now: number,
+): Promise<{ ok: true; added: number } | Refusal> {
+  let result: { ok: true; added: number } | Refusal = { ok: false, message: NOTE_CHANGED };
+  await process((note) => {
+    const r = appendLog(note, forwardBlockLine, rows, checkedThrough, now);
+    result = r.ok ? { ok: true, added: r.added } : r;
+    return r.ok ? r.note : note;
+  });
+  return result;
 }
 
 /** A bar where what the log says is not what today's prices give. */
