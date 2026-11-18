@@ -37,7 +37,7 @@ Needs Obsidian 1.11.4 or later. Tested on desktop (macOS); phone layouts have on
 
 ## The language
 
-A block is settings, optional parameters, and rules. Only `universe` and a buy or short rule are required.
+A block is settings, optional parameters and definitions, and rules. Only `universe` and a buy or short rule are required.
 
 ```strategy
 name: Three funds
@@ -70,19 +70,21 @@ for GLD:
 | Shorts and leverage | `borrow fee: 0.5%` · `margin rate: 6%` |
 | Other | `name: My strategy` · `benchmark: QQQ` |
 
-**Rules:** `buy when`, `sell when`, `short when`, `cover when`, `add when`. A rule continues on the next lines with `and` or `or`. Rules under `for TLT:` apply to that ticker only; `for all:` goes back to the shared ones.
+**Rules:** `buy when`, `sell when`, `short when`, `cover when`, `add when`. A rule continues on the next lines with `and` or `or`. Rules under `for TLT:` (or `for SPY, QQQ:`) apply to those tickers only; `for all:` goes back to the shared ones.
 
-**Conditions:** `>` `<` `>=` `<=` `==` `!=`, `above`, `below`, `crosses above`, `crosses below`, `and`, `or`, `not`, `+ - * /`, brackets. `close[1]` is the previous bar; `sma(50) of SPY` reads another ticker.
+**Conditions:** `>` `<` `>=` `<=` `==` `!=`, `above`, `below`, `crosses above`, `crosses below` (`crosses` for either), `rsi(2) between 10 and 30`, `and`, `or`, `not`, `+ - * /`, brackets. `close > sma(50) for 3 bars` holds on each of the last 3 bars, and `within 3 bars` on at least one. `close[1]` is the previous bar; `sma(50) of SPY` reads another ticker.
 
 **Values**
 
 - Series: `open`, `high`, `low`, `close`, `volume`.
-- Indicators: `sma` `ema` `wma` `hma` `rsi` `roc` `stdev` `highest` `lowest` `atr` `macd` `macd_signal` `bb_upper` `bb_lower` `keltner_upper` `keltner_lower` `stoch_k` `stoch_d` `adx` `plus_di` `minus_di` `cci` `williams_r` `mfi` `obv` `vwap` `supertrend` `supertrend_up` `median` `zscore` `percent_rank` `slope` `correl` `bars_since` `sum` `dema` `tema` `kama` `aroon_up` `aroon_down` `psar` `cmf` `linreg` `rsquared` `efficiency` `streak` `min` `max` `abs` `sqrt` `log` `exp` `if(condition, a, b)`.
+- Indicators: `sma` `ema` `wma` `hma` `rsi` `roc` `stdev` `highest` `lowest` `atr` `macd` `macd_signal` `bb_upper` `bb_lower` `keltner_upper` `keltner_lower` `stoch_k` `stoch_d` `adx` `plus_di` `minus_di` `cci` `williams_r` `mfi` `obv` `vwap` `supertrend` `supertrend_up` `median` `zscore` `percent_rank` `slope` `correl` `count` `bars_since` `sum` `dema` `tema` `kama` `aroon_up` `aroon_down` `psar` `cmf` `linreg` `rsquared` `efficiency` `streak` `min` `max` `abs` `sqrt` `log` `exp` `if(condition, a, b)`.
 - Calendar: `month`, `day`, `weekday`, `quarter`, `year`, `trading_day`, `trading_days_left`, and the conditions `week_start`, `week_end`, `month_start`, `month_end`, `quarter_start`, `quarter_end`, `year_start`, `year_end`.
-- The open position: `bars held`, `entry price`, `last entry price`, `entries made`.
+- The open position: `bars held`, `entry price`, `last entry price`, `entries made`, `highest since entry`, `lowest since entry`, `position return`.
 - A CSV column: `column(score) of signals`.
 
 **Parameters:** `fast = 50 in 20..100 step 10` gives a slider and lets **Try other parameter values** sweep the range.
+
+**Definitions:** `uptrend = close > sma(200)` names a condition or a number; use the name in rules, as in `buy when uptrend and rsi(2) < 10`.
 
 **Tickers:** `SPY` (Yahoo), `binance:BTCUSDT`, `tiingo:SPY`, `fred:T10Y2Y` (an economic series, read in rules with `of`) or `csv:Data/gold.csv` (a file in your vault). Weights are optional and may add up to 200%.
 

@@ -92,7 +92,8 @@ test('a value that is already there leaves the text exactly as it was', () => {
 
 test('lines that are not parameters are never changed', () => {
   const text = ['name: fast = 5', 'universe: SPY', 'buy when close > sma(fast) and x == 3', 'x = 3 == 4', 'for SPY:', 'stop loss: 8%'].join('\n');
-  assert.equal(setParamValues(text, { fast: 9, x: 9, name: 1, stop: 0.5 }), text.replace('x = 3 == 4', 'x = 9 == 4'));
+  // `x = 3 == 4` is a definition of a condition, so it has no value to write either.
+  assert.equal(setParamValues(text, { fast: 9, x: 9, name: 1, stop: 0.5 }), text);
 });
 
 test('words the language already uses are not parameters', () => {

@@ -1,5 +1,5 @@
 import { parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
-import { lineKind, type LineKind } from './highlight.ts';
+import { continues, lineKind, type LineKind } from './highlight.ts';
 
 export interface LlmConfig {
   provider: 'anthropic' | 'openai';
@@ -144,13 +144,14 @@ If the description asks for something outside these limits, write the closest st
 
 ## Layout
 
-A strategy is lines in this order: settings, then parameters, then rules. A line is one of:
+A strategy is lines in this order: settings, then parameters and definitions, then rules. A line is one of:
   key: value          a setting
   name = value        a parameter
+  name = expression   a definition: a name for a condition or a number
   buy when ...        a rule (so are "sell when ...", "short when ...", "cover when ..." and "add when ...")
-  for TICKER:         starts rules for one ticker; "for all:" returns to the shared rules
+  for TICKER:         starts rules for one ticker, or for several: "for SPY, QQQ:"; "for all:" returns to the shared rules
   # note              a comment, also written // note
-A rule may continue on the next lines (indent them and start each with "and" or "or"). A blank line ends it.
+A rule or a definition may continue on the next lines (indent them and start each with "and" or "or"). A blank line ends it.
 
 ## Settings
 
@@ -195,11 +196,12 @@ add when <condition>      with entries: 3, adds the next entry to the position h
 A rule that holds at a close fills at the next open, or with fill: close at that same close. At most one buy rule, one sell rule and one add rule per scope, and an add rule only with an entries line. At most one short rule and one cover rule per scope too.
 A ticker needs a buy rule or a short rule; with hold the buy rule is optional (then every ticker is eligible), and hold cannot be combined with short or cover rules.
 A ticker held long is also closed when its short rule holds, and one held short when its buy rule holds; it then turns to the other side at the same fill when that side's rule holds and its exit rule does not (a flip). So buy when close > sma(200) with short when close < sma(200) is long above the average and short below it. When the buy and short rules both hold for a ticker not held, neither opens.
-Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, add when, short when, cover when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
+Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. "for SPY, QQQ:" gives each ticker listed the rules and stops that follow, and each must be in the universe. Inside a "for TICKER:" section only buy when, sell when, add when, short when, cover when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
 
 ## Conditions and values
 
-Compare with > < >= <= == !=, or the words above and below (the same as > and <). "crosses above" and "crosses below" mean the moment a value changes sides: sma(50) crosses above sma(200). Join conditions with and, or, not and parentheses. Arithmetic with + - * / works on numbers: close > sma(200) * 1.02. A percentage is a number: roc(20) > 5% is the same as roc(20) > 0.05. true and false are conditions too (also written always and never).
+Compare with > < >= <= == !=, or the words above and below (the same as > and <). "crosses above" and "crosses below" mean the moment a value changes sides: sma(50) crosses above sma(200); "crosses" alone means either way. "between" is a range with both ends included: rsi(2) between 10 and 30 means rsi(2) >= 10 and rsi(2) <= 30. Join conditions with and, or, not and parentheses. Arithmetic with + - * / works on numbers: close > sma(200) * 1.02. A percentage is a number: roc(20) > 5% is the same as roc(20) > 0.05. true and false are conditions too (also written always and never). Two conditions can be compared with == and !=: uptrend of SPY == false.
+Windows of bars: "condition for 3 bars" holds when the condition held on each of the last 3 bars, this one included, and "condition within 3 bars" when it held on at least one of them (a number from 1 to 10000 or a parameter; "bar" is also accepted). They apply to the comparison before them, so a and b for 3 bars means a and (b for 3 bars); use brackets for more: (a and b) for 3 bars. close > sma(200) for 5 bars, rsi(2) < 10 within 3 bars. They are unknown until the whole window is known, and position values cannot be read over a window.
 Earlier bars: close[1] is the previous bar's close, close[5] the close five bars back, highest(20)[1] the highest high of the 20 bars before this one.
 Another ticker: sma(200) of SPY, close of ^VIX < 25. The ticker need not be in the universe. Put "of" right after the value it applies to.
 An economic series from FRED: close of fred:T10Y2Y < 0 reads the series T10Y2Y (here the 10-year minus 2-year Treasury yield, in percent), each value from the day it was first published; sma(close, 3) of fred:UNRATE works too. A FRED series can be read with "of" and be the cash rate (cash rate: fred:DGS3MO), but never be in the universe or the benchmark. Use a FRED series only when the description asks for that data, by its FRED series ID.
@@ -239,6 +241,7 @@ Functions, written with parentheses. A period is a plain number or a parameter, 
   percent_rank(n)              share of the previous n values below this one, 0 to 100
   slope(n)                     least-squares slope over n bars, per bar; n at least 2
   correl(other, n)             correlation of the one-bar changes of this ticker's close and of another series over n bars, n at least 2: correl(close of SPY, 60)
+  count(condition, n)          how many of the last n bars the condition held, this one included; unknown while any of them is: count(close > close[1], 10) >= 7
   bars_since(condition)        bars since the condition was last true; unknown until it has been: bars_since(close crosses above sma(50)) < 10
   sum(n)                       sum of the last n values: sum(volume, 5)
   dema(n)  tema(n)             double and triple exponential averages, with less lag than ema
@@ -265,12 +268,21 @@ Position values, in sell, cover and add rules only (written with a space, not in
   entry price        the price the position was bought at, or for a short sold at; with several entries, their average
   last entry price   the price of the latest entry
   entries made       how many entries the position has, 1 after the first
+  highest since entry  the highest price since the first entry: its fill price, then the high of each bar after it (and of the fill bar, when it filled at that bar's open); also written highest_since_entry
+  lowest since entry   the same with lows; also lowest_since_entry
+  position return    the open position's return at this close before costs: close / entry price - 1, or for a short 1 - close / entry price; also position_return
   Example: sell when bars held >= 10 or close > entry price * 1.1
+  Example: sell when close < highest since entry - 3 * atr(22)
+  Example: sell when position return > 20% or bars held > 30
   Example: add when close > last entry price * 1.03
 
 ## Parameters
 
 A parameter is a named number on its own line: fast = 50. Use its name wherever a plain number goes: in rules (sma(fast), close[lag], rsi(n) < limit), in stop loss, trailing stop, take profit, risk per trade, and in hold ("hold: top n by roc(126)"). Add a range to let the plugin test values: fast = 50 in 20..100 step 10. The value after = is the one used, and it must lie inside the range; step is optional and defaults to 1 (or 1% for percentages). Write % on every number of a percentage parameter: stop = 8% in 4%..12% step 2%. Declare parameters only when the description asks to test, tune or vary a value. A name uses letters, digits and underscores and must not be a word the language already uses (a series, function, setting or calendar name, or words such as top, step or in): fast_ma, slow_ma and stop_pct are safe.
+
+## Definitions
+
+A definition is a name for a condition or a number: uptrend = close > sma(200), or stretch = close / sma(20) - 1. Use the name wherever that condition or number goes: in rules, in the hold score and in other definitions, as in buy when uptrend and stretch < -3%. It is replaced by what it stands for, so uptrend of SPY and uptrend[1] apply to the whole of it, and not uptrend works. Definitions may use parameters and other definitions, in any order, but not themselves. A definition that reads bars held and the like can be used only in sell, cover and add rules. A definition cannot stand where a period or a plain number is wanted (sma(n), close[n], stop loss): that is what a parameter is for. A name follows the rules for parameter names, and a definition no rule reads is a mistake to leave in. Write a definition only when it is used more than once or makes a long rule easier to read.
 
 ## Do not
 
@@ -282,7 +294,7 @@ A parameter is a named number on its own line: fast = 50. Use its name wherever 
 - Do not short or borrow unless the description asks for it: then use short when and cover when, or weights adding up to more than 100%.
 - Do not use options, futures or crypto margin products, and do not let weights or size go above 200%. A sell rule only closes a long position, and a cover rule only a short one.
 - Do not write a cover rule without a short rule, or combine hold with short or cover rules.
-- Do not use bars held, entry price, last entry price or entries made in a buy or short rule, inside a function, or with [n] or "of".
+- Do not use bars held, entry price, last entry price, entries made, highest since entry, lowest since entry or position return in a buy or short rule, inside a function, over a window of bars, or with [n] or "of".
 - Do not put an expression where a function wants a period: write sma(200), not sma(100 * 2).
 - Do not leave a blank line inside a rule, or put prose in the fence. A # comment line is fine.
 - Do not give universe weights when you use hold, and do not use weights together with size.
@@ -361,7 +373,7 @@ export function parseReply(reply: string): { source: string; notes: string[] } |
     let inRule = false;
     for (const line of lines) {
       const kind = lineKind(line, inRule);
-      inRule = kind === 'rule' || kind === 'continuation';
+      inRule = continues(kind);
       kinds.push(kind);
     }
     from = kinds.findIndex((k) => k !== 'blank' && k !== 'other' && k !== 'continuation');

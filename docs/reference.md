@@ -62,13 +62,14 @@ Each line is one of these:
 
 - a setting, written `key: value`, such as `universe: SPY`;
 - a parameter, written `name = value`, such as `fast = 50`;
+- a definition, written `name = expression`, such as `uptrend = close > sma(200)`;
 - a rule, starting with `buy when`, `sell when`, `short when`, `cover when` or `add when`, which may continue on the lines after it;
-- a `for` line, which starts rules for one ticker;
+- a `for` line, which starts rules for one ticker or several;
 - a comment, or a blank line.
 
 Only `universe` is required, plus a buy rule or a short rule. The one exception is `hold`, which makes the buy rule optional. Keywords, setting names, function names and parameter names do not care about capital letters.
 
-The parser reads the whole block and reports every problem at once, with the line number. Settings and parameters can come in any order, and a parameter can be used above the line that declares it. What does depend on order is the `for` lines: after `for TICKER:`, rules and stops belong to that ticker until `for all:` (see "Per-ticker sections"). A good habit is settings first, then parameters, then the shared rules, then the `for` sections.
+The parser reads the whole block and reports every problem at once, with the line number. Settings, parameters and definitions can come in any order, and a parameter or a definition can be used above the line that declares it. What does depend on order is the `for` lines: after `for TICKER:`, rules and stops belong to that ticker until `for all:` (see "Per-ticker sections"). A good habit is settings first, then parameters and definitions, then the shared rules, then the `for` sections.
 
 Dates are always written `2015-01-31`. A percentage is written with a percent sign (`5%`) and counts as the number 0.05 wherever a number is expected.
 
@@ -164,17 +165,18 @@ sell when close < sma(200)
   or rsi(14) > 85
 ```
 
-A rule ends at the first blank line, or at a line that is a setting, a parameter, a `for` line or another rule. Do not leave a blank line in the middle of a rule.
+A rule ends at the first blank line, or at a line that is a setting, a parameter, a definition, a `for` line or another rule. Do not leave a blank line in the middle of a rule. A definition continues the same way (see "Definitions").
 
 ### Per-ticker sections
 
-A line such as `for TLT:` starts a section for one ticker. `for all:` goes back to the rules every ticker shares.
+A line such as `for TLT:` starts a section for one ticker. A line such as `for SPY, QQQ:` starts one for several: each ticker listed gets the rules and stops that follow, as if they were written under a `for` line of its own. `for all:` goes back to the rules every ticker shares.
 
 - Rules written before any `for` line, or after `for all:`, are shared. They apply to every ticker that has no rule of its own for that side.
-- A `buy when`, `sell when`, `add when`, `short when` or `cover when` inside `for TLT:` replaces the shared rule of the same kind, for TLT only.
+- A `buy when`, `sell when`, `add when`, `short when` or `cover when` inside `for TLT:` replaces the shared rule of the same kind, for TLT only. Inside `for SPY, QQQ:` it does so for each of them.
 - Inside a `for` section you can also write `stop loss`, `trailing stop` and `take profit`. Each one replaces the shared setting of the same kind for that ticker. The kinds you leave out stay as they are in the shared settings.
 - Any other setting inside a `for` section is an error, because it applies to the whole strategy. Put it above the first `for` line or after `for all:`.
-- The ticker must be in the universe. For a CSV ticker, use the file name.
+- Each ticker must be in the universe, and a message points at the one that is not, as in `"for SPY, QQQ:" names QQQ, which is not in the universe`. For a CSV ticker, use the file name. List a ticker once on a line, and write `for all:` on its own, not with others.
+- A rule of one kind written twice for a ticker is an error, whichever sections the two come from: with `for SPY, QQQ:` above a `buy when`, a later `for QQQ:` with its own `buy when` says "There is already a buy rule for QQQ". Join the conditions with `and` or `or` instead.
 - Every ticker needs a buy rule or a short rule, shared or its own.
 
 ### Conditions and operators
@@ -183,9 +185,12 @@ A condition compares numbers and joins the comparisons.
 
 | Written | Means |
 | --- | --- |
-| `>` `<` `>=` `<=` `==` `!=` | The usual comparisons. |
+| `>` `<` `>=` `<=` `==` `!=` | The usual comparisons. `==` and `!=` also compare two conditions, as in `uptrend of SPY == false`. |
 | `above`, `below` | The same as `>` and `<`. You can write `is above` and `is below`. |
 | `crosses above`, `crosses below` | `a crosses above b` is true on a bar where a is above b and was at or below b on the previous bar. `crosses below` is the mirror of it. |
+| `crosses` | `a crosses b` is true on a bar where a crosses above b or crosses below it: either way. |
+| `between` | `a between lo and hi` means `a >= lo and a <= hi`, with a read twice, so both ends are included: `rsi(2) between 10 and 30`. |
+| `for n bars`, `within n bars` | `cond for 3 bars` is true when the condition held on each of the last 3 bars, this one included. `cond within 3 bars` is true when it held on at least one of them (see "Windows of bars"). |
 | `and`, `or`, `not` | Join conditions. |
 | `( )` | Group. |
 | `+ - * /` | Arithmetic on numbers. A leading `-` negates. Dividing by 0 gives an unknown value. |
@@ -199,19 +204,36 @@ From loosest to tightest, the order is:
 1. `or`
 2. `and`
 3. `not`
-4. comparisons (`>`, `<`, `>=`, `<=`, `==`, `!=`, `above`, `below`, `crosses above`, `crosses below`). They do not chain: write `a < b and b < c`, not `a < b < c`.
+4. comparisons (`>`, `<`, `>=`, `<=`, `==`, `!=`, `above`, `below`, `crosses above`, `crosses below`, `crosses`, `between`), each with the windows (`for n bars`, `within n bars`) that follow it. They do not chain: write `a < b and b < c`, not `a < b < c`. A window applies to the comparison before it, so `a and b for 3 bars` reads as `a and (b for 3 bars)`; use brackets to apply it to more, as in `(a and b) for 3 bars`.
 5. `+` and `-`
 6. `*` and `/`
 7. a leading `-`
 8. `[n]` and `of`, then function calls and brackets
 
-So `not close > 1 + 2 * 3 or close < 0 and volume > 5` reads as `(not (close > 1 + (2 * 3))) or ((close < 0) and (volume > 5))`.
+So `not close > 1 + 2 * 3 or close < 0 and volume > 5` reads as `(not (close > 1 + (2 * 3))) or ((close < 0) and (volume > 5))`. `rsi(2) between 10 and 30 and close > sma(200)` reads as `(rsi(2) between 10 and 30) and (close > sma(200))`, and `not rsi(2) between 10 and 30` as `not (rsi(2) between 10 and 30)`. In the rule values table and in "Explain this trade", a `between` is one part that opens into its two comparisons, and a window is one part that shows the count it rests on.
 
 A rule has to be a condition: `buy when sma(200)` is an error. Both sides of a comparison have to be numbers, and `and`, `or` and `not` need conditions on their sides. A rule can nest at most 64 levels of brackets, functions and operators, a long chain such as `a + b + c + ...` counting one level for each term; deeper is an error.
 
 Another ticker: `sma(200) of SPY` and `close of ^VIX` read a value from a ticker that does not have to be in the universe. `of` applies to the value just before it, so write `(close - open) of SPY` to apply it to a whole expression. A ticker that is not in the universe is loaded from the default source (the `data` line or the plugin setting), or from the source you name, as in `close of binance:BTCUSDT`. For each bar of the rule's own ticker, you get the other ticker's latest bar that had ended by the time this bar ended (rule 6 under "How the simulation works"). Daily tickers on the same dates line up day for day; a weekly bar dated Monday is read from the following Monday, once its week is over. With `fill: close`, a ticker on other hours than the rule's own is read one bar earlier (rule 6). A column of a CSV file is read the same way: `column(score) of signals` (see "Signals from a CSV file").
 
 Earlier bars: `close[5]` is the close five bars back. It works on any value: `highest(20)[1]` is the highest high of the 20 bars before this one.
+
+### Windows of bars
+
+`cond for n bars` is true when the condition held on each of the last n bars, this one included, and `cond within n bars` when it held on at least one of them (`bar` is also accepted, as in `for 1 bar`). The number is a whole number from 1 to 10000, or a parameter whose value is one.
+
+```strategy
+universe: SPY
+days = 5 in 3..10
+buy when close > sma(200) for days bars and rsi(2) < 10 within 3 bars
+sell when count(close < close[1], 5) >= 4
+```
+
+- They are built on `count(condition, n)`, which says how many of the last n bars the condition held, this one included: `x for n bars` is `count(x, n) == n`, and `x within n bars` is `count(x, n) >= 1`. You can write `count` yourself, as in `count(close > close[1], 10) >= 7`.
+- A window is unknown until n bars have been read, and while any of its bars is unknown (rule 33). So `x within 3 bars` is unknown on a bar where an earlier bar of the window is unknown, even if the condition held on another.
+- A window applies to a condition, so `close for 3 bars` is an error. It binds at the level of a comparison: `a and b for 3 bars` reads as `a and (b for 3 bars)`.
+- A position value cannot be read over a window, since it belongs to the open position at the bar being read: `bars held > 3 for 2 bars` and `count(bars held > 3, 2)` are errors. Read it outside the window, as in `sell when bars held > 5 and close < sma(20) for 3 bars`.
+- The history a rule needs grows by n for a window (rule 4); with a parameter, by the largest value of its range.
 
 ### Series
 
@@ -221,7 +243,7 @@ These are the bar's own values for the ticker the rule belongs to: `open`, `high
 
 Most functions read a series and take one or more periods. Without a series they read the one in the table. To read another, write it first: `sma(volume, 20)`, or `sma(rsi(2), 5)`. Periods must be plain numbers or parameters, whole numbers from 1 to 10000. `slope`, `zscore`, `cci`, `hma`, `linreg`, `rsquared` and `correl` need a period of at least 2. A Bollinger or Keltner `width`, the supertrend `mult` and the `psar` `step` and `max` can be any number above 0, and `psar` refuses a `step` above its `max`. Empty brackets use the defaults: `macd()`, `rsi()`, `atr()`.
 
-Some functions read the ticker's own high, low, close and volume and take no series, as `atr` does: `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `obv`, `vwap`, `supertrend`, `supertrend_up`, `aroon_up`, `aroon_down`, `psar` and `cmf`. `mfi`, `obv`, `vwap` and `cmf` need volume. A ticker whose prices have none, such as a CSV file without a `volume` column, a FRED series or an index with no volume, stops the run with "X has no volume, which mfi() needs". `bars_since` takes a condition instead of a series, and `correl` takes the other ticker's series first.
+Some functions read the ticker's own high, low, close and volume and take no series, as `atr` does: `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `obv`, `vwap`, `supertrend`, `supertrend_up`, `aroon_up`, `aroon_down`, `psar` and `cmf`. `mfi`, `obv`, `vwap` and `cmf` need volume. A ticker whose prices have none, such as a CSV file without a `volume` column, a FRED series or an index with no volume, stops the run with "X has no volume, which mfi() needs". `bars_since` and `count` take a condition instead of a series, and `correl` takes the other ticker's series first.
 
 | Function | Arguments (defaults) | Meaning |
 | --- | --- | --- |
@@ -258,6 +280,7 @@ Some functions read the ticker's own high, low, close and volume and take no ser
 | `percent_rank` | `percent_rank(n)` or `percent_rank(series, n)` | Where the value ranks among the previous n values, 0 to 100. |
 | `slope` | `slope(n)` or `slope(series, n)` | Least-squares slope over n bars, in the series' units per bar. Divide by the price for a fraction: `slope(90) / close > 0.1%`. |
 | `correl` | `correl(other, n)` | Correlation, -1 to 1, between this ticker's close and another series, such as `correl(close of SPY, 60)`. |
+| `count` | `count(condition, n)` | How many of the last n bars the condition held, this one included: `count(close > close[1], 10) >= 7`. Unknown until n bars have been read and while any of them is unknown. |
 | `bars_since` | `bars_since(condition)` | Bars since the condition was last true: `bars_since(close crosses above sma(50)) < 10`. |
 | `sum` | `sum(n)` or `sum(series, n)` | Sum of the last n values: `sum(volume, 5)`. |
 | `dema` | `dema(n)` or `dema(series, n)` | Double exponential average, with less lag than `ema`. |
@@ -306,6 +329,7 @@ The functions from `stoch_k` on each have one exact definition:
 - `percent_rank` is 100 times the number of the previous n values that are below this one, divided by n. Earlier values equal to this one do not count as below it. The first n bars are unknown.
 - `slope` is the slope of the least-squares straight line through the last n values, against the bar number. A window of equal values has slope 0.
 - `correl` is the Pearson correlation of the one-bar changes (value over the bar before, minus 1) of this ticker's close and of the series written first, over the last n bars. The other series is read as `of` reads it (rule 6): at each bar of this ticker, from the other ticker's latest bar that had ended, and with `fill: close` from one bar earlier on another clock, when this ticker's closes are taken one bar earlier too, so both changes cover the same days and are known at the fill. On a day when the other ticker had no new bar its change is 0. A series that does not change over the n bars gives no value.
+- `count` is the number of the last n bars on which its condition was true, this bar included. It is unknown on the first n - 1 bars and on any bar where one of the n is unknown. `cond for n bars` and `cond within n bars` are `count(cond, n) == n` and `count(cond, n) >= 1`.
 - `bars_since` is 0 on a bar where its condition is true, and otherwise the number of bars since it last was. It is unknown until the condition has been true once, and after a bar where the condition was unknown it is unknown until the condition is next true. It counts back only as far as the prices loaded, which is the history the condition needs plus 250 bars (rule 4).
 - `sum` adds up the last n values, each window on its own, so no rounding is carried from one bar to the next.
 - `dema` is 2 * e1 - e2 and `tema` is 3 * e1 - 3 * e2 + e3, where e1 is the `ema` of the series over n bars, e2 the `ema` of e1 and e3 the `ema` of e2, each exactly as `ema` gives it, seeded with the simple average of its first n values. The first 2n - 2 bars of `dema` are unknown, and the first 3n - 3 of `tema`.
@@ -361,13 +385,26 @@ These belong to the open position, so only sell, cover and add rules can read th
 - `entry price` (also written `entry_price`) is the price the position was bought at, slippage included, or for a short the price it was sold at. With several entries it is their average price, weighted by the shares of each.
 - `last entry price` (also written `last_entry_price`) is the price of the latest entry, slippage included. With one entry it is the entry price.
 - `entries made` (also written `entries_made`) is how many entries the position has: 1 after the buy or the short sale, and one more for each add.
+- `highest since entry` (also written `highest_since_entry`) is the highest price since the position's first entry: the price the first entry filled at, before slippage, then the high of each later bar, and the high of the fill bar too when it filled at that bar's open. With `fill: close` the fill bar's range came before the fill, so it does not count. It is the same high-water mark the trailing stop trails from (rule 23), kept for a short as well, where it is the highest price, not the best.
+- `lowest since entry` (also written `lowest_since_entry`) is the same with lows: the first entry's fill price before slippage, then the low of each later bar (and of the fill bar when it filled at its open).
+- `position return` (also written `position_return`) is the open position's return at this close before costs: `close / entry price - 1` for a long and `1 - close / entry price` for a short, where the entry price is the one above, an average with several entries.
 
-They cannot be used in a buy or short rule or a `hold` score, inside a function (`sma(bars held, 2)`), with `[n]`, or with `of`. Write them with spaces or underscores, but not as the single words `bars`, `entry` or `entries`.
+They are read at the close of each bar, so the bar being read counts: `highest since entry` includes this bar's high. They cannot be used in a buy or short rule or a `hold` score, inside a function (`sma(bars held, 2)`), over a window of bars (`for n bars`, `within n bars`, `count`), with `[n]`, or with `of`. Write them with spaces or underscores, but not as the single words `bars`, `entry`, `entries`, `highest`, `lowest` or `position`: `highest` and `lowest` alone are the functions, and `position` alone is free to use as a parameter's name, as `last` is.
 
 ```strategy
 universe: SPY
 buy when close > sma(200)
 sell when bars held >= 20 or close < entry price * 0.9
+```
+
+A chandelier exit on closes, and a profit target that also ends a stale position:
+
+```strategy
+universe: SPY
+buy when close > sma(200)
+sell when close < highest since entry - 3 * atr(22)
+  or position return > 20%
+  or bars held > 30
 ```
 
 ### Building a position in entries
@@ -468,6 +505,8 @@ A parameter is a named number on its own line:
 fast = 50
 ```
 
+A line `name = value` is a parameter when its value is a number, or a number followed by a range. Any other value makes it a definition (see "Definitions"). A value that starts like a range but is not one, such as `fast = 50 in 20`, is still a parameter, and gets the parameter's message.
+
 Use the name wherever a plain number goes: in rules (`sma(fast)`, `close[lag]`, `rsi(n) < limit`), in `stop loss`, `trailing stop` and `take profit`, in `risk per trade`, in `weighting`, in `hold` (`hold: top n by roc(20)`), and in `entries`.
 
 Add a range to say which values are worth trying:
@@ -481,10 +520,32 @@ stop = 8% in 4%..12% step 2%
 - `step` is optional. It defaults to 1, or to 1% for a percentage.
 - A range can hold at most 200 values.
 - Write `%` on every number of a percentage parameter. In a stop distance's share (`stop loss: stop`) and in `risk per trade`, use a percentage parameter. In a period, a `top` count, an ATR multiple or `entries`, use a plain one. Inside a rule either works as a number: `limit = 3%` is 0.03.
-- A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below is of buy sell when for all in step at top by true false always never min max abs bars entry bars_held entry_price last_entry_price entries_made`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
-- Declare a name once. Names do not care about capital letters. A parameter can sit anywhere in the block.
+- A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below between within is of buy sell when for all in step at top by true false always never min max abs bars entry bars_held entry_price last_entry_price entries_made highest_since_entry lowest_since_entry position_return`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
+- Declare a name once, among parameters and definitions together. Names do not care about capital letters. A parameter can sit anywhere in the block.
 
 A range changes nothing by itself: the block runs with the value written. Every declared parameter gets a slider in the result (see "The Parameters bar" under "Reading a result"), and a range also enables "Try other parameter values".
+
+### Definitions
+
+A definition gives a name to a condition or to a number, so a long rule can be read in pieces and a piece written once:
+
+```strategy
+universe: QQQ
+uptrend = close > sma(200)
+stretch = close / sma(20) - 1
+buy when uptrend and stretch < -3%
+sell when not uptrend or uptrend of SPY == false
+```
+
+- It is a line `name = expression`. A value that is a number, or a number with a range, is a parameter instead (see "Parameters and ranges"). Like a rule, a definition may continue on the lines after it that start with `and` or `or`.
+- Use the name wherever the condition or the number could be written: in a rule, in the `hold` score, and in other definitions. A definition can use parameters and other definitions, whichever comes first in the block, but one that leads back to itself, directly or through others, is an error on its own line.
+- Where it is used it is replaced by its expression, so the strategy that runs has only ordinary expressions: `uptrend of SPY` reads the whole condition for SPY, `uptrend[1]` is the whole condition one bar earlier, `not uptrend` is its opposite, and `uptrend for 3 bars` is a window over it. A strategy written with definitions gives exactly the result of the same strategy written without them, and the same trigger prices.
+- Each use is checked where it stands. A definition that reads `bars held` or another position value is fine in a sell, cover or add rule, and an error in a buy rule, which names the definition: `"held" reads "bars held", which only makes sense in a sell, cover or add rule`. A definition cannot stand where a period or a plain number is wanted, as in `sma(n)`, `close[n]`, `for n bars` or `stop loss: n`; make that name a parameter instead.
+- A mistake inside a definition is reported once, on the definition's own line, and the places that use it say nothing more.
+- A name follows the rules for a parameter's name, and is unique among the parameters and definitions of the block. A definition that no rule or `hold` score reads gives a note, since it does nothing.
+- Definitions made of definitions are filled in wherever they are used, so a rule that reads more than 3,000 words and symbols of definitions in all, nested ones counted each time they are read, is an error.
+
+In the rule values table and in "Explain this trade", a rule shows a definition by its name, with the parts of its expression below it as they are written on its line. The parameters a definition reads are listed with the rule's own. The editor colours a definition's name like a parameter's, offers it as you type a rule, and shows its text when you hover it. It has no slider, since it has no value of its own to change.
 
 ### Comments
 
@@ -509,7 +570,7 @@ the messages are:
 
 ```text
 Line 2: "lots" is not a cost. Write it as 5 bps or 0.05%
-Line 3: Unknown name "smaa". Series: open, high, low, close, volume. Functions: sma, ema, rsi, roc, stdev, highest, lowest, atr, macd, macd_signal, bb_upper, bb_lower, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, keltner_upper, keltner_lower, supertrend, supertrend_up, wma, hma, median, zscore, percent_rank, slope, correl, bars_since, sum, dema, tema, kama, aroon_up, aroon_down, psar, cmf, linreg, rsquared, efficiency, streak, min, max, abs, sqrt, log, exp, if, column. Dates: month, day, weekday, year, month_start, month_end, quarter, week_start, week_end, quarter_start, quarter_end, year_start, year_end, trading_day, trading_days_left
+Line 3: Unknown name "smaa". Series: open, high, low, close, volume. Functions: sma, ema, rsi, roc, stdev, highest, lowest, atr, macd, macd_signal, bb_upper, bb_lower, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, keltner_upper, keltner_lower, supertrend, supertrend_up, wma, hma, median, zscore, percent_rank, slope, correl, count, bars_since, sum, dema, tema, kama, aroon_up, aroon_down, psar, cmf, linreg, rsquared, efficiency, streak, min, max, abs, sqrt, log, exp, if, column. Dates: month, day, weekday, year, month_start, month_end, quarter, week_start, week_end, quarter_start, quarter_end, year_start, year_end, trading_day, trading_days_left
 Line 4: The rule ends too early
 ```
 
@@ -771,7 +832,7 @@ These are the engine's rules. Each is exact.
 1. Rules are read at the close of each bar. A buy or sell that is true at a close fills at that ticker's next open, the next bar of that ticker. With `fill: close` it fills at that same close instead, and so does everything else that would fill at the next open: ranking decisions, adds, rebalancing and buying again after a stop (rules 17, 18, 23, 26, 27, 31 and 51 say how).
 2. An order from the last bar in the prices is not filled. It stays pending and is reported in the result and in "Today's orders". With `fill: close` it has filled at that last close, so nothing is left pending, except an order from a ranking decision made at a time a ticker had no bar, which fills at that ticker's next close.
 3. The run starts on `from`, or on the first day every ticker in the universe has prices if that is later. Tickers read only with `of`, and the benchmark, do not delay the start. The result warns when the run starts more than 7 days after `from`. It ends on `to`, or on the last bar.
-4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, and `ema`, `rsi`, `atr`, `macd`, `plus_di`, `minus_di`, `keltner_upper`, `keltner_lower`, `supertrend` and `supertrend_up` count five times their period, and `adx` ten times, because they depend on where they started. `dema` counts ten times its period and `tema` fifteen times, and `kama` its period plus five times its `slow`, for the same reason. `bars_since` and `streak` add 250 bars to what they read, and count back no further than the prices loaded, and `psar`, which depends on the trend it began in, reads 250 bars. `month_start` and the other `_start` values need the bar before, and `trading_day` needs the data to begin before the month of the run's first bar: it reaches back 38 days, a month and a week for the days a month may lack, which is as many bars as that many days hold at the run's `interval`, so it is known from the first bar at any bar size. A period or lag given by a parameter with a range counts at the largest value of its range, so the sliders, "Try other parameter values" and "Was it luck?" can try any value in it on the prices already loaded. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. A CSV file's lookback is counted in its own rows, whatever `interval` says: at least that many rows, and as far in time as its own bar size, the shortest gap between its rows, calls for. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
+4. Bars before the start feed the indicators. With `from` set, every ticker's prices start a lookback before it: the longest chain of windows and lags in the block's rules, `hold` score, ATR stops and sizing. Nested windows add up, `[n]` adds n, a `for n bars` or `within n bars` window and `count(condition, n)` add n to what the condition needs, and `ema`, `rsi`, `atr`, `macd`, `plus_di`, `minus_di`, `keltner_upper`, `keltner_lower`, `supertrend` and `supertrend_up` count five times their period, and `adx` ten times, because they depend on where they started. `dema` counts ten times its period and `tema` fifteen times, and `kama` its period plus five times its `slow`, for the same reason. `bars_since` and `streak` add 250 bars to what they read, and count back no further than the prices loaded, and `psar`, which depends on the trend it began in, reads 250 bars. `month_start` and the other `_start` values need the bar before, and `trading_day` needs the data to begin before the month of the run's first bar: it reaches back 38 days, a month and a week for the days a month may lack, which is as many bars as that many days hold at the run's `interval`, so it is known from the first bar at any bar size. A period or lag given by a parameter with a range counts at the largest value of its range, so the sliders, "Try other parameter values" and "Was it luck?" can try any value in it on the prices already loaded. The lookback is at least 250 bars, and for daily and longer bars it reaches 1.6 times as far in calendar time, for weekends and holidays. A CSV file's lookback is counted in its own rows, whatever `interval` says: at least that many rows, and as far in time as its own bar size, the shortest gap between its rows, calls for. Older prices are left out even when they are saved, so the same block gives the same result every time. Without `from`, the whole history is used.
 5. The run has one step for each time at which any ticker in the universe has a bar. A ticker with no bar that day keeps its last close for valuing the position.
 6. A value read with `of`, the benchmark's value and a cash-rate ticker's yield come from that series' latest bar that had ended by the end of the strategy's bar. A bar ends at its start plus its series' step, the shortest gap between its bars. From a step of 20 days on, the step is counted in calendar months, so a monthly bar dated the 1st ends on the 1st of the next month. Daily series on the same dates line up day for day, whichever days each trades; a weekly bar dated Monday is read from the following Monday; an hourly rule reads a daily bar from that day's 23:00 bar on. With `fill: close`, a rule reads a ticker that keeps other hours than its own ticker one bar early: from that ticker's latest bar that had ended by the time the rule's own bar began, so never its bar of the same day, week or hour. Two tickers keep other hours when the prices show it: they come from different sources (Yahoo or Tiingo, which date a listing's bars alike, Binance, FRED or a CSV file), they have bars on different days of the week (crypto trades at weekends, stocks do not), or their bars are of different sizes. A stock's rule that reads `close of binance:BTCUSDT` therefore reads Bitcoin's previous day, and an hourly rule reads a daily bar from the next day's first hour on. Tickers on the same hours are read as before, and the result notes that it takes the other ticker's close as known at the moment of the fill, which is not true for a market that closes later, such as a New York stock read by a Tokyo one. Binance tickers of one bar size all close at the same moment and get no such note. The benchmark and a cash-rate ticker decide no orders and are read the same way with either fill. A column of a CSV file is read from the file's latest row that had ended: on each bar of the rule's own ticker, `column(score) of signals` is that row's value. In a file with prices a row is a bar, and its columns end with it, as its close does. A file with no prices, a file of signals, holds dated values: a row ends at the end of the day it is dated (UTC), however far apart the rows are, or, when its rows are less than a day apart, at its time plus the shortest gap between them. So a row dated Tuesday is known at Tuesday's close, and an order it decides fills at Wednesday's open. With `fill: close`, a rule whose ticker keeps other hours than the file reads it one row early, as it reads any such ticker. A FRED series holds dated values in the same way, read by `of` and as a cash rate alike: each row is dated the day a value was first published and ends at the end of that day (UTC), so a monthly series is read from the day each month's value came out, not a month after it.
 
@@ -824,7 +885,7 @@ These are the engine's rules. Each is exact.
 
 **Unknown values**
 
-33. A value is unknown while an indicator is still warming up, when you look back past the start of the data, when a ticker read with `of` has no bar that has ended yet (or a file of signals no row that has: rule 6), when a cell of a CSV column is empty or holds no number, after a division by 0, and when `crosses` needs a previous bar that is unknown. `bars_since` is unknown until its condition has been true. `month_start` and the other `_start` values are unknown on the first bar of the data, and `trading_day` through its first month. `streak` is unknown on the first bar and after an unknown value, until the next change that is known. `sqrt` of a number below 0, `log` of 0 or less and `exp` of a number too large to hold are unknown, `efficiency` and `rsquared` over a window where nothing changes are unknown, and so is `cmf` while none of its bars traded. `if(condition, a, b)` is unknown where its condition is, and otherwise only the value it picks counts.
+33. A value is unknown while an indicator is still warming up, when you look back past the start of the data, when a ticker read with `of` has no bar that has ended yet (or a file of signals no row that has: rule 6), when a cell of a CSV column is empty or holds no number, after a division by 0, and when `crosses` needs a previous bar that is unknown. `count`, and so `for n bars` and `within n bars`, is unknown until n bars have been read and while any of them is unknown. `between` is unknown when any of its three values is. `bars_since` is unknown until its condition has been true. `month_start` and the other `_start` values are unknown on the first bar of the data, and `trading_day` through its first month. `streak` is unknown on the first bar and after an unknown value, until the next change that is known. `sqrt` of a number below 0, `log` of 0 or less and `exp` of a number too large to hold are unknown, `efficiency` and `rsquared` over a window where nothing changes are unknown, and so is `cmf` while none of its bars traded. `if(condition, a, b)` is unknown where its condition is, and otherwise only the value it picks counts.
 34. A comparison with an unknown value is unknown. `and` is false if either side is false, and otherwise unknown if either side is unknown. `or` is true if either side is true, and otherwise unknown if either side is unknown. `not` of unknown is unknown.
 35. A rule only fires when it is true. Unknown never buys or sells, and counts as "not holding" for the re-arm rule.
 
@@ -854,7 +915,7 @@ These are the engine's rules. Each is exact.
 51. With `entries: n`, a position is built in up to n entries. The buy rule or a ranking makes the first; the `add when` rule makes each later one. The add rule is read at each close of a ticker held with fewer than n entries, after the sell rule, and its order fills like a buy: at the ticker's next open, or with `fill: close` at that same close. It makes at most one entry a close, and none at a close where the sell rule holds. With `entries` above 1, a ticker with no add rule is an error, and so is an add rule without an `entries` line.
 52. Each entry spends 1/n of what one buy of the whole position would spend at that fill (rules 8, 10 and 11): the weight, or its inverse-volatility share, times equity, or the risk-per-trade amount capped at the weight. An add is cut so the position is worth at most that whole amount after it, and like every buy it is cut to the cash there is, or for a block that can borrow to its room (rule 70). So the entries never take a ticker above its weight, nor the strategy above 100% invested, or above its cap for a block that can borrow. An add with nothing left to buy is not made and does not count.
 53. A rebalance takes a position with k of its n entries to k/n of its target weight; it never makes an entry. When a rebalance and an add fall on the same fill, the add is sized against what the position is worth once the rebalance's trades are made. A trim left undone for its commission (rule 49) leaves the position as it is. A top-up that buys less than it wanted, for lack of cash or for its commission, leaves the add sized from the position as it then is. A top-up still owed (rule 18) that finds the position at or above its target buys nothing. With `hold`, the ranking makes the first entry and the add rule the others, at any close: a decision that keeps a ticker does not add to it, and one that drops it sells it whole. When cash is short, adds are paid for along with the buys: in ranking order with `hold`, and in the order of the universe without it.
-54. In sell and add rules, `bars held` counts from the first entry's fill, `entry price` is the average fill price of the entries weighted by their shares, `last entry price` is the fill price of the latest entry, and `entries made` is the number of entries. Rebalancing changes none of them.
+54. In sell and add rules, `bars held` counts from the first entry's fill, `entry price` is the average fill price of the entries weighted by their shares, `last entry price` is the fill price of the latest entry, and `entries made` is the number of entries. `highest since entry` and `lowest since entry` read the bars from the first entry's fill, whatever is added after it, and `position return` uses the average entry price. Rebalancing changes none of them.
 55. Each entry sets the stop loss and take profit again from the new average entry price: the average times (1 - x) or (1 + x), or minus or plus the ATR distance set at the first entry (rule 22). The trailing stop keeps trailing from the first entry (rule 23). The new shares are watched by the stops from the bar they were bought at, or with `fill: close` from the next bar, as a buy is (rule 26).
 56. The sell rule, a stop, a target and a ranking sell the whole position. There are no partial sales.
 57. A position is one trade from its first entry to its sale: its entry price is the average of its entries, its bars held count from the first, and the trade count and share won count it once. An add left waiting at the last bar is reported like a buy, and "Today's orders" lists it as "Add SPY", with "Step 2 of 3". It is not reported when the position is already worth its whole weight at the last close, as there is no room for it. One that only the cash stands in the way of is reported, as a buy is, since the sales and trims at that open are paid out first.
@@ -1002,7 +1063,7 @@ The prices are worked out after the result is drawn, in the background worker th
 **What a price assumes.** A price is exact when the rules read nothing of the next bar but its close. Otherwise a line under it says what it assumes:
 
 - "it opens at its last close", for a rule that reads `open`;
-- "it trades only between its open and its close", for `high` and `low` and the functions that read them: `atr`, `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `vwap`, `keltner_upper`, `keltner_lower`, `supertrend`, `supertrend_up`, `aroon_up`, `aroon_down`, `psar`, `cmf`, and `highest` and `lowest` of the high and low. A rule such as `high > highest(20)[1]` is then solved for the close, though a high above the close would also buy;
+- "it trades only between its open and its close", for `high` and `low` and the functions that read them: `atr`, `stoch_k`, `stoch_d`, `adx`, `plus_di`, `minus_di`, `cci`, `williams_r`, `mfi`, `vwap`, `keltner_upper`, `keltner_lower`, `supertrend`, `supertrend_up`, `aroon_up`, `aroon_down`, `psar`, `cmf`, `highest since entry`, `lowest since entry`, and `highest` and `lowest` of the high and low. A rule such as `high > highest(20)[1]` is then solved for the close, though a high above the close would also buy;
 - "its volume is that of its last bar", for `volume`, `mfi`, `obv`, `vwap` and `cmf`;
 - "^VIX is unchanged", for another ticker the rule reads with `of`, which gets a bar of its own at its last close. Read a bar back, as in `close[1] of ^VIX`, it needs nothing assumed. With `fill: close`, a ticker that keeps other hours is read a bar early (rule 6), so its bar is usually known already. A ticker on other hours read with next-open fills waits for its bar that ends with the rule's own: a stock read with `close of binance:BTCUSDT` on a Friday reads Bitcoin's Monday at Monday's close, so Bitcoin's Saturday and Sunday, when they are not in the prices yet, are taken as unchanged ("BTCUSDT is unchanged until that close");
 - "UNRATE publishes no new value by that close", for a FRED series the rule reads, and "signals has no new row by that close" for a CSV file of columns with no prices. Such a series has a row only when a value comes out, so it gets none: `close[1] of fred:UNRATE` is still the value before the last one. Read a bar back, it is assumed too, since a new value would move every row back by one;
@@ -1339,11 +1400,11 @@ The model may get a strategy wrong. Read the draft and the model's notes before 
 
 Inside a `strategy` block the editor helps you write it.
 
-- **Colours.** The parts of a block are coloured with your theme's code colours: setting and parameter names, keywords (`buy`, `short`, `add`, `when`, `and`, `of`, `for`), functions, series and calendar values, numbers and values, tickers, parameters used in rules, operators, and comments in italics. The result shows the block coloured the same way.
-- **Auto-complete.** A pop-up offers what can come next, with a line of help for each item. At the start of a line it offers `buy when`, `sell when`, `add when`, `short when`, `cover when`, `for`, and the settings (only the stops inside a `for` section). After `of` and `for` it offers the tickers named in your `universe`, `symbol` and `benchmark` lines, and after `of` also `tiingo:` and `fred:` once you type their first letters. After a setting name it offers values, such as the choices for `rebalance`, `data`, `interval` and `fill`. Inside a rule it offers series, calendar values, your parameters, functions and words such as `crosses above`. `bars held`, `entry price`, `last entry price` and `entries made` are offered only in sell, cover and add rules. After `column(` it offers the column names of the CSV files the block names with `csv:`, for the files the plugin has already read (a block that has run, or the CSV helper, reads one); a file it has not read yet offers none. It stays quiet while you type a number.
+- **Colours.** The parts of a block are coloured with your theme's code colours: setting and parameter names, keywords (`buy`, `short`, `add`, `when`, `and`, `of`, `for`, `between`, `within`), functions, series and calendar values, numbers and values, tickers, parameters and definitions used in rules, operators, and comments in italics. The result shows the block coloured the same way.
+- **Auto-complete.** A pop-up offers what can come next, with a line of help for each item. At the start of a line it offers `buy when`, `sell when`, `add when`, `short when`, `cover when`, `for`, and the settings (only the stops inside a `for` section). After `of` and `for` it offers the tickers named in your `universe`, `symbol` and `benchmark` lines (after a comma on a `for` line, the ones it does not list yet), and after `of` also `tiingo:` and `fred:` once you type their first letters. After a setting name it offers values, such as the choices for `rebalance`, `data`, `interval` and `fill`. Inside a rule it offers series, calendar values, your parameters and definitions, functions and words such as `crosses above`, `between` and `within`. `bars held`, `entry price`, `last entry price`, `entries made`, `highest since entry`, `lowest since entry` and `position return` are offered only in sell, cover and add rules, and in definitions. After `column(` it offers the column names of the CSV files the block names with `csv:`, for the files the plugin has already read (a block that has run, or the CSV helper, reads one); a file it has not read yet offers none. It stays quiet while you type a number.
 - **Underlines.** Problems are underlined with a wavy line, in the theme's error colour. Notes (such as the fixed-price one) are underlined in its warning colour. Hover the underline to read the message, which starts with "Problem:" or "Note:". The editor reads the block with the same parser as the result, using the plugin's defaults.
-- **Help on hover.** Hold the pointer over a word in a `strategy` block to see what it means: its form, one or two sentences, and an example. This covers settings and their fixed values (`monthly`, `yahoo`, `1h`, `next open`), functions, series, calendar and position values, rule words (`crosses above`, `of`, `for all`, `and`), a ticker written with `tiingo:` or `fred:`, `%` and `bps`, the `[n]` lag, and `in ... step` on a parameter line. A name of several words such as `bars held` or `last entry price` is one word, and so is a rule's start such as `add when` or `short when`. A parameter you declared shows its value and range wherever it is used. When the spot also has a problem, the problem comes first and the help under it.
-- **Fixes.** When a problem looks like a typo, the tooltip offers a button such as "Change to sma". It covers the start of a rule (`sel whn`, `ad when`, `shrt when`), a misspelt setting, function (`column` included), series, word in a condition, setting value (`montly`, `yaho`), `for` ticker or parameter name, and habits from other languages: `&&`, `||`, `!` before a word, `=>` and `=<`. A fix is offered only when the corrected block no longer has that problem, and none is offered when two words are equally close. Clicking it is an ordinary edit. The command "Fix the problem at the cursor" does the same from the keyboard for the problem at the cursor, or else the first one on its line. In the list that replaces a result when the block cannot run, the same suggestion is a sentence ("Did you mean sma?").
+- **Help on hover.** Hold the pointer over a word in a `strategy` block to see what it means: its form, one or two sentences, and an example. This covers settings and their fixed values (`monthly`, `yahoo`, `1h`, `next open`), functions, series, calendar and position values, rule words (`crosses above`, `of`, `for all`, `and`), a ticker written with `tiingo:` or `fred:`, `%` and `bps`, the `[n]` lag, and `in ... step` on a parameter line. A name of several words such as `bars held` or `last entry price` is one word, and so is a rule's start such as `add when` or `short when`. A parameter you declared shows its value and range wherever it is used, and a definition its text. When the spot also has a problem, the problem comes first and the help under it.
+- **Fixes.** When a problem looks like a typo, the tooltip offers a button such as "Change to sma". It covers the start of a rule (`sel whn`, `ad when`, `shrt when`), a misspelt setting, function (`column` included), series, word in a condition (`crosses abov`, `betwen`), setting value (`montly`, `yaho`), `for` ticker, parameter or definition name, and habits from other languages: `&&`, `||`, `!` before a word, `=>` and `=<`. A fix is offered only when the corrected block no longer has that problem, and none is offered when two words are equally close. Clicking it is an ordinary edit. The command "Fix the problem at the cursor" does the same from the keyboard for the problem at the cursor, or else the first one on its line. In the list that replaces a result when the block cannot run, the same suggestion is a sentence ("Did you mean sma?").
 - **Ticker lookup.** With the setting "Look tickers up while writing" on, which is the default, typing a ticker on a `universe`, `symbol`, `benchmark` or `cash rate` line offers real ones with their names, from Yahoo and Binance. The tickers already in the block are offered at once. A ticker from the other source is written with its prefix, such as `binance:BTCUSDT`. Typing `csv:` offers the CSV files in your vault, and typing the start of `tiingo:` offers it. Tiingo tickers and FRED series are not looked up, nor are the tickers of a block whose tickers come from Tiingo, so they get no suggestions and no note. Only the ticker word is completed, so a weight such as `SPY 60%` is left alone. A ticker its source does not know, in the universe or after `of`, is underlined as a note ("Yahoo has no ticker called SPYY."), with a button to change it to a near one when there is one. When the same ticker is written on a `for` line or after `of`, the button changes every place and says how many ("Change to SPY (2 places)"). It is offered only if the block has no new problem afterwards. That note never stops a run, and it waits until the cursor leaves the ticker. The lookup sends tickers over the network; see "Network requests" for what and when.
 
 ### Strategy preview

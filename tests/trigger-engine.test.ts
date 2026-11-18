@@ -92,6 +92,60 @@ test('random strategies: each price a report gives makes the order inside it and
   assert.ok(seen.buy >= 150 && seen.sell >= 120 && seen.add >= 25 && seen.rearm >= 8, JSON.stringify(seen));
 });
 
+/** The newer language in random strategies: definitions, ranges, windows, either-way crosses and the values since the entry. */
+function newerStrategy(seed: number): string {
+  const rng = makeRng(seed);
+  const pick = <T,>(xs: T[]): T => xs[rng.int(xs.length)];
+  const n = () => 5 + rng.int(25);
+  const defs = [
+    ['trend', () => `close > sma(${n()})`],
+    ['calm', () => `stdev(${n()}) / close < ${(1 + rng.int(4)).toFixed(0)}%`],
+    ['dip', () => `rsi(${2 + rng.int(6)}) < ${30 + rng.int(25)}`],
+    ['gap', () => `close / sma(${n()}) - 1`],
+  ] as const;
+  const lines = ['universe: A', 'capital: 10000'];
+  if (rng.next() < 0.5) lines.push('fill: close');
+  if (rng.next() < 0.25) lines.push(`trailing stop: ${3 + rng.int(6)}%`);
+  const made = defs.filter(() => rng.next() < 0.75);
+  for (const [name, text] of made) lines.push(`${name} = ${text()}`);
+  const has = (name: string) => made.some(([x]) => x === name);
+  const buys = [
+    () => (has('trend') ? `trend for ${2 + rng.int(3)} bars` : `close > sma(${n()}) for 2 bars`),
+    () => (has('dip') ? `dip within ${2 + rng.int(3)} bars and ${has('trend') ? 'trend' : `close > sma(${n()})`}` : `rsi(3) < 40 within 3 bars`),
+    () => `close between sma(${n()}) * 0.98 and sma(${n()}) * 1.02`,
+    () => `close crosses sma(${n()})`,
+    () => `rsi(${2 + rng.int(6)}) between ${10 + rng.int(20)} and ${40 + rng.int(30)}`,
+    () => `count(close > open, ${4 + rng.int(4)}) >= ${2 + rng.int(3)}`,
+    () => (has('gap') ? `gap < -${(1 + rng.int(3)).toFixed(0)}% and ${has('calm') ? 'calm' : 'close > open'}` : `close < sma(${n()}) * 0.97`),
+  ];
+  const sells = [
+    () => `close < highest since entry - ${(1 + rng.int(3)).toFixed(0)} * atr(14)`,
+    () => `position return > ${4 + rng.int(8)}% or position return < -${2 + rng.int(4)}%`,
+    () => `close < highest since entry * 0.95 or bars held > ${5 + rng.int(20)}`,
+    () => `close > lowest since entry * 1.08`,
+    () => (has('trend') ? `not trend or position return > 6%` : `close < sma(${n()})`),
+    () => `close crosses below sma(${n()})`,
+  ];
+  lines.push(`buy when ${pick(buys)()}`);
+  lines.push(`sell when ${pick(sells)()}`);
+  return lines.join('\n');
+}
+
+test('random strategies in the newer language: each price a report gives makes the order inside it and not outside', () => {
+  const seen = tally();
+  const A = walkBars(800, 3, { vol: 0.025 });
+  for (let seed = 1; seed <= 90; seed++) {
+    const src = newerStrategy(seed);
+    const spec = parsed(src);
+    const rng = makeRng(seed * 17);
+    for (let k = 0; k < 5; k++) {
+      const cut = 420 + rng.int(380);
+      verify(spec, new Map([['A', head(A, cut)]]), `seed ${seed}, ${cut} bars:\n${src}\n`, seen);
+    }
+  }
+  assert.ok(seen.buy >= 40 && seen.sell >= 40, JSON.stringify(seen));
+});
+
 /** `n` weekdays up to `end`, about `every` calendar days apart, with a value for each from `value`. */
 function published(n: number, seed: number, every: number, value: (i: number, rng: ReturnType<typeof makeRng>) => number, end = Date.UTC(2026, 10, 13)): { t: number[]; v: number[] } {
   const rng = makeRng(seed);

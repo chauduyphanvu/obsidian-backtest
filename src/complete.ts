@@ -1,6 +1,6 @@
 import { docFor, shortOf, valueId, FIXED_VALUES } from './docs.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, STOP_SETTINGS } from './dsl.ts';
-import { commentStart, declaredParams, lineKind, settingKey, TICKER_SETTINGS } from './highlight.ts';
+import { commentStart, continues, declaredDefinitions, declaredParams, lineKind, settingKey, TICKER_SETTINGS } from './highlight.ts';
 import type { Suggestion } from './symbols.ts';
 import { SOURCE_PREFIX } from './types.ts';
 
@@ -76,10 +76,14 @@ const WORDS: Completion[] = [
   entry('and', 'and '),
   entry('or', 'or '),
   entry('not', 'not '),
+  entry('crosses', 'crosses '),
   entry('crosses above', 'crosses above '),
   entry('crosses below', 'crosses below '),
   entry('above', 'above '),
   entry('below', 'below '),
+  entry('between', 'between '),
+  entry('within', 'within '),
+  { label: 'for', insert: 'for ', detail: shortOf('for … bars') },
   entry('of', 'of '),
   entry('true', 'true'),
 ];
@@ -164,6 +168,9 @@ export function complete(block: string[], above: string[], before: string, colum
   };
   const names = (suffix: string, detail: string) => tickers(block).map((t) => ({ label: t, insert: t + suffix, detail }));
   const params = declaredParams(block);
+  const definitions = declaredDefinitions(block);
+  // The definition being written cannot use itself.
+  const writing = lineKind(before, false) === 'define' ? before.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)/)![1].toLowerCase() : '';
 
   // Read the lines above the way the parser does: whether a rule is open, which side it is, and
   // which "for" section the cursor sits in.
@@ -172,8 +179,10 @@ export function complete(block: string[], above: string[], before: string, colum
   let section: string | null = null;
   for (const line of above) {
     const kind = lineKind(line, inRule);
-    inRule = kind === 'rule' || kind === 'continuation';
+    inRule = continues(kind);
     if (kind === 'rule') positions = POSITION_RULE.test(line);
+    // A definition may read position values, which are checked where it is used.
+    if (kind === 'define') positions = true;
     if (kind === 'for') {
       const name = line.match(/^\s*for\s+(.+?)\s*:/i)![1];
       section = name.toLowerCase() === 'all' ? null : name;
@@ -200,6 +209,7 @@ export function complete(block: string[], above: string[], before: string, colum
       ...(positions ? POSITION_WORDS : []),
       ...CALENDAR_WORDS,
       ...params.map((p) => ({ label: p.name, insert: p.name, detail: `parameter: ${p.value}` })),
+      ...definitions.filter((d) => d.name.toLowerCase() !== writing).map((d) => ({ label: d.name, insert: d.name, detail: `definition: ${d.value}` })),
       ...FUNCTIONS.map((f) => entry(f, `${f}(`, functionDetail(f))),
       ...WORDS,
     ]);
@@ -223,6 +233,12 @@ export function complete(block: string[], above: string[], before: string, colum
   }
   if (/^\s*(buy|sell|add|short|cover)\s+$/i.test(head)) return match([{ label: 'when', insert: 'when ', detail: '' }], true);
   if (/^\s*for\s+$/i.test(head)) return match([...names(':', 'rules for this ticker only'), entry('all', 'all:', shortOf('for all'))], true);
+  // After a comma on a `for` line: another ticker of the list, one it does not name yet.
+  const listed = head.match(/^\s*for\s+(.+,\s*)$/i);
+  if (listed) {
+    const taken = new Set(listed[1].split(',').map((x) => x.trim().toLowerCase()));
+    return match(names(':', 'rules for this ticker too').filter((t) => !taken.has(t.label.toLowerCase())), true);
+  }
 
   const key = settingKey(head);
   if (key === 'hold' && /:\s*top\s+\S+\s+by\s/i.test(head)) return expression(false);
@@ -238,8 +254,8 @@ export function complete(block: string[], above: string[], before: string, colum
   }
 
   const kind = lineKind(before, inRule);
-  if (kind !== 'rule' && kind !== 'continuation') return null;
-  return expression(kind === 'rule' ? POSITION_RULE.test(before) : positions);
+  if (kind !== 'rule' && kind !== 'continuation' && kind !== 'define') return null;
+  return expression(kind === 'rule' ? POSITION_RULE.test(before) : kind === 'define' ? true : positions);
 }
 
 /** Where the cursor is when a ticker is being written on a `universe`, `symbol`, `benchmark` or `cash rate` line. */

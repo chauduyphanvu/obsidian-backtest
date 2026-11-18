@@ -1,6 +1,6 @@
 import { FUNCTIONS, tickers } from './complete.ts';
 import { CALENDAR, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
-import { declaredParams, NUMERIC_SETTINGS, RULE_HEADS, settingKey, tokenizeBlock } from './highlight.ts';
+import { declaredDefinitions, declaredParams, NUMERIC_SETTINGS, RULE_HEADS, settingKey, tokenizeBlock } from './highlight.ts';
 import { SOURCE_PREFIX } from './types.ts';
 
 /** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
@@ -177,7 +177,7 @@ function pick(ctx: Context, word: string, candidates: readonly string[], build: 
 
 const NAMES = [...SERIES, ...CALENDAR, ...Object.keys(POSITION), 'true', 'false', 'always', 'never'];
 /** Words that can follow a finished value in a condition. */
-const CONNECTIVES = ['and', 'or', 'crosses', 'above', 'below', 'is'];
+const CONNECTIVES = ['and', 'or', 'crosses', 'above', 'below', 'is', 'between', 'within', 'for'];
 
 /** A rule's start written wrong, such as `sel whn`, on a line that begins with it. */
 function ruleHead(lineNo: number, line: string): Edit | null {
@@ -208,8 +208,10 @@ function unknownName(ctx: Context, word: string): Fix | null {
   const { d } = ctx;
   if (d.from === undefined || d.to === undefined || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== word) return null;
   const call = ctx.lines[d.line - 1].slice(d.to).trimStart().startsWith('(');
-  const params = declaredParams(ctx.lines).map((p) => p.name);
-  const candidates = call ? FUNCTIONS : [...NAMES, ...params];
+  const params = [...declaredParams(ctx.lines), ...declaredDefinitions(ctx.lines)].map((p) => p.name);
+  // After "crosses" a direction is as likely as a value.
+  const direction = /\bcrosses\s+$/i.test(ctx.lines[d.line - 1].slice(0, d.from)) ? ['above', 'below'] : [];
+  const candidates = call ? FUNCTIONS : [...NAMES, ...params, ...direction];
   return pick(ctx, word, candidates, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
@@ -337,11 +339,7 @@ export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Default
   if ((found = m(/^Unknown name "(.+?)"\./))) return unknownName(ctx, found[1]);
   if ((found = m(/^Unexpected character "(.)"$/))) return habit(ctx, found[1]);
   if ((found = m(/^Unexpected "(.+)"$/))) return unexpected(ctx, found[1]);
-  if (m(/^Expected "above" or "below" after "crosses"$/)) {
-    const typed = d.from === undefined ? '' : textOf(lines, d.line, d.from, d.to ?? d.from).toLowerCase();
-    return typed ? pick(ctx, typed, ['above', 'below'], (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : null;
-  }
-  if (m(/^"for .+?:" names a ticker that is not in the universe$/)) return forTicker(ctx);
+  if (m(/^"for .+?:" names (?:a ticker that is not|.+, which is not) in the universe$/)) return forTicker(ctx);
   if ((found = m(/^"(entry|bars)" on its own is not a name\. Write "(?:entry|bars) (price|held)"$/))) return onItsOwn(ctx, found[1], found[2]);
   if (/^Not a setting or a rule/.test(d.message)) return notARule(ctx);
   const options = optionsOf(d.message);
