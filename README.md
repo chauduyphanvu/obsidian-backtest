@@ -80,7 +80,7 @@ Dates are always written `2015-01-31`. A percentage is written with a percent si
 | `symbol` | `symbol: SPY` | Another way to write `universe`. | none |
 | `from` | `from: 2015-01-31` | First day of the run. | the first day every ticker has prices |
 | `to` | `to: 2024-12-31` | Last day of the run, whole day included. | the last day with prices |
-| `data` | `data: binance` | Where plain tickers come from: `yahoo`, `binance` or `tiingo`. | the plugin setting (Yahoo) |
+| `data` | `data: binance` | Where plain tickers come from: `yahoo`, `binance` or `tiingo`. A ticker that starts with `^` comes from Yahoo. | the plugin setting (Yahoo) |
 | `interval` | `interval: 1h` | Bar size. Yahoo and Tiingo give `1d` and `1w`. Binance gives `1m` `3m` `5m` `15m` `30m` `1h` `2h` `4h` `6h` `8h` `12h` `1d` `3d` `1w`. | `1d` |
 | `capital` | `capital: 10k` | Starting money, as `10000` or `10k` (`m` is millions; `$`, commas and underscores are ignored). | the plugin setting (10000) |
 | `costs` | `costs: 5 bps` | Cost of each trade, as `5 bps` or `0.05%`. A plain number is bps. Must be under 10%. | the plugin setting (0 bps) |
@@ -122,7 +122,7 @@ More on the values:
 
 The `universe` line lists tickers, separated by commas, each with an optional weight: `universe: SPY 60%, TLT 40%`.
 
-- A plain ticker comes from the source named by `data`, or by the plugin setting when the block has no `data` line.
+- A plain ticker comes from the source named by `data`, or by the plugin setting when the block has no `data` line. A plain ticker that starts with `^`, an index or a yield such as `^VIX` or `^IRX`, comes from Yahoo whatever `data` says, since only Yahoo has them: with `data: tiingo`, `close of ^VIX` and the cash rate `^IRX` still read Yahoo. Write `tiingo:^VIX` to ask Tiingo all the same.
 - Put `yahoo:`, `binance:`, `tiingo:`, `fred:` or `csv:` in front of a ticker to choose its source: `universe: SPY, binance:BTCUSDT`.
 - Write Yahoo tickers the way Yahoo spells them: `SPY`, `BRK-B`, `BTC-USD`, `^GSPC`. Binance tickers are market symbols such as `BTCUSDT`. Tiingo tickers are US stocks, ETFs and funds, such as `tiingo:SPY` or `tiingo:BRK-B`. Letters in Yahoo, Binance, Tiingo and FRED tickers are turned into capitals. A ticker may hold letters, digits and `^ . _ = -`.
 - Tiingo and FRED need an API key each, chosen in the plugin settings ("Tiingo API key" and "FRED API key"). Without one, a block that uses them stops with "Tiingo needs an API key to load SPY. Choose the secret that holds it under "Tiingo API key" in the plugin settings." (or the same for FRED).

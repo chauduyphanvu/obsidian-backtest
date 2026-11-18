@@ -1,5 +1,5 @@
 import { DAY } from './format.ts';
-import { columnName, DATA_SOURCES, SOURCE_PREFIX, type Asset, type AssetRef, type DataSource, type Source } from './types.ts';
+import { columnName, DATA_SOURCES, plainSource, SOURCE_PREFIX, type Asset, type AssetRef, type DataSource, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
 export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn';
@@ -879,7 +879,7 @@ class ExprParser {
 function parseRef(text: string, defaultSource: Source, where: At): AssetRef {
   const prefix = text.match(SOURCE_PREFIX);
   const m = prefix && text.length > prefix[0].length ? prefix : null;
-  const source = m ? (m[1].toLowerCase() as Source) : defaultSource;
+  const source = m ? (m[1].toLowerCase() as Source) : plainSource(text, defaultSource);
   const raw = m ? text.slice(m[0].length) : text;
   if (source === 'csv') {
     const base = raw.split('/').pop()!.replace(/\.csv$/i, '');
