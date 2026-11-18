@@ -7,7 +7,7 @@ import { nextLines, rowFrom } from '../src/dashboard.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
 import { isoDate } from '../src/format.ts';
-import { actionWord, type OrderRow } from '../src/orders.ts';
+import type { OrderRow } from '../src/orders.ts';
 import { exitWording, tradeExit } from '../src/price-chart.ts';
 import { compactFacts } from '../src/render.ts';
 import type { RunOutput } from '../src/runner.ts';
@@ -114,8 +114,7 @@ test('the trades CSV of a run that shorts gets a side column at the end, so the 
 test('the snapshot note: a short held, the trades with their side, and the exposure of a block that borrows', () => {
   const out = run(`${FLIP}\nfill: close`, { A: bars([101, 99, 101, 98]) });
   const md = snapshotMarkdown({ name: 'Flip', source: FLIP, backtest: out.backtest, now: day(9) });
-  // What follows the position is the order made at the last close, which orders.ts words.
-  assert.ok(md.includes(`| A | 100% | Short since ${date(3)}, `), md);
+  assert.ok(md.includes(`| A | 100% | Short since ${date(3)}, sold, then sold short at the last close |`), md);
   assert.ok(md.includes('| Ticker | Side | Opened | At | Closed | At | Return | Exit |'), md);
   assert.ok(md.includes(`| A | Short | ${date(3)} | 98.00 | – | – | 0.0% | still held |`), md);
   assert.ok(md.includes(`| A | Long | ${date(2)} | 101.00 | ${date(3)} | 98.00 | −3.0% | flipped to short |`), md);
@@ -153,9 +152,16 @@ test('the dashboard names a short held, and counts longs and shorts held togethe
 });
 
 test('the dashboard\'s next orders: sells and covers first, then buys and short sales, then adds, each timing on its own', () => {
-  const order = (ticker: string, action: string, when: OrderRow['when'] = 'next open', step?: OrderRow['step']): OrderRow =>
-    ({ ticker, action, when, weight: 0, value: 0, lastClose: 1, since: null, ...(step ? { step } : {}) }) as unknown as OrderRow;
-  const word = (o: OrderRow) => actionWord(o);
+  const order = (ticker: string, action: OrderRow['action'], when: OrderRow['when'] = 'next open', step?: OrderRow['step']): OrderRow => ({
+    ticker,
+    action,
+    when,
+    weight: 0,
+    value: 0,
+    lastClose: 1,
+    since: null,
+    ...(step ? { step } : {}),
+  });
   const rows = [
     order('D', 'short'),
     order('E', 'buy', 'next open', { k: 2, n: 2 }),
@@ -164,14 +170,12 @@ test('the dashboard\'s next orders: sells and covers first, then buys and short 
     order('A', 'sell'),
     order('F', 'short', 'last close'),
     order('G', 'cover', 'last close'),
+    order('H', 'short', 'next open', { k: 2, n: 3 }),
   ];
-  assert.deepEqual(nextLines(rows), [
-    `${word(rows[4])} A`,
-    `${word(rows[2])} B`,
-    `${word(rows[3])} C`,
-    `${word(rows[0])} D`,
-    `${word(rows[1])} E`,
-    `${word(rows[6])} G at the last close`,
-    `${word(rows[5])} F at the last close`,
-  ]);
+  assert.deepEqual(nextLines(rows), ['Sell A', 'Buy to cover B', 'Buy C', 'Sell short D', 'Add E, H', 'Bought to cover G at the last close', 'Sold short F at the last close']);
+  // From a run: a short sale waiting, and a flip as its two orders.
+  const next = (src: string, data: Record<string, Bars>) => rowFrom('n.md', 'S', run(src, data), day(9)).next;
+  assert.deepEqual(next('universe: A\nshort when close < 11', { A: bars([12, 12, 10]) }), ['Sell short A']);
+  assert.deepEqual(next(FLIP, { A: bars([101, 101, 99]) }), ['Sell A', 'Sell short A']);
+  assert.deepEqual(next(FLIP, { A: bars([99, 99, 101]) }), ['Buy to cover A', 'Buy A']);
 });

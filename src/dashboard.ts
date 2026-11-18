@@ -129,7 +129,8 @@ const LINE_KINDS = ['sell', 'cover', 'buy', 'short', 'add'] as const;
  * no time.
  */
 export function nextLines(orders: OrderRow[]): string[] {
-  const kindOf = (o: OrderRow): string => (o.action === 'buy' && !!o.step && o.step.k > 1 ? 'add' : o.action);
+  // A later entry of a position built in steps is an add, on either side.
+  const kindOf = (o: OrderRow): string => ((o.action === 'buy' || o.action === 'short') && !!o.step && o.step.k > 1 ? 'add' : o.action);
   return TIMINGS.flatMap((when) =>
     LINE_KINDS.flatMap((kind) => {
       const group = orders.filter((o) => o.when === when && kindOf(o) === kind);

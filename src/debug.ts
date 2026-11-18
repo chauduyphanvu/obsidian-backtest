@@ -874,10 +874,11 @@ function disarmedBefore(ix: AssetIx, t0: number, side: 'long' | 'short', rule: n
   let p = ix.trades.length - 1;
   while (p >= 0 && !(sideOf(ix.trades[p]) === side && ix.trades[p].reason !== 'open' && ix.trades[p].exitT < t0)) p--;
   let by: Trade | null = p >= 0 && isLevelExit(ix.trades[p]) ? ix.trades[p] : null;
-  // A stop exit's own close reads the rule again; a margin call is made after its close was read.
+  // A stop exit's own close reads the rule again; a margin call is made after its close was read. The later one counts:
+  // a side entered again since had stopped holding first, which the walk below finds.
   let from = by ? barAt(ix.bars.t, by.exitT) : -1;
   const last = calls.at(-1);
-  if (last && (p < 0 || last.t >= ix.trades[p].exitT)) {
+  if (last && (!by || last.t >= by.exitT)) {
     by = last.trade;
     from = barAt(ix.bars.t, last.t) + 1;
   }
