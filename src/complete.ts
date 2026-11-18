@@ -169,6 +169,8 @@ export function complete(block: string[], above: string[], before: string, colum
   const names = (suffix: string, detail: string) => tickers(block).map((t) => ({ label: t, insert: t + suffix, detail }));
   const params = declaredParams(block);
   const definitions = declaredDefinitions(block);
+  // A word the language took up after 0.7.0 can be one of these names, which then means only the block's own.
+  const own = new Set([...params, ...definitions].map((n) => n.name.toLowerCase()));
   // The definition being written cannot use itself.
   const writing = lineKind(before, false) === 'define' ? before.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)/)![1].toLowerCase() : '';
 
@@ -207,10 +209,10 @@ export function complete(block: string[], above: string[], before: string, colum
     return match([
       ...SERIES.map((s) => entry(s)),
       ...(positions ? POSITION_WORDS : []),
-      ...CALENDAR_WORDS,
+      ...CALENDAR_WORDS.filter((c) => !own.has(c.label)),
       ...params.map((p) => ({ label: p.name, insert: p.name, detail: `parameter: ${p.value}` })),
       ...definitions.filter((d) => d.name.toLowerCase() !== writing).map((d) => ({ label: d.name, insert: d.name, detail: `definition: ${d.value}` })),
-      ...FUNCTIONS.map((f) => entry(f, `${f}(`, functionDetail(f))),
+      ...FUNCTIONS.filter((f) => !own.has(f)).map((f) => entry(f, `${f}(`, functionDetail(f))),
       ...WORDS,
     ]);
   };

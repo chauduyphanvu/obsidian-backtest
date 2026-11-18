@@ -137,6 +137,15 @@ test('inside a rule a definition is offered with its text, and so are the new wo
   assert.deepEqual(labels([], 'held = position r'), ['position return']);
 });
 
+test('a word the block took as a name is offered only as that name, not as the function or value it would mean elsewhere', () => {
+  const block = ['universe: SPY', 'count = 50 in 20..100 step 10', 'quarter = close > sma(50)', 'buy when close > sma(count)'];
+  const found = complete(block, [], 'buy when coun')!;
+  assert.deepEqual(found.items.map((i) => [i.label, i.insert, i.detail]), [['count', 'count', 'parameter: 50 in 20..100 step 10']]);
+  assert.deepEqual(complete(block, [], 'buy when quar')!.items.filter((i) => i.label === 'quarter').map((i) => i.detail), ['definition: close > sma(50)']);
+  // Elsewhere both are there as before.
+  assert.equal(complete(BLOCK, [], 'buy when coun')!.items[0].insert, 'count(');
+});
+
 test('after a comma on a for line the tickers not listed yet are offered', () => {
   assert.deepEqual(labels([], 'for '), ['SPY', 'QQQ', 'all']);
   assert.deepEqual(labels([], 'for SPY, '), ['QQQ']);
