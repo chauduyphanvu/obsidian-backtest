@@ -151,6 +151,9 @@ function readable(header: string[], saved: Partial<FillColumns>): boolean {
   return at.date >= 0 && at.ticker >= 0 && at.quantity >= 0 && at.price >= 0 && !savedMissing;
 }
 
+/** The header line of a table of trades in an activity statement or a Flex query, whose rows start with their section. */
+const MARKED = /^"?(?:Trades"?,"?Header|HEADER)"?,/;
+
 interface Table {
   header: string[];
   rows: { cells: string[]; line: number }[];
@@ -162,7 +165,7 @@ interface Table {
  * title and over totals and notes. Also counts the statement's dividend and transfer rows, which have sections of their own.
  */
 function tablesOf(lines: string[], saved: Partial<FillColumns>): { tables: Table[]; ignored: number; dividends: number; transfers: number } {
-  const marked = lines.some((l) => /^"?(?:Trades"?,"?Header|HEADER)"?,/.test(l));
+  const marked = lines.some((l) => MARKED.test(l));
   const tables: Table[] = [];
   let ignored = 0;
   let dividends = 0;
@@ -326,6 +329,36 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
 }
 
 const ROLE_FORMS = 'date, ticker, side, quantity, price and fees';
+
+/** Lines of a file looked through for its header when its columns are named by hand. */
+const HEADER_SEARCH = 40;
+
+export interface HeaderGuess {
+  /** The headers of the line most likely to be the table's, as the file spells them. */
+  header: string[];
+  /** The header each part is in by its usual names or the saved ones, as indexes into `header`; -1 for none. */
+  at: Record<Exclude<FillRole, 'fees'>, number>;
+  fees: number[];
+}
+
+/**
+ * The header of the table of trades in a file whose columns were not found, for naming them by hand: of its first lines,
+ * the one with the most cells filled. In a statement whose rows start with their section, only the trades' header lines
+ * are looked at, without the section and kind. Null for a file with no line of two cells.
+ */
+export function headerGuess(text: string, saved: Partial<FillColumns> = {}): HeaderGuess | null {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+  const marked = lines.some((l) => MARKED.test(l));
+  let best: string[] = [];
+  for (const line of marked ? lines.filter((l) => MARKED.test(l)) : lines.slice(0, HEADER_SEARCH)) {
+    const cells = splitCsvLine(line, marked ? ',' : detectCsvSeparator(line)).map((c) => c.trim());
+    const header = marked ? cells.slice(2) : cells;
+    if (header.filter(Boolean).length > best.filter(Boolean).length) best = header;
+  }
+  if (best.filter(Boolean).length < 2) return null;
+  const { at, fees } = columnsOf(best, saved);
+  return { header: best, at, fees: fees.filter((i) => i >= 0) };
+}
 
 /**
  * Reads a `fills columns` setting: `date = Run Date; ticker = Symbol; side = Action; quantity = Quantity; price = Price ($);

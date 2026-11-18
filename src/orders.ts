@@ -1,6 +1,8 @@
+import { accountOrders, accountStrategy, parseAccount, runAccount, type AccountOrder } from './account.ts';
+import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
-import { DAY, isoDate, money, price, signedPct, stamp } from './format.ts';
+import { DAY, isoDate, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
 
@@ -327,7 +329,7 @@ export function problemsOf(s: StrategyStatus): string[] {
 const heldText = (h: HoldingRow) => `${h.ticker} ${share(h.weight)}${h.gain === null ? '' : ` (${signedPct(h.gain)})`}`;
 
 /** The wikilink text for a strategy; a table cell needs the alias separator escaped. */
-function link(s: StrategyStatus, inTable: boolean): string {
+function link(s: Pick<StrategyStatus, 'note' | 'strategy'>, inTable: boolean): string {
   const target = s.note.replace(/\.md$/i, '');
   const name = s.strategy.replace(/[[\]|]/g, ' ').replace(/\s+/g, ' ').trim();
   return `[[${target}${inTable ? '\\|' : '|'}${name}]]`;
@@ -406,8 +408,61 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
   });
 }
 
+// --- Accounts ---------------------------------------------------------------------------------------------------------
+
+/** One `account` block's orders: what the account trades at the next open to hold what its strategies hold together. */
+export interface AccountStatus {
+  note: string;
+  /** The block's `name:`, else its note's name. */
+  name: string;
+  /** Its orders with shares to trade, sales first. */
+  orders: AccountOrder[];
+  /** The latest of its strategies' last bars; null when they did not run. */
+  asOf: number | null;
+  error: string | null;
+}
+
+/** What the scan of the vault's accounts needs from the plugin. */
+export interface AccountScanHost {
+  /** Every `account` block in the vault. */
+  find(): Promise<{ note: string; name: string; source: string }[]>;
+  /** How the block in `note` finds and runs the strategies it lists; runs already kept are reused. */
+  strategies(note: string): CompareHost<{ basename: string }>;
+}
+
+export const ACCOUNTS_HEADING = 'Accounts';
+export const ACCOUNTS_NOTE =
+  "What each account block trades at the next open, in shares: its strategies' orders netted together at the account's size, with each holding brought to their positions. The block shows where each order comes from.";
+
+/** Every account block in the vault, its strategies run (from the kept results where the strategies were just run) and netted into orders. */
+export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus[]> {
+  const found = await host.find();
+  return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
+    const status: AccountStatus = { note: f.note, name: f.name, orders: [], asOf: null, error: null };
+    const { config, entries, errors } = parseAccount(f.source);
+    if (errors.length) return { ...status, error: `Line ${errors[0].line}: ${errors[0].message}` };
+    try {
+      const runs = await runAccount(entries, host.strategies(f.note));
+      const strategies = runs.map((r) => accountStrategy(r.label, r.alloc, r.out));
+      const plan = accountOrders(config, strategies);
+      return { ...status, orders: plan.orders.filter((o) => o.shares !== 0), asOf: Math.max(...strategies.map((s) => s.asOf)) };
+    } catch (e) {
+      return { ...status, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+}
+
+/** An account's order in words: "Buy 12 shares", "Sell all 30 shares". */
+export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind'>): string {
+  const n = Math.abs(o.shares);
+  return `${o.shares > 0 ? 'Buy' : o.kind === 'close' ? 'Sell all' : 'Sell'} ${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`;
+}
+
+/** Accounts by name, as the window and the note list them. */
+export const sortAccounts = (list: AccountStatus[]): AccountStatus[] => [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+
 /** A note body for today's orders; the date is the reader's today. */
-export function ordersMarkdown(list: StrategyStatus[], now: number): string {
+export function ordersMarkdown(list: StrategyStatus[], now: number, accounts: AccountStatus[] = []): string {
   const lines = ['---', `${ORDERS_MARKER}: true`, '---', '', `# Today's orders, ${localDate(now)}`, ''];
   if (list.length === 0) return [...lines, 'No strategy blocks found.', ''].join('\n');
 
@@ -426,6 +481,20 @@ export function ordersMarkdown(list: StrategyStatus[], now: number): string {
       lines.push(`| ${link(status, true)} | ${actionWord(order)} | ${order.ticker} | ${orderSize(order)} | ${price(order.lastClose)} | ${basisCell} |`);
     }
     lines.push('');
+  }
+
+  if (accounts.length) {
+    lines.push(`## ${ACCOUNTS_HEADING}`, '', ACCOUNTS_NOTE, '');
+    const sortedAccounts = sortAccounts(accounts);
+    const trading = sortedAccounts.filter((a) => a.orders.length);
+    if (trading.length) {
+      lines.push('| Account | Order | Ticker | Last close |', '| --- | --- | --- | ---: |');
+      for (const a of trading) for (const o of a.orders) lines.push(`| ${link({ note: a.note, strategy: a.name }, true)} | ${accountOrderText(o)} | ${o.ticker} | ${price(o.price)} |`);
+      lines.push('');
+    }
+    const rest = sortedAccounts.filter((a) => !a.orders.length);
+    for (const a of rest) lines.push(`- ${link({ note: a.note, strategy: a.name }, false)}: ${a.error === null ? 'nothing to trade' : `couldn't be worked out. ${a.error}`}`);
+    if (rest.length) lines.push('');
   }
 
   const watching = watchList(sorted);

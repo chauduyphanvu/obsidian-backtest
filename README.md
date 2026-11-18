@@ -924,18 +924,93 @@ Each line names one strategy:
 - A weight can follow the note, such as `40%`.
 - A line that starts with `#` is a comment. Blank lines are skipped.
 
-The rules: at least 2 strategies and at most 8. List each strategy once. Give every line a weight or none. Weights must be above 0% and add up to at most 100%.
+The rules: at least 2 strategies and at most 8. List each strategy once. Give every line a weight or none. A weight can't be below 0%, at least one must be above 0%, and together they add up to at most 100%. A strategy at `0%` is listed but not in the combination: its line is drawn and its figures are in the table, Combined leaves it out, and it counts toward the 2.
 
 Blocks are found the way the editor finds them. A `strategy` block inside a callout or a quote counts. One inside a longer fence of another kind, such as an example shown in a four-backtick `markdown` block, does not.
 
 What you get:
 
 - A title and the dates every strategy covers, from the latest start to the earliest end. Between a strategy's own dates its last value is carried forward. Each line is rescaled to start at the plugin's "Starting money" setting (not each strategy's own `capital`), and the title line says so. A key shows each line's final value.
-- With weights, a "Combined" line. It holds the strategies at those weights and goes back to them on the first date of each month. Any weight not used stays in cash that earns nothing. The line is drawn on top.
+- With weights, a "Combined" line. It holds the strategies at those weights and goes back to them on the first date of each month. Any weight not used stays in cash that earns nothing. A strategy at 0% is not in it, and the note under the chart names it. The line is drawn on top.
 - A table of return per year, total return, worst drawdown and Sharpe ratio for each line. As in a strategy's own result, the Sharpe ratio takes off what cash earned over each step, using the strategy's own cash rate. For the "Combined" line it takes off the average of the strategies' cash returns, weighted by their weights as if they added up to 100%.
 - How alike they move. With two strategies it is a sentence about the correlation of their returns. With three or more it is a table of correlations, from 1 (move together) to -1 (move against each other).
 
+- With weights, "How to split" (below).
+
 Each strategy runs as written, with the plugin's defaults for what it leaves out. If one cannot run, the comparison says which line and why.
+
+### How to split
+
+Under a `compare` block with weights, and in an `account` block with two strategies or more, "How to split" suggests other weights for the same strategies. Each set adds up to the total the block's weights add up to (if they add up to 80%, so does each set, and the rest stays in cash), and no weight is below 0%.
+
+| Row | How its weights are set |
+| --- | --- |
+| As written | The block's own weights. |
+| Equal weights | The same weight for each strategy. |
+| Inverse volatility | Each strategy in proportion to 1 ÷ the volatility of its monthly returns. Needs 6 full months. |
+| Minimum variance | The weights whose mix varied least, from how the strategies' monthly returns vary and move together. Needs 24 full months. |
+| Maximum diversification | The weights whose mix has the highest ratio of the strategies' own volatilities, weighted, to the mix's. Needs 24 full months. |
+
+The returns are those of each full calendar month the strategies have in common. How they move together is estimated with the covariances pulled towards one average correlation (Ledoit and Wolf, 2004), which steadies an estimate from few months; the notes say how far. A strategy whose monthly returns barely moved, as one that sat in cash does, gets nothing from the three methods that size by risk, since they would put almost everything in it.
+
+Each row has the return per year, worst drawdown and Sharpe ratio of its combined line. A method's line works its weights out again at the start of each month from the months before it only, with equal weights until it has the months it needs, and holds them through the month, so its figures are ones that following the method could have had. The weights in the row are the ones it gives for the month to come, from every full month, as whole percentages rounded by largest remainders so they add up exactly.
+
+"Use these weights" writes a row's weights into the block: in place of the weight on each strategy's line, or after the note on a line with none. Comments and other lines are left as they are. If the block changed since the table was drawn, nothing is written and the table says: "The note has changed since this result was drawn, so nothing was written. Try again."
+
+Under the table, "What each strategy adds" takes the combined line at the weights written and, for each strategy, the same line without it, its weight spread over the others in proportion to theirs. The figures are the first less the second: above 0 is better in all three columns.
+
+These are estimates from the past. Weights chosen on the same history the strategies were chosen on flatter the mix. The month-by-month lines keep later months out of each month's weights; they do not undo that.
+
+## Accounts
+
+A code block marked `account` describes one brokerage account: what it holds, its cash, and the strategies it follows with their share of it. It shows the orders that bring the account to what those strategies hold together, how to split it between them, and, given a file of your broker's trades, how your fills compare with the strategies' trades.
+
+```account
+name: Main brokerage
+holdings: SPY 120, TLT 50, QQQ 10
+cash: 4,200
+whole shares: yes
+skip under: 1%
+fills: Broker/schwab.csv
+fills from: 2026-06-01
+capital at start: 48,000
+
+[[Trend following]] 40%
+[[Pullbacks#QQQ RSI pullback]] 40%
+Research/Three sleeves.md 20%
+```
+
+| Setting | What it does |
+| --- | --- |
+| `name: Main brokerage` | The name at the top of the block and in the orders window. Without it, the note's name. |
+| `holdings: SPY 120, TLT 50` | What the account holds: each ticker as the strategies spell it, with its shares, separated by commas or semicolons. `holdings: none` for nothing. |
+| `cash: 4,200` | Its cash, such as `4,200`, `$4,200.50` or `48k`. The block needs `cash`, `holdings` or both. |
+| `whole shares: yes` | `yes`, the default, rounds orders to whole shares. `no` trades fractions, to 8 decimals. |
+| `skip under: 1%` | Leaves out a resize worth less than this share of the money the strategies manage, and, in whole shares, one of a share or less. Opening or closing a position follows a signal and is never left out. The default, 0%, makes every order. |
+| `fills: Broker/schwab.csv` | Your broker's CSV export of trades, by its path in the vault, or as `[[Broker/schwab.csv]]`. Needs `fills from`. |
+| `fills from: 2026-06-01` | The first day the account followed the strategies. Fills before it are not compared. |
+| `capital at start: 48,000` | What the account was worth that day. Without it, sizes are not compared. |
+| `fills columns: date = Trade Date; ticker = Symbol` | The headers of the fills file that hold each part of a trade (`date`, `ticker`, `side`, `quantity`, `price` and `fees`, with several fees columns joined by `+`), where they are not the usual ones. The form for an unrecognised file writes it. |
+
+The strategies are listed as in a `compare` block, at most 8. Each weight is a share of the money the strategies manage: the cash and the holdings of tickers a listed strategy trades, at the last closes. What the weights leave over stays in cash. Without weights each strategy gets an equal share. A strategy at `0%` gets none of the money, so what the account holds of its tickers is sold, unless another strategy holds them. A line that starts with `#` is a comment, and a mistake is shown with its line, as in a `compare` block. Holdings of tickers no listed strategy trades are left alone.
+
+**Orders for this account.** For each ticker: Buy, Sell, "Sell all", "Nothing to do" or "Skip: small"; the shares; the last close; the order's value; the shares held and the strategies' target; and where the order comes from: each strategy's own order at the account's size, and the drift, what it takes to bring the holding back to the strategies' positions. A ticker's target is the sum, over the strategies, of their share of the money the strategies manage times the share of their equity the ticker comes to once their orders waiting for the next open are made. Sales are listed first. Buys are cut, with "cut to the cash", when they come to more than the cash and the sales bring. Under the table: the money the strategies manage, the cash after the orders, what trading the strategies' orders as one spares against each trading on its own (in money traded and in their costs), and the holdings left alone. The orders are for the next open after the strategies' last bar, and the price of a ticker two strategies trade is the last close of the one whose prices end latest.
+
+**How to split** is the table described under "Comparing and combining strategies". "Use these weights" writes the weights on the block's strategy lines.
+
+**Your fills against the signals.** With `fills` and `fills from`, the block reads your broker's file and sets your fills against the strategies' trades from that day on.
+
+- **Reading the file.** Columns are found by their headers, never by their place, so a column added or moved does not matter. Lines above the table and totals and notes under it are skipped. These are recognised: Charles Schwab's transaction history, Fidelity's account history, and Interactive Brokers' activity statement (its Trades section) and a Flex query of trades. Another file reads when its headers are the usual ones, such as Date, Symbol, Action, Quantity, Price and Commission. Without a buy or sell column, the sign of the quantity says which. When the date, ticker, quantity or price can't be found, the block shows a form with a menu for each part, guessed from the line with the most columns; "Save these columns in the block" writes the `fills columns` line, and the block reads the file again. Dividends, reinvestments, transfers and other activity, such as interest, fees and options, are left out and counted, and so are trades of tickers no listed strategy trades. BRK/B, BRK.B and BRK B are all Yahoo's BRK-B.
+- **Matching.** Each day's trades of a ticker are netted across the strategies, each sized as its share of `capital at start` ÷ its own equity on `fills from`. Your fill of the same day and side is **on time**, or **partial** under 70% of the strategies' size in money and **oversized** over 130%. One within 5 trading days after is **late**. A trade of the strategies with no fill is **not made**, or **waiting** while its 5 days are not over. A fill of yours that matches no trade is **off plan**. Without `capital at start`, nothing is partial or oversized, and trades not made are not counted in money.
+- **Prices.** Yahoo's and Tiingo's prices are adjusted for later dividends and splits, so they are not what you paid. For the tickers that you or the strategies traded since `fills from`, the block loads the daily prices as they traded (see "Network requests"), and only when the file has fills from that day on. A strategy's price is converted by that day's close as traded over its adjusted close. Binance and CSV prices are as traded already. A fill more than 3% outside the range its day traded in is most likely from a split and is not compared on price. When the prices as traded can't be loaded, the ticker's fills are matched but not compared on price, and a note says so.
+- **What is shown.** "Not following the rules cost $X since 2026-06-01" (or "made", when it came out ahead), and its four parts: **slippage**, your price against the strategies' on the same day times your shares, above 0 when yours was worse; **fees**, from the file; **late fills**, the same for fills on a later day; and **trades not made**, what the strategies' trade would have made by the last close, below 0 for a loss avoided. The total is exactly the sum of the four, not a second run of the whole account: a trade off plan counts only its fees. Then a row for each ticker, and, for each strategy with fills compared, the median slippage as a line to copy into its block, such as `slippage: 4.2 bps`, so its backtest pays what you pay. The plugin's own settings are not changed. "Every trade" lists each row with the strategies' trade, yours and the cost.
+
+What to keep in mind:
+
+- A rebalance due at the next open shows a bar late: the block shows it once the strategy's backtest has made it.
+- The size of a new position of a strategy that sizes by inverse volatility or by risk per trade is an estimate from the last close.
+- Dividends and reinvestments are left out. A dividend is in your cash only once you write it in `cash`, and shares a reinvestment bought are not compared with anything.
+- A fill far outside its day's range is left out of the price comparison as a likely split. The strategies' shares are counted after every later split, as their prices are.
 
 ## All strategies in one table
 
@@ -970,6 +1045,7 @@ The command "Show today's orders", or the ribbon icon of the same name, opens a 
 - **To do at the next close.** Orders of a strategy with `fill: close` that could not fill at the close they were decided at. This happens when a ranking decision is made at a time a ticker has no bar: its order waits for that ticker's next close. The rows look like the ones above.
 - **Traded at the last close.** What a strategy with `fill: close` did at the close that has just passed. Its backtest has already bought or sold, so the row says Bought or Sold. To match it, the order had to be placed before that close. A buy shows its share of the strategy, a sell the whole position and the day it was opened.
 - **Watch at the next close.** The trigger prices worth watching (see "Trigger prices"), nearest first: those that give an order at an unchanged close or within 2% of the last close, and every one of a strategy with `fill: close`, whose orders have to be placed before the close. Each row has Buy, Sell or Add in a dashed outline, the ticker, the price in words with when its order fills, such as "Buys if it closes above 512.30 (+1.2%), at the following open", the strategy, the last close (with the other ticker named, as in "512.30 (SPY)", when the rule reads another ticker's close), and the bar it is based on. A close to watch is not an order and is not counted as one.
+- **Accounts.** For each `account` block in the vault (see "Accounts"), its orders in shares, from the results of the strategies just run: Buy or Sell, the ticker, the shares ("Sell all 30 shares" for a position closed), the last close and the shares held. An account with nothing to trade says so, and one that can't be worked out says why. These are the strategies' orders netted at the account's size, so they are not counted again in the status bar.
 - **Holding.** Strategies that hold something or have no order, and what they hold. A position that has an order row, including one bought at the last close, is not listed again here.
 - **Strategies that fill at the close.** The strategies with `fill: close`, under this note: "A strategy with fill: close decides and fills an order at the same close, so the order has to be placed just before a close. What is listed for it is what its rules said at the last close."
 - **Problems.** A block that could not run (one that is too large or takes too long to run is listed here with its message, see "When a backtest is too large"), prices that are out of date, and any warning from loading prices. For daily bars, prices are out of date when they end more than 4 calendar days ago. For bars shorter than a day, they are out of date when the last bar is more than 3 bars old, and for weekly bars when it is more than 2 bars old.
@@ -978,7 +1054,7 @@ A group with no rows is left out. When no strategy has an order, the window says
 
 The header says which bar the orders are based on. Orders under "To do at the next open" are for the open after that bar, and under "To do at the next close" for the close after it. "Traded at the last close" is that bar's own close. When the strategies with orders end on different bars, the header shows the oldest and says so, and each row shows its own. Yahoo's bar for the current day is used once the exchange's regular session has closed, when Yahoo's answer gives that time; until then, and when it does not, the orders refer to the previous close. Check the date.
 
-Refresh prices downloads each ticker once, however many strategies use it, then runs the strategies again, three at a time. Each Tiingo ticker is a request to Tiingo, whose free plan allows about 50 an hour, so a vault with many Tiingo tickers can reach that limit when the window or the check at start-up refreshes them all. "Save as note" writes the same list to the note named in the "Note for today’s orders" setting, creating it if it does not exist and replacing its whole contents each time. The saved note has one section for each group that has rows ("To do at the next open", "To do at the next close", "Traded at the last close"), or "To do" with "No strategy has an order." when there are none, then "Watch at the next close" as a table when there is a close to watch, and names the strategies with `fill: close` under "Strategies that fill at the close". The generated note starts with the property `backtest_orders: true`. An existing note is replaced only if it has that property; otherwise nothing is written and the window says "<path> already exists and was not made by Backtest Blocks. Choose another note in settings." With no note set, it says so. Nothing in the window places an order.
+Refresh prices downloads each ticker once, however many strategies use it, then runs the strategies again, three at a time. Each Tiingo ticker is a request to Tiingo, whose free plan allows about 50 an hour, so a vault with many Tiingo tickers can reach that limit when the window or the check at start-up refreshes them all. "Save as note" writes the same list to the note named in the "Note for today’s orders" setting, creating it if it does not exist and replacing its whole contents each time. The saved note has one section for each group that has rows ("To do at the next open", "To do at the next close", "Traded at the last close"), or "To do" with "No strategy has an order." when there are none, then "Accounts" as a table of each account's orders with a line for each account with none, then "Watch at the next close" as a table when there is a close to watch, and names the strategies with `fill: close` under "Strategies that fill at the close". The generated note starts with the property `backtest_orders: true`. An existing note is replaced only if it has that property; otherwise nothing is written and the window says "<path> already exists and was not made by Backtest Blocks. Choose another note in settings." With no note set, it says so. Nothing in the window places an order.
 
 A block with no `name` is listed under its note's file name, or "file name 1", "file name 2" when a note has several.
 
@@ -1261,7 +1337,7 @@ More forms: `column(score) of signals crosses above 0.5`, and `hold: top 3 by co
 
 ### What is saved on disk
 
-Prices from Yahoo, Binance and Tiingo are saved in `<plugin folder>/cache`, one JSON file for each source, ticker and interval, and a FRED series in one file whatever the interval, with the note on its backfill when it has one. The plugin folder is `<vault>/.obsidian/plugins/backtest-blocks/`. The file names hold the source and the ticker or series ID only. No API key is saved there or in the settings, which hold only the names of the secrets. The smaller bars of `magnify` are saved the same way, under their own bar size. Binance's are kept in a file of their own, apart from a block's own bars of that size, and cut to the latest 100,000 each time they are refreshed. The files are treated as fresh for the "Keep saved prices for" time (6 hours by default). After that the plugin fetches again. If the fetch fails and a saved copy exists, the copy is used and the result says: "Couldn't refresh X (reason); using prices saved on DATE." An `account` block with a `fills` line also saves the daily prices of the Yahoo and Tiingo tickers in your fills as they traded each day, unadjusted for later dividends and splits, in files of their own whose names start with `raw-`. If you sync the `.obsidian` folder, the saved prices go with it. "Clear saved prices" removes the folder.
+Prices from Yahoo, Binance and Tiingo are saved in `<plugin folder>/cache`, one JSON file for each source, ticker and interval, and a FRED series in one file whatever the interval, with the note on its backfill when it has one. The plugin folder is `<vault>/.obsidian/plugins/backtest-blocks/`. The file names hold the source and the ticker or series ID only. No API key is saved there or in the settings, which hold only the names of the secrets. The smaller bars of `magnify` are saved the same way, under their own bar size. Binance's are kept in a file of their own, apart from a block's own bars of that size, and cut to the latest 100,000 each time they are refreshed. The files are treated as fresh for the "Keep saved prices for" time (6 hours by default). After that the plugin fetches again. If the fetch fails and a saved copy exists, the copy is used and the result says: "Couldn't refresh X (reason); using prices saved on DATE." An `account` block with a `fills` line also saves the daily prices as they traded, unadjusted for later dividends and splits, of the Yahoo and Tiingo tickers it compares your fills on, in files of their own whose names start with `raw-`. If you sync the `.obsidian` folder, the saved prices go with it. "Clear saved prices" removes the folder.
 
 Each strategy block's tries and versions (see "How many tries" and "Versions") are saved in `<plugin folder>/ledger`, one JSON file for each block, named by a hash of its note and its name or place. A file is written about 2 seconds after a change, and when the plugin is turned off. Before writing, the plugin reads the file again and merges it with what it holds, so a copy that a sync brought in from another device is joined, not overwritten: the tries and versions of both are kept, less the tries from before the latest "Start the count again". Deleting the folder forgets every block's tries and versions.
 
@@ -1278,7 +1354,7 @@ The plugin contacts these hosts, and no others:
 - A block with `magnify` makes the same requests for its smaller bars, to the Yahoo and Binance hosts.
 - A `forward` block runs its frozen rules like a `strategy` block, so it makes the same requests as a block with those tickers, when it is drawn and when you press "Refresh prices".
 - The "Regimes and crises" section makes the same requests as a block with those tickers, to the same hosts, for the daily bars of SPY, `^VIX` and `^TNX` from Yahoo, or of `BTCUSDT` from Binance for a strategy that trades only there, and only when you press its button "Load SPY, ^VIX, ^TNX from Yahoo" (or "Load BTCUSDT from Binance"). It asks for nothing before you open the section, and nothing when those prices are already saved and fresh.
-- An `account` block with a `fills` line makes the same daily request to Yahoo, or to Tiingo for a ticker that came from Tiingo, for each ticker in your fills that one of its strategies trades, to read the prices as they traded that day. It asks only when that ticker's saved copy is missing or no longer fresh, and never for a Binance or CSV ticker, whose prices are as traded already.
+- An `account` block with a `fills` line makes the same daily request to Yahoo, or to Tiingo for a ticker whose prices came from Tiingo, for each ticker that you or its strategies traded since `fills from`, to read the prices as they traded each day. It asks only when your file has fills from that day on, and only when that ticker's saved copy is missing or no longer fresh, and never for a Binance or CSV ticker, whose prices are as traded already. Your file itself is read from the vault and sent nowhere.
 - `api.anthropic.com`, only when you draft a strategy with the Anthropic provider and no server address.
 - The server address you enter, only when you draft a strategy. That can be a server on your own machine.
 
@@ -1309,6 +1385,8 @@ Nothing else leaves your vault. There is no telemetry, no analytics, no update c
 
 - The overfitting checks have unit tests: the normal distribution and its inverse against values worked out to many more digits; the deflated Sharpe ratio against the worked example of Bailey and López de Prado (100 tries whose Sharpe ratios a year have a variance of 0.5, a Sharpe ratio of 2.5 a year over 5 years of 250 bars, skewness −3 and kurtosis 10 give SR₀ = 0.1132 a bar and a deflated Sharpe ratio of 0.9004); the probability of backtest overfitting against a case worked by hand (4 parts, 3 variants) and on made-up sweeps (about one half for variants with no edge, near 0 with one real edge); that blocks that trade alike count as one try and that anything that can change a trade counts as another; how two copies of a block's record merge; and the changed lines against a slower count of the longest common run of lines.
 
+- The `account` block has unit tests with figures worked out by hand: the target and order of each ticker for every kind of order a strategy can have waiting, two strategies sharing a ticker, netting and what it spares, the band, whole and fractional shares, buys cut to the cash, a strategy at 0%, and the notes. "How to split" has them for the simplex projection and each method against cases worked by hand, for the shrinkage against the formula of Ledoit and Wolf, for weights that use no later month, and for whole percentages that add up. The broker files are read from example files with titles above and notes under the table: Schwab, Fidelity (two accounts in one file), an Interactive Brokers activity statement and a Flex query, and files with renamed columns. The matching has a test for each kind of fill, a split, prices as they traded, and that the total is exactly the sum of its parts. Writing weights and the `fills columns` line into the block is tested in callouts and with Windows line endings, and refused when the block changed. Yahoo's prices as they traded are worked back from a hand-made answer with a 4-for-1 split, and the orders window's Accounts group from strategies run on made-up prices.
+
 **What has not been checked against anything**
 
 The second backtester has nothing to compare these with, so they rest on the unit tests (and the review) only:
@@ -1323,6 +1401,7 @@ The second backtester has nothing to compare these with, so they rest on the uni
 
 Also not checked:
 
+- The `account` block, "How to split" under a `compare` block, the form for naming a file's columns and the orders window's Accounts group have not been tried in a running Obsidian, and how they are drawn has not been looked at. The broker files they read are built from each broker's documented headers and action words, not from real exports: a broker that names a column or words an action differently needs a `fills columns` line, or its rows are listed as not read. Prices as they traded have not been downloaded from the live services: Yahoo's are worked back from its split events, which assumes its prices are adjusted for splits as its documentation says, and Tiingo's are its own unadjusted fields.
 - Trigger prices have not been tried in a running Obsidian. The "Next close" column, the orders window's "Watch at the next close" and the tooltip have been drawn only in a headless browser with stand-ins for Obsidian's own objects. Holidays, an exchange's half days, and the hours of a market that is closed overnight are not known when the next bar is placed.
 - The Parameters bar with `entries` as a parameter has not been tried in a running Obsidian, nor the bar-by-bar table's question before a CSV file of over 20 MB. They have been checked by unit tests and, for what is drawn, in headless Chrome, with stand-ins for Obsidian's own objects.
 - `magnify` has been checked on four saved real Yahoo responses and on a comparison of SPY's hourly and 5-minute bars with its daily bars (492 sessions), and three live pages of Binance's bars were downloaded. In the plugin it has been run on live prices only with SPY's 1-hour bars, and the smaller bars of exchanges with a lunch break, such as Tokyo or Hong Kong, and of futures or currencies have not been tried. A day whose smaller bars do not cover its session or do not match the bar is read whole, and the notes say so (rule 63).
@@ -1390,6 +1469,7 @@ Layout of `src/`:
 - `allocate.ts`: how to split money between strategies: equal weights, inverse volatility, minimum variance and maximum diversification from monthly returns, worked out again each month from the months before it, and weights in whole percentages.
 - `fills.ts`: a broker's export of trades read into fills (Charles Schwab, Fidelity, Interactive Brokers, or any file whose columns are named), and those fills set against the strategies' trades: slippage, fees, late fills and trades not made.
 - `render-split.ts`: drawing "How to split" under a weighted `compare` block and in an `account` block, with its button that writes the weights into the block.
+- `render-account.ts`: drawing the `account` block: its orders, how to split, and your fills against the strategies' trades, with the form that names an unrecognised file's columns.
 - `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.
 - `render.ts`, `render-params.ts`, `render-trades.ts`, `render-stats.ts`, `render-price.ts`, `price-chart.ts`, `render-debug.ts`, `render-sweep.ts`, `render-luck.ts`, `render-compare.ts`, `render-dashboard.ts`, `render-actions.ts`, `orders-view.ts`, `dom.ts`: drawing results, charts, tables and windows. `render-params.ts` draws the Parameters bar, `render-debug.ts` the bar-by-bar table, `render-sweep.ts` and `render-luck.ts` the sweep and luck sections, `render-compare.ts` the compare block and `render-dashboard.ts` the `backtests` block.
 - `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `types.ts`: the plugin itself, settings and shared types.

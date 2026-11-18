@@ -40,9 +40,10 @@ export function renderCompareMessage(parent: HTMLElement, text: string): void {
   h(h(parent, 'div', 'bt-root'), 'div', 'bt-note', text);
 }
 
-export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], source: string): void {
+/** The block's problems, each with its line; `title` names what can't run, as "This comparison can't run yet". */
+export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], source: string, title = "This comparison can't run yet"): void {
   const root = h(parent, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? "This comparison can't run yet" : `This comparison can't run yet: ${errors.length} problems`);
+  h(root, 'div', 'bt-error-title', errors.length === 1 ? title : `${title}: ${errors.length} problems`);
   const lines = source.split('\n');
   const list = h(root, 'ul', 'bt-errors');
   for (const e of errors) {

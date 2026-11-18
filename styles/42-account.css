@@ -1,0 +1,107 @@
+/* The account block: its orders, "How to split" (also under a weighted compare block), and the fills against the signals. */
+
+.bt-acct-heading,
+.bt-split-heading {
+  margin: 18px 0 6px;
+  font-weight: var(--font-semibold);
+}
+
+/* As in the orders window, a purchase and a sale are told apart by their words, not by colour. */
+.bt-root .bt-acct-buy td:nth-child(2),
+.bt-root .bt-acct-sell td:nth-child(2) {
+  font-weight: var(--font-semibold);
+}
+.bt-root .bt-acct-none td {
+  color: var(--text-muted);
+}
+.bt-root .bt-acct-orders td,
+.bt-root .bt-acct-trades td,
+.bt-root .bt-split-table td.bt-num {
+  white-space: nowrap;
+}
+/* Which strategy each order comes from can run long; it wraps rather than widening the table. */
+.bt-root .bt-acct-orders td:last-child {
+  white-space: normal;
+  min-width: 14em;
+  color: var(--text-muted);
+}
+
+.bt-acct-total {
+  margin: 10px 0 6px;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+.bt-root .bt-acct-parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.bt-acct-part {
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+.bt-acct-part dt {
+  color: var(--text-muted);
+}
+.bt-acct-part dd {
+  margin: 2px 0 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-root .bt-acct-off-plan td,
+.bt-root .bt-acct-waiting td {
+  color: var(--text-muted);
+}
+
+.bt-acct-suggested {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+.bt-acct-suggested code {
+  user-select: all;
+}
+
+.bt-acct-form {
+  margin: 10px 0;
+}
+.bt-acct-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 12px;
+  margin-bottom: 10px;
+}
+.bt-acct-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.bt-acct-field select {
+  width: 100%;
+  min-width: 0;
+}
+.bt-acct-label {
+  color: var(--text-muted);
+}
+
+.bt-split {
+  margin-top: 8px;
+}
+.bt-root .bt-split-written td {
+  font-weight: var(--font-semibold);
+}
+.bt-root .bt-split-table th.bt-num {
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bt-split-name {
+  white-space: nowrap;
+}
+.bt-split-use {
+  white-space: nowrap;
+}
