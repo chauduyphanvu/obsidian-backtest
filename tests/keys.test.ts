@@ -21,19 +21,48 @@ const NOW = Date.UTC(2025, 2, 12, 12);
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 
-/** FRED's observations JSON from [date, first published, value] rows. */
-const fredJson = (rows: [string, string, string][]): string =>
-  JSON.stringify({ output_type: 4, observations: rows.map(([date, published, value]) => ({ realtime_start: published, realtime_end: published, date, value })) });
+/**
+ * A stand-in for FRED holding one series, from [date, first published, value] rows, answering as FRED did on 2026-11-17:
+ * its publication days (vintage dates); the series as it stood on a day; and each observation as first released
+ * (`output_type=4`) within a real-time period, which leaves out what the first day published, and is refused for a period
+ * with more than 2,000 publication days.
+ */
+function fredAnswer(rows: [string, string, string][]): (url: string) => Promise<string> {
+  const days = [...new Set(rows.map((r) => r[1]))].sort();
+  return async (url) => {
+    const q = new URL(url).searchParams;
+    if (url.includes('/series/vintagedates?')) {
+      const offset = Number(q.get('offset') ?? 0);
+      const limit = Number(q.get('limit') ?? 10000);
+      return JSON.stringify({ count: days.length, offset, limit, vintage_dates: days.slice(offset, offset + limit) });
+    }
+    const start = q.get('realtime_start') ?? days[days.length - 1];
+    const end = q.get('realtime_end') ?? '9999-12-31';
+    const asRow = ([date, , value]: [string, string, string], from: string) => ({ realtime_start: from, realtime_end: end, date, value });
+    if (q.get('output_type') !== '4') {
+      return JSON.stringify({ observations: rows.filter((r) => r[1] <= end).map((r) => asRow(r, start)) });
+    }
+    const within = days.filter((d) => d >= start && d <= end).length;
+    if (within > 2000) {
+      return JSON.stringify({
+        error_code: 400,
+        error_message: `Bad Request.  There are ${within} vintage dates in the specified real-time period: ${start} to ${end}.  This exceeds the maximum number of vintage dates allowed for this file type (2000).`,
+      });
+    }
+    return JSON.stringify({ observations: rows.filter((r) => r[1] !== days[0] && r[1] >= start && r[1] <= end).map((r) => asRow(r, r[1])) });
+  };
+}
 
 /** Daily FRED observations, each first published the next day, for the `n` days to 10 March 2025. */
-function daily(n: number, value = (i: number) => (i % 7) - 3): string {
+function dailyRows(n: number, value = (i: number) => (i % 7) - 3): [string, string, string][] {
   const rows: [string, string, string][] = [];
   for (let i = 0; i < n; i++) {
     const d = Date.UTC(2025, 2, 10) - (n - 1 - i) * DAY;
     rows.push([iso(d), iso(d + DAY), String(value(i))]);
   }
-  return fredJson(rows);
+  return rows;
 }
+const daily = (n: number) => fredAnswer(dailyRows(n));
 
 const tiingoRows = (n: number) =>
   JSON.stringify(
@@ -76,22 +105,43 @@ const FRED: AssetRef = { name: 'T10Y2Y', source: 'fred', id: 'T10Y2Y' };
 
 // ------------------------------------------------------------------------------------------------ loading FRED
 
-test('a FRED series is asked for once, as first released, with the key only in the query, and saved under its ID', async () => {
-  const { d, seen, cache } = recording(async () => daily(30));
+test('a FRED series is asked for by its publication days: as it stood on the first, then as first released, with the key only in the query, and saved under its ID', async () => {
+  const { d, seen, cache } = recording(daily(30));
   const r = await loadBars(FRED, '1d', 0, d);
+  const base = `https://api.stlouisfed.org/fred/series/%s?series_id=T10Y2Y&api_key=${FRED_KEY}&file_type=json`;
   assert.deepEqual(seen.requests, [
-    { url: `https://api.stlouisfed.org/fred/series/observations?series_id=T10Y2Y&api_key=${FRED_KEY}&file_type=json&output_type=4&realtime_start=1776-07-04` },
+    { url: `${base.replace('%s', 'vintagedates')}&limit=10000&offset=0` },
+    { url: `${base.replace('%s', 'observations')}&realtime_start=2025-02-10&realtime_end=2025-02-10` },
+    { url: `${base.replace('%s', 'observations')}&output_type=4&realtime_start=2025-02-10&realtime_end=9999-12-31` },
   ]);
   assert.deepEqual([r.source, r.stale, r.warning, r.bars.values, iso(r.through)], ['fred', false, null, true, '2025-03-11']);
   assert.deepEqual([...cache.keys()], ['fred-T10Y2Y']);
   // The same series serves every interval from the one file.
   await loadBars(FRED, '1h', 0, d);
   await loadBars(FRED, '1w', 0, d);
-  assert.equal(seen.requests.length, 1);
+  assert.equal(seen.requests.length, 3);
+});
+
+test('a daily series with more publication days than FRED answers for at once is asked for a window of days at a time, with what its first day held', async () => {
+  // FRED has DGS3MO from 1982, but ALFRED from 2005: its first day there held 23 years, then each day added one value.
+  const first = '2005-06-28';
+  const rows: [string, string, string][] = [];
+  for (let t = Date.UTC(1982, 0, 4); t < Date.parse(first); t += 7 * DAY) rows.push([iso(t), first, '5']);
+  for (let i = 0; i < 3500; i++) {
+    const d = Date.parse(first) + i * DAY;
+    rows.push([iso(d), iso(d + DAY), String(1 + (i % 5))]);
+  }
+  const { d, seen } = recording(fredAnswer(rows));
+  const r = await loadBars({ name: 'DGS3MO', source: 'fred', id: 'DGS3MO' }, '1d', 0, d);
+  assert.equal(iso(r.bars.t[0]).slice(0, 4), '1982');
+  assert.equal(r.bars.c[r.bars.c.length - 1], 1 + (3499 % 5));
+  // Its publication days, its first day, then three windows of first releases.
+  assert.equal(seen.requests.length, 5);
+  assert.match(r.note!, /^FRED first published \d+ values of DGS3MO \(dated 1982-01-04 to 2005-06-2\d\) together on 2005-06-28/);
 });
 
 test('whether bars are values comes from the source, never from a saved file', async () => {
-  const { d, cache } = recording(async () => daily(30));
+  const { d, cache } = recording(daily(30));
   await loadBars(FRED, '1d', 0, d);
   const saved = JSON.parse(cache.get('fred-T10Y2Y')!);
   delete saved.bars.values;
@@ -107,7 +157,7 @@ test('whether bars are values comes from the source, never from a saved file', a
 test('the note on a backfill comes with the series, fresh or saved, and is not a warning', async () => {
   const rows: [string, string, string][] = Array.from({ length: 8 }, (_, i) => [iso(Date.UTC(2024, i, 1)), '2024-10-01', String(i)]);
   rows.push(['2024-09-01', '2024-10-04', '9'], ['2024-10-01', '2024-11-08', '10']);
-  const { d, cache } = recording(async () => fredJson(rows));
+  const { d, cache } = recording(fredAnswer(rows));
   const fresh = await loadBars({ name: 'UNRATE', source: 'fred', id: 'UNRATE' }, '1d', 0, d);
   assert.match(fresh.note!, /^FRED first published 8 values of UNRATE \(dated 2024-01-01 to 2024-08-01\) together on 2024-10-01/);
   assert.equal(fresh.warning, null);
@@ -132,7 +182,7 @@ test('FRED: a series it does not know is final; a rejected key, another error an
 });
 
 test('FRED without a key asks nothing and names the setting', async () => {
-  const { d, seen } = recording(async () => daily(5), { secret: () => null });
+  const { d, seen } = recording(daily(5), { secret: () => null });
   await assert.rejects(loadBars(FRED, '1d', 0, d), { message: 'FRED needs an API key to load T10Y2Y. Choose the secret that holds it under "FRED API key" in the plugin settings.' });
   assert.equal(seen.requests.length, 0);
 });
@@ -171,15 +221,16 @@ test('a run with Tiingo, FRED and Tiingo standing in for Yahoo puts the keys in 
   const { d, seen } = recording(async (url) => {
     if (url.includes('finance.yahoo.com')) throw new Error('HTTP 503');
     if (url.includes('api.tiingo.com')) return tiingoRows(400);
-    return daily(400);
+    return daily(400)(url);
   });
   const block = 'universe: tiingo:SPY, QQQ\ncash rate: fred:DGS3MO\nfrom: 2024-12-01\nbuy when close of fred:T10Y2Y > 0';
   const runner = new Runner(d, defaultsFrom({ ...DEFAULT_SETTINGS, tiingoSecret: 'tiingo-secret', fredSecret: 'fred-secret' }));
   const { spec, errors } = runner.parse(block);
   assert.deepEqual(errors, []);
   const out = await runner.run(spec!);
-  // Both keys went out, each where its service takes it: FRED's twice, Tiingo's for SPY and for QQQ in Yahoo's place.
-  assert.equal(seen.requests.filter((r) => r.url.includes(`api_key=${FRED_KEY}`)).length, 2);
+  // Both keys went out, each where its service takes it: FRED's in the three requests of each series, Tiingo's for SPY
+  // and for QQQ in Yahoo's place.
+  assert.equal(seen.requests.filter((r) => r.url.includes(`api_key=${FRED_KEY}`)).length, 6);
   assert.equal(seen.requests.filter((r) => r.headers?.Authorization === `Token ${TIINGO_KEY}`).length, 2);
   assert.deepEqual(
     out.prices.map((p) => [p.name, p.source]),
@@ -218,12 +269,12 @@ test('no error from a keyed request carries a key, or the query of the address i
     assert.ok(!m.includes(FRED_KEY) && !m.includes(TIINGO_KEY), m);
     assert.ok(!/https?:\/\/\S*\?/.test(m), m);
   }
-  assert.ok(messages.includes("Couldn't load T10Y2Y from fred: net::ERR_CONNECTION_RESET at https://api.stlouisfed.org/fred/series/observations"));
+  assert.ok(messages.includes("Couldn't load T10Y2Y from fred: net::ERR_CONNECTION_RESET at https://api.stlouisfed.org/fred/series/vintagedates"));
   assert.ok(messages.includes("Couldn't load T10Y2Y from fred: FRED said: Something went wrong with …"));
 });
 
 test('a saved copy used after a failed refresh says why without the key', async () => {
-  const { d, cache } = recording(async () => daily(30));
+  const { d, cache } = recording(daily(30));
   await loadBars(FRED, '1d', 0, d);
   const later = recording(
     async (url) => {
@@ -232,14 +283,14 @@ test('a saved copy used after a failed refresh says why without the key', async 
     { now: () => NOW + DAY, cacheRead: async (k) => cache.get(k) ?? null },
   );
   const r = await loadBars(FRED, '1d', 0, later.d);
-  assert.equal(r.warning, "Couldn't refresh T10Y2Y (timeout https://api.stlouisfed.org/fred/series/observations); using prices saved on 2025-03-12.");
+  assert.equal(r.warning, "Couldn't refresh T10Y2Y (timeout https://api.stlouisfed.org/fred/series/vintagedates); using prices saved on 2025-03-12.");
 });
 
 test("a FRED series keeps the history its rules need counted in its own rows, as a CSV file does", async () => {
   // A monthly series from 1990, first published 14 days after each month: a daily run's 250 bars of history would hold
   // only a dozen of its rows.
   const months: [string, string, string][] = Array.from({ length: 420 }, (_, i) => [iso(Date.UTC(1990, i, 1)), iso(Date.UTC(1990, i + 1, 14)), String(4 + (i % 5))]);
-  const { d } = recording(async () => fredJson(months));
+  const { d } = recording(fredAnswer(months));
   const { spec, errors } = parseSpec('universe: SPY\nfrom: 2020-01-01\nbuy when sma(close, 12) of fred:UNRATE < 6');
   assert.deepEqual(errors, []);
   const spy = JSON.stringify({ fetched: NOW, since: 0, bars: { t: [Date.UTC(2019, 0, 2), Date.UTC(2020, 0, 2)], o: [1, 1], h: [1, 1], l: [1, 1], c: [1, 1], v: [1, 1] } });
@@ -294,7 +345,7 @@ test('a saved FRED series with its note is ready to run with no download', async
     const d = Date.UTC(2024, 1, 4) + i * DAY;
     return [iso(d), iso(i < 10 ? Date.UTC(2024, 1, 14) : d + DAY), '4'];
   });
-  const net = recording(async (url) => (url.includes('api.tiingo.com') ? tiingoRows(400) : fredJson(rows)));
+  const net = recording(async (url) => (url.includes('api.tiingo.com') ? tiingoRows(400) : fredAnswer(rows)(url)));
   const store = new PriceStore({ files: io, cacheDir: 'cache', normalize: (p) => p, fetchText: net.d.fetchText, secret: net.d.secret });
   const block = 'universe: tiingo:SPY\ncash rate: fred:DGS3MO\nbuy when true';
   const defaults = defaultsFrom(DEFAULT_SETTINGS);

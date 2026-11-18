@@ -7,12 +7,6 @@ import { emptyBars, type Bars } from './types.ts';
 /** A series' first day of publication with more observations than this is a backfill: history put in at once. */
 export const BACKFILL = 5;
 
-/**
- * The earliest real-time day a request asks for, so ALFRED gives each observation's first release. A row that gives this
- * day back as its publication carries no date of its own.
- */
-export const REALTIME_START = '1776-07-04';
-
 interface Observation {
   /** The day the observation is for: a day, or the first day of its week's end, month, quarter or year as FRED dates it. */
   date: number;
@@ -78,8 +72,8 @@ function onDays(published: number[]): string {
 }
 
 /**
- * FRED's observations JSON, asked for with `output_type=4` (each observation once, as first released) and the earliest
- * `realtime_start`, to rows a rule reads: one on each day a newer observation was first published, holding the value of
+ * FRED's observations, as the series stood on its first day in ALFRED followed by each later observation as first
+ * released (`output_type=4`, data.ts), to rows a rule reads: one on each day a newer observation was first published, holding the value of
  * the newest one known that day, so `t` grows with every row. A missing value ("."), and a row whose date cannot be read,
  * is left out. Values may be zero or below.
  *
@@ -99,7 +93,7 @@ export function parseFred(json: string, id: string): FredSeries {
     const raw = row?.value;
     const value = typeof raw === 'string' && raw.trim() !== '' && raw.trim() !== '.' ? Number(raw) : NaN;
     if (!Number.isFinite(date) || !Number.isFinite(value)) continue;
-    const published = row?.realtime_start === REALTIME_START ? NaN : dayOf(row?.realtime_start);
+    const published = dayOf(row?.realtime_start);
     const seen = first.get(date);
     // An observation listed again, as a revision would be, keeps its first release.
     if (!seen || (Number.isFinite(published) && !(seen.published <= published))) first.set(date, { date, published, value });

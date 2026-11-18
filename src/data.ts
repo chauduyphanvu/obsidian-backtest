@@ -1,6 +1,6 @@
 import { intervalMs, YAHOO_INSIDE_DAYS } from './dsl.ts';
 import { DAY } from './format.ts';
-import { parseFred, REALTIME_START, type FredSeries } from './fred.ts';
+import { parseFred, type FredSeries } from './fred.ts';
 import { columnName, emptyBars, MAX_COLUMNS, sliceBars, type AssetRef, type Bars, type Column, type KeyedService, type Source, type UnreadColumn } from './types.ts';
 
 const FRESH_FOR = 6 * 3_600_000;
@@ -631,24 +631,47 @@ async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps, raw 
   });
 }
 
-/** A FRED series, each value dated by its first release (fred.ts). FRED takes the key only in the query, so every error is cleaned of it. */
+/** Publication days one first-release answer covers: FRED refuses a real-time period with more than 2,000. */
+const FRED_DAYS_AT_ONCE = 1500;
+
+/**
+ * A FRED series, each value dated by its first release (fred.ts): the days ALFRED has it published on; the series as it
+ * stood on the first of them, which holds its history from before ALFRED; then each later observation as first released
+ * (`output_type=4`, which never repeats what the first day held), a window of days at a time. FRED takes the key only
+ * in the query, so every error is cleaned of it.
+ */
 async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
   const key = keyFor('fred', ref, deps);
   return keyed(key, async () => {
-    const url =
-      `https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(ref.id)}&api_key=${encodeURIComponent(key)}` +
-      `&file_type=json&output_type=4&realtime_start=${REALTIME_START}`;
-    const text = await deps.fetchText(url);
-    if (!text.trimStart().startsWith('{')) throw new Error('FRED sent something other than series data');
-    try {
-      return parseFred(text, ref.name);
-    } catch (e) {
+    const ask = async (path: string, query: string): Promise<Record<string, unknown>> => {
+      const text = await deps.fetchText(
+        `https://api.stlouisfed.org/fred/series/${path}?series_id=${encodeURIComponent(ref.id)}&api_key=${encodeURIComponent(key)}&file_type=json${query}`,
+      );
+      if (!text.trimStart().startsWith('{')) throw new Error('FRED sent something other than series data');
       const error = said(text, 'error_message');
-      if (error === undefined) throw e;
-      if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series called ${ref.name}. Check the series ID, such as T10Y2Y.`);
-      if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Check the secret chosen under "${KEY_SETTING.fred}" in the plugin settings`);
-      throw new Error(`FRED said: ${error.replace(/\s+/g, ' ')}`);
+      if (error !== undefined) {
+        if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series called ${ref.name}. Check the series ID, such as T10Y2Y.`);
+        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Check the secret chosen under "${KEY_SETTING.fred}" in the plugin settings`);
+        throw new Error(`FRED said: ${error.replace(/\s+/g, ' ')}`);
+      }
+      return JSON.parse(text) as Record<string, unknown>;
+    };
+    const rows = (body: Record<string, unknown>): unknown[] => (Array.isArray(body.observations) ? body.observations : []);
+
+    const days: string[] = [];
+    for (;;) {
+      const page = await ask('vintagedates', `&limit=10000&offset=${days.length}`);
+      const got = Array.isArray(page.vintage_dates) ? page.vintage_dates.filter((d): d is string => typeof d === 'string') : [];
+      days.push(...got);
+      if (got.length === 0 || days.length >= Number(page.count)) break;
     }
+    if (days.length === 0) throw new Error(`FRED gives no day ${ref.name} was published on, so its values can't be dated`);
+    const observations = rows(await ask('observations', `&realtime_start=${days[0]}&realtime_end=${days[0]}`));
+    for (let i = 0; i < days.length; i += FRED_DAYS_AT_ONCE) {
+      const end = i + FRED_DAYS_AT_ONCE < days.length ? days[i + FRED_DAYS_AT_ONCE - 1] : '9999-12-31';
+      observations.push(...rows(await ask('observations', `&output_type=4&realtime_start=${days[i]}&realtime_end=${end}`)));
+    }
+    return parseFred(JSON.stringify({ observations }), ref.name);
   });
 }
 

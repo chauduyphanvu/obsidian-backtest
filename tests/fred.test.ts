@@ -3,14 +3,14 @@ import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { barsFrom } from '../src/data.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { BACKFILL, parseFred, REALTIME_START } from '../src/fred.ts';
+import { BACKFILL, parseFred } from '../src/fred.ts';
 import { sliceBars, type Bars } from '../src/types.ts';
 import { bars, DAY, near, T0 } from './helpers.ts';
 
 /** FRED's observations JSON as `output_type=4` answers, from [date, first published, value] rows. */
 function fredJson(rows: [string, string, string][]): string {
   return JSON.stringify({
-    realtime_start: REALTIME_START,
+    realtime_start: '2024-01-01',
     realtime_end: '9999-12-31',
     output_type: 4,
     file_type: 'json',
@@ -159,10 +159,10 @@ test('a weekly series is dated by the day its week ends', () => {
   assert.match(s.note!, /5 days after the last day of its period/);
 });
 
-test('a row that gives the first day asked for as its publication has no date of its own, and is dated as a backfill is', () => {
+test('a row without a publication day it can be read from has no date of its own, and is dated as a backfill is', () => {
   const s = parseFred(
     fredJson([
-      ['2024-01-02', REALTIME_START, '1'],
+      ['2024-01-02', '', '1'],
       ['2024-01-03', '2024-01-04', '2'],
       ['2024-01-04', '2024-01-05', '3'],
     ]),
