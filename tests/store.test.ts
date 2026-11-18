@@ -158,7 +158,7 @@ test('a file\'s key is read once: later renames by a prefix read only files not 
   assert.equal(s.reads.length, 2);
   s.reads.length = 0;
   await s.store.renamePrefix('E.md\u0000', 'F.md\u0000');
-  assert.deepEqual(s.reads, []);
+  assert.equal(s.reads.length, 0);
   // A file a sync brought in is read, and moved.
   s.map.set(path('G.md\u0000name:z'), file('G.md\u0000name:z', [3]));
   await s.store.renamePrefix('G.md\u0000', 'H.md\u0000');
