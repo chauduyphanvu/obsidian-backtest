@@ -1,7 +1,7 @@
 {
   "id": "backtest-blocks",
   "name": "Backtest Blocks",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "minAppVersion": "1.11.4",
   "description": "Write a trading strategy (long, short or leveraged) as readable rules in a note and see its backtest drawn underneath.",
   "author": "Vu",
