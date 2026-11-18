@@ -831,14 +831,16 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     return !a.heldBack;
   };
 
+  const configured = new Map(assets.map((a) => [a, a.weight]));
   /**
    * Target weights for the assets held or being bought. Inverse volatility shares out those
    * assets' configured weights by 1 / volatility, measured up to `idx(a)`; an asset whose volatility
-   * is 0 (or, for a buy not yet signalled, unknown) keeps its configured weight.
+   * is 0 (or, for a buy not yet signalled, unknown) keeps its configured weight. Read only: without
+   * inverse volatility every call gives the same map.
    */
   const targetWeights = (entering: Set<A>, idx: (a: A) => number): Map<A, number> => {
-    const out = new Map(assets.map((a) => [a, a.weight]));
-    if (p.sizing.k !== 'invvol') return out;
+    if (p.sizing.k !== 'invvol') return configured;
+    const out = new Map(configured);
     const n = p.sizing.n;
     const known = assets
       .filter((a) => a.shares > 0 || entering.has(a))
