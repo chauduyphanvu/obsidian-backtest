@@ -1,0 +1,11 @@
+language 1
+strategy "s5: long one ticker, short another" {
+  // One script's rules are every security's, so the short goes on TWIN, CHOP's twin, and series("twin") tells them apart.
+  universe   symbols("TRND", "TWIN")
+  twin       series("twin")
+  enter long when twin == 0 and close > sma(close, 50) and not (close < sma(close, 50))
+  enter short when twin == 1 and close < sma(close, 50) and not (close > sma(close, 50))
+  exit long when close < sma(close, 50)
+  exit short when close > sma(close, 50)
+  size       100% of equity, max 2 positions
+}

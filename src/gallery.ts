@@ -143,6 +143,18 @@ slippage: 2 bps
 buy  when month >= 11 or month <= 4
 sell when month >= 5 and month <= 10`,
   },
+  {
+    title: 'Trend, long or short',
+    description:
+      'Holds SPY while its price is above its 200-day average and sells it short while the price is below, turning from one side to the other at each crossing. It tends to struggle in sideways markets, where each crossing is a sale and a short sale that both cost a little, and in sharp rebounds, when the short loses as the price climbs back.',
+    text: `name: Trend, long or short
+universe: SPY
+from: 2005-01-01
+costs: 5 bps
+
+buy   when close > sma(200)
+short when close < sma(200)`,
+  },
 ];
 
 export const EMPTY: Starter = {

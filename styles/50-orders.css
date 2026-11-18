@@ -95,9 +95,17 @@ summary.bt-orders-heading {
   font-weight: var(--font-semibold);
   text-align: center;
 }
-.bt-orders-sell {
+.bt-orders-sell,
+.bt-orders-short {
   background: var(--text-normal);
   color: var(--background-primary);
+}
+/* A list with "Sell short" or "Buy to cover" in it, and "Sold short" or "Bought to cover" once done. */
+.bt-orders-wide .bt-orders-row {
+  grid-template-columns: 7.2em minmax(0, 1fr);
+}
+.bt-orders-done.bt-orders-wide .bt-orders-row {
+  grid-template-columns: 8.8em minmax(0, 1fr);
 }
 .bt-orders-ticker {
   display: inline-block;

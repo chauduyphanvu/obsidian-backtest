@@ -34,17 +34,25 @@ export function walkBars(n: number, seed: number, o: { weekends?: boolean; end?:
 /** The first `n` bars. */
 export const head = (b: Bars, n: number): Bars => ({ t: b.t.slice(0, n), o: b.o.slice(0, n), h: b.h.slice(0, n), l: b.l.slice(0, n), c: b.c.slice(0, n), v: b.v.slice(0, n) });
 
-/** Whether the ticker's state at the end shows the order a trigger of `side` gives. */
+/**
+ * Whether the ticker's state at the end shows the order a trigger of `side` gives. A sell that flips to short leaves a
+ * short waiting (or, with fill: close, filled), and a cover that flips to long a buy.
+ */
 function fired(st: AssetState, side: TriggerSide, closeFill: boolean): boolean {
   if (side === 'rearm') return st.rearming !== true;
-  return closeFill ? st.filled?.side === side : st.pending === side;
+  if (side === 'rearmShort') return st.rearmingShort !== true;
+  const given = closeFill ? st.filled?.side : st.pending;
+  if (side === 'sell') return given === 'sell' || given === 'short';
+  if (side === 'cover') return given === 'cover' || given === 'buy';
+  return given === side;
 }
 
 /** A close one and a half times the search's precision beyond `edge`, below it for `out` −1 and above it for 1. */
 const beyond = (t: Trigger, edge: number, out: -1 | 1): number => edge + out * 1.5 * (t.values ? PRECISION * (t.range.hi - t.range.lo) : edge * PRECISION);
 
-export type Tally = Record<TriggerSide, number>;
-export const tally = (): Tally => ({ buy: 0, sell: 0, add: 0, rearm: 0 });
+/** Prices checked by side; `flip` counts those of a short while long and a buy while short among them. */
+export type Tally = Record<TriggerSide | 'flip', number>;
+export const tally = (): Tally => ({ buy: 0, sell: 0, add: 0, rearm: 0, short: 0, cover: 0, rearmShort: 0, flip: 0 });
 
 /** Checks every price of the report on `data` against the engine; counts the prices checked by side into `seen`. */
 export function verify(spec: Spec, data: Map<string, Bars>, label: string, seen: Tally): TriggerReport {
@@ -63,6 +71,7 @@ export function verify(spec: Spec, data: Map<string, Bars>, label: string, seen:
           assert.equal(fired(after, t.side, spec.fill === 'close'), expected, `${label}: ${t.ticker} ${t.side} with ${t.driver} closing at ${x} (edge ${edge}, ${expected ? 'inside' : 'outside'})`);
         }
         seen[t.side]++;
+        if ((t.side === 'short' && st.side === 'long') || (t.side === 'buy' && st.side === 'short')) seen.flip++;
       }
     }
   }

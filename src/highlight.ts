@@ -11,7 +11,9 @@ export interface Token {
 /** What a line is, read the way the parser reads it. */
 export type LineKind = 'blank' | 'for' | 'rule' | 'setting' | 'param' | 'continuation' | 'other';
 
-const KEYWORDS = ['buy', 'sell', 'when', 'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of'];
+/** The words a rule starts with, before `when`. */
+export const RULE_HEADS = ['buy', 'sell', 'add', 'short', 'cover'];
+const KEYWORDS = ['buy', 'sell', 'short', 'cover', 'when', 'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of'];
 const CONSTANTS = ['true', 'false', 'always', 'never'];
 const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
 /** Words that read like series: calendar values and the one-word spellings of position values. */
@@ -70,7 +72,7 @@ export function lineKind(line: string, inRule: boolean): LineKind {
   const text = code(line);
   if (!text) return 'blank';
   if (/^for\s+.+:$/i.test(text)) return 'for';
-  if (/^(buy|sell|add)\s+when\b/i.test(text)) return 'rule';
+  if (/^(buy|sell|add|short|cover)\s+when\b/i.test(text)) return 'rule';
   if (settingKey(text)) return 'setting';
   if (paramName(text)) return 'param';
   return inRule ? 'continuation' : 'other';

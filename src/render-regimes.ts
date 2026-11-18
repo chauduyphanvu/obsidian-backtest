@@ -108,7 +108,7 @@ export function regimeRows(stats: BucketStats[], states: string[]): Row[] {
       : [
           {
             label: i < states.length ? states[i] : 'Not known yet',
-            cells: [[share(s.share), null], growthCell(s.strategy), growthCell(s.benchmark), [pct(s.exposure, 0), null], [pct(s.worstDrawdown), null]] as Cell[],
+            cells: [[share(s.share), null], growthCell(s.strategy), growthCell(s.benchmark), investedCell(s), [pct(s.worstDrawdown), null]] as Cell[],
           },
         ],
   );
@@ -138,12 +138,15 @@ export function recoveryText(r: Recovery, intraday: boolean): string {
   return r.kind === 'back' ? stamp(r.t, intraday) : r.kind === 'held' ? 'Never below it' : 'Not by the end';
 }
 
+/** What was invested, gross, with the net beside it for a run that can borrow: "150%", "(net 50%)". */
+export const investedCell = (s: { exposure: number; netExposure?: number }): Cell => [pct(s.exposure, 0), s.netExposure === undefined ? null : `net ${pct(s.netExposure, 0)}`];
+
 /** The row of a fall: its name and days, then the figures. */
 export function crisisRow(r: CrisisResult, intraday: boolean): Row & { dates: string } {
   return {
     label: r.crisis.name,
     dates: `${r.crisis.peak} to ${r.crisis.trough}`,
-    cells: [[signedPct(r.strategy), null], [Number.isNaN(r.benchmark) ? '–' : signedPct(r.benchmark), null], [pct(r.worstDrawdown), null], [pct(r.exposure, 0), null], [recoveryText(r.recovery, intraday), null]],
+    cells: [[signedPct(r.strategy), null], [Number.isNaN(r.benchmark) ? '–' : signedPct(r.benchmark), null], [pct(r.worstDrawdown), null], investedCell(r), [recoveryText(r.recovery, intraday), null]],
   };
 }
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { brokerNumber, fillColumnsText, matchFills, parseFillColumns, readFills, type Fill, type FillLog, type FillsRead, type Followed, type MatchOptions } from '../src/fills.ts';
+import { costHeadline, matchCells } from '../src/render-account.ts';
 import { near } from './helpers.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -29,9 +30,10 @@ test('a Schwab export with its title above and its totals below', () => {
     ['2026-04-09', 'QQQ', 'buy', 5, 441.2, 0, 5],
     ['2026-03-31', 'SPY', 'buy', 1200, 498, 1, 15],
   ]);
-  // A dividend; two reinvestments; a MoneyLink transfer; bank interest, a short sale and a split.
-  assert.deepEqual(r.left, { dividends: 1, reinvestments: 2, transfers: 1, other: 3 });
-  assert.deepEqual(r.untraded, [{ ticker: 'AAPL', rows: 1 }]);
+  // A dividend; two reinvestments; a MoneyLink transfer; bank interest and a split.
+  assert.deepEqual(r.left, { dividends: 1, reinvestments: 2, transfers: 1, other: 2 });
+  // The short sale is read as a trade, of a ticker no strategy trades.
+  assert.deepEqual(r.untraded, [{ ticker: 'AAPL', rows: 1 }, { ticker: 'GME', rows: 1 }]);
   assert.deepEqual(r.unread, [{ line: 14, why: 'the action "Conversion" is not a purchase or a sale this reads' }]);
   // The title and the totals line.
   assert.equal(r.ignored, 2);
@@ -580,4 +582,178 @@ test('an Interactive Brokers file with orders and their executions reads each or
     'Trades,Data,ClosedLot,Stocks,USD,SPY,2026-01-05,3,500,',
   ].join('\n');
   assert.deepEqual(brief(read(statement)).map((f) => [f[1], f[3]]), [['SPY', 12]]);
+});
+
+// --- Short sales and covers ----------------------------------------------------------------------------------------
+
+const sided = (r: FillsRead) => r.fills.map((f) => [new Date(f.date).toISOString().slice(0, 10), f.ticker, f.side, f.action ?? null, f.quantity, f.price, Number(f.fees.toFixed(10)), f.line]);
+
+test("Schwab's Sell Short and Buy to Cover are read as a sale and a purchase on the short side", () => {
+  const r = read(fixture('fills-schwab-short.csv'));
+  assert.equal(r.format, 'Charles Schwab');
+  assert.deepEqual(sided(r), [
+    ['2026-06-10', 'SPY', 'buy', 'cover', 10, 91, 0, 3],
+    ['2026-06-02', 'SPY', 'sell', 'short', 10, 99.5, 0.02, 6],
+    ['2026-06-02', 'TLT', 'sell', null, 20, 49.9, 0.01, 7],
+  ]);
+  // A short-term capital gain is a distribution; margin interest and an option bought to open stay left out.
+  assert.deepEqual(r.left, { dividends: 1, reinvestments: 0, transfers: 0, other: 2 });
+  assert.deepEqual([r.untraded, r.unread, r.ignored], [[], [], 2]);
+});
+
+test("Fidelity's short sale and cover are read right after its usual words, never in a fund's name or a note", () => {
+  const r = read(fixture('fills-fidelity-short.csv'), [...TRADED, 'SH']);
+  assert.equal(r.format, 'Fidelity');
+  assert.deepEqual(sided(r), [
+    ['2026-06-10', 'SPY', 'buy', 'cover', 10, 91, 0, 5],
+    // ProShares Short S&P500 is a fund sold, not a short sale.
+    ['2026-06-03', 'SH', 'sell', null, 30, 40.2, 0.01, 6],
+    ['2026-06-02', 'SPY', 'sell', 'short', 10, 99.5, 0.02, 7],
+    // "PROSPECTUS UNDER SEPARATE COVER" after a purchase is not a cover.
+    ['2026-06-01', 'QQQ', 'buy', null, 5, 441.2, 0, 8],
+  ]);
+  // The mark to market of a short against margin moves no shares.
+  assert.deepEqual(r.left, { dividends: 0, reinvestments: 0, transfers: 0, other: 1 });
+  assert.equal(r.ignored, 2);
+});
+
+test("Interactive Brokers' signed quantities give the side, and its open and close codes say a short sale, a cover or a flip", () => {
+  const statement = read(fixture('fills-ibkr-statement-short.csv'));
+  assert.equal(statement.format, 'Interactive Brokers activity statement');
+  assert.deepEqual(sided(statement), [
+    ['2026-06-02', 'SPY', 'sell', 'short', 10, 99.5, 1, 6],
+    ['2026-06-10', 'SPY', 'buy', 'cover', 10, 91, 1, 7],
+    // C;O closes the long and opens a short in one trade.
+    ['2026-06-02', 'TLT', 'sell', 'flip', 30, 49.9, 1, 8],
+    // O;P opens a long, filled in parts.
+    ['2026-06-03', 'QQQ', 'buy', null, 5, 200, 1, 10],
+  ]);
+  // The statement's lines above, the closed lot, the total and the codes.
+  assert.equal(statement.ignored, 9);
+  const flex = read(fixture('fills-ibkr-flex-short.csv'));
+  assert.equal(flex.format, 'Interactive Brokers Flex query');
+  assert.deepEqual(sided(flex), [
+    ['2026-06-02', 'SPY', 'sell', 'short', 10, 99.5, 1, 5],
+    ['2026-06-10', 'SPY', 'buy', 'cover', 10, 91, 1, 6],
+    ['2026-06-02', 'TLT', 'sell', null, 20, 49.9, 1, 7],
+  ]);
+  // Without the codes, a short sale is a sale.
+  assert.deepEqual(sided(read('Date,Symbol,Quantity,Price\n2026-06-02,SPY,-10,99.5')), [['2026-06-02', 'SPY', 'sell', null, 10, 99.5, 0, 2]]);
+});
+
+test("other brokers' words for a short sale and a cover are read as the whole action; options and other uses of the words stay out", () => {
+  const actions = ['Sell Short', 'Short Sale', 'SS', 'SSHORT', 'Sold Short', 'SELL_SHORT', 'Buy to Cover', 'BTC', 'Cover', 'Bought to Cover', 'Buy to Open', 'Sell to Close', 'Short Term Cap Gain', 'Short Interest', 'Covered Call'];
+  const r = read(['Date,Action,Symbol,Quantity,Price', ...actions.map((a) => `2026-06-02,${a},SPY,1,100`)].join('\n'));
+  assert.deepEqual(r.fills.map((f) => [f.side, f.action, f.line]), [
+    ['sell', 'short', 2],
+    ['sell', 'short', 3],
+    ['sell', 'short', 4],
+    ['sell', 'short', 5],
+    ['sell', 'short', 6],
+    ['sell', 'short', 7],
+    ['buy', 'cover', 8],
+    ['buy', 'cover', 9],
+    ['buy', 'cover', 10],
+    ['buy', 'cover', 11],
+  ]);
+  assert.deepEqual(r.left, { dividends: 1, reinvestments: 0, transfers: 0, other: 4 });
+  assert.deepEqual(r.unread, []);
+});
+
+const shortFill = (date: number, ticker: string, side: 'buy' | 'sell', quantity: number, price: number, fees: number, line: number): Fill => ({
+  ...fill(date, ticker, side, quantity, price, fees, line),
+  action: side === 'sell' ? 'short' : 'cover',
+});
+
+test("a short strategy's fills: its short sale and its cover matched on their sides, late and slippage as for a long one, and the headline their sum", () => {
+  // S shorts 10 SPY on June 2 at 100 and covers them on June 9 at 90; L sells the 20 TLT it bought in May. Each had
+  // 10,000 before June 1 and has half of 20,000, so their shares count once.
+  const S = strategy('S', 0.5, 10_000, [
+    [june(2), 'SPY', -10, 100],
+    [june(9), 'SPY', 0, 90],
+  ]);
+  const L = strategy('L', 0.5, 10_000, [
+    [may(20), 'TLT', 20, 48],
+    [june(2), 'TLT', 0, 50],
+  ]);
+  const r = matchFills([S, L], read(fixture('fills-schwab-short.csv')).fills, OPTS);
+  assert.deepEqual(summary(r.rows), [
+    ['06-02', 'SPY', 'on time'],
+    ['06-02', 'TLT', 'on time'],
+    ['06-09', 'SPY', 'late'],
+  ]);
+  const [short, tlt, cover] = r.rows;
+  assert.deepEqual(short.model, { day: june(2), side: 'sell', action: 'short', quantity: 10, value: 1000, price: 100, strategies: [0] });
+  assert.deepEqual(short.yours, { day: june(2), side: 'sell', action: 'short', quantity: 10, price: 99.5, fees: 0.02, lines: [6] });
+  // Sold short 0.50 below the strategy: 5 worse, 50 bps.
+  assert.ok(near(short.slippage, 5) && near(short.bps!, 50));
+  assert.equal(tlt.model!.action, undefined);
+  // Covered a day late at 91 against 90: 10 worse, counted as late.
+  assert.deepEqual([cover.model!.side, cover.model!.action, cover.daysLate], ['buy', 'cover', 1]);
+  assert.ok(near(cover.late, 10) && cover.slippage === 0);
+  assert.ok(near(r.total, 5 + 2 + 10 + 0.03));
+  assert.equal(costHeadline(r, june(1)), 'Not following the rules cost $17.03 since 2026-06-01.');
+  assert.deepEqual(matchCells(short), ['2026-06-02', 'SPY', 'On time', 'Sell short 10 at 100.00', 'Sell short 10 at 99.50', '+50.0 bps', '$5.02']);
+  assert.deepEqual(matchCells(cover).slice(2, 5), ['Late by 1 trading day', 'Buy to cover 10 at 90.00', 'Buy to cover 10 at 91.00']);
+  assert.deepEqual(r.suggested.map((x) => x.line), ['slippage: 50 bps', 'slippage: 20 bps']);
+});
+
+test('slippage on the short side: selling short higher and covering lower than the strategy are gains, the other way costs', () => {
+  const S = ONE([
+    [june(2), 'SPY', -10, 100],
+    [june(4), 'SPY', 0, 95],
+  ]);
+  const better = matchFills([S], [shortFill(june(2), 'SPY', 'sell', 10, 100.4, 0, 2), shortFill(june(4), 'SPY', 'buy', 10, 94.9, 0, 3)], SIZED);
+  assert.deepEqual(better.rows.map((x) => [x.class, Number(x.slippage.toFixed(6)), Number(x.bps!.toFixed(4))]), [
+    ['on time', -4, -40],
+    ['on time', -1, -10.5263],
+  ]);
+  const worse = matchFills([S], [shortFill(june(2), 'SPY', 'sell', 10, 99.6, 0, 2), shortFill(june(4), 'SPY', 'buy', 10, 95.1, 0, 3)], SIZED);
+  assert.deepEqual(worse.rows.map((x) => Number(x.slippage.toFixed(6))), [4, 1]);
+  assert.equal(costHeadline(better, june(1)), 'Not following the rules made $5.00 since 2026-06-01.');
+});
+
+test('a short sale not made: a rise since is a loss avoided, a fall a gain missed, and one still waiting costs nothing yet', () => {
+  // SPY ends at 120.
+  const S = ONE([[june(2), 'SPY', -10, 100]]);
+  const rose = matchFills([S], [], SIZED);
+  assert.deepEqual(rose.rows.map((x) => [x.class, x.model!.action, x.skipped, x.move]), [['skipped', 'short', -200, -0.2]]);
+  assert.deepEqual(matchCells(rose.rows[0]).slice(2, 4), ['Not made, would have lost 20.0%', 'Sell short 10 at 100.00']);
+  const fell = matchFills([S], [], { ...SIZED, last: { SPY: 90 } });
+  assert.deepEqual(fell.rows.map((x) => [x.skipped, x.move]), [[100, 0.1]]);
+  // Half made: the rest is partial, costed the same way.
+  const half = matchFills([S], [shortFill(june(2), 'SPY', 'sell', 5, 100, 0, 2)], SIZED);
+  assert.deepEqual(half.rows.map((x) => [x.class, x.model!.quantity, x.skipped]), [
+    ['on time', 5, 0],
+    ['partial', 5, -100],
+  ]);
+  const waiting = matchFills([ONE([[june(29), 'SPY', -10, 100]])], [], SIZED);
+  assert.deepEqual(waiting.rows.map((x) => [x.class, x.model!.action, x.skipped]), [['waiting', 'short', 0]]);
+});
+
+test("a trade's short side is the account's: a short that a long outweighs is a sale, and one that takes it through 0 is a flip", () => {
+  // A holds 10 SPY from May; on June 2 B shorts 5, or 15. Both count once at 20,000.
+  const A = strategy('A', 0.5, 10_000, [[may(20), 'SPY', 10, 100]]);
+  const B = (shares: number) => strategy('B', 0.5, 10_000, [[june(2), 'SPY', -shares, 100]]);
+  assert.deepEqual(matchFills([A, B(5)], [], OPTS).rows[0].model, { day: june(2), side: 'sell', quantity: 5, value: 500, price: 100, strategies: [1] });
+  assert.deepEqual(matchFills([A, B(15)], [], OPTS).rows[0].model, { day: june(2), side: 'sell', action: 'flip', quantity: 15, value: 1500, price: 100, strategies: [1] });
+  // On its own, B's short is a short sale.
+  assert.equal(matchFills([B(5)], [], { ...OPTS, capital: 10_000 }).rows[0].model!.action, 'short');
+  // A short opened and stopped out the same day is a short sale and a cover.
+  const stopped: Followed = { ...ONE([]), log: { t: [june(2), june(2)], asset: ['SPY', 'SPY'], kind: ['entry', 'stop'], sharesAfter: [-10, 0], price: [100, 104] } };
+  assert.deepEqual(matchFills([stopped], [], SIZED).rows.map((x) => [x.model!.side, x.model!.action]), [
+    ['sell', 'short'],
+    ['buy', 'cover'],
+  ]);
+});
+
+test("a flip: the strategy's sale through 0 matches your day's sale and short sale, added up", () => {
+  const S = ONE([
+    [may(20), 'SPY', 10, 100],
+    [june(2), 'SPY', -10, 100],
+  ]);
+  const r = matchFills([S], [fill(june(2), 'SPY', 'sell', 10, 99.9, 0, 2), shortFill(june(2), 'SPY', 'sell', 10, 99.7, 0, 3)], SIZED);
+  assert.deepEqual(r.rows.map((x) => [x.class, x.model!.action, x.model!.quantity, x.yours!.action, x.yours!.quantity]), [['on time', 'flip', 20, 'flip', 20]]);
+  assert.ok(near(r.rows[0].slippage, 1 + 3));
+  assert.deepEqual(matchCells(r.rows[0]).slice(3, 5), ['Flip to short 20 at 100.00', 'Flip to short 20 at 99.80']);
 });

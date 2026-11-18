@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { bootstrap, matchTurnover, monthOfBars, pickRules, placeHoldings, randomEntries, randomPicks, randomTiming, returnOverDrawdown, walkForward, walkPlan, walkWindows } from '../src/luck.ts';
+import { randomTimingWorks, randomVerdict } from '../src/render-luck.ts';
 import { makeRng, type Rng } from '../src/rng.ts';
 import { quantile } from '../src/sweep.ts';
 import type { Bars } from '../src/types.ts';
@@ -247,6 +248,92 @@ test('random entries says when the check has nothing to vary', async () => {
   assert.equal(r.skip, null);
   assert.ok(r.invested > 0.9);
   assert.ok(returnOverDrawdown({ cagr: 0.1, maxDrawdown: 0 }) === Infinity && returnOverDrawdown({ cagr: 0.1, maxDrawdown: -0.2 }) === 0.5);
+});
+
+// ---------------------------------------------------------------- short and leveraged strategies
+
+test('placed holdings keep their side, and where they sit does not depend on it', () => {
+  const lengths = [5, 8, 3, 6];
+  const shorts = [true, false, true, false];
+  for (let seed = 1; seed <= 30; seed++) {
+    const placed = placeHoldings(lengths, 10, 80, makeRng(seed), undefined, shorts);
+    assert.deepEqual(placed.map((h) => `${h.exit - h.entry}${h.short ? ' short' : ''}`).sort(), ['3 short', '5 short', '6', '8']);
+    assert.ok(placed.every((h) => h.short === true || !('short' in h)));
+    assert.deepEqual(placed.map(({ entry, exit }) => ({ entry, exit })), placeHoldings(lengths, 10, 80, makeRng(seed)));
+  }
+});
+
+test('random timing of a strategy that goes long and short keeps each trade\'s side and length, and shorts at the open as the strategy does', async () => {
+  const rng = makeRng(21);
+  const data = { A: walk(rng, 400, 0.08), B: walk(rng, 400, 0.08) };
+  const rules = 'buy when close > sma(10) * 1.02\nsell when close < sma(10)\nshort when close < sma(10) * 0.98\ncover when close > sma(10)';
+  const bt = backtest(`universe: A 50%, B 50%\ncosts: 10 bps\n${rules}`, data);
+  const sides = (trades: { asset: string; bars: number; side?: 'short' }[], name: string) =>
+    trades
+      .filter((t) => t.asset === name)
+      .map((t) => `${Math.max(1, t.bars)}${t.side ? ' short' : ''}`)
+      .sort();
+  assert.ok(bt.run.trades.filter((t) => t.side === 'short').length > 10 && bt.run.trades.filter((t) => !t.side).length > 10);
+  for (let seed = 1; seed <= 10; seed++) {
+    const v = randomTiming(bt, makeRng(seed));
+    for (const name of ['A', 'B']) {
+      assert.deepEqual(sides(v.run.trades, name), sides(bt.run.trades, name));
+      const b = data[name as 'A' | 'B'];
+      for (const t of v.run.trades.filter((x) => x.asset === name)) assert.equal(t.entryPrice, b.o[b.t.indexOf(t.entryT)]);
+    }
+    assert.ok(v.run.trades.every((t) => t.reason === 'signal' || t.reason === 'open'));
+    assert.ok(v.run.borrowFees! > 0 && v.run.netExposure!.some((x) => x < 0), 'the random runs pay the borrow fee and hold shorts');
+  }
+  // A trend that flips straight from one side to the other is in the market the whole time, long or short: nothing to vary.
+  const flips = backtest('universe: A 50%, B 50%\nbuy when close > sma(10)\nshort when close < sma(10)', data);
+  assert.equal((await randomEntries(flips, { seed: 1 })).skip, 'always-invested');
+});
+
+test('random timing of a leveraged block runs with its margin: gross above 100%, interest on the money borrowed', () => {
+  const rng = makeRng(31);
+  const data = { A: walk(rng, 400, 0.04), B: walk(rng, 400, 0.04) };
+  const bt = backtest('universe: A 75%, B 75%\nbuy when close > sma(10)\nsell when close < sma(10)', data);
+  assert.ok(bt.spec.margin && Math.max(...bt.run.exposure) > 1.4);
+  for (let seed = 1; seed <= 5; seed++) {
+    const v = randomTiming(bt, makeRng(seed)).run;
+    assert.ok(Math.max(...v.exposure) > 1.4 && Math.max(...v.exposure) <= 2 + 1e-9, String(Math.max(...v.exposure)));
+    assert.ok(v.marginInterest! > 0 && v.marginCalls !== undefined);
+  }
+});
+
+test('a strategy short the whole time has no timing to vary, as one long the whole time has not', async () => {
+  const A = bars(Array.from({ length: 60 }, (_, i) => 100 - i / 2));
+  const short = await randomEntries(backtest('universe: A\nshort when true', { A }), { seed: 1 });
+  const long = await randomEntries(backtest('universe: A\nbuy when true', { A }), { seed: 1 });
+  assert.deepEqual([short.skip, short.invested], ['always-invested', long.invested]);
+});
+
+test('reshuffling a run that was ruined stops at the ruin: every path that draws the fall ends at nothing, and the run itself is −100%', () => {
+  const t = Array.from({ length: 11 }, (_, i) => Date.UTC(2020, 0, 1) + i * 36.525 * DAY);
+  const equity = [100, 110, 120, 60, 10, 0, 0, 0, 0, 0, 0];
+  const r = bootstrap(t, equity, { seed: 3, runs: 200, blockBars: 1 });
+  assert.ok(r.cagr.values.every(Number.isFinite) && r.maxDrawdown.values.every(Number.isFinite));
+  assert.deepEqual([r.actual.cagr, r.actual.maxDrawdown], [-1, -1]);
+  // Five steps, one of them the fall to 0: a path of five one-step blocks draws it 1 − (4/5)^5 of the time, about 67%.
+  const ruined = r.cagr.values.filter((x) => x === -1).length / r.runs;
+  assert.ok(Math.abs(ruined - (1 - 0.8 ** 5)) < 0.08, String(ruined));
+});
+
+test('random entries of a short strategy: the same trades by side, and the section words them so', async () => {
+  const rng = makeRng(41);
+  const bt = backtest('universe: A\nshort when close < sma(10)\ncover when close > sma(10)', { A: walk(rng, 400, 0.06) });
+  const r = await randomEntries(bt, { seed: 2, runs: 10 });
+  assert.deepEqual([r.mode, r.skip, r.runs], ['timing', null, 10]);
+  assert.ok(r.random.trades.every((n) => n === r.strategy.trades) && r.random.cagr.every(Number.isFinite));
+  assert.match(randomVerdict({ ...r, invested: 0.95 }, false, true, 10), / The strategy is in its tickers, long or short, 95% of the time, so random timing is close to holding throughout/);
+  assert.match(randomVerdict({ ...r, invested: 0.95 }, false, false, 10), / The strategy is invested 95% of the time, so random timing/);
+  assert.equal(randomVerdict({ ...r, skip: 'always-invested' }, false, true, 10), 'The strategy holds its tickers, long or short, the whole time, so there is no timing to vary.');
+  assert.equal(randomVerdict({ ...r, skip: 'always-invested' }, false, false, 10), 'The strategy holds its tickers the whole time, so there is no timing to vary.');
+  assert.equal(
+    randomTimingWorks(bt.spec, true),
+    'each try keeps how many trades each ticker made, whether each was long or short, and how long each was held, with the same weights, costs, slippage, cash rate, borrow fee and margin rate, and places those holdings at random dates. Stops are off: the holding lengths already include their exits.',
+  );
+  assert.match(randomTimingWorks(backtest('universe: A 150%\nbuy when true', { A: walk(rng, 50) }).spec), /with the same weights, costs, slippage, cash rate and margin rate, and places/);
 });
 
 test('random entries can be stopped, and the same seed gives the same answer', async () => {
