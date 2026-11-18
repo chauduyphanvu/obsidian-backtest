@@ -1,0 +1,14 @@
+language 1
+strategy "s8: flip between long and short at the close" {
+  // Rearview opens no side of a security it holds the other side of, so the shorts go on TWIN, CHOP's twin.
+  universe   symbols("CHOP", "TWIN")
+  twin       series("twin")
+  fast       sma(close, 20)
+  slow       sma(close, 50)
+  enter long when twin == 0 and fast > slow and not (fast < slow)
+  enter short when twin == 1 and fast < slow and not (fast > slow)
+  exit long when fast < slow
+  exit short when fast > slow
+  size       100% of equity, max 2 positions
+  fill       same_close
+}

@@ -1,0 +1,11 @@
+universe: MREV 50%
+capital: 1000000000
+from: 2013-04-01
+costs: 10 bps
+commission: 0.005 per share, min 1
+borrow fee: 0.365%
+margin rate: 7.3%
+short when close crosses below sma(20)
+cover when close crosses above sma(50)
+stop loss: 3%
+take profit: 5%

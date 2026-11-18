@@ -1,0 +1,5 @@
+universe: LATE
+capital: 1000000000
+borrow fee: 0.365%
+margin rate: 7.3%
+short when close crosses below sma(20)

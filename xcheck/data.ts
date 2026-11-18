@@ -193,15 +193,26 @@ export function generate(): { days: string[]; specs: TickerSpec[]; rows: Row[] }
 
 const fmt = (x: number) => Number(x.toFixed(6)).toString();
 
+/**
+ * Securities only Rearview sees: a twin with the bars of one of our tickers under another id. Rearview never opens a
+ * side of a security it holds the other side of (a held security is no entry candidate), where we close one side and
+ * open the other at one fill; a case that flips trades our ticker's longs on the ticker and its shorts on the twin, in
+ * one account. `series("twin")` is 1 on a twin and 0 on every other security, for the rules to tell them apart.
+ */
+export const TWINS = [{ id: 10, ticker: 'TWIN', of: 'CHOP' }];
+
 /** The import folder's files, by name. `weights` adds series/w.csv: a constant per security from the first day. */
 export function importFiles(g: ReturnType<typeof generate>, weights: Record<string, number>): Record<string, string> {
-  const name = (s: TickerSpec) => `${s.ticker} synthetic`;
+  const name = (s: { ticker: string }) => `${s.ticker} synthetic`;
+  const twins = TWINS.map((w) => ({ ...w, src: g.specs.find((s) => s.ticker === w.of)! }));
+  const rows = [...g.rows, ...twins.flatMap((w) => g.rows.filter((r) => r.id === w.src.id).map((r) => ({ ...r, id: w.id })))];
   const files: Record<string, string> = {
     'manifest.json': '{"format":"rvw-import","version":1}\n',
-    'securities.csv': 'id,name,kind,exchange,sector,industry,delist_date,delist_reason\n' + g.specs.map((s) => `${s.id},${name(s)},STOCK,NYSE,,,,\n`).join(''),
-    'tickers.csv': 'id,ticker,from,to\n' + g.specs.map((s) => `${s.id},${s.ticker},${g.days[s.first]},\n`).join(''),
+    'securities.csv':
+      'id,name,kind,exchange,sector,industry,delist_date,delist_reason\n' + [...g.specs, ...twins].map((s) => `${s.id},${name(s)},STOCK,NYSE,,,,\n`).join(''),
+    'tickers.csv': 'id,ticker,from,to\n' + [...g.specs, ...twins.map((w) => ({ ...w, first: w.src.first }))].map((s) => `${s.id},${s.ticker},${g.days[s.first]},\n`).join(''),
     'actions.csv': 'id,ex_date,type,value1,value2,ref_id\n',
-    'bars.csv': 'id,date,open,high,low,close,volume\n' + g.rows.map((r) => `${r.id},${r.date},${fmt(r.o)},${fmt(r.h)},${fmt(r.l)},${fmt(r.c)},${r.v}\n`).join(''),
+    'bars.csv': 'id,date,open,high,low,close,volume\n' + rows.map((r) => `${r.id},${r.date},${fmt(r.o)},${fmt(r.h)},${fmt(r.l)},${fmt(r.c)},${r.v}\n`).join(''),
   };
   files['series/w.csv'] =
     'id,date,value\n' +
@@ -209,6 +220,8 @@ export function importFiles(g: ReturnType<typeof generate>, weights: Record<stri
       .filter((s) => s.ticker in weights)
       .map((s) => `${s.id},${g.days[s.first]},${weights[s.ticker]}\n`)
       .join('');
+  files['series/twin.csv'] =
+    'id,date,value\n' + [...g.specs.map((s) => `${s.id},${g.days[s.first]},0\n`), ...twins.map((w) => `${w.id},${g.days[w.src.first]},1\n`)].join('');
   return files;
 }
 
