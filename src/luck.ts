@@ -5,6 +5,7 @@ import { parseSpec } from './dsl.ts';
 import { firstAtOrAfter, simulate, type RunResult, type SimParams, type Signals } from './engine.ts';
 import { specEvaluator, type BarRule } from './evaluate.ts';
 import { tidy, YEAR } from './format.ts';
+import { priceMemo } from './price-memo.ts';
 import { makeRng, shuffle, type Rng } from './rng.ts';
 import { baseSpec, BATCH, grid, pause, quantile, runVariant, sweepLimit, sweepParams, valuesAt, type Metric, type Parse, type SweepParam } from './sweep.ts';
 import type { Bars } from './types.ts';
@@ -487,6 +488,7 @@ export async function walkForward(
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
+  priceMemo.share(data);
 
   const key = (index: number[]) => index.join(',');
   const declaredIndex = params.map((p) => p.values.indexOf(value(p.name)));

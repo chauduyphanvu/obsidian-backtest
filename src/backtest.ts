@@ -1,9 +1,11 @@
 import { INSIDE_BARS } from './data.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
-import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type Signals, type Skipped, type Trade } from './engine.ts';
+import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type SimParams, type Signals, type Skipped, type Trade } from './engine.ts';
 import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
 import { DAY, isIntraday, stamp, YEAR } from './format.ts';
 import { alignByEnd } from './indicators.ts';
+import { priceMemo } from './price-memo.ts';
+import { stable } from './result-cache.ts';
 import type { Asset, Bars } from './types.ts';
 
 export interface Stats {
@@ -320,25 +322,31 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     : spec.rank
       ? spec.universe.map((a) => ({ ...a, weight: (a.weight * spec.rank!.top) / n }))
       : spec.universe;
-  const always = new Map<string, Signals>(held.map((a) => [a.name, { buy: data.get(a.name)!.t.map(() => 1), sell: null, score: null }]));
-  const bench = simulate(
-    {
-      assets: held,
-      from: run.t[0],
-      to: run.t[run.t.length - 1],
-      capital: spec.capital,
-      costBps: spec.costBps,
-      slippageBps: spec.slippageBps,
-      rebalance: spec.rebalance,
-      stops: {},
-      cash: spec.cash,
-      sizing: { k: 'fixed' },
-      rank: null,
-      fill: spec.fill,
-      commission: spec.commission,
-    },
+  const params: SimParams = {
+    assets: held,
+    from: run.t[0],
+    to: run.t[run.t.length - 1],
+    capital: spec.capital,
+    costBps: spec.costBps,
+    slippageBps: spec.slippageBps,
+    rebalance: spec.rebalance,
+    stops: {},
+    cash: spec.cash,
+    sizing: { k: 'fixed' },
+    rank: null,
+    fill: spec.fill,
+    commission: spec.commission,
+  };
+  // Every input of the run is in its key, so variants that hold the same (a ranking's top k changes the weights) share it.
+  const bench = priceMemo.get(
     data,
-    always,
+    `benchmark\u0000${stable(params)}`,
+    () => {
+      const always = new Map<string, Signals>(held.map((a) => [a.name, { buy: data.get(a.name)!.t.map(() => 1), sell: null, score: null }]));
+      const { t, equity } = simulate(params, data, always);
+      return { t, equity };
+    },
+    (b) => b.t.length + b.equity.length,
   );
   // A named benchmark can trade on other days or bars than the strategy: carry the value of its
   // latest bar that had ended by the end of each of the strategy's bars.

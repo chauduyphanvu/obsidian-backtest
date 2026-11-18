@@ -1211,6 +1211,7 @@ Layout of `src/`:
 - `dsl.ts`, `docs.ts`, `complete.ts`, `highlight.ts`, `diagnostics.ts`, `fixes.ts`, `editor.ts`, `symbols.ts`: the language and the editor (parser, help text for hover and auto-complete, colours, underlines, "did you mean" fixes, ticker lookup).
 - `evaluate.ts`, `indicators.ts`: evaluating rules, and the indicator maths.
 - `engine.ts`, `backtest.ts`, `stats.ts`, `explain.ts`, `debug.ts`: the simulation (commission, entries and looking inside bars included), the benchmark, the statistics, the reasons behind each trade, and the value of each part of the rules at each bar.
+- `price-memo.ts`: work kept for the next run on the same prices, so a sweep, a walk-forward or a slider works out each indicator and the benchmark once.
 - `data.ts`, `runner.ts`, `result-cache.ts`: prices and their cache (the smaller bars of `magnify` and the columns of CSV files included), running a block, and keeping results in memory.
 - `price-store.ts`: the saved price files, in the vault and in memory, the column names of the CSV files read, and whether a block's prices are all saved and fresh.
 - `results.ts`: running a block's text and keeping the result, so a block drawn again, the other blocks, the orders and the note properties reuse a recent run.
