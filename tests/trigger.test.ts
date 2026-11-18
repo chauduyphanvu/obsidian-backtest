@@ -138,6 +138,19 @@ test('a level is found to the cent it is shown in, however high the price, and a
   assert.ok(b.fires[0].hi! <= 66500 && 66500 - b.fires[0].hi! < 0.005, String(b.fires[0].hi));
 });
 
+test('the cent shown is where the order starts, wherever the change falls inside it: "above" a cent that gives none, "unless below" one that gives it', () => {
+  const text = (closes: number[], rules: string) => tickerText(report(`universe: A\n${rules}`, { A: bars(closes) }).report, 'A').text;
+  const rising = [720, 722, 724, 726, 728];
+  // 729.77 gives no order and 729.78 does, whether the change is just under 729.78 or just over 729.77.
+  assert.equal(text(rising, 'buy when close > 729.776'), 'Buys if it closes above 729.77 (+0.2%), at the following open.');
+  assert.equal(text(rising, 'buy when close > 729.7701'), 'Buys if it closes above 729.77 (+0.2%), at the following open.');
+  // 729.70 and below give the order, 729.71 does not.
+  assert.equal(text([735, 734, 733, 732, 731], 'buy when close < 729.7049'), 'Buys if it closes below 729.71 (−0.2%), at the following open.');
+  assert.equal(text([740, 738, 736, 734, 732], 'buy when true\nsell when close < 730.2249'), 'Sells if it closes below 730.23 (−0.2%), at the following open.');
+  // close > sma(3) at the next bar is x > 10.5: it buys at an unchanged close, and 10.51 is the lowest close that still does.
+  assert.equal(text([12, 12, 10, 11], 'buy when close > sma(3)'), 'Buys unless it closes below 10.51 (−4.5%), at the following open.');
+});
+
 test('a rule on another ticker is solved for that ticker\'s close, with the traded one held where it was', () => {
   const S = bars([10, 10, 10, 10, 9]);
   const T = bars([50, 51, 52, 53, 54]);
@@ -162,7 +175,8 @@ test('a held position: the sell rule\'s closes stop at the stop, which acts insi
   assert.equal(t.fires[0].lo, null);
   assert.ok(t.fires[0].hi! < 11.5 && 11.5 / t.fires[0].hi! - 1 <= PRECISION);
   assert.equal(t.range.lo, 9.5 * (1 + 1e-9));
-  assert.equal(tickerText(r, 'A').text, 'Sells unless it closes above 11.50 (+4.5%), at the following open. The stop at 9.50 (−13.6%) sells during the bar if the price reaches it.');
+  // 11.49 still sells, 11.50 does not.
+  assert.equal(tickerText(r, 'A').text, 'Sells unless it closes above 11.49 (+4.5%), at the following open. The stop at 9.50 (−13.6%) sells during the bar if the price reaches it.');
   // Just below the stop the bar reaches it on its way to the close and sells there; just above, the sell rule does.
   const st = bt.run.states[0];
   const below = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 9.5 * (1 - 1e-6))).run;
@@ -186,7 +200,8 @@ test('after a stop the buy rule must stop holding: the close below which it does
   const t = only(r);
   assert.equal(t.side, 'rearm');
   assert.ok(t.fires[0].lo === null && t.fires[0].hi! <= 9.9 && 9.9 / t.fires[0].hi! - 1 <= PRECISION);
-  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the buy rule must stop holding before A is bought again: it does if A closes below 9.90 (−1.0%).');
+  // At 9.90 the rule close > 9.9 does not hold; at 9.91 it does.
+  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the buy rule must stop holding before A is bought again: it does if A closes below 9.91 (−0.9%).');
   verify(parsed('universe: A\nstop loss: 10%\nbuy when close > 9.9'), new Map([['A', A]]), 'rearm', tally());
 });
 
@@ -414,12 +429,19 @@ test('the search narrows each change down to within the precision, on the side w
 
 test('a rule\'s closes in words: above, below, between, unless, either side, and whatever the close', () => {
   const t = (fires: Trigger['fires']) => ({ fires, last: 100 });
-  assert.equal(condition(t([{ lo: 102, hi: null }]), 'it'), 'if it closes above 102.00 (+2.0%)');
+  // A band runs from the first close that gives the order to the last. "Above" and "below" name the shown price next to it
+  // that gives none; "unless" names the last shown price in it that still gives the order.
+  assert.equal(condition(t([{ lo: 102.001, hi: null }]), 'it'), 'if it closes above 102.00 (+2.0%)');
+  assert.equal(condition(t([{ lo: 102, hi: null }]), 'it'), 'if it closes above 101.99 (+2.0%)');
   assert.equal(condition(t([{ lo: 98, hi: null }]), 'it'), 'unless it closes below 98.00 (−2.0%)');
-  assert.equal(condition(t([{ lo: null, hi: 97 }]), 'SPY'), 'if SPY closes below 97.00 (−3.0%)');
+  assert.equal(condition(t([{ lo: 97.999, hi: null }]), 'it'), 'unless it closes below 98.00 (−2.0%)');
+  assert.equal(condition(t([{ lo: null, hi: 96.999 }]), 'SPY'), 'if SPY closes below 97.00 (−3.0%)');
   assert.equal(condition(t([{ lo: null, hi: 101 }]), 'it'), 'unless it closes above 101.00 (+1.0%)');
-  assert.equal(condition(t([{ lo: 98, hi: 99 }]), 'it'), 'if it closes between 98.00 (−2.0%) and 99.00 (−1.0%)');
-  assert.equal(condition(t([{ lo: null, hi: 95 }, { lo: 105, hi: null }]), 'it'), 'if it closes below 95.00 (−5.0%) or above 105.00 (+5.0%)');
+  assert.equal(condition(t([{ lo: null, hi: 101.009 }]), 'it'), 'unless it closes above 101.00 (+1.0%)');
+  assert.equal(condition(t([{ lo: 98.001, hi: 98.999 }]), 'it'), 'if it closes between 98.00 (−2.0%) and 99.00 (−1.0%)');
+  assert.equal(condition(t([{ lo: null, hi: 94.999 }, { lo: 105.001, hi: null }]), 'it'), 'if it closes below 95.00 (−5.0%) or above 105.00 (+5.0%)');
+  // Below 1, prices are shown to the millionth.
+  assert.equal(condition({ fires: [{ lo: 0.5000004, hi: null }], last: 0.49 }, 'it'), 'if it closes above 0.50 (+2.0%)');
   assert.equal(condition(t([{ lo: null, hi: null }]), 'it'), 'whatever the next close');
   assert.equal(condition(t([]), 'it'), null);
   assert.equal(levelsSentence({ levels: { stop: 95, target: 110 }, ownLast: 100 }), 'The stop at 95.00 (−5.0%) and the target at 110.00 (+10.0%) sell during the bar if the price reaches them.');

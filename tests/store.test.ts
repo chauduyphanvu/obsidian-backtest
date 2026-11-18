@@ -46,7 +46,7 @@ function setup(files: Record<string, string> = {}) {
     await new Promise((r) => setTimeout(r, 0));
     await store.flush();
   };
-  return { map, dirs, writes, reads, store, timers, fire };
+  return { map, dirs, writes, reads, store, timers, fire, io };
 }
 
 const path = (key: string) => `plugin/ledger/${fileId(key)}.json`;
@@ -205,4 +205,19 @@ test('a file\'s key is read once: later renames by a prefix read only files not 
   await s.store.flush();
   assert.ok(s.reads.includes(path('G.md\u0000name:z')));
   assert.deepEqual(JSON.parse(s.map.get(path('H.md\u0000name:z'))!).value, [3]);
+});
+
+test('a change whose write failed is still a change: the next flush writes it', async () => {
+  const s = setup();
+  const write = s.io.write;
+  let fail = true;
+  s.io.write = async (p, text) => {
+    if (fail) throw new Error('disk full');
+    await write(p, text);
+  };
+  await s.store.update('a', () => [1]);
+  await assert.rejects(s.store.flush(), /disk full/);
+  fail = false;
+  await s.store.flush();
+  assert.equal(s.map.get(path('a')), file('a', [1]));
 });

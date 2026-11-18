@@ -79,10 +79,18 @@ export const watchable = (spec: Spec): boolean => spec.to === null;
 const GRID = 48;
 /**
  * A change is narrowed down until the closes on either side of it are this close, as a fraction of the price, and within
- * a quarter of the last digit a price is shown with (format.ts price), so the level shown is the change to that digit.
+ * a quarter of the last digit a price is shown with (format.ts price); then the shown price between them, if any, is
+ * tried, so the shown prices either side of every change are known.
  */
 export const PRECISION = 1e-4;
-const shownStep = (x: number): number => (x < 1 ? 1e-6 : 0.01) / 4;
+/** Shown prices in one unit of a price: cents, or millionths below 1, as format.ts price shows them. */
+const shownUnits = (x: number): number => (x < 1 ? 1e6 : 100);
+const shownStep = (x: number): number => 1 / shownUnits(x) / 4;
+/** The shown prices nearest `x`: the highest below it, the lowest at or above it, the lowest above it, the highest at or below it. */
+const below = (x: number) => (Math.ceil(x * shownUnits(x) - 1e-6) - 1) / shownUnits(x);
+const atOrAbove = (x: number) => Math.ceil(x * shownUnits(x) - 1e-6) / shownUnits(x);
+const above = (x: number) => (Math.floor(x * shownUnits(x) + 1e-6) + 1) / shownUnits(x);
+const atOrBelow = (x: number) => Math.floor(x * shownUnits(x) + 1e-6) / shownUnits(x);
 /** The range searched is SPREAD standard deviations of the driver's last RETURNS log returns either side of its last close, within RANGE_MIN and RANGE_MAX. */
 const SPREAD = 5;
 const RETURNS = 60;
@@ -357,6 +365,13 @@ export function search(lo: number, hi: number, label: (x: number) => string, eve
         else [q, lq] = [m, lm];
       }
       if (tries >= MAX_TRIES) [q, lq] = [xs[k], ls[k]];
+      else if (!even && above(p) < q) {
+        const c = above(p);
+        const lc = label(c);
+        tries++;
+        if (lc === cur) p = c;
+        else [q, lq] = [c, lc];
+      }
       out[out.length - 1].to = p;
       out.push({ label: lq, from: q, to: null });
       [cur, at] = [lq, q];
@@ -545,10 +560,16 @@ function priced(x: number, from: number, values?: true): string {
 
 const VERB: Record<Exclude<TriggerSide, 'rearm'>, string> = { buy: 'Buys', sell: 'Sells', add: 'Adds' };
 
-/** Where a band's closes lie, after "closes": "above 512.30 (+1.2%)", "below …", "between … and …". */
+/**
+ * Where a band's closes lie, after "closes": "above 512.30 (+1.2%)", "below …", "between … and …", each price the shown one
+ * next to the band that gives no order, so a close at it gives none and the next one in gives the order. A series of
+ * values is not shown in steps, so it shows the edges as found.
+ */
 function where(b: Band, last: number, values?: true): string {
-  if (b.lo !== null && b.hi !== null) return `between ${priced(b.lo, last, values)} and ${priced(b.hi, last, values)}`;
-  return b.lo !== null ? `above ${priced(b.lo, last, values)}` : `below ${priced(b.hi!, last, values)}`;
+  const lo = b.lo === null ? null : priced(values ? b.lo : below(b.lo), last, values);
+  const hi = b.hi === null ? null : priced(values ? b.hi : above(b.hi), last, values);
+  if (lo !== null && hi !== null) return `between ${lo} and ${hi}`;
+  return lo !== null ? `above ${lo}` : `below ${hi}`;
 }
 
 /**
@@ -563,8 +584,9 @@ export function condition(t: Pick<Trigger, 'fires' | 'last' | 'values'>, who: st
   if (t.fires.length > 1) return `if ${closes} ${t.fires.map((b) => where(b, t.last, t.values)).join(' or ')}`;
   const [b] = t.fires;
   if (b.lo === null && b.hi === null) return t.values ? `whatever ${closes}` : 'whatever the next close';
-  if (b.hi === null && b.lo! <= t.last) return `unless ${closes} below ${priced(b.lo!, t.last, t.values)}`;
-  if (b.lo === null && b.hi! >= t.last) return `unless ${closes} above ${priced(b.hi!, t.last, t.values)}`;
+  // Here the price shown is the last in the band, which still gives the order.
+  if (b.hi === null && b.lo! <= t.last) return `unless ${closes} below ${priced(t.values ? b.lo! : atOrAbove(b.lo!), t.last, t.values)}`;
+  if (b.lo === null && b.hi! >= t.last) return `unless ${closes} above ${priced(t.values ? b.hi! : atOrBelow(b.hi!), t.last, t.values)}`;
   return `if ${closes} ${where(b, t.last, t.values)}`;
 }
 

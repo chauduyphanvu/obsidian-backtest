@@ -462,7 +462,6 @@ export interface RawPrices {
   range(ticker: string, day: number): { low: number; high: number } | null;
 }
 
-/** The index of the last of the ascending `t` at or before `at`; -1 for none. */
 /** The shortest step between bars: a day for daily bars, a week for weekly ones; Infinity for a single bar, whose step is not known. */
 const steps = new WeakMap<Bars, number>();
 function stepOf(bars: Bars): number {

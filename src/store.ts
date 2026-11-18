@@ -202,15 +202,21 @@ export class JsonStore<T> {
     return this.chain(key, async () => {
       if (!entry.dirty || entry.value === null) return;
       entry.dirty = false;
-      const mine = entry.value;
-      const disk = await this.readDisk(key);
-      const value = disk === null ? mine : this.o.merge(disk, mine);
-      // Changes made while the file was read stay changes, merged on top of what is written now.
-      if (entry.value === mine) entry.value = value;
-      const dir = this.o.normalize(this.o.dir);
-      if (!(await this.o.files.exists(dir))) await this.o.files.mkdir(dir);
-      await this.o.files.write(this.path(key), JSON.stringify({ key, value }));
-      this.keys.set(this.path(key), key);
+      try {
+        const mine = entry.value;
+        const disk = await this.readDisk(key);
+        const value = disk === null ? mine : this.o.merge(disk, mine);
+        // Changes made while the file was read stay changes, merged on top of what is written now.
+        if (entry.value === mine) entry.value = value;
+        const dir = this.o.normalize(this.o.dir);
+        if (!(await this.o.files.exists(dir))) await this.o.files.mkdir(dir);
+        await this.o.files.write(this.path(key), JSON.stringify({ key, value }));
+        this.keys.set(this.path(key), key);
+      } catch (e) {
+        // Not written: still a change, for the next change or flush to write.
+        entry.dirty = true;
+        throw e;
+      }
     });
   }
 }

@@ -619,19 +619,20 @@ const trigger = (ticker: string, side: Trigger['side'], fires: Trigger['fires'],
 });
 const reportOf = (triggers: Trigger[], closeFill = false): TriggerReport => ({ next: SAMPLE_ASOF + DAY, intraday: false, closeFill, decision: null, triggers });
 const SAMPLE_TRIGGERS = [
-  trigger('A', 'buy', [{ lo: 101.5, hi: null }]),
-  trigger('B', 'sell', [{ lo: null, hi: 95 }]),
+  // Each band from its first close to its last that give the order, as the search finds them just inside a shown price.
+  trigger('A', 'buy', [{ lo: 101.501, hi: null }]),
+  trigger('B', 'sell', [{ lo: null, hi: 94.999 }]),
   trigger('C', 'sell', [{ lo: null, hi: 102 }]),
-  trigger('D', 'rearm', [{ lo: null, hi: 99.5 }]),
+  trigger('D', 'rearm', [{ lo: null, hi: 99.499 }]),
   trigger('E', 'buy', []),
   trigger('F', 'buy', [], { blocked: 'pending' }),
-  trigger('G', 'add', [{ lo: 98, hi: 99 }]),
+  trigger('G', 'add', [{ lo: 98.001, hi: 98.999 }]),
 ];
 
 test('the closes to watch: those that give an order unchanged or within 2%, nearest first, and every one with fill: close', () => {
   const rows = watchRows(reportOf(SAMPLE_TRIGGERS));
   assert.deepEqual(rows.map((r) => [r.ticker, r.side, r.now]), [['C', 'sell', true], ['G', 'add', false], ['A', 'buy', false]]);
-  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', when: 'at the following open', driver: 'A', lastClose: 100, distance: 101.5 / 100 - 1, now: false });
+  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', when: 'at the following open', driver: 'A', lastClose: 100, distance: 101.501 / 100 - 1, now: false });
   assert.deepEqual([watchClose(rows[2]), watchClose({ ...rows[2], driver: 'SPY' })], ['100.00', '100.00 (SPY)']);
   assert.equal(rows[0].phrase, 'Sells unless it closes above 102.00 (+2.0%)');
   const close = watchRows(reportOf(SAMPLE_TRIGGERS, true));

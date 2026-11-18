@@ -7,7 +7,7 @@ import { hintFor } from './fixes.ts';
 import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, viewText, waitFor, type Choice, type Shown } from './live-core.ts';
 import { blockStateKey } from './render.ts';
 import { debounce } from './result-cache.ts';
-import { findBlock, setParamValuesInNote, writeInNote } from './rewrite.ts';
+import { findBlock, writeValuesInNote } from './rewrite.ts';
 
 export const VIEW_TYPE_LIVE = 'backtest-live';
 
@@ -380,7 +380,7 @@ export class LiveView extends ItemView {
       // The editor of a note in reading mode is not saved, so the file is changed instead.
       const file = view.file;
       const at = locateBlock(viewText(view).split('\n'), selected.text, selected.index);
-      await writeInNote((edit) => this.app.vault.process(file, edit), at ? at.first - 1 : undefined, (note, line) => setParamValuesInNote(note, line, selected.text, values));
+      await writeValuesInNote((edit) => this.app.vault.process(file, edit), at ? at.first - 1 : undefined, selected.text, values);
       return;
     }
     const lines = view.editor.getValue().split('\n');

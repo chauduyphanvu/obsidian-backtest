@@ -397,15 +397,11 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   const setup = fillsSetup(runs);
   const read = readFills(text, [...setup.bars.keys()], config.fillColumns ?? {});
   if (stopped()) return;
-  if (!read.ok) {
-    say(read.reason, 'bt-warning');
+  if (!read.ok || readNone(read)) {
+    if (!read.ok) say(read.reason, 'bt-warning');
+    else for (const line of readLines(read)) say(line);
     const save = host.setting;
     if (save) columnForm(box, text, config.fillColumns ?? {}, (value) => save('fills columns', value));
-    return;
-  }
-  if (readNone(read)) {
-    for (const line of readLines(read)) say(line);
-    if (host.setting) columnForm(box, text, config.fillColumns ?? {}, (value) => host.setting!('fills columns', value));
     return;
   }
   const wanted = read.fills.some((f) => f.date >= from) ? rawWanted(setup, read.fills, from) : [];
