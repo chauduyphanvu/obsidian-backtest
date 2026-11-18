@@ -71,7 +71,7 @@ export function buyPoints(w: WindowTrade): { t: number; price: number }[] {
   return fills.filter((e) => e.t >= w.from && e.t <= w.to).map((e) => ({ t: e.t, price: e.price }));
 }
 
-/** The periods the strategy held the ticker, with trades that touch or overlap joined. Needs `held` in time order. */
+/** The periods the strategy held the ticker, with trades that touch or overlap joined. Needs `held` in time order. A short and a long that meet at a flip are joined too: pass one side's trades to tell them apart. */
 export function heldIntervals(held: WindowTrade[]): { from: number; to: number }[] {
   const out: { from: number; to: number }[] = [];
   for (const w of held) {
@@ -194,7 +194,7 @@ export function markerPath(kind: 'buy' | 'sell', x: number, y: number): string {
   return `M${f(x)},${f(y + 2 * dir)}L${f(x - 5)},${f(y + 11 * dir)}L${f(x + 5)},${f(y + 11 * dir)}Z`;
 }
 
-/** What the tooltip says about the buying: the day and price, or for a position built in entries their number, the first day and the average price. */
+/** What the tooltip says about the entry: the day and price, or for a position built in entries their number, the first day and the average price. */
 export function boughtWording(trade: Trade, when: (t: number) => string, price: (v: number) => string): string {
   const n = trade.entries?.length ?? 1;
   return n > 1 ? `${n} entries from ${when(trade.entryT)}, ${price(trade.entryPrice)} on average` : `${when(trade.entryT)} at ${price(trade.entryPrice)}`;
@@ -205,7 +205,31 @@ export function exitWording(reason: ExitReason): string {
   return reason === 'open' ? 'still held' : reason === 'signal' ? 'sell rule' : reason;
 }
 
-/** One line above the chart: how often the strategy held the ticker, and what simply holding it would have returned. */
+const openedAt = new WeakMap<Trade[], Set<string>>();
+const openKey = (asset: string, t: number, side: 'long' | 'short') => `${asset}\u0000${t}\u0000${side}`;
+
+/** Whether the other side's entry rule closed the trade and opened that side at the same fill. `trades` is the run's. */
+export function flipped(trade: Trade, trades: Trade[]): boolean {
+  const exit = trade.why?.exit;
+  if (exit?.k !== 'rule' || !exit.flip) return false;
+  let opened = openedAt.get(trades);
+  if (!opened) openedAt.set(trades, (opened = new Set(trades.map((t) => openKey(t.asset, t.entryT, t.side ?? 'long')))));
+  return opened.has(openKey(trade.asset, trade.exitT, trade.side === 'short' ? 'long' : 'short'));
+}
+
+/**
+ * Why one trade of the run ended, as the trades table words it: a short's own exit rule is the cover rule, and the other
+ * side's entry rule is a flip when it opened that side, or else that rule by name.
+ */
+export function tradeExit(trade: Trade, trades: Trade[]): string {
+  const exit = trade.why?.exit;
+  const short = trade.side === 'short';
+  if (trade.reason !== 'signal') return exitWording(trade.reason);
+  if (exit?.k === 'rule' && exit.flip) return flipped(trade, trades) ? (short ? 'flipped to long' : 'flipped to short') : short ? 'buy rule' : 'short rule';
+  return short ? 'cover rule' : 'sell rule';
+}
+
+/** One line above the chart: how often the strategy held the ticker, long or short, and what simply holding it would have returned. */
 export function summaryLine(tradeCount: number, share: number, hold: number | null): string {
   const mine = tradeCount === 0 ? 'No trades.' : `${tradeCount} ${tradeCount === 1 ? 'trade' : 'trades'}, held ${pct(share, share < 0.1 ? 1 : 0)} of the time.`;
   return hold === null ? mine : `${mine} Bought and held, it returned ${pct(hold, Math.abs(hold) >= 10 ? 0 : 1)} over this period.`;

@@ -170,7 +170,7 @@ test('ruin: equity at 0 or below closes everything, and the run is over with its
 test('when the buy and short rules both hold, neither side opens and the bar is counted', () => {
   const bt = run('universe: A\nbuy when true\nshort when true', { A: flat(5) });
   assert.deepEqual([bt.run.trades.length, bt.run.conflicts, bt.run.fills.t.length], [0, 5, 0]);
-  assert.ok(bt.notes.includes('On 5 bars the buy rule and the short rule both held, so neither side opened there.'));
+  assert.ok(bt.notes.includes('Buy and short rules both held on 5 bars; neither was taken.'));
   // A sell rule that holds vetoes the long, so the short opens alone.
   assert.equal(run('universe: A\nbuy when true\nsell when true\nshort when true', { A: flat(5) }).run.trades[0].side, 'short');
 });
