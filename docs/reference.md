@@ -1383,7 +1383,7 @@ The key is not saved in the plugin's settings file. You pick it from Obsidian's 
 
 What is sent, exactly:
 
-- A fixed set of instructions that comes with the plugin: the language reference, the limits (long, short or leveraged up to 2×, with no options or futures), the reply format and worked examples. It holds nothing from your vault. This is the plugin's built-in guide to the language.
+- A fixed set of instructions that comes with the plugin (its language part is also published as `llms-full.txt`, see "For language models and tools"): the language reference, the limits (long, short or leveraged up to 2×, with no options or futures), the reply format and worked examples. It holds nothing from your vault. This is the plugin's built-in guide to the language.
 - The description you typed.
 - If the parser finds errors in the draft, up to two repair requests follow. Each one sends the conversation so far (your description and the model's earlier replies), the parser's messages with the lines they are about, and the draft.
 
@@ -1575,6 +1575,8 @@ Two features make requests on their own, to the price hosts above and no others:
   - The list of Binance prices, `data-api.binance.vision/api/v3/ticker/price`. It carries no parameters and no text from your notes. It is fetched the first time a Binance ticker is checked or a plain word is completed, and again after 6 hours.
   - Answers are kept in memory only. At most 2 lookups run at once. A failed lookup is silent and is not repeated for 30 seconds, and 3 failures in a row pause that host for 60 seconds.
 
+The command line and MCP server (see "For language models and tools") contact the same price hosts, from the machine they run on, only when they run a backtest (`run`, or the `run_backtest` tool), and with the `User-Agent` `backtest-blocks`. Checking a block, explaining a word and the rest make no requests.
+
 Nothing else leaves your vault. There is no telemetry, no analytics, no update check and no remote code. No note's text is sent anywhere. The only words taken from your notes are ticker symbols, and only for the lookup above; what is described under "Drafting from plain English" goes to a model. The plugin sets no `User-Agent` of its own: the request carries whatever Obsidian's `requestUrl` sends.
 
 ## How far to trust it
@@ -1636,23 +1638,57 @@ Also not checked:
 - Shorts and borrowing are modelled simply. Every short pays the same borrow fee, whatever its stock would really cost to borrow: there are no hard-to-borrow lists, no per-stock borrow rates, no recalls of borrowed shares and no short-sale price restrictions (Rule 201 of Regulation SHO). A short pays a stock's dividends only through the adjusted prices: the price does not drop on the day a dividend is paid, so the short does not gain that drop, which is about what paying the dividend would cost. Money borrowed pays one rate, however much is borrowed. A broker's margin call sets a level for each position and sells the biggest losers first until the shortfall is covered; here equity is set against 25% of the gross value, and a call closes everything.
 - Real fills differ from the next open and from the close: spreads, size and liquidity, outages, and your taxes are not in the numbers. A run with `fill: close` assumes you can trade at a closing price that is not known until the close. A real order can only come near it, by being placed just before the close.
 
+## For language models and tools
+
+The language is small enough for a model to learn from one document, and the plugin's parser can check what a model writes outside Obsidian too.
+
+### Files for models
+
+These are made from the plugin's code by `npm run generate`, and a test fails when one no longer matches it, so they list exactly what the parser takes:
+
+- `llms.txt`: an index of the files below, in the layout of llmstxt.org.
+- `llms-full.txt`: everything a writer needs. What a block is, the language (the same text the drafting command sends, see "Drafting from plain English"), worked examples, and how to check a block.
+- `docs/language.json`: every function, series, calendar and position value, setting (with its fixed values), word and unit, with its form, meaning and an example, and the names a parameter can't take.
+- `docs/corpus/examples.jsonl`: requests in plain English and the blocks that answer them, with what the writer told the reader, one JSON object a line. Every block parses with no problems, and together they use every word of the language.
+- `docs/corpus/mistakes.jsonl`: blocks with a mistake a writer is likely to make, the parser's exact messages, and the block put right.
+- `docs/grammar/strategy.lark` and `docs/grammar/strategy.gbnf`: the text of one block (without its fence) as a grammar, for models that generate under one: Lark for grammar-constrained tools such as OpenAI's, vLLM and llguidance, GBNF for llama.cpp.
+
+The grammar keeps a model to the language's shape: known settings with their values, known function names, rules, parameters, definitions and `for` lines. It takes more than the parser does, though. A name can be any identifier, an expression is a flat run of operands and operators, and what a block means (which names exist, which rule may read what) is the parser's to say. Words must be in lower case, as the examples write them, while the parser also takes `Buy When`. So check what a grammar produces, as with any other draft.
+
+### The command line
+
+Each release carries `backtest-blocks.mjs`, one file for Node.js 20 or later with no install step. It reads notes as they are in a vault, or a bare block on standard input (`-`).
+
+- `check <note>...` checks every `strategy` block in each note. Standard input, or a file that isn't a `.md` note, is read as one bare block when it has no fence at all. It prints each problem as `note.md:12:5: error: message`, with the line and column counted in the note, past the markers of a callout or quote. The count of blocks and problems goes to standard error. It exits with 0 when no block has an error, 1 when one has or a note has no strategy block, and 2 when the command is wrong or a note can't be read; the other notes are still checked and their problems printed. Warnings don't fail it. `--json` prints the problems as data.
+- `run <note> [--block name|n]` backtests one block on live prices and prints the verdict, return per year, total return, worst drawdown and Sharpe ratio against the benchmark, the trades and what it holds now. A note with several blocks needs `--block`, by name or number from 1. CSV files are read from the vault the note is in (the folder above it that holds `.obsidian`), or from `--vault`, as Obsidian reads them, and never from outside it. Prices are saved in `$XDG_CACHE_HOME/backtest-blocks` or `~/.cache/backtest-blocks` (`--cache` chooses another folder) and kept for the plugin's default time; `--refresh` fetches them again. Tiingo and FRED read their keys from `TIINGO_API_KEY` and `FRED_API_KEY`. It uses the plugin's default settings, and `--json` prints the result as data with the last ten trades.
+- `explain <word>` prints a word's form, meaning and example, as the editor's help does, and suggests near words for one it doesn't know. A word can be given as a block writes it: `sma(200)`, `stop loss: 10%`, `rebalance: monthly`. `words` lists every word (`--json` gives `language.json`), and `guide` prints `llms-full.txt`.
+
+### The MCP server
+
+`node backtest-blocks.mjs mcp` serves the same over standard input and output, for Claude Code (`claude mcp add backtest-blocks -- node /path/to/backtest-blocks.mjs mcp`), Claude Desktop, Codex or any other MCP client:
+
+- Tools: `check_strategy` (a block or a note; errors and warnings with their lines), `run_backtest` (a block or a note, with `block`, `vault_path` and `refresh`; the same result as `run`), `explain_word` and `list_words`. Only `run_backtest` reaches the network.
+- Resources: the guide, the word list, the examples, the mistakes and both grammars.
+- Prompt: `write_strategy`, which gives a model the drafting command's own instructions and the idea, and asks it to check its block with `check_strategy` before it replies.
+
 ## Development
 
 ```
 npm test           # unit tests, each .ts file run directly by Node
+npm run generate   # write llms.txt, llms-full.txt and the files for models under docs/
 npm run typecheck  # tsc --noEmit
 npm run build      # type check, then bundle into dist/
 npm run check      # everything a push or release must pass (ci/check.sh)
 node xcheck/run.ts # optional cross-check; needs the second backtester's command-line tool
 ```
 
-Obsidian loads one script for a plugin, so the background workers are built into `main.js`: `npm run build` bundles `src/worker.ts` first (`esbuild.config.mjs`) and embeds its text in the main bundle, which starts them from that text.
+Obsidian loads one script for a plugin, so the background workers are built into `main.js`: `npm run build` bundles `src/worker.ts` first (`esbuild.config.mjs`) and embeds its text in the main bundle, which starts them from that text. It then bundles `src/cli/bin.ts` with the MCP SDK into `dist/backtest-blocks.mjs`, which the check runs on two notes in `tests/fixtures/cli/`.
 
 The cross-check runs 44 cases and 55 indicator expressions (`xcheck/README.md` lists them and the differences it explains). It needs Rearview's command-line tool, `rvw`: the path in the `RVW` environment variable, or else `rvw` on `PATH`. Without it the script says so and exits 0.
 
 The checks run on your own machine; the repository has no hosted workflow. `sh ci/check.sh` (or `npm run check`) runs the tests, the type check and build, checks the built files and the version files against each other, and runs the cross-check when `rvw` is found; it stops at the first failure. A file `ci/local.env`, which is not in git, can set `RVW` for that machine. `git config core.hooksPath ci/hooks`, run once in a clone, makes every push run the check first.
 
-`sh ci/release.sh` releases the `version` in `manifest.json`. It refuses unless you are on `main` with nothing uncommitted and `main` matches the remote, the tag and the release do not exist yet, and the whole check passes with the cross-check. Then it tags the commit, pushes the tag and publishes a GitHub release with `main.js`, `manifest.json` and `styles.css`, using `ci/notes/<version>.md` as the notes when that file exists. `--dry-run` runs every check and changes nothing; `--draft` leaves the release as a draft. It needs the GitHub command-line tool, `gh`. `versions.json` maps each plugin version to the minimum Obsidian version.
+`sh ci/release.sh` releases the `version` in `manifest.json`. It refuses unless you are on `main` with nothing uncommitted and `main` matches the remote, the tag and the release do not exist yet, and the whole check passes with the cross-check. Then it tags the commit, pushes the tag and publishes a GitHub release with `main.js`, `manifest.json`, `styles.css` and `backtest-blocks.mjs`, using `ci/notes/<version>.md` as the notes when that file exists. `--dry-run` runs every check and changes nothing; `--draft` leaves the release as a draft. It needs the GitHub command-line tool, `gh`. `versions.json` maps each plugin version to the minimum Obsidian version.
 
 Layout of `src/`:
 
@@ -1675,7 +1711,9 @@ Layout of `src/`:
 - `overfit.ts`: the maths of the overfitting checks: the normal distribution, the deflated Sharpe ratio, and the probability of backtest overfitting by combinatorially symmetric cross-validation.
 - `ledger.ts`: each block's record of the variants it ran and the versions of its text, how two copies of a record merge, and the lines that changed between two versions.
 - `render-versions.ts`: the Versions section: each version of a block's text that was run, with its figures, the lines that changed from the one before, and putting an older one back.
-- `llm.ts`, `llm-modal.ts`: drafting.
+- `llm.ts`, `llm-modal.ts`, `language-guide.ts`, `examples.ts`: drafting, and the guide to the language and worked examples it sends, which `llms-full.txt` carries too.
+- `llm-files.ts`, `corpus/`, `grammar.ts`: the files for models (`npm run generate` writes them from `scripts/generate.ts`): the word list, the worked examples and mistakes, and the grammar with its Lark and GBNF forms and the recognizer the tests use.
+- `cli/bin.ts`, `cli/main.ts`, `cli/node-deps.ts`, `cli/report.ts`, `cli/mcp.ts`: the command line and MCP server, `backtest-blocks.mjs`: the program, its commands, prices and files on Node, a run as text or data, and the MCP tools.
 - `forward.ts`: forward tests: the note made from a strategy with the plugin defaults pinned in its text, reading its `forward` block and checking that the rules were not edited, the figures since the start against earlier stretches of the same length, the bars where a run's rules gave an order, and the log of orders with its appending and its comparison with today's prices.
 - `render-forward.ts`: drawing the `forward` block: its figures, the sentences under them, the revisions, the log line and the button that adds to the log.
 - `gallery.ts`, `gallery-modal.ts`, `csv-import.ts`, `csv-modal.ts`: the starter strategies and the CSV helper, each with its logic and its window.

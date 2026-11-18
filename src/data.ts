@@ -28,6 +28,8 @@ export interface DataDeps {
   sleep?: (ms: number) => Promise<void>;
   /** The API key of a service, read from the user's secret storage when a request is about to go out; null when none is set. */
   secret?: (service: KeyedService) => string | null;
+  /** The environment variable a service's key is read from, when keys come from there instead of the plugin's settings. */
+  keyVariable?: (service: KeyedService) => string;
   /** Whether a Yahoo ticker that fails to load may come from Tiingo instead: the setting "When Yahoo fails, use Tiingo". */
   tiingoFallback?: () => boolean;
 }
@@ -588,9 +590,16 @@ export const withoutQueries = (text: string): string => text.replace(/\b(https?:
 /** The API key a request to `service` needs, or a MissingKey error that names the setting to choose it with. */
 function keyFor(service: KeyedService, ref: AssetRef, deps: DataDeps): string {
   const key = deps.secret?.(service)?.trim();
-  if (!key) throw new MissingKey(`${SERVICE[service]} needs an API key to load ${ref.name}. Choose the secret that holds it under "${KEY_SETTING[service]}" in the plugin settings.`);
+  if (!key) {
+    const where = deps.keyVariable ? `Set ${deps.keyVariable(service)} in the environment.` : `Choose the secret that holds it under "${KEY_SETTING[service]}" in the plugin settings.`;
+    throw new MissingKey(`${SERVICE[service]} needs an API key to load ${ref.name}. ${where}`);
+  }
   return key;
 }
+
+/** Where the user put a service's key, for a message that says to check it. */
+const keyPlace = (service: KeyedService, deps: DataDeps): string =>
+  deps.keyVariable ? deps.keyVariable(service) : `the secret chosen under "${KEY_SETTING[service]}" in the plugin settings`;
 
 /** Runs a request that carries `key`, so that no error it ends in holds the key or a web address's query. */
 async function keyed<T>(key: string, request: () => Promise<T>): Promise<T> {
@@ -625,7 +634,7 @@ async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps, raw 
       const detail = said(text, 'detail');
       if (detail === undefined) throw e;
       if (/not\s*found/i.test(detail)) throw new NoPrices(`Tiingo has no prices for ${ref.name}. Check the ticker.`);
-      if (/token|api key|auth/i.test(detail)) throw new Error(`Tiingo did not accept the API key. Check the secret chosen under "${KEY_SETTING.tiingo}" in the plugin settings`);
+      if (/token|api key|auth/i.test(detail)) throw new Error(`Tiingo did not accept the API key. Check ${keyPlace('tiingo', deps)}`);
       throw new Error(`Tiingo said: ${detail}`);
     }
   });
@@ -651,7 +660,7 @@ async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
       const error = said(text, 'error_message');
       if (error !== undefined) {
         if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series called ${ref.name}. Check the series ID, such as T10Y2Y.`);
-        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Check the secret chosen under "${KEY_SETTING.fred}" in the plugin settings`);
+        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Check ${keyPlace('fred', deps)}`);
         throw new Error(`FRED said: ${error.replace(/\s+/g, ' ')}`);
       }
       return JSON.parse(text) as Record<string, unknown>;

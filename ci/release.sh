@@ -1,6 +1,7 @@
 #!/bin/sh
 # Releases the version in manifest.json from this machine: checks everything, tags the commit,
-# pushes the tag and publishes a GitHub release with main.js, manifest.json and styles.css.
+# pushes the tag and publishes a GitHub release with main.js, manifest.json and styles.css, and the command line
+# and MCP server, backtest-blocks.mjs.
 #
 #   sh ci/release.sh             release
 #   sh ci/release.sh --dry-run   run every check and say what would happen, change nothing
@@ -47,5 +48,5 @@ fi
 git tag "$version"
 git push origin "$version"
 # shellcheck disable=SC2086
-gh release create "$version" dist/main.js dist/manifest.json dist/styles.css --title "$version" --verify-tag $draft "$@"
+gh release create "$version" dist/main.js dist/manifest.json dist/styles.css dist/backtest-blocks.mjs --title "$version" --verify-tag $draft "$@"
 printf '\nrelease: %s is out.\n' "$version"

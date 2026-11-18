@@ -32,14 +32,17 @@ npm run build >"$out" 2>&1 || { cat "$out"; fail 'The build failed.'; }
 echo 'built dist/'
 
 step 'Built files'
-for f in main.js manifest.json styles.css; do
+for f in main.js manifest.json styles.css backtest-blocks.mjs; do
   [ -s "dist/$f" ] || fail "dist/$f is missing or empty."
 done
 version=$(node -p "require('./manifest.json').version")
 [ "$(node -p "require('./dist/manifest.json').version")" = "$version" ] || fail 'dist/manifest.json has another version than manifest.json.'
 [ "$(node -p "require('./package.json').version")" = "$version" ] || fail 'package.json has another version than manifest.json.'
 node -e "const v=require('./versions.json'); if (!v['$version']) process.exit(1)" || fail "versions.json has no entry for $version."
-echo "version $version, main.js $(wc -c <dist/main.js | tr -d ' ') bytes"
+[ "$(node dist/backtest-blocks.mjs --version)" = "$version" ] || fail 'dist/backtest-blocks.mjs has another version than manifest.json.'
+node dist/backtest-blocks.mjs check tests/fixtures/cli/ok.md 2>/dev/null || fail 'dist/backtest-blocks.mjs did not pass a good block.'
+if node dist/backtest-blocks.mjs check tests/fixtures/cli/bad.md >/dev/null 2>&1; then fail 'dist/backtest-blocks.mjs passed a block with a mistake.'; fi
+echo "version $version, main.js $(wc -c <dist/main.js | tr -d ' ') bytes, backtest-blocks.mjs $(wc -c <dist/backtest-blocks.mjs | tr -d ' ') bytes"
 
 step 'Cross-check against the second backtester'
 if [ -n "${RVW:-}" ] && [ -x "$RVW" ] || command -v rvw >/dev/null 2>&1; then

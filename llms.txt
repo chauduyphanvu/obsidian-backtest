@@ -1,0 +1,22 @@
+# Backtest Blocks
+
+> A plugin for Obsidian that backtests trading strategies written in a small rule language, in `strategy` code blocks in a note. Long, short or leveraged up to 2×, on daily, weekly or intraday bars from Yahoo Finance, Binance, Tiingo or CSV files, with economic series from FRED.
+
+A parser checks every line of a block, and only what it accepts is backtested. Write blocks from the guide below, then check them with the command line or the MCP server.
+
+## Docs
+
+- [Writing strategy blocks](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/llms-full.txt): the whole language for a writer, with worked examples and how to check a block
+- [Word list](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/language.json): every function, setting, value and word, with its form, meaning and an example
+- [Worked examples](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/corpus/examples.jsonl): 77 requests in plain English and the blocks that answer them
+- [Mistakes and fixes](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/corpus/mistakes.jsonl): 33 blocks with a mistake, what the parser says and the block put right
+
+## Tools
+
+- [Command line and MCP server](https://github.com/chauduyphanvu/obsidian-backtest/releases/latest/download/backtest-blocks.mjs): one file for Node.js. `node backtest-blocks.mjs check note.md` checks blocks, `run` backtests one, and `mcp` serves both as MCP tools
+- [Lark grammar](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/grammar/strategy.lark) and [GBNF grammar](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/grammar/strategy.gbnf): for generating under a grammar; they take more than the parser does, so check the result
+
+## Optional
+
+- [Full reference](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/reference.md): the complete guide, written for people
+- [Source](https://github.com/chauduyphanvu/obsidian-backtest)
