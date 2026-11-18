@@ -120,6 +120,8 @@ test('inside a rule a definition is offered with its text, and so are the new wo
   assert.deepEqual(labels([], 'buy when str'), ['stretch']);
   // In another definition too, before or after it is written.
   assert.deepEqual(labels([], 'dip = upt'), ['uptrend']);
+  // Not itself: it would only be a loop.
+  assert.equal(labels([], 'uptrend = upt'), null);
   assert.deepEqual(labels([], 'buy when close > 1 betw'), ['between']);
   assert.deepEqual(labels([], 'buy when close > 1 with'), ['within']);
   assert.deepEqual(labels([], 'buy when close > 1 f'), ['fast', 'for']);

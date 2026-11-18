@@ -169,6 +169,8 @@ export function complete(block: string[], above: string[], before: string, colum
   const names = (suffix: string, detail: string) => tickers(block).map((t) => ({ label: t, insert: t + suffix, detail }));
   const params = declaredParams(block);
   const definitions = declaredDefinitions(block);
+  // The definition being written cannot use itself.
+  const writing = lineKind(before, false) === 'define' ? before.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)/)![1].toLowerCase() : '';
 
   // Read the lines above the way the parser does: whether a rule is open, which side it is, and
   // which "for" section the cursor sits in.
@@ -207,7 +209,7 @@ export function complete(block: string[], above: string[], before: string, colum
       ...(positions ? POSITION_WORDS : []),
       ...CALENDAR_WORDS,
       ...params.map((p) => ({ label: p.name, insert: p.name, detail: `parameter: ${p.value}` })),
-      ...definitions.map((d) => ({ label: d.name, insert: d.name, detail: `definition: ${d.value}` })),
+      ...definitions.filter((d) => d.name.toLowerCase() !== writing).map((d) => ({ label: d.name, insert: d.name, detail: `definition: ${d.value}` })),
       ...FUNCTIONS.map((f) => entry(f, `${f}(`, functionDetail(f))),
       ...WORDS,
     ]);

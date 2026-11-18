@@ -218,6 +218,29 @@ test('Written.parts has a text for every node, with a definition shown by its na
   assert.deepEqual(more, ['up[1] and up of QQQ', 'up[1]', 'up', 'close', 'sma(200)', '', 'up of QQQ', 'up', 'close', 'sma(200)', '']);
 });
 
+test('Written.parts stays one text for each node of the tree, whatever a rule is made of', () => {
+  const rules = [
+    'up and dip',
+    'up[1] and dip of QQQ',
+    'band for 3 bars or not band within 2 bars',
+    'rsi(2) between 10 and 30 and (close crosses sma(5)) for 2 bars',
+    'count(up and dip, 4) >= 2 and gap between -2% and 2%',
+    'not (band and up) for 3 bars',
+    'gap < -3% and up of QQQ == false',
+    'close[2] - 1 between gap and 2 * gap',
+  ];
+  const defs = 'universe: SPY, QQQ\nup = close > sma(200)\ndip = rsi(2) < 10\ngap = close / sma(20) - 1\nband = gap between -3% and 3%\n';
+  for (const rule of rules) {
+    const spec = ok(`${defs}buy when ${rule}`);
+    let nodes = 0;
+    walk(spec.rules.SPY.buy, () => nodes++);
+    const w = spec.written!.rules.SPY.buy!;
+    assert.equal(w.parts.length, nodes, rule);
+    assert.equal(w.parts[0], rule);
+    assert.ok(w.parts.every((p) => typeof p === 'string'));
+  }
+});
+
 const wave = (n: number): number[] => Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 7) * 10 + i * 0.05);
 
 test('the rule table has a column for a definition by its name, opening into its parts when it joins conditions', () => {
