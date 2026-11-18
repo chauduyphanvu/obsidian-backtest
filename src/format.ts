@@ -80,14 +80,21 @@ export function timeTicks(t0: number, t1: number, width: number): { t: number; l
     }
   } else {
     const months = days / 30.44;
-    const step = [1, 2, 3, 6, 12, 24, 60, 120].find((x) => months / x <= max) ?? 240;
+    const steps = [1, 2, 3, 6, 12, 24, 60, 120, 240];
+    let k = steps.findIndex((x) => months / x <= max);
+    if (k < 0) k = steps.length - 1;
     const d0 = new Date(t0);
-    let m = d0.getUTCFullYear() * 12 + d0.getUTCMonth();
-    m = Math.ceil(m / step) * step;
-    for (;; m += step) {
-      const t = Date.UTC(Math.floor(m / 12), m % 12, 1);
-      if (t > t1) break;
-      if (t >= t0) out.push({ t, label: step >= 12 ? String(Math.floor(m / 12)) : m % 12 === 0 ? String(Math.floor(m / 12)) : MONTHS[m % 12] });
+    const first = d0.getUTCFullYear() * 12 + d0.getUTCMonth();
+    // A step that leaves one tick, such as 5 years over a 5-year span in a narrow chart, steps down: years are short labels.
+    for (; k >= 0; k--) {
+      const step = steps[k];
+      out.length = 0;
+      for (let m = Math.ceil(first / step) * step; ; m += step) {
+        const t = Date.UTC(Math.floor(m / 12), m % 12, 1);
+        if (t > t1) break;
+        if (t >= t0) out.push({ t, label: step >= 12 ? String(Math.floor(m / 12)) : m % 12 === 0 ? String(Math.floor(m / 12)) : MONTHS[m % 12] });
+      }
+      if (out.length >= 2 || step <= 12) break;
     }
   }
   return out;

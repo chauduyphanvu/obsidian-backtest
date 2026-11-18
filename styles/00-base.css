@@ -48,26 +48,7 @@
   font-weight: var(--font-semibold);
 }
 
-/* Six tiles in two, three or six columns, whatever the width, so none is left alone on a row. */
-.bt-tiles-box {
-  container-type: inline-size;
-  margin: 14px 0;
-}
-.bt-tiles {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-@container (min-width: 376px) {
-  .bt-tiles {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-@container (min-width: 760px) {
-  .bt-tiles {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-}
+/* Figure tiles, as the forward test and the sweep draw them. */
 .bt-tile {
   background: var(--background-secondary);
   border-radius: var(--radius-s);
@@ -124,6 +105,10 @@
 /* Their aria-labels are for screen readers. Obsidian would show each as a tooltip over the content, and over an svg its
    tooltip code throws; this variable is what it checks first. */
 .bt-svg,
+.bt-ruler,
+.bt-tabs-main,
+.bt-tabs-more,
+.bt-range,
 .bt-params,
 .bt-debug-scroll,
 .bt-dash-table,
@@ -203,18 +188,10 @@
   font-weight: var(--font-semibold);
   margin-bottom: 2px;
 }
-.bt-tip-row {
-  display: grid;
-  grid-template-columns: 14px auto auto 52px;
-  align-items: center;
-  gap: 8px;
-}
-.bt-tip-value,
-.bt-tip-dd {
+.bt-tip-value {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.bt-tip-dd,
 .bt-tip-foot {
   color: var(--text-muted);
 }

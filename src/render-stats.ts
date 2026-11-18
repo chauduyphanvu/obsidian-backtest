@@ -1,50 +1,17 @@
-// The "More statistics" section: a comparison table, yearly returns chart and monthly returns table.
+// The Years and Months tabs of a result: the strategy's return each year less its benchmark's, and each month's return in
+// a calendar grid.
 
-import { h, s } from './dom.ts';
-import { minus, MONTHS, niceStep, pct, signedPct, ungroupedPlural } from './format.ts';
-import { deepStats, periodReturns, type DeepStats, type PeriodReturn, type Underwater } from './stats.ts';
+import { h, onWidth, s } from './dom.ts';
+import { MONTHS, pct, plural, signedPct } from './format.ts';
+import { periodReturns, type PeriodReturn } from './stats.ts';
+import { tabInfo } from './tabs.ts';
+import { benchProse, LEVEL, periodName, yearsAhead } from './verdict.ts';
 
-export interface DeepStatsInput {
+export interface PeriodInput {
   t: number[];
   strategy: number[];
   benchmark: number[];
   benchmarkLabel: string;
-  /** What cash earned over each step, aligned with `t`; the Sortino ratios measure returns above it. */
-  cashReturn?: number[];
-}
-
-/** Appends a collapsed "More statistics" section to `parent`. Returns a cleanup function (disconnects observers). Content is built the first time the section is opened. */
-export function renderDeepStats(parent: HTMLElement, input: DeepStatsInput): () => void {
-  const details = h(parent, 'details', 'bt-details');
-  h(details, 'summary', undefined, 'More statistics');
-  let observer: ResizeObserver | undefined;
-  details.addEventListener('toggle', () => (observer = build(h(details, 'div', 'bt-stats-body'), input)), { once: true });
-  return () => observer?.disconnect();
-}
-
-function build(body: HTMLElement, input: DeepStatsInput): ResizeObserver {
-  comparison(body, input);
-  const years = periodReturns(input.t, input.strategy, 'year');
-  // Same dates as the strategy, but a benchmark whose prices start later has fewer years.
-  const benchYears = periodReturns(input.t, input.benchmark, 'year');
-  const observer = yearsChart(body, input.benchmarkLabel, years, benchYears);
-  monthsTable(body, periodReturns(input.t, input.strategy, 'month'), years);
-  return observer;
-}
-
-/** "45 days" up to two months, then "1 year 3 months". */
-function duration(days: number): string {
-  if (days < 1) return 'less than a day';
-  if (days < 60) return ungroupedPlural(Math.round(days), 'day');
-  const months = Math.round(days / 30.4375);
-  const years = Math.floor(months / 12);
-  return [years > 0 ? ungroupedPlural(years, 'year') : '', months % 12 > 0 ? ungroupedPlural(months % 12, 'month') : ''].filter(Boolean).join(' ');
-}
-
-function periodName(p: PeriodReturn): string {
-  if (p.key.length === 4) return p.key;
-  const d = new Date(p.t);
-  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 /** A value with a quieter note after it, such as "+31.2% (2019)". */
@@ -56,180 +23,175 @@ export function cell(row: HTMLElement, value: string, note: string | null): void
   }
 }
 
-function comparison(body: HTMLElement, input: DeepStatsInput): void {
-  const mine = deepStats(input.t, input.strategy, input.cashReturn);
-  const bench = deepStats(input.t, input.benchmark, input.cashReturn);
-  const table = h(body, 'table', 'bt-table');
-  const head = h(h(table, 'thead'), 'tr');
-  h(head, 'th');
-  for (const [cls, label] of [['bt-swatch-strategy', 'Strategy'], ['bt-swatch-benchmark', input.benchmarkLabel]] as const) {
-    const mark = h(h(head, 'th', 'bt-num'), 'span', 'bt-stats-th');
-    h(mark, 'span', `bt-swatch bt-stats-swatch ${cls}`);
-    h(mark, 'span', undefined, label);
-  }
-
-  const ratio = (x: number) => minus((Math.round(x * 100) / 100 || 0).toFixed(2));
-  const best = (p: PeriodReturn | null): [string, string | null] => (p ? [signedPct(p.ret), periodName(p)] : ['–', null]);
-  const below = (u: Underwater): [string, string | null] => (u.longestDays === 0 ? ['None', null] : [duration(u.longestDays), u.longestTo === null ? 'still below' : null]);
-  const rows: [string, (d: DeepStats) => [string, string | null]][] = [
-    ['Sortino ratio', (d) => [ratio(d.sortino), null]],
-    ['Return per year ÷ worst drawdown', (d) => [ratio(d.calmar), null]],
-    ['Best year', (d) => best(d.bestYear)],
-    ['Worst year', (d) => best(d.worstYear)],
-    ['Months with a gain', (d) => [pct(d.positiveMonths, 0), null]],
-    ['Longest time below a previous high', (d) => below(d.underwater)],
-    ['Best month', (d) => best(d.bestMonth)],
-    ['Worst month', (d) => best(d.worstMonth)],
-  ];
-  const tbody = h(table, 'tbody');
-  for (const [label, get] of rows) {
-    const row = h(tbody, 'tr');
-    h(row, 'td', undefined, label);
-    cell(row, ...get(mine));
-    cell(row, ...get(bench));
-  }
+/** Builds a section the first time it opens; returns a cleanup function for what the build left watching. */
+function lazy(details: HTMLElement, build: (body: HTMLElement) => (() => void) | void): () => void {
+  let stop: (() => void) | void;
+  details.addEventListener('toggle', () => (stop = build(h(details, 'div', 'bt-tab-body'))), { once: true });
+  return () => stop?.();
 }
 
+/** Draws into `box` at its width, and again when that changes. Returns a cleanup function. */
+const pts = (d: number): string => `${Math.abs(d * 100).toFixed(1)} pts`;
+
+/** The Years tab. Nothing is added for a run shorter than a calendar year's worth of data. */
+export function renderYears(parent: HTMLElement, input: PeriodInput): () => void {
+  const mine = periodReturns(input.t, input.strategy, 'year');
+  if (mine.length === 0) return () => {};
+  const ahead = yearsAhead(input.t, input.strategy, input.benchmark);
+  const details = h(parent, 'details', 'bt-details bt-years');
+  h(details, 'summary', undefined, 'Years');
+  tabInfo(details, 'Years', ahead.years > 0 ? `ahead in ${ahead.ahead.length} of ${ahead.years}` : plural(mine.length, 'year'));
+  return lazy(details, (body) => {
+    const bench = benchProse(input.benchmarkLabel);
+    const theirs = new Map(periodReturns(input.t, input.benchmark, 'year').map((p) => [p.key, p]));
+    if (ahead.years > 0) {
+      const behind = ahead.years - ahead.ahead.length - ahead.level;
+      const all = `Ahead of ${bench} in ${ahead.ahead.length} of ${plural(ahead.years, 'whole year')}, level in ${ahead.level}, behind in ${behind}.`;
+      h(body, 'p', 'bt-tab-lead', ahead.onlyFalling && ahead.ahead.length < ahead.years ? `${all} Every year it was ahead, ${bench} fell.` : all);
+    }
+    const read = h(body, 'div', 'bt-tab-read');
+    const idle = `Each bar is the strategy’s return less ${bench}’s that calendar year. Point at a year to compare them.`;
+    read.textContent = idle;
+    const key = h(body, 'div', 'bt-chart-legend');
+    for (const [cls, text] of [['bt-chart-swatch-gap-ahead', 'Strategy ahead'], ['bt-chart-swatch-gap-behind', `${input.benchmarkLabel} ahead`]]) {
+      const k = h(key, 'span', 'bt-chart-key');
+      h(k, 'span', `bt-chart-swatch ${cls}`);
+      h(k, 'span', undefined, text);
+    }
+    const chart = h(body, 'div', 'bt-chart');
+    if (mine.some((p) => p.partial)) h(body, 'div', 'bt-note', 'Faded bars are years the data only partly covers.');
+    return onWidth(chart, (width) => drawGaps(chart, read, idle, width, mine, theirs, bench));
+  });
+}
+
+/** Columns closer than this have every second, fifth or tenth year named. */
 const LABEL_GAP = 34;
 
-function yearsChart(body: HTMLElement, benchmarkLabel: string, mine: PeriodReturn[], bench: PeriodReturn[]): ResizeObserver {
-  h(body, 'div', 'bt-stats-heading', 'Return by year');
-  const legend = h(body, 'div', 'bt-legend');
-  for (const [cls, label] of [['bt-swatch-strategy', 'Strategy'], ['bt-swatch-benchmark', benchmarkLabel]] as const) {
-    const key = h(legend, 'span', 'bt-key');
-    h(key, 'span', `bt-swatch bt-stats-swatch ${cls}`);
-    h(key, 'span', undefined, label);
-  }
-  const chart = h(body, 'div', 'bt-chart');
-  const tip = h(chart, 'div', 'bt-tip bt-stats-tip');
-  tip.hidden = true;
-  let drawn = 0;
-  const observer = new ResizeObserver((entries) => {
-    // Drawing changes the container's height, which would notify this observer again within the same frame.
-    const width = Math.floor(entries[0].contentRect.width);
-    if (width > 0 && width !== drawn) window.requestAnimationFrame(() => drawYears(chart, tip, (drawn = width), benchmarkLabel, mine, bench));
-  });
-  observer.observe(chart);
-  if (mine.some((p) => p.partial)) h(body, 'div', 'bt-note', 'Faded bars are years the data only partly covers.');
-  return observer;
-}
-
-/** A bar from the zero line at `y0` to `yv`, rounded at the data end only. */
-function bar(svg: SVGElement, x: number, w: number, y0: number, yv: number, cls: string): void {
-  if (yv === y0) return;
-  const up = yv < y0;
-  const len = Math.max(Math.abs(yv - y0), 1);
-  const end = up ? y0 - len : y0 + len;
-  const r = Math.min(3, w / 2, len);
-  const k = up ? 1 : -1;
-  const f = (v: number) => v.toFixed(2);
-  const sweep = up ? 1 : 0;
-  const d =
-    `M${f(x)},${f(y0)}V${f(end + k * r)}A${r},${r} 0 0 ${sweep} ${f(x + r)},${f(end)}` + `H${f(x + w - r)}A${r},${r} 0 0 ${sweep} ${f(x + w)},${f(end + k * r)}V${f(y0)}Z`;
-  s(svg, 'path', { d, class: cls });
-}
-
-function drawYears(chart: HTMLElement, tip: HTMLElement, width: number, benchmarkLabel: string, mine: PeriodReturn[], bench: PeriodReturn[]): void {
+function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: number, mine: PeriodReturn[], theirs: Map<string, PeriodReturn>, bench: string): void {
   chart.querySelector('svg')?.remove();
-  tip.hidden = true;
   const n = mine.length;
-  const left = 44;
-  const right = 8;
-  const top = 8;
-  const plotH = Math.round(Math.min(200, Math.max(140, width * 0.32)));
-  const height = top + plotH + 24;
-  const plotW = width - left - right;
-  const groupW = plotW / n;
-
-  const benchBy = new Map(bench.map((p) => [p.key, p]));
-  const returns = [...mine, ...bench].map((p) => p.ret);
-  const lo = Math.min(0, ...returns);
-  const hi = Math.max(0, ...returns);
-  const step = niceStep(Math.max(hi - lo, 0.01), 4);
-  const yMin = Math.floor(lo / step + 1e-9) * step;
-  const yMax = Math.max(Math.ceil(hi / step - 1e-9) * step, yMin + step);
-  const y = (v: number) => top + ((yMax - v) / (yMax - yMin)) * plotH;
-
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': 'Return of the strategy and the benchmark in each calendar year' });
-  for (let k = Math.round(yMin / step); k * step <= yMax + step / 1e6; k++) {
-    const v = k * step;
-    if (v !== 0) s(svg, 'line', { x1: left, x2: width - right, y1: y(v), y2: y(v), class: 'bt-grid' });
-    s(svg, 'text', { x: left - 6, y: y(v) + 3.5, class: 'bt-axis', 'text-anchor': 'end' }, pct(v, step >= 0.01 ? 0 : 1));
-  }
-  const hl = s(svg, 'rect', { y: top, width: groupW, height: plotH, class: 'bt-stats-hl', visibility: 'hidden' });
-
-  const barW = Math.max(1, Math.min(14, Math.floor((groupW * 0.8 - 2) / 2)));
-  const labelEvery = [1, 2, 5, 10, 20].find((k) => groupW * k >= LABEL_GAP) ?? 20;
-  const y0 = y(0);
-  mine.forEach((p, i) => {
-    const x = left + i * groupW + (groupW - (2 * barW + 2)) / 2;
-    const partial = p.partial ? ' bt-stats-partial' : '';
-    bar(svg, x, barW, y0, y(p.ret), `bt-stats-bar-strategy${partial}`);
-    const b = benchBy.get(p.key);
-    if (b) bar(svg, x + barW + 2, barW, y0, y(b.ret), `bt-stats-bar-benchmark${p.partial || b.partial ? ' bt-stats-partial' : ''}`);
-    if (Number(p.key) % labelEvery === 0) {
-      s(svg, 'text', { x: left + (i + 0.5) * groupW, y: top + plotH + 16, class: 'bt-axis', 'text-anchor': 'middle' }, p.key);
-    }
+  const gaps = mine.map((p) => {
+    const b = theirs.get(p.key);
+    return b && Number.isFinite(b.ret) ? p.ret - b.ret : NaN;
   });
-  s(svg, 'line', { x1: left, x2: width - right, y1: y0, y2: y0, class: 'bt-baseline' });
+  const known = gaps.filter(Number.isFinite);
+  const lo = Math.min(0, ...known);
+  const hi = Math.max(0, ...known);
+  const top = 18;
+  const plotH = Math.round(Math.min(170, Math.max(110, width * 0.24)));
+  const height = top + plotH + 22;
+  const left = 6;
+  const plotW = width - 2 * left;
+  const groupW = plotW / n;
+  const span = hi - lo || 0.01;
+  const y = (v: number) => top + ((hi - v) / span) * plotH;
+  const y0 = y(0);
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `The strategy's return less ${bench}'s in each calendar year` });
+  const hl = s(svg, 'rect', { y: 0, width: groupW, height: top + plotH + 4, class: 'bt-stats-hl', visibility: 'hidden' });
+  s(svg, 'line', { x1: left, x2: left + plotW, y1: y0, y2: y0, class: 'bt-baseline' });
+  const barW = Math.max(1, Math.min(26, groupW * 0.7));
+  const labelEvery = [1, 2, 5, 10, 20].find((k) => groupW * k >= LABEL_GAP) ?? 20;
+  const best = known.length ? gaps.indexOf(Math.max(...known)) : -1;
+  const worst = known.length ? gaps.indexOf(Math.min(...known)) : -1;
+  mine.forEach((p, i) => {
+    const cx = left + (i + 0.5) * groupW;
+    const g = gaps[i];
+    const faded = p.partial ? ' bt-stats-partial' : '';
+    if (!Number.isFinite(g)) s(svg, 'circle', { cx, cy: y0, r: 2.5, class: `bt-gap-none${faded}` });
+    else if (Math.abs(g) <= LEVEL) s(svg, 'rect', { x: cx - barW / 2, y: y0 - 1, width: barW, height: 2, rx: 1, class: `bt-gap-level${faded}` });
+    else {
+      const [a, b] = [y(Math.max(g, 0)), y(Math.min(g, 0))];
+      s(svg, 'rect', { x: cx - barW / 2, y: a, width: barW, height: Math.max(b - a, 1), rx: Math.min(2, barW / 2), class: `${g > 0 ? 'bt-gap-ahead' : 'bt-gap-behind'}${faded}` });
+    }
+    // The extremes are named; the read-out gives the rest.
+    if ((i === best && g > LEVEL) || (i === worst && g < -LEVEL)) {
+      s(svg, 'text', { x: cx, y: g > 0 ? y(g) - 5 : y(g) + 13, class: 'bt-axis bt-callout', 'text-anchor': 'middle' }, `${g > 0 ? '+' : '−'}${(Math.abs(g) * 100).toFixed(1)}`);
+    }
+    if (Number(p.key) % labelEvery === 0) s(svg, 'text', { x: cx, y: height - 4, class: 'bt-axis', 'text-anchor': 'middle' }, p.key);
+  });
 
-  // The hit target is the whole column, labels included.
-  const hit = s(svg, 'rect', { x: left, y: top, width: plotW, height: plotH + 24, fill: 'transparent' });
+  const hit = s(svg, 'rect', { x: left, y: 0, width: plotW, height, fill: 'transparent' });
   const show = (clientX: number) => {
     const i = Math.min(n - 1, Math.max(0, Math.floor((clientX - svg.getBoundingClientRect().left - left) / groupW)));
     hl.setAttribute('x', String(left + i * groupW));
     hl.setAttribute('visibility', 'visible');
-    tip.replaceChildren();
-    h(tip, 'div', 'bt-tip-date', mine[i].key);
-    for (const [cls, label, p] of [['bt-swatch-strategy', 'Strategy', mine[i]], ['bt-swatch-benchmark', benchmarkLabel, benchBy.get(mine[i].key)]] as const) {
-      const row = h(tip, 'div', 'bt-tip-row');
-      h(row, 'span', `bt-swatch bt-stats-swatch ${cls}`);
-      h(row, 'span', 'bt-tip-label', label);
-      h(row, 'span', 'bt-tip-value', p ? signedPct(p.ret) : '–');
-    }
-    if (mine[i].partial) h(tip, 'div', 'bt-tip-foot', 'The data covers part of this year');
-    tip.hidden = false;
-    const px = left + (i + 0.5) * groupW;
-    const x = px + 12 + tip.offsetWidth > width ? px - 12 - tip.offsetWidth : px + 12;
-    tip.style.left = `${Math.max(0, x)}px`;
-    tip.style.top = `${top + 4}px`;
+    const p = mine[i];
+    const b = theirs.get(p.key);
+    const g = gaps[i];
+    const apart = !Number.isFinite(g) ? `${bench} has no return for it` : Math.abs(g) <= LEVEL ? 'level' : `${pts(g)} ${g > 0 ? 'ahead' : 'behind'}`;
+    read.textContent = `${p.key}${p.partial ? ', part of the year' : ''} · strategy ${signedPct(p.ret)}, ${bench} ${b ? signedPct(b.ret) : '–'} · ${apart}`;
   };
   hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
   hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
   hit.addEventListener('pointerleave', () => {
-    tip.hidden = true;
     hl.setAttribute('visibility', 'hidden');
+    read.textContent = idle;
   });
 }
 
 /** Weakest and strongest tint, as a percentage of the gain or loss colour. */
-const TINT_MIN = 10;
-const TINT_MAX = 52;
+const TINT_MIN = 12;
+const TINT_MAX = 70;
+const LETTERS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
 
-function monthsTable(body: HTMLElement, months: PeriodReturn[], years: PeriodReturn[]): void {
-  h(body, 'div', 'bt-stats-heading', 'Strategy return by month');
-  const wrap = h(body, 'div', 'bt-scroll bt-stats-scroll');
-  const table = h(wrap, 'table', 'bt-table bt-stats-months');
-  const head = h(h(table, 'thead'), 'tr');
-  h(head, 'th');
-  for (const name of [...MONTHS, 'Year']) h(head, 'th', 'bt-num', name);
-
-  const byKey = new Map(months.map((m) => [m.key, m]));
-  const peak = Math.max(...months.map((m) => Math.abs(m.ret)));
-  const tbody = h(table, 'tbody');
-  for (const year of years) {
-    const row = h(tbody, 'tr');
-    h(row, 'th', undefined, year.key).setAttribute('scope', 'row');
-    for (let m = 0; m < 12; m++) {
-      const r = byKey.get(`${year.key}-${String(m + 1).padStart(2, '0')}`)?.ret;
-      const td = h(row, 'td', 'bt-num');
-      if (r === undefined) continue;
-      td.textContent = pct(r).replace('%', '');
-      if (r === 0) continue;
-      td.className += r > 0 ? ' bt-stats-up' : ' bt-stats-down';
-      td.style.setProperty('--bt-stats-tint', `${Math.round(TINT_MIN + (TINT_MAX - TINT_MIN) * (Math.abs(r) / peak))}%`);
+/** The Months tab: each month's return as a cell of a calendar grid, its value read out when pointed at. */
+export function renderMonths(parent: HTMLElement, input: Pick<PeriodInput, 't' | 'strategy'>): () => void {
+  const months = periodReturns(input.t, input.strategy, 'month');
+  if (months.length === 0) return () => {};
+  const up = months.filter((m) => m.ret > 0).length / months.length;
+  const details = h(parent, 'details', 'bt-details bt-months');
+  h(details, 'summary', undefined, 'Months');
+  tabInfo(details, 'Months', `up in ${pct(up, 0)}`);
+  return lazy(details, (body) => {
+    const years = periodReturns(input.t, input.strategy, 'year');
+    const best = months.reduce((a, m) => (m.ret > a.ret ? m : a));
+    const worst = months.reduce((a, m) => (m.ret < a.ret ? m : a));
+    const flat = months.some((m) => m.ret === 0);
+    h(body, 'p', 'bt-tab-lead', `Up in ${pct(up, 0)} of ${plural(months.length, 'month')}. The best was ${periodName(best)} at ${signedPct(best.ret)}, the worst ${periodName(worst)} at ${signedPct(worst.ret)}.${flat ? ' Outlined months had no change, most often from being in cash.' : ''}`);
+    const read = h(body, 'div', 'bt-tab-read');
+    const idle = 'Point at a month to read its return.';
+    read.textContent = idle;
+    const byKey = new Map(months.map((m) => [m.key, m]));
+    const peak = Math.max(...months.map((m) => Math.abs(m.ret)), 1e-9);
+    const wrap = h(body, 'div', 'bt-months-box');
+    const table = h(wrap, 'table', 'bt-months-grid');
+    const head = h(h(table, 'thead'), 'tr');
+    h(head, 'th');
+    MONTHS.forEach((name, m) => {
+      const th = h(head, 'th');
+      h(th, 'span', 'bt-m-long', name);
+      h(th, 'span', 'bt-m-short', LETTERS[m]);
+    });
+    h(head, 'th', 'bt-num', 'Year');
+    const tbody = h(table, 'tbody');
+    tbody.addEventListener('pointerleave', () => (read.textContent = idle));
+    for (const year of years) {
+      const row = h(tbody, 'tr');
+      h(row, 'th', undefined, year.key).setAttribute('scope', 'row');
+      for (let m = 0; m < 12; m++) {
+        const p = byKey.get(`${year.key}-${String(m + 1).padStart(2, '0')}`);
+        const td = h(row, 'td', 'bt-month');
+        if (!p) {
+          td.classList.add('bt-month-none');
+          continue;
+        }
+        const text = p.ret === 0 ? 'no change' : signedPct(p.ret);
+        h(td, 'span', 'bt-sr', text);
+        if (p.ret === 0) td.classList.add('bt-month-flat');
+        else {
+          td.classList.add(p.ret > 0 ? 'bt-stats-up' : 'bt-stats-down');
+          td.style.setProperty('--bt-stats-tint', `${Math.round(TINT_MIN + (TINT_MAX - TINT_MIN) * Math.sqrt(Math.abs(p.ret) / peak))}%`);
+        }
+        td.addEventListener('pointerenter', () => (read.textContent = `${periodName(p)}${p.partial ? ', part of the month' : ''} · ${text}`));
+      }
+      h(row, 'td', `bt-num bt-stats-year${year.partial ? ' bt-stats-partial-year' : ''}`, pct(year.ret));
     }
-    h(row, 'td', `bt-num bt-stats-year${year.partial ? ' bt-stats-partial-year' : ''}`, pct(year.ret));
-  }
-  h(body, 'div', 'bt-note', 'Months coloured by size: blue for gains, red for losses.');
+    const scale = h(body, 'div', 'bt-months-scale');
+    h(scale, 'span', undefined, pct(-peak, 0));
+    for (const [cls, tint] of [['bt-stats-down', TINT_MAX], ['bt-stats-down', TINT_MIN + 10], ['bt-month-flat', 0], ['bt-stats-up', TINT_MIN + 10], ['bt-stats-up', TINT_MAX]] as const) {
+      const sw = h(scale, 'span', `bt-months-swatch ${cls}`);
+      if (tint) sw.style.setProperty('--bt-stats-tint', `${tint}%`);
+    }
+    h(scale, 'span', undefined, `+${pct(peak, 0)}`);
+  });
 }

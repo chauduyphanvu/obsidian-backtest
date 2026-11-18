@@ -701,6 +701,24 @@ export function condition(t: Pick<Trigger, 'fires' | 'last' | 'values'>, who: st
   return `if ${closes} ${where(b, t.last, t.values)}`;
 }
 
+/**
+ * Each edge of the bands where the rule fires, with the price the sentence names for it (condition), so a drawing of the
+ * bands is labelled with the same prices as the words beside it. A series of values shows its edges as found.
+ */
+export function edgePrices(t: Pick<Trigger, 'fires' | 'last' | 'values'>): { edge: number; shown: number; side: 'lo' | 'hi' }[] {
+  const at = (edge: number, round: (x: number) => number, side: 'lo' | 'hi') => ({ edge, shown: t.values ? edge : round(edge), side });
+  if (t.fires.length === 1) {
+    const [b] = t.fires;
+    if (b.lo === null && b.hi === null) return [];
+    if (b.hi === null && b.lo! <= t.last) return [at(b.lo!, atOrAbove, 'lo')];
+    if (b.lo === null && b.hi! >= t.last) return [at(b.hi!, atOrBelow, 'hi')];
+  }
+  return t.fires.flatMap((b) => [...(b.lo === null ? [] : [at(b.lo, below, 'lo' as const)]), ...(b.hi === null ? [] : [at(b.hi, above, 'hi' as const)])]);
+}
+
+/** A price or value as the trigger sentences show it: "512.30", or a series of values to 5 significant digits. */
+export const shownPrice = (x: number, values?: true): string => (values ? shown(x) : minus(price(x)));
+
 /** When an order given at the next close fills. */
 export const fillPhrase = (closeFill: boolean): string => (closeFill ? 'at that close' : 'at the following open');
 

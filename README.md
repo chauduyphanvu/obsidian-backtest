@@ -14,7 +14,7 @@ sell when close < sma(200)
 
 In reading view (or live preview, with the cursor outside the block) the block becomes its result:
 
-- return per year, total return, worst drawdown, Sharpe ratio, time invested and trades, next to buy and hold, with a chart of both;
+- a sentence on how it did against buy and hold, then return per year, total return, worst drawdown, Sharpe ratio, volatility, time invested and trades side by side, and a chart of both you can read bar by bar, with the market's big falls marked;
 - what it holds now, and the closes that would trigger its next order;
 - every trade, with **Explain this trade** to see why it happened;
 - sliders for parameters, sweeps of their ranges, and **Was it luck?** checks;

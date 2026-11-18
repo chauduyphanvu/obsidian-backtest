@@ -1,9 +1,12 @@
 // The "Regimes and crises" section: how the strategy did in each state of the market, and through the market's worst falls.
 
 import { h } from './dom.ts';
-import { pct, signedPct, stamp } from './format.ts';
+import { pct, plural, signedPct, stamp } from './format.ts';
 import { bucketStats, crisesFor, crisisResults, regimeBuckets, regimePlan, type BucketStats, type CrisisResult, type Growth, type Recovery, type RunSeries } from './regimes.ts';
 import { cell } from './render-stats.ts';
+import { dumbbell } from './render-versus.ts';
+import { tabInfo } from './tabs.ts';
+import { LEVEL, benchProse } from './verdict.ts';
 import type { Extras } from './runner.ts';
 import type { AssetRef } from './types.ts';
 
@@ -25,23 +28,32 @@ type Cell = [string, string | null];
 export function renderRegimes(parent: HTMLElement, input: RegimeInput): () => void {
   const details = h(parent, 'details', 'bt-details bt-regimes');
   h(details, 'summary', undefined, 'Regimes and crises');
+  const falls = crisesFor(input.universe);
+  const results = crisisResults(input.run, falls);
+  const compared = results.filter((r) => Number.isFinite(r.benchmark));
+  tabInfo(details, 'Regimes and crises', compared.length ? `better in ${compared.filter(better).length} of ${plural(compared.length, 'fall')}` : 'by market state');
   let gone = false;
-  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-regimes-body'), input, () => gone), { once: true });
+  details.addEventListener('toggle', () => build(h(details, 'div', 'bt-regimes-body'), input, results, falls.length, () => gone), { once: true });
   return () => {
     gone = true;
   };
 }
+
+/** Better than the benchmark by more than the Years tab calls level, so a near tie is not counted as a win. */
+const better = (r: CrisisResult): boolean => r.strategy - r.benchmark > LEVEL;
 
 /** "A", "A and B", "A, B and C". */
 const list = (names: string[]): string => (names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-function build(body: HTMLElement, input: RegimeInput, gone: () => boolean): void {
+function build(body: HTMLElement, input: RegimeInput, results: CrisisResult[], known: number, gone: () => boolean): void {
   const plan = regimePlan(input.universe);
   const from = input.run.t[0];
   const names = plan.refs.map((r) => r.name);
-  h(body, 'div', 'bt-stats-heading bt-regimes-first', 'By market state');
+  h(body, 'div', 'bt-stats-heading bt-regimes-first', 'Market falls');
+  fallRows(body, input.benchmarkLabel, results, input.intraday, known);
+  h(body, 'div', 'bt-stats-heading', 'By market state');
   const box = h(body, 'div', 'bt-regimes-box');
 
   const show = (got: Extras): void => {
@@ -80,9 +92,6 @@ function build(body: HTMLElement, input: RegimeInput, gone: () => boolean): void
     else offer();
   });
 
-  const falls = crisesFor(input.universe);
-  h(body, 'div', 'bt-stats-heading', 'Market falls');
-  crisisTable(body, input.benchmarkLabel, crisisResults(input.run, falls), input.intraday, falls.length);
 }
 
 const REGIME_NOTE =
@@ -150,23 +159,49 @@ export function crisisRow(r: CrisisResult, intraday: boolean): Row & { dates: st
   };
 }
 
-function crisisTable(parent: HTMLElement, benchmarkLabel: string, results: CrisisResult[], intraday: boolean, known: number): void {
+/**
+ * Each market fall the run covers on a line of its own: what the strategy and its benchmark did over it, as two dots on a
+ * scale shared by every fall, and under its name the strategy's worst drawdown in it, what it held, and when it was back
+ * at its earlier high.
+ */
+function fallRows(parent: HTMLElement, benchmarkLabel: string, results: CrisisResult[], intraday: boolean, known: number): void {
   if (results.length === 0) {
     h(parent, 'div', 'bt-note', `The run does not cover any of the ${known} market falls this section knows.`);
     return;
   }
-  const wrap = h(parent, 'div', 'bt-scroll bt-regimes-scroll');
-  const table = h(wrap, 'table', 'bt-table bt-regimes-table');
-  const head = h(h(table, 'thead'), 'tr');
-  h(head, 'th');
-  for (const label of ['Strategy', benchmarkLabel, 'Worst drawdown', 'Invested', 'Back at its earlier high']) h(head, 'th', 'bt-num', label);
-  const tbody = h(table, 'tbody');
-  for (const result of results) {
-    const row = crisisRow(result, intraday);
-    const tr = h(tbody, 'tr');
-    const first = h(tr, 'td', undefined, row.label);
-    h(first, 'span', 'bt-regimes-dates', row.dates);
-    for (const c of row.cells) cell(tr, ...c);
+  const bench = benchProse(benchmarkLabel);
+  const compared = results.filter((r) => Number.isFinite(r.benchmark));
+  const won = compared.filter(better);
+  if (compared.length > 0) {
+    let lead = `Did better than ${bench} in ${won.length} of the ${plural(compared.length, 'market fall')} it covered.`;
+    const closest = won.length === compared.length ? won.reduce((a, r) => (r.strategy - r.benchmark < a.strategy - a.benchmark ? r : a)) : null;
+    if (closest && compared.length > 1 && closest.strategy - closest.benchmark < 0.01) lead += ` In the ${closest.crisis.name}, by only ${((closest.strategy - closest.benchmark) * 100).toFixed(1)} points.`;
+    h(parent, 'p', 'bt-tab-lead', lead);
   }
-  h(parent, 'div', 'bt-note', 'Each fall runs from the close of the market’s peak day to the close of its trough day, and is shown only when the run covers all of it. The earlier high is the strategy’s highest value before the fall began.');
+  const values = results.flatMap((r) => [r.strategy, r.benchmark]).filter(Number.isFinite);
+  const [lo, hi] = [Math.min(0, ...values), Math.max(0, ...values)];
+  const list = h(parent, 'div', 'bt-vs bt-falls');
+  const head = h(list, 'div', 'bt-vs-row bt-vs-head');
+  h(head, 'span', 'bt-vs-label');
+  const sKey = h(head, 'span', 'bt-vs-s bt-vs-key');
+  h(sKey, 'span', 'bt-vs-key-dot bt-dumbbell-strategy');
+  sKey.append('Strategy');
+  h(head, 'span', 'bt-vs-track');
+  const bKey = h(head, 'span', 'bt-vs-b bt-vs-key');
+  h(bKey, 'span', 'bt-vs-key-dot bt-dumbbell-benchmark');
+  bKey.append(benchmarkLabel);
+  for (const r of results) {
+    const row = crisisRow(r, intraday);
+    const line = h(list, 'div', 'bt-vs-row');
+    const name = h(line, 'span', 'bt-vs-label');
+    h(name, 'span', 'bt-fall-name', row.label);
+    const [worst, invested, back] = [row.cells[2], row.cells[3], row.cells[4]];
+    h(name, 'span', 'bt-regimes-dates', `${row.dates} · worst ${worst[0]} · held ${invested[0]}${invested[1] ? ` (${invested[1]})` : ''} · back at its high: ${back[0].toLowerCase()}`);
+    const s = h(line, 'span', 'bt-vs-s');
+    h(s, 'span', 'bt-vs-value', row.cells[0][0]);
+    dumbbell(line, r.strategy, r.benchmark, lo, hi).classList.add('bt-vs-track');
+    const b = h(line, 'span', 'bt-vs-b');
+    h(b, 'span', 'bt-vs-value', row.cells[1][0]);
+  }
+  h(parent, 'div', 'bt-note', 'Each fall runs from the close of the market’s peak day to the close of its trough day, and is shown only when the run covers all of it. Worst is the strategy’s deepest drawdown within the fall; its earlier high is its highest value before the fall began.');
 }

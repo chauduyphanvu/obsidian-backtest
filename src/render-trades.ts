@@ -1,12 +1,14 @@
 import type { Backtest } from './backtest.ts';
-import { h } from './dom.ts';
+import { h, onWidth, s } from './dom.ts';
 import type { Trade } from './engine.ts';
 import { explainTrade, MARK, type Explanation } from './explain.ts';
 import { boughtText, hasShorts, positionText, sideText } from './export.ts';
-import { minus, money, pct, price, signedPct, stamp } from './format.ts';
+import { minus, money, pct, plural, price, signedPct, stamp } from './format.ts';
 import { positionOrder } from './orders.ts';
 import { tradeExit } from './price-chart.ts';
+import { tabInfo } from './tabs.ts';
 import { tickerText, type TriggerReport } from './trigger.ts';
+import { tradesSentence } from './verdict.ts';
 
 const MAX_TRADE_ROWS = 500;
 /** For unique ids across every result on the page. */
@@ -52,15 +54,33 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
   triggers?.then(fill, () => fill(null));
 }
 
-export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean): void {
+/**
+ * The Trades tab: the trades in a sentence, every closed trade's return as a bar from the worst to the best, and the list
+ * of trades, latest first. Returns a cleanup function.
+ */
+export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean): () => void {
   const all: Trade[] = bt.run.trades;
-  if (all.length === 0) return;
+  if (all.length === 0) return () => {};
+  const closed = all.filter((t) => t.reason !== 'open');
   const d = h(root, 'details', 'bt-details');
   h(d, 'summary', undefined, `Trades (${all.length})`);
+  const won = closed.filter((t) => t.ret > 0).length;
+  tabInfo(d, 'Trades', closed.length ? `${closed.length.toLocaleString('en-US')} closed · ${pct(won / closed.length, 0)} won` : `${all.length} open`);
+  let stop = () => {};
   // Built on first open: a long run can have thousands of rows.
   d.addEventListener(
     'toggle',
     () => {
+      const lead = tradesSentence(bt);
+      if (lead) h(d, 'p', 'bt-tab-lead', lead);
+      const rows = new Map<Trade, HTMLTableRowElement>();
+      if (closed.length >= 2) {
+        const read = h(d, 'div', 'bt-tab-read');
+        const idle = 'Every closed trade’s return, from the worst to the best. Point at one to read it; click it to find it in the list.';
+        read.textContent = idle;
+        const chart = h(d, 'div', 'bt-chart bt-payoff');
+        stop = onWidth(chart, (width) => drawPayoff(chart, read, idle, width, closed, intraday, rows));
+      }
       const shown = all.slice(-MAX_TRADE_ROWS).reverse();
       if (shown.length < all.length) h(d, 'div', 'bt-note', `Showing the latest ${shown.length} of ${all.length}.`);
       const table = h(h(d, 'div', 'bt-scroll bt-trades'), 'table', 'bt-table');
@@ -74,6 +94,7 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
       const body = h(table, 'tbody');
       for (const t of shown) {
         const row = h(body, 'tr');
+        rows.set(t, row);
         explainButton(h(row, 'td', 'bt-why-cell'), row, bt, t, columns.length);
         h(row, 'td', undefined, t.asset);
         if (sides) h(row, 'td', undefined, sideText(t));
@@ -89,6 +110,73 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
     },
     { once: true },
   );
+  return () => stop();
+}
+
+/** Every closed trade's return as a bar, sorted from the worst to the best: gains up, losses down. */
+function drawPayoff(chart: HTMLElement, read: HTMLElement, idle: string, width: number, closed: Trade[], intraday: boolean, rows: Map<Trade, HTMLTableRowElement>): void {
+  chart.querySelector('svg')?.remove();
+  const sorted = [...closed].sort((a, b) => a.ret - b.ret);
+  const n = sorted.length;
+  const left = 4;
+  const plotW = width - 2 * left;
+  const step = plotW / n;
+  const gap = step >= 4 ? 1 : 0;
+  const top = 6;
+  const plotH = Math.round(Math.min(140, Math.max(90, width * 0.18)));
+  const height = top + plotH + 22;
+  // Sorted, so the ends are the extremes; a spread would pass more trades than a call takes arguments.
+  const hi = Math.max(0, sorted[n - 1].ret);
+  const lo = Math.min(0, sorted[0].ret);
+  const y = (v: number) => top + ((hi - v) / (hi - lo || 1)) * plotH;
+  const y0 = y(0);
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `The returns of ${n} closed trades, from the worst to the best` });
+  const hl = s(svg, 'rect', { y: top, width: step, height: plotH, class: 'bt-stats-hl', visibility: 'hidden' });
+  const bars = { gain: '', loss: '' };
+  sorted.forEach((t, i) => {
+    const x0 = left + i * step;
+    const w = Math.max(step - gap, 0.6);
+    const [a, b] = [y(Math.max(t.ret, 0)), y(Math.min(t.ret, 0))];
+    const len = Math.max(b - a, 1);
+    const top1 = t.ret > 0 ? a : y0;
+    bars[t.ret > 0 ? 'gain' : 'loss'] += `M${x0.toFixed(2)},${top1.toFixed(2)}h${w.toFixed(2)}v${len.toFixed(2)}h${(-w).toFixed(2)}Z`;
+  });
+  if (bars.loss) s(svg, 'path', { d: bars.loss, class: 'bt-payoff-loss' });
+  if (bars.gain) s(svg, 'path', { d: bars.gain, class: 'bt-payoff-gain' });
+  s(svg, 'line', { x1: left, x2: left + plotW, y1: y0, y2: y0, class: 'bt-baseline' });
+  const lost = sorted.filter((t) => t.ret <= 0);
+  const won = sorted.filter((t) => t.ret > 0);
+  const avg = (list: Trade[]) => list.reduce((a, t) => a + t.ret, 0) / list.length;
+  for (const [list, from] of [[lost, 0], [won, lost.length]] as const) {
+    if (list.length === 0) continue;
+    const w = list.length * step;
+    const text = w >= 150 ? `${list.length.toLocaleString('en-US')} ${list === won ? 'won' : 'lost'}, ${signedPct(avg(list))} on average` : w >= 50 ? `${list.length.toLocaleString('en-US')} ${list === won ? 'won' : 'lost'}` : '';
+    if (text) s(svg, 'text', { x: left + (from + list.length / 2) * step, y: height - 5, class: 'bt-axis', 'text-anchor': 'middle' }, text);
+  }
+  const hit = s(svg, 'rect', { x: left, y: 0, width: plotW, height, fill: 'transparent' });
+  const at = (clientX: number) => Math.min(n - 1, Math.max(0, Math.floor((clientX - svg.getBoundingClientRect().left - left) / step)));
+  const say = (t: Trade) => `${t.asset}${t.side === 'short' ? ', short' : ''} · ${stamp(t.entryT, intraday)} to ${stamp(t.exitT, intraday)} · ${plural(t.bars, 'bar')} · ${signedPct(t.ret)}, ${(t.pnl > 0 ? '+' : '') + minus(money(t.pnl))}`;
+  hit.addEventListener('pointermove', (e) => {
+    const i = at((e as PointerEvent).clientX);
+    hl.setAttribute('x', String(left + i * step));
+    hl.setAttribute('visibility', 'visible');
+    read.textContent = say(sorted[i]);
+  });
+  hit.addEventListener('pointerleave', () => {
+    hl.setAttribute('visibility', 'hidden');
+    read.textContent = idle;
+  });
+  hit.addEventListener('click', (e) => {
+    const t = sorted[at((e as MouseEvent).clientX)];
+    const row = rows.get(t);
+    if (!row) {
+      read.textContent = `${say(t)} · not in the list, which shows the latest ${MAX_TRADE_ROWS} trades.`;
+      return;
+    }
+    row.scrollIntoView?.({ block: 'nearest' });
+    row.classList.add('bt-row-flash');
+    window.setTimeout(() => row.classList.remove('bt-row-flash'), 1600);
+  });
 }
 
 /** A cell whose text breaks only at its spaces, so a date in it stays whole: a browser would break it at its hyphens. */

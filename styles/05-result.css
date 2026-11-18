@@ -1,0 +1,777 @@
+/* The result of a strategy block: its top line, the block's text, the opening sentence, the figures against the
+   benchmark's, the value chart, the next close, the sections as tabs, and the fine print. Colours come from the theme;
+   the strategy is blue and its benchmark orange in every part of it. */
+
+.bt-root.bt-result {
+  container: bt-result / inline-size;
+  padding: 16px 20px 18px;
+  border-radius: 12px;
+  --bt-loss: #e34948;
+  --bt-ahead: color-mix(in srgb, var(--bt-strategy) 14%, transparent);
+  --bt-behind: color-mix(in srgb, var(--bt-benchmark) 13%, transparent);
+  --bt-fall: color-mix(in srgb, var(--text-normal) 5%, transparent);
+  --bt-chip-bg: var(--background-modifier-hover);
+  --bt-warn-bg: color-mix(in srgb, var(--bt-warning) 20%, transparent);
+  --bt-join: color-mix(in srgb, var(--text-normal) 22%, transparent);
+}
+.theme-dark .bt-root.bt-result {
+  --bt-loss: #e66767;
+  --bt-ahead: color-mix(in srgb, var(--bt-strategy) 22%, transparent);
+  --bt-behind: color-mix(in srgb, var(--bt-benchmark) 20%, transparent);
+  --bt-fall: color-mix(in srgb, var(--text-normal) 6%, transparent);
+  --bt-warn-bg: color-mix(in srgb, var(--bt-warning) 16%, transparent);
+}
+.bt-root.bt-result.bt-folded {
+  padding: 8px 12px 8px 10px;
+}
+@container bt-result (max-width: 520px) {
+  .bt-root.bt-result {
+    padding: 14px 14px 16px;
+  }
+}
+
+.bt-result > .bt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 6px;
+}
+.bt-result .bt-notes:empty,
+.bt-result .bt-figures-note:empty {
+  display: none;
+}
+.bt-result .bt-sub {
+  margin-top: -10px;
+  font-size: var(--font-ui-smaller);
+}
+
+/* The top line: the name, what it holds, what is due, and how near the next order is. */
+.bt-result .bt-head {
+  align-items: flex-start;
+  gap: 8px;
+}
+.bt-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.bt-result .bt-title {
+  margin-right: 2px;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.01em;
+}
+.bt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--bt-chip-bg);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.bt-chip-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bt-strategy);
+}
+.bt-chip-cash .bt-chip-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-muted);
+}
+.bt-chip-watch {
+  background: var(--bt-warn-bg);
+}
+/* A small warning triangle. */
+.bt-chip-warn {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid var(--bt-warning);
+}
+.bt-root button.bt-icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: -2px -6px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.bt-root button.bt-icon-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.bt-root button.bt-icon-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+/* A button that reads as a link. */
+.bt-root button.bt-link-button {
+  align-self: flex-start;
+  height: auto;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-decoration: underline;
+  text-decoration-color: var(--background-modifier-border-hover);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.bt-root button.bt-link-button:hover {
+  color: var(--text-normal);
+}
+
+/* The block's text, its settings folded away. */
+.bt-src {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+}
+.bt-src .bt-source {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  background: none;
+  white-space: pre;
+}
+.bt-src-line {
+  display: block;
+  min-height: 1.5em;
+}
+.bt-src:not(.bt-src-all) .bt-src-setting {
+  display: none;
+}
+.bt-root button.bt-src-toggle {
+  flex: none;
+  white-space: nowrap;
+}
+@container bt-result (max-width: 520px) {
+  .bt-src {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+.bt-result .bt-warning {
+  margin-top: 6px;
+  padding: 7px 12px;
+  border-left: none;
+  border-radius: 8px;
+  background: var(--bt-warn-bg);
+}
+
+/* The opening sentence: the strategy's figures underlined in blue, the benchmark's in orange. */
+.bt-verdict-lead {
+  margin: 0;
+  font-size: 1.5em;
+  font-weight: var(--font-medium);
+  line-height: 1.38;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+.bt-mark {
+  font-weight: var(--font-semibold);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.26em;
+  text-decoration-skip-ink: none;
+}
+.bt-mark-strategy {
+  text-decoration-color: var(--bt-strategy);
+}
+.bt-mark-benchmark {
+  text-decoration-color: var(--bt-benchmark);
+}
+.bt-verdict-more {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+}
+@container bt-result (max-width: 520px) {
+  .bt-verdict-lead {
+    font-size: 1.25em;
+  }
+}
+
+/* The figures: each on a line, the strategy's and the benchmark's as two dots on one scale. */
+.bt-vs {
+  display: flex;
+  flex-direction: column;
+}
+.bt-vs-row {
+  display: grid;
+  grid-template-columns: minmax(7.5em, 11em) 5.5em minmax(60px, 1fr) 6.5em minmax(7em, 10em);
+  column-gap: 14px;
+  align-items: center;
+  min-height: 36px;
+  padding: 3px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-vs-head {
+  min-height: 0;
+  padding: 0 0 5px;
+  border-top: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-vs-label {
+  color: var(--text-muted);
+}
+.bt-vs-s,
+.bt-vs-b {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.bt-vs-s {
+  align-items: flex-end;
+  text-align: right;
+}
+.bt-vs-s .bt-vs-value {
+  font-size: 1.15em;
+  font-weight: var(--font-semibold);
+}
+.bt-vs-b {
+  align-items: flex-start;
+  color: var(--text-muted);
+}
+.bt-vs-note {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+}
+.bt-vs-delta,
+.bt-vs-text {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-vs-text {
+  grid-column: 3 / -1;
+}
+.bt-vs-head .bt-vs-key {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+.bt-vs-head .bt-vs-s.bt-vs-key {
+  justify-content: flex-end;
+}
+.bt-vs-key-dot {
+  flex: none;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.bt-vs > .bt-link-button {
+  margin-top: 6px;
+}
+.bt-dumbbell {
+  position: relative;
+  height: 20px;
+}
+.bt-dumbbell-zero {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  background: var(--background-modifier-border-hover);
+}
+.bt-dumbbell-join {
+  position: absolute;
+  top: 9px;
+  height: 2px;
+  background: var(--bt-join);
+}
+.bt-dumbbell-dot {
+  position: absolute;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--background-primary);
+}
+.bt-dumbbell-strategy {
+  background: var(--bt-strategy);
+}
+.bt-dumbbell-benchmark {
+  background: var(--bt-benchmark);
+}
+/* The market falls use the same rows, with no difference column and room for the dates under each name. */
+.bt-falls .bt-vs-row {
+  grid-template-columns: minmax(10em, 1.4fr) 4.5em minmax(60px, 1fr) 4.5em;
+  padding: 6px 0;
+}
+.bt-falls .bt-vs-label {
+  display: flex;
+  flex-direction: column;
+  color: var(--text-normal);
+}
+@container bt-result (max-width: 520px) {
+  .bt-vs-row,
+  .bt-falls .bt-vs-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: 'label s b' 'track track track' 'delta delta delta';
+    row-gap: 3px;
+    padding: 8px 0;
+  }
+  .bt-vs-label {
+    grid-area: label;
+  }
+  .bt-vs-s {
+    grid-area: s;
+  }
+  .bt-vs-b {
+    grid-area: b;
+  }
+  .bt-vs-track,
+  .bt-vs-text {
+    grid-area: track;
+  }
+  .bt-vs-delta {
+    grid-area: delta;
+  }
+  .bt-vs-head {
+    grid-template-areas: 'label s b';
+    padding: 0 0 4px;
+  }
+  .bt-vs-head .bt-vs-track,
+  .bt-vs-head .bt-vs-delta {
+    display: none;
+  }
+  .bt-vs-row:not(.bt-vs-head) .bt-vs-b::before {
+    content: 'vs ';
+  }
+  .bt-vs-row:not(.bt-vs-head) .bt-vs-b {
+    flex-direction: row;
+    gap: 4px;
+  }
+  .bt-vs-delta:empty {
+    display: none;
+  }
+}
+
+/* The value chart: the read-out line over it, then the chart, then its key. */
+.bt-value {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bt-read {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  min-height: 30px;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.bt-read-date {
+  min-width: 9em;
+  font-weight: var(--font-semibold);
+}
+.bt-read-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bt-read-value {
+  font-weight: var(--font-semibold);
+}
+.bt-read-dd,
+.bt-read-fall {
+  color: var(--text-muted);
+}
+.bt-read-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--bt-chip-bg);
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.bt-read-held {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1.5px var(--bt-strategy);
+}
+.bt-read-held.bt-read-in {
+  background: var(--bt-strategy);
+}
+.bt-read-held.bt-read-short {
+  background: repeating-linear-gradient(45deg, var(--bt-strategy) 0 1.5px, transparent 1.5px 3px);
+}
+.bt-range {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+.bt-root button.bt-range-button {
+  height: auto;
+  padding: 2px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+}
+.bt-root button.bt-range-button[aria-pressed='true'] {
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-normal);
+}
+.bt-ahead {
+  fill: var(--bt-ahead);
+}
+.bt-behind {
+  fill: var(--bt-behind);
+}
+.bt-fall-band {
+  fill: var(--bt-fall);
+}
+.bt-axis.bt-fall-label {
+  font-size: 10.5px;
+}
+.bt-strip-bg {
+  fill: var(--background-secondary);
+}
+.bt-strip,
+.bt-hatch {
+  fill: var(--bt-strategy);
+}
+.bt-strip-part {
+  opacity: 0.5;
+}
+/* A label over lines keeps a rim of the background around it. */
+.bt-axis.bt-callout {
+  fill: var(--text-normal);
+  font-weight: var(--font-semibold);
+  paint-order: stroke;
+  stroke: var(--background-primary);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.bt-axis.bt-end-label {
+  fill: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+.bt-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bt-chart-swatch {
+  width: 12px;
+  height: 9px;
+  border-radius: 2px;
+}
+.bt-chart-swatch-ahead {
+  background: var(--bt-ahead);
+}
+.bt-chart-swatch-behind {
+  background: var(--bt-behind);
+}
+.bt-chart-swatch-fall {
+  background: var(--bt-fall);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+.bt-chart-swatch-held,
+.bt-chart-swatch-gap-ahead {
+  background: var(--bt-strategy);
+}
+.bt-chart-swatch-gap-behind {
+  background: var(--bt-benchmark);
+}
+.bt-chart-swatch-short {
+  background: repeating-linear-gradient(45deg, var(--bt-strategy) 0 1.5px, transparent 1.5px 3px);
+}
+.bt-chart-note {
+  margin-left: auto;
+}
+
+/* At the next close: what is held, what the next close could do, and a scale of the closes that would. */
+.bt-now {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+}
+.bt-now-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 16px;
+}
+.bt-now-title {
+  font-weight: var(--font-semibold);
+}
+.bt-now-held,
+.bt-now-note {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-now-say {
+  font-size: 1.08em;
+  line-height: 1.45;
+}
+.bt-now-say.bt-now-waiting {
+  color: var(--text-muted);
+}
+.bt-rulers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bt-rulers:empty {
+  display: none;
+}
+.bt-now .bt-table {
+  margin-top: 4px;
+}
+.bt-ruler {
+  position: relative;
+  height: 56px;
+  margin: 0 8px;
+}
+.bt-ruler-track {
+  position: absolute;
+  top: 27px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--background-modifier-border-hover);
+}
+.bt-ruler-zone {
+  position: absolute;
+  top: 21px;
+  height: 14px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-normal) 32%, transparent) 0 1.5px, transparent 1.5px 6px);
+}
+.bt-ruler-zone-label,
+.bt-ruler-last {
+  position: absolute;
+  top: 40px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bt-ruler-zone-label.bt-ruler-end {
+  right: 0;
+}
+.bt-ruler-zone-label.bt-ruler-mid,
+.bt-ruler-last {
+  transform: translateX(-50%);
+}
+.bt-ruler-edge {
+  position: absolute;
+  top: 16px;
+  width: 2px;
+  height: 24px;
+  margin-left: -1px;
+  background: var(--text-normal);
+}
+.bt-ruler-price {
+  position: absolute;
+  top: 0;
+  font-size: 11.5px;
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bt-ruler-after {
+  padding-left: 5px;
+}
+.bt-ruler-before {
+  padding-right: 5px;
+  transform: translateX(-100%);
+}
+.bt-ruler-level {
+  position: absolute;
+  top: 22px;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  background: var(--text-muted);
+}
+/* In a narrow result the sentence above says which closes give the order; the shading needs no name there. */
+@container bt-result (max-width: 520px) {
+  .bt-ruler-zone-label {
+    display: none;
+  }
+}
+.bt-ruler-dot {
+  position: absolute;
+  top: 21px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: var(--text-normal);
+  box-shadow: 0 0 0 3px var(--background-primary);
+}
+
+/* The sections as tabs: large ones with a line under the name, then a row of small ones. */
+.bt-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bt-tabbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bt-tabs-main,
+.bt-tabs-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.bt-tabs-more-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-root button.bt-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  height: auto;
+  min-width: 8em;
+  padding: 6px 12px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bt-root button.bt-tab:hover {
+  background: var(--background-modifier-hover);
+}
+.bt-root button.bt-tab[aria-selected='true'] {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+}
+.bt-root button.bt-tab:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+.bt-root button.bt-tab.bt-tab-small {
+  flex-direction: row;
+  min-width: 0;
+  padding: 3px 10px;
+  border-radius: 8px;
+  font-size: var(--font-ui-smaller);
+}
+.bt-tab-name {
+  font-weight: var(--font-semibold);
+}
+.bt-tab-small .bt-tab-name {
+  font-weight: var(--font-medium);
+}
+.bt-tab-preview {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-tabbed > details > summary {
+  display: none;
+}
+.bt-tabbed > details:not([open]) {
+  display: none;
+}
+.bt-tabbed > details.bt-details {
+  margin-top: 0;
+}
+.bt-tab-lead {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+.bt-tab-read {
+  min-height: 1.45em;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Trades: every closed trade's return, from the worst to the best. */
+.bt-payoff-gain {
+  fill: var(--bt-stats-gain);
+}
+.bt-payoff-loss {
+  fill: var(--bt-stats-loss);
+}
+.bt-payoff {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.bt-root .bt-table tr.bt-row-flash td {
+  background: var(--bt-warn-bg);
+}
+
+/* The fine print. */
+.bt-fine {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-fine .bt-note {
+  margin: 0;
+  font-size: var(--font-ui-smaller);
+}
