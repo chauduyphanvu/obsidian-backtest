@@ -1,7 +1,7 @@
 // How large one backtest may be and how long it may take, in one place, with the messages a refusal shows. Pure.
 
 import type { Backtest } from './backtest.ts';
-import { walk, type Spec } from './dsl.ts';
+import { ruleExprs, walk, type Spec } from './dsl.ts';
 import { isInsideKey } from './engine.ts';
 import { ResultCache } from './result-cache.ts';
 import type { RunOutput } from './runner.ts';
@@ -85,7 +85,7 @@ export function runSize(spec: Spec, data: Map<string, Bars>): RunSize {
     const rules = spec.rules[a.name];
     let parts = 0;
     let periods = 0;
-    for (const e of [rules.buy, rules.sell, rules.add, spec.rank?.by]) {
+    for (const e of [...ruleExprs(rules), spec.rank?.by]) {
       if (!e) continue;
       walk(e, (x) => {
         parts++;

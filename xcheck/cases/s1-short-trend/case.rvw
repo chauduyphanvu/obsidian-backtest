@@ -1,0 +1,9 @@
+language 1
+strategy "s1: short a downtrend" {
+  universe   symbols("CHOP")
+  fast       sma(close, 20)
+  slow       sma(close, 100)
+  enter short when crosses_below(fast, slow) and not crosses_above(fast, slow)
+  exit short when crosses_above(fast, slow)
+  size       100% of equity, max 1 positions
+}

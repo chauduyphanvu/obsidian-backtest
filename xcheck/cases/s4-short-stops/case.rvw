@@ -1,0 +1,9 @@
+language 1
+strategy "s4: short with stop and target" {
+  universe   symbols("MREV")
+  enter short when crosses_below(close, sma(close, 20)) and not crosses_above(close, sma(close, 50))
+  exit short when crosses_above(close, sma(close, 50))
+  stop       3%
+  target     5%
+  size       50% of equity, max 1 positions
+}

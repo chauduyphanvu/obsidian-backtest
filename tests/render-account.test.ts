@@ -12,8 +12,8 @@ import { bars } from './helpers.ts';
 const T = Date.UTC(2026, 10, 13);
 
 function state(name: string, o: Partial<AssetState> = {}): AssetState {
-  const st: AssetState = { name, weight: 1, long: false, since: null, pending: null, shares: 0, lastClose: 100, value: 0, targetWeight: 0, ...o };
-  st.long = st.shares > 0;
+  const st: AssetState = { name, weight: 1, side: null, since: null, pending: null, shares: 0, lastClose: 100, value: 0, targetWeight: 0, ...o };
+  st.side = st.shares > 0 ? 'long' : st.shares < 0 ? 'short' : null;
   st.value = st.shares * st.lastClose;
   return st;
 }
@@ -67,6 +67,49 @@ test('what trading the orders as one spares is said in money and in costs', () =
   const B = strat('B', 0.5, 1000, [state('SPY', { shares: 5, pending: 'sell' })]);
   const plan = accountOrders({ ...account, cash: 500, holdings: [{ ticker: 'SPY', shares: 5 }] }, [A, B]);
   assert.equal(planLines(plan)[1], 'Trading their orders as one, rather than each strategy on its own, spares $500 of trades and $0.50 of their costs.');
+});
+
+test('orders on the short side say so, a flip gives both steps, and short holdings read with a minus', () => {
+  // 13,000 in cash, SPY and XLE short, GME short that no strategy trades: 10,000 managed. The strategy flips SPY to a
+  // long of 60%, covers XLE and sells QQQ short.
+  const S = strat(
+    'S',
+    1,
+    1000,
+    [state('SPY', { shares: -5, pending: 'buy', targetWeight: 0.6 }), state('XLE', { shares: -1, pending: 'cover' }), state('QQQ', { pending: 'short', targetWeight: 0.2 })],
+    { borrows: true },
+  );
+  const holdings = [
+    { ticker: 'SPY', shares: -20 },
+    { ticker: 'XLE', shares: -10 },
+    { ticker: 'GME', shares: -10 },
+  ];
+  const plan = accountOrders({ ...account, cash: 13_000, holdings }, [S]);
+  assert.deepEqual(
+    orderRows(plan, ['S']).map((r) => [r.ticker, r.order, r.shares, r.value, r.holding, r.side]),
+    [
+      ['SPY', 'Flip: buy to cover 20, then buy 60', '80', '$8,000', '−20 → 60', 1],
+      ['XLE', 'Buy to cover all', '10', '$1,000', '−10 → 0', 1],
+      ['QQQ', 'Sell short', '20', '$2,000', '0 → −20', -1],
+    ],
+  );
+  assert.deepEqual(planLines(plan), [
+    'The strategies manage $10k: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: $6,000.',
+    'Left as they are, as no strategy listed trades them: GME −10.',
+  ]);
+  // Held long and flipped to a short of 50, and a short added to.
+  const flip = accountOrders({ ...account, cash: 7000, holdings: [{ ticker: 'SPY', shares: 30 }] }, [strat('S', 1, 1000, [state('SPY', { shares: 10, pending: 'short', targetWeight: 0.5 })])]);
+  assert.deepEqual(orderRows(flip, ['S']).map((r) => [r.order, r.shares, r.side]), [['Flip: sell 30, then sell short 50', '80', -1]]);
+  const more = accountOrders({ ...account, cash: 15_000, holdings: [{ ticker: 'SPY', shares: -50 }] }, [strat('S', 1, 1000, [state('SPY', { shares: -6 })])]);
+  assert.deepEqual(orderRows(more, ['S']).map((r) => [r.order, r.shares, r.holding]), [['Sell short', '10', '−50 → −60']]);
+});
+
+test('an account that borrows: cash below 0 reads with a minus', () => {
+  // 120 SPY and 2,000 borrowed: 10,000 managed, which a strategy at 150% holds 15,000 of.
+  const L = strat('L', 1, 1000, [state('SPY', { shares: 15 })], { borrows: true });
+  const plan = accountOrders({ ...account, cash: -2000, holdings: [{ ticker: 'SPY', shares: 120 }] }, [L]);
+  assert.deepEqual(orderRows(plan, ['L']).map((r) => [r.order, r.shares]), [['Buy', '30']]);
+  assert.equal(planLines(plan)[0], 'The strategies manage $10k: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: −$5,000.');
 });
 
 test('the orders are for the next open after the last bar, said once when every strategy agrees', () => {
@@ -183,6 +226,16 @@ test('each trade in the table: how it went, both sides, your price against their
   assert.deepEqual(matchCells(row({ class: 'off-plan', yours: yours({ day: T + DAY }), fees: 1 })), ['2026-11-14', 'SPY', 'Off plan', '–', 'Buy 10 at 100.50', '', '$1.00']);
   assert.equal(matchCells(row({ model: model(), yours: yours({ price: 400 }), outside: true }))[5], 'outside the day');
   assert.equal(matchCells(row({ model: model({ price: NaN }), yours: yours(), unpriced: true }))[3], 'Buy 10 at unknown');
+});
+
+test('trades on the short side in the table: a short sale, a cover and a flip each way', () => {
+  const cells = matchCells(row({ model: model({ side: 'sell', action: 'short' }), yours: yours({ side: 'sell', action: 'short', price: 99.5 }), bps: 50, slippage: 5, fees: 1 }));
+  assert.deepEqual(cells.slice(3), ['Sell short 10 at 100.00', 'Sell short 10 at 99.50', '+50.0 bps', '$6.00']);
+  assert.equal(matchCells(row({ model: model({ action: 'cover' }), yours: yours() }))[3], 'Buy to cover 10 at 100.00');
+  // Your file need not say it was a cover: a purchase is then a purchase.
+  assert.equal(matchCells(row({ model: model({ action: 'cover' }), yours: yours() }))[4], 'Buy 10 at 100.50');
+  assert.equal(matchCells(row({ model: model({ action: 'flip' }) }))[3], 'Flip to long 10 at 100.00');
+  assert.equal(matchCells(row({ class: 'off-plan', yours: yours({ side: 'sell', action: 'flip' }) }))[4], 'Flip to short 10 at 100.50');
 });
 
 test('each ticker: how its trades went and what they cost, part by part', () => {

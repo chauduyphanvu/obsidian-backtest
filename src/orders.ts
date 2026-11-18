@@ -1,7 +1,7 @@
-import { accountOrders, accountStrategy, parseAccount, runAccount, type AccountOrder } from './account.ts';
+import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountOrder } from './account.ts';
 import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
-import type { AssetState } from './engine.ts';
+import { isFlip, type AssetState } from './engine.ts';
 import { DAY, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
@@ -21,11 +21,16 @@ export const pendingTiming = (fill?: Fill): OrderTiming => (fill === 'close' ? '
 
 export const timingPhrase = (when: OrderTiming): string => `at the ${when}`;
 
-/** "Buy" and "Sell", "Add" for a later entry; "Bought", "Sold" and "Added" for an order the backtest has already made. */
+const DONE: Record<OrderRow['action'], string> = { buy: 'Bought', sell: 'Sold', short: 'Sold short', cover: 'Bought to cover' };
+
+/**
+ * "Buy", "Sell", "Sell short" and "Buy to cover", "Add" for a later entry on either side; "Bought", "Sold", "Sold short",
+ * "Bought to cover" and "Added" for an order the backtest has already made.
+ */
 export function actionWord(o: Pick<OrderRow, 'action' | 'when'> & Pick<Partial<OrderRow>, 'step'>): string {
   const done = o.when === 'last close';
-  if (o.action === 'buy' && o.step && o.step.k > 1) return done ? 'Added' : 'Add';
-  return o.action === 'buy' ? (done ? 'Bought' : 'Buy') : done ? 'Sold' : 'Sell';
+  if ((o.action === 'buy' || o.action === 'short') && o.step && o.step.k > 1) return done ? 'Added' : 'Add';
+  return (done ? DONE : STEP_WORDS)[o.action];
 }
 
 /** What a strategy that fills at the close needs the reader to know, said once. */
@@ -35,41 +40,55 @@ export const CLOSE_FILL_NOTE =
 /** Said under the orders its backtest has already made. */
 export const LAST_CLOSE_NOTE = 'The backtest made these at the last close. To match it, they had to be placed before that close.';
 
-/** How a position's order reads in the positions table: "buys at the next close", "adds at the next open", "bought at the last close"; empty for none. */
+const DOES = { buy: 'buys', sell: 'sells', add: 'adds', short: 'sells short', cover: 'buys to cover' };
+const DID = { buy: 'bought', sell: 'sold', add: 'added', short: 'sold short', cover: 'bought to cover' };
+
+/**
+ * How a position's order reads in the positions table: "buys at the next close", "adds at the next open", "bought at the
+ * last close", and for a flip both its orders, "sells, then sells short at the next open"; empty for none.
+ */
 export function positionOrder(st: AssetState, fill?: Fill): string {
-  if (st.pending) return `${{ buy: 'buys', sell: 'sells', add: 'adds' }[st.pending]} ${timingPhrase(pendingTiming(fill))}`;
-  return st.filled ? `${{ buy: 'bought', sell: 'sold', add: 'added' }[st.filled.side]} at the last close` : '';
+  if (st.pending) {
+    const flip = isFlip(st);
+    return `${flip ? `${DOES[st.side === 'long' ? 'sell' : 'cover']}, then ` : ''}${DOES[st.pending]} ${timingPhrase(st.marginCall ? 'next open' : pendingTiming(fill))}`;
+  }
+  if (!st.filled) return '';
+  const { side, closed } = st.filled;
+  return `${closed ? `${DID[side === 'short' ? 'sell' : 'cover']}, then ` : ''}${DID[side]} at the last close`;
 }
 
+/** A buy or a short sale opens a position or adds to it; a sell closes a long and a cover a short. A flip is a sell and a short sale, or a cover and a buy. */
 export interface OrderRow {
   ticker: string;
-  action: 'buy' | 'sell';
+  action: 'buy' | 'sell' | 'short' | 'cover';
   when: OrderTiming;
-  /** Target share of the strategy's equity for a buy; 0 for a sell. */
+  /** Target share of the strategy's equity for a buy or a short sale; 0 for a sell or a cover. */
   weight: number;
-  /** Dollar size at the backtest's current equity: weight × equity for a buy, the position's value for a sell. */
+  /** Dollar size at the backtest's current equity: weight × equity for a buy or a short sale, the position's value for a sell or a cover. */
   value: number;
   lastClose: number;
-  /** For a sell: when the position was opened. */
+  /** For a sell or a cover: when the position was opened. */
   since: number | null;
-  /** For a buy of a strategy with `entries` above 1: which entry it is, of how many. */
+  /** For a buy or a short sale of a strategy with `entries` above 1: which entry it is, of how many. */
   step?: { k: number; n: number };
 }
 
 export interface HoldingRow {
   ticker: string;
-  /** Current value ÷ equity. */
+  /** Current value ÷ equity; a short's is the value of the shares owed. */
   weight: number;
   since: number;
   lastClose: number;
   /** Open profit of the position as a fraction, from the open trade. */
   gain: number | null;
+  /** Held short. */
+  short?: true;
 }
 
 /** A close at the next bar that would make a rule give an order (trigger.ts), for the reader to watch. */
 export interface WatchRow {
   ticker: string;
-  side: 'buy' | 'sell' | 'add';
+  side: 'buy' | 'sell' | 'add' | 'short' | 'cover';
   /** The rule's part in words, such as "Buys if it closes above 512.30 (+1.2%)", and when its order fills, such as "at the following open". */
   phrase: string;
   when: string;
@@ -137,7 +156,10 @@ export function barLabel(s: Pick<StrategyStatus, 'asOf' | 'interval'>): string {
 }
 
 const compare = (a: string, b: string) => a.localeCompare(b, 'en');
-const rank = (o: OrderRow) => (o.action === 'sell' ? 0 : 1);
+/** What closes a position comes first, so the cash and the room to borrow are there for what opens one; an add goes with its side. */
+const RANK: Record<OrderRow['action'], number> = { sell: 0, cover: 1, buy: 2, short: 3 };
+const rank = (o: OrderRow) => RANK[o.action];
+const closes = (o: OrderRow) => o.action === 'sell' || o.action === 'cover';
 const byAction = (a: OrderRow, b: OrderRow) => rank(a) - rank(b) || compare(a.ticker, b.ticker);
 
 /** The calendar day of a time on the reader's clock, so "today" means their today. */
@@ -162,7 +184,7 @@ export function watchRows(report: TriggerReport): WatchRow[] {
   for (const t of report.triggers) {
     const phrase = rulePhrase(t);
     const near = nearest(t);
-    if (t.side === 'rearm' || phrase === null || near === null) continue;
+    if (t.side === 'rearm' || t.side === 'rearmShort' || phrase === null || near === null) continue;
     if (!report.closeFill && !near.now && (t.values || !(Math.abs(near.distance) <= WATCH_WITHIN))) continue;
     rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), driver: t.driver, lastClose: t.last, distance: t.values ? NaN : near.distance, now: near.now });
   }
@@ -199,24 +221,32 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
   for (const st of run.states) {
     const before = orders.length;
     const made = st.entries ?? 0;
-    if (st.pending === 'buy' || st.pending === 'add') {
-      orders.push({ ticker: st.name, action: 'buy', when: pending, weight: st.targetWeight, value: st.targetWeight * equity, lastClose: st.lastClose, since: null, ...step(made + 1) });
-    } else if (st.pending === 'sell') {
-      orders.push({ ticker: st.name, action: 'sell', when: pending, weight: 0, value: st.value, lastClose: st.lastClose, since: st.since });
+    const opening = (action: 'buy' | 'short', when: OrderTiming, weight: number, value: number, k: number) =>
+      orders.push({ ticker: st.name, action, when, weight, value, lastClose: st.lastClose, since: null, ...step(k) });
+    const closing = (action: 'sell' | 'cover', when: OrderTiming, value: number, since: number | null) =>
+      orders.push({ ticker: st.name, action, when, weight: 0, value, lastClose: st.lastClose, since });
+    // A flip closes the position held and opens the other side: two orders, the first entry of the new position second.
+    const flip = isFlip(st);
+    // A margin call closes the position at the next open even when the strategy fills at the close.
+    if (st.pending === 'sell' || st.pending === 'cover' || flip) closing(st.side === 'short' ? 'cover' : 'sell', st.marginCall ? 'next open' : pending, Math.abs(st.value), st.since);
+    if (st.pending === 'buy' || st.pending === 'short' || st.pending === 'add') {
+      const action = st.pending === 'short' || (st.pending === 'add' && st.side === 'short') ? 'short' : 'buy';
+      opening(action, pending, st.targetWeight, st.targetWeight * equity, flip ? 1 : made + 1);
     }
     if (st.filled) {
-      // A whole position bought or sold at the last close, or an entry added to one, valued there.
-      const value = st.filled.shares * st.lastClose;
-      if (st.filled.side !== 'sell') {
-        orders.push({ ticker: st.name, action: 'buy', when: 'last close', weight: equity > 0 ? value / equity : 0, value, lastClose: st.lastClose, since: null, ...step(made) });
-      } else {
-        const closed = run.trades.filter((t) => t.asset === st.name && t.reason !== 'open').pop();
-        orders.push({ ticker: st.name, action: 'sell', when: 'last close', weight: 0, value, lastClose: st.lastClose, since: closed?.entryT ?? null });
+      // A whole position bought or sold at the last close, or an entry added to one, valued there; a flip, the position it
+      // closed and the one it opened.
+      const { side, shares, closed } = st.filled;
+      const value = shares * st.lastClose;
+      if (side === 'sell' || side === 'cover' || closed) {
+        const exited = run.trades.filter((t) => t.asset === st.name && t.reason !== 'open').pop();
+        closing(side === 'sell' || side === 'short' ? 'sell' : 'cover', 'last close', closed ? closed * st.lastClose : value, exited?.entryT ?? null);
       }
+      if (side !== 'sell' && side !== 'cover') opening(side === 'short' || (side === 'add' && st.side === 'short') ? 'short' : 'buy', 'last close', equity > 0 ? value / equity : 0, value, made);
     }
-    if (orders.length === before && st.long) {
+    if (orders.length === before && st.side !== null) {
       const open = run.trades.find((t) => t.asset === st.name && t.reason === 'open');
-      holdings.push({ ticker: st.name, weight: equity > 0 ? st.value / equity : 0, since: st.since!, lastClose: st.lastClose, gain: open ? open.ret : null });
+      holdings.push({ ticker: st.name, weight: equity > 0 ? Math.abs(st.value) / equity : 0, since: st.since!, lastClose: st.lastClose, gain: open ? open.ret : null, ...(st.side === 'short' ? { short: true as const } : {}) });
     }
   }
   orders.sort(byAction);
@@ -244,9 +274,9 @@ export function failedStatus(note: string, strategy: string, message: string): S
   return { note, strategy, asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: message, closeFill: false, stale: false };
 }
 
-/** Strategies with orders first, those with a sell ahead of buy-only ones; then the rest. Each group by note, then name. */
+/** Strategies with orders first, those with a sell or a cover ahead of the others; then the rest. Each group by note, then name. */
 export function sortStatuses(list: StrategyStatus[]): StrategyStatus[] {
-  const group = (s: StrategyStatus) => (s.orders.some((o) => o.action === 'sell') ? 0 : s.orders.length ? 1 : 2);
+  const group = (s: StrategyStatus) => (s.orders.some(closes) ? 0 : s.orders.length ? 1 : 2);
   return list
     .map((s) => ({ ...s, orders: [...s.orders].sort(byAction) }))
     .sort((a, b) => group(a) - group(b) || compare(a.note, b.note) || compare(a.strategy, b.strategy));
@@ -257,7 +287,7 @@ export interface TodoRow {
   order: OrderRow;
 }
 
-/** Every order of every strategy as one list: by timing, then sells first so the cash is there for the buys, then by note and ticker. */
+/** Every order of every strategy as one list: by timing, then sells and covers first so the cash is there for the buys, then by note and ticker. */
 export function todoRows(list: StrategyStatus[]): TodoRow[] {
   const when = (o: OrderRow) => TIMINGS.indexOf(o.when);
   return list
@@ -313,7 +343,7 @@ export function share(weight: number): string {
 /** The size of an order as a share of the strategy's own money, then in dollars at the backtest's equity; for an entry of several, which one. */
 export function orderSize(o: OrderRow): string {
   const dollars = `about ${money(o.value)}`;
-  if (o.action === 'sell') return `Whole position, ${dollars}`;
+  if (closes(o)) return `Whole position, ${dollars}`;
   const size = `${share(o.weight)} of the strategy, ${dollars}`;
   return o.step ? `Step ${o.step.k} of ${o.step.n}: ${size}` : size;
 }
@@ -327,7 +357,7 @@ export function problemsOf(s: StrategyStatus): string[] {
   return out;
 }
 
-const heldText = (h: HoldingRow) => `${h.ticker} ${share(h.weight)}${h.gain === null ? '' : ` (${signedPct(h.gain)})`}`;
+const heldText = (h: HoldingRow) => `${h.short ? 'short ' : ''}${h.ticker} ${share(h.weight)}${h.gain === null ? '' : ` (${signedPct(h.gain)})`}`;
 
 /** The wikilink text for a strategy; a table cell needs the alias separator escaped. */
 function link(s: Pick<StrategyStatus, 'note' | 'strategy'>, inTable: boolean): string {
@@ -440,10 +470,14 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
   const found = await host.find();
   return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
     const status: AccountStatus = { note: f.note, name: f.name, orders: [], asOf: null, error: null };
-    const { config, entries, errors } = parseAccount(f.source);
+    const parsed = parseAccount(f.source);
+    const { config, entries } = parsed;
+    const errors = errorsBeforeRun(parsed);
     if (errors.length) return { ...status, error: `Line ${errors[0].line}: ${errors[0].message}` };
     try {
       const runs = await runAccount(entries, host.strategies(f.note));
+      const borrowed = borrowedError(parsed, runs);
+      if (borrowed) return { ...status, error: `Line ${borrowed.line}: ${borrowed.message}` };
       const strategies = runs.map((r) => accountStrategy(r.label, r.alloc, r.out));
       const plan = accountOrders(config, strategies);
       return { ...status, orders: plan.orders.filter((o) => o.shares !== 0), asOf: Math.max(...strategies.map((s) => s.asOf)) };
@@ -453,10 +487,21 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
   });
 }
 
-/** An account's order in words: "Buy 12 shares", "Sell all 30 shares". */
-export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind'>): string {
-  const n = Math.abs(o.shares);
-  return `${o.shares > 0 ? 'Buy' : o.kind === 'close' ? 'Sell all' : 'Sell'} ${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`;
+/** An account's order in words: "Buy 12 shares", "Sell all 30 shares", "Sell short 5 shares", "Flip: sell 50 shares, then sell short 30 shares". */
+export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind' | 'holding'>): string {
+  return orderText(o, (n) => `${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`);
+}
+
+/**
+ * An account's order as the orders window lists it: the badge ("Buy", "Sell short", "Flip"), its style (a flip's by its
+ * direction), and the rest of accountOrderText after the badge's words.
+ */
+export function accountOrderBadge(o: Pick<AccountOrder, 'shares' | 'kind' | 'holding'>): { action: string; style: OrderRow['action']; text: string } {
+  const steps = orderSteps(o);
+  const text = accountOrderText(o);
+  if (steps.length === 2) return { action: 'Flip', style: o.shares > 0 ? 'buy' : 'sell', text: text.slice('Flip: '.length) };
+  const action = STEP_WORDS[steps[0].action];
+  return { action, style: steps[0].action, text: text.slice(action.length + 1) };
 }
 
 /** Accounts by name, as the window and the note list them. */

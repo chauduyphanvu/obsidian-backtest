@@ -6,8 +6,9 @@ import { WARMUP_INPUT, type Backtest } from './backtest.ts';
 import { findPos, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import { barAt, commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
-import { fixed, isIntraday, minus, pair, places, price, shareCount, stamp, ungroupedOrdinal, ungroupedPlural } from './format.ts';
+import { DAY, fixed, isIntraday, minus, pair, places, price, shareCount, stamp, ungroupedOrdinal, ungroupedPlural } from './format.ts';
 import * as ind from './indicators.ts';
+import { flipped } from './price-chart.ts';
 import type { Bars } from './types.ts';
 
 export type Outcome = 'yes' | 'no' | 'unknown';
@@ -25,6 +26,7 @@ export interface Row {
   code: boolean;
 }
 
+/** The sections of a short are worded as such ("Why it was shorted", "Why it was covered") but keep these ids. */
 export interface Section {
   /** `add` is an entry after the first, for a position built in steps; there is one for each. */
   id: 'bought' | 'size' | 'add' | 'sold' | 'result';
@@ -34,14 +36,14 @@ export interface Section {
 
 /** The numbers the words rest on, worked out again from the prices and settings, so they can be checked against the trade. */
 export interface Facts {
-  /** The bar whose close the buy was read at, and the buy rule there; null when there is no buy rule. */
+  /** The bar whose close the buy was read at, and the buy rule there (the short rule, for a short); null when there is no buy rule. */
   buyT: number;
   buyRule: Outcome | null;
   /** The fill: the open (or close) of the fill bar with the slippage, and the shares the money bought there. */
   entryPrice: number;
   shares: number;
   reason: ExitReason;
-  /** A sell rule's exit: the bar it was read at and the rule's outcome there. */
+  /** A rule's exit: the bar it was read at and the outcome there of the rule that closed it (sell, cover, or the other side's entry rule for a flip). */
   sellT: number | null;
   sellRule: Outcome | null;
   /** The stop or target level that was hit, worked out from the fill, the settings and the ATR. */
@@ -113,6 +115,11 @@ class Explainer {
   private facts: Facts;
   /** Every entry of a position built in steps; empty otherwise. */
   private entries: TradeEntry[];
+  /** A short, whose prices move the other way: 1 for a long, -1 for a short. */
+  private short: boolean;
+  private s: 1 | -1;
+  /** For a short, the parts of its return a share: what it brought in, what covering it cost, and its borrow fees. */
+  private shortReturn: { basis: number; cover: number; borrow: number } | null = null;
 
   constructor(bt: Backtest, trade: Trade, why: TradeWhy) {
     this.bt = bt;
@@ -127,21 +134,27 @@ class Explainer {
     this.facts = { buyT: why.buyT, buyRule: null, entryPrice: NaN, shares: NaN, reason: trade.reason, sellT: null, sellRule: null, level: null, exitPrice: NaN, ret: NaN };
     this.entries = trade.entries ?? [];
     if (trade.entries) this.facts.entries = [];
+    this.short = trade.side === 'short';
+    this.s = this.short ? -1 : 1;
   }
 
   build(): Explanation {
     const { trade } = this;
     // In this order: each section fills in the facts the next one uses.
     const n = this.bt.spec.entries ?? 1;
+    const [opened, closed] = this.short ? ['shorted', 'covered'] : ['bought', 'sold'];
     const sections: Section[] = [
-      { id: 'bought', title: 'Why it was bought', rows: this.bought() },
+      { id: 'bought', title: `Why it was ${opened}`, rows: this.bought() },
       { id: 'size', title: n > 1 ? `How much: entry 1 of ${n}` : 'How much', rows: this.size() },
       ...(this.why.adds ?? []).map((add, j): Section => ({ id: 'add', title: `Entry ${j + 2} of ${n}`, rows: this.added(add, j) })),
-      { id: 'sold', title: trade.reason === 'open' ? 'Why it is still held' : 'Why it was sold', rows: this.sold() },
+      { id: 'sold', title: trade.reason === 'open' ? 'Why it is still held' : `Why it was ${closed}`, rows: this.sold() },
       { id: 'result', title: 'Result', rows: this.result() },
     ];
-    const sold = trade.reason === 'open' ? 'still held' : `sold ${this.date(trade.exitT)} at ${price(trade.exitPrice)}`;
-    const bought = this.entries.length > 1 ? `bought in ${this.entries.length} entries from ${this.date(trade.entryT)}, at ${price(trade.entryPrice)} on average` : `bought ${this.date(trade.entryT)} at ${price(trade.entryPrice)}`;
+    const sold = trade.reason === 'open' ? 'still held' : `${closed} ${this.date(trade.exitT)} at ${price(trade.exitPrice)}`;
+    const bought =
+      this.entries.length > 1
+        ? `${opened} in ${this.entries.length} entries from ${this.date(trade.entryT)}, at ${price(trade.entryPrice)} on average`
+        : `${opened} ${this.date(trade.entryT)} at ${price(trade.entryPrice)}`;
     return { asset: trade.asset, title: `${trade.asset}: ${bought}, ${sold}`, sections, facts: this.facts };
   }
 
@@ -168,12 +181,13 @@ class Explainer {
       const read = d.t === why.buyT ? '' : `, which read its bar of ${this.date(why.buyT)}`;
       rows.push(row(`Chosen at the ranking made at ${this.closeOf(d.t)}${read}.`));
     } else {
-      rows.push(row(`The buy rule was read at ${this.closeOf(why.buyT)}.`));
+      rows.push(row(`The ${this.entryRule} rule was read at ${this.closeOf(why.buyT)}.`));
     }
     const rules = bt.spec.rules[trade.asset];
-    const written = bt.spec.written?.rules[trade.asset]?.buy ?? null;
-    if (written) {
-      const rule = this.rule('buy when', rules.buy, written, i, null);
+    const written = bt.spec.written?.rules[trade.asset]?.[this.entryRule] ?? null;
+    const entry = this.short ? rules.short : rules.buy;
+    if (written && entry) {
+      const rule = this.rule(`${this.entryRule} when`, entry, written, i, null);
       this.facts.buyRule = rule.result;
       this.facts.entries?.push({ t: trade.entryT, signalT: why.buyT, rule: rule.result, price: NaN, shares: NaN });
       rows.push(...rule.rows);
@@ -182,26 +196,46 @@ class Explainer {
       this.facts.entries?.push({ t: trade.entryT, signalT: why.buyT, rule: null, price: NaN, shares: NaN });
     }
     if (why.rank) rows.push(...this.ranking(why.rank));
+    rows.push(...this.flippedFrom());
     rows.push(...this.waits());
     return rows;
+  }
+
+  /** The rule that opens this side: buy, or short. */
+  private get entryRule(): 'buy' | 'short' {
+    return this.short ? 'short' : 'buy';
+  }
+
+  /** When the position on the other side was closed at the same fill, so this one flipped it. */
+  private flippedFrom(): Row[] {
+    const { trade } = this;
+    const before = this.bt.run.trades.find((t) => t.asset === trade.asset && t.exitT === trade.entryT && t.reason === 'signal' && (t.side === 'short') !== this.short);
+    if (!before) return [];
+    const was = before.side === 'short' ? 'short' : 'long';
+    const exit = before.why?.exit;
+    if (exit?.k === 'rule' && exit.flip) return [row(`The same rule closed the ${was} position held until then, so the position flipped at the same fill.`)];
+    return [row(`The ${was === 'short' ? 'cover' : 'sell'} rule closed the ${was} position held until then at the same fill, so the position flipped.`)];
   }
 
   /** What held the buy back, when that is what set its timing. */
   private waits(): Row[] {
     const { why } = this;
     const rows: Row[] = [];
+    const [order, verb] = this.short ? ['short sale', 'sell short'] : ['buy', 'buy'];
     if (why.warmup) {
       const w = why.warmup;
-      const what = why.rank ? `It was chosen from ${this.date(w.fromT)} on` : `The buy rule held from ${this.date(w.fromT)} on`;
-      rows.push(row(`${what}, but ${WARMUP_INPUT[w.input](w.n)} was still unknown. A buy waits until the inputs it needs are known, so this was the first close it could buy at.`));
+      const what = why.rank ? `It was chosen from ${this.date(w.fromT)} on` : `The ${this.entryRule} rule held from ${this.date(w.fromT)} on`;
+      rows.push(row(`${what}, but ${WARMUP_INPUT[w.input](w.n)} was still unknown. A ${order} waits until the inputs it needs are known, so this was the first close it could ${verb} at.`));
     }
     if (why.rearm) {
       const r = why.rearm;
+      // A margin call disarms every side at the close it is made at, held or not.
+      const call = this.bt.run.trades.some((t) => t.why?.exit?.k === 'margin' && t.why.exit.t === r.exitT);
       const before = this.bt.run.trades.find((t) => t.asset === this.trade.asset && t.exitT === r.exitT && t.reason !== 'open' && t.reason !== 'signal');
-      const exit = before ? `the ${before.reason}` : 'the stop';
+      const exit = call ? 'the margin call' : before ? `the ${before.reason}` : 'the stop';
       rows.push(
         row(
-          `After ${exit} on ${this.date(r.exitT)} the buy rule still held, last on ${this.date(r.heldT)}. After a stop or target exit the rule has to stop holding before it can buy again: it did not hold on ${this.date(r.clearedT)}, and held again at the next close.`,
+          `After ${exit} on ${this.date(r.exitT)} the ${this.entryRule} rule still held, last on ${this.date(r.heldT)}. After ${call ? 'a margin call' : 'a stop or target exit'} the rule has to stop holding before it can ${verb} again: it did not hold on ${this.date(r.clearedT)}, and held again at the next close.`,
         ),
       );
     }
@@ -380,7 +414,7 @@ class Explainer {
       rows.push(row('Risk per trade', `${share(s.risk)} of that: ${money(amount)}`));
       rows.push(row(`Distance: ${fixed(s.mult, 4)} × ATR(${s.n}) at ${inputs}`, `${fixed(s.mult, 4)} × ${fixed(atr, 4)} = ${fixed(each, 4)} a share`));
       rows.push(row(`Shares that lose ${money(amount)} over that distance`, `${shareCount(riskShares)}, worth ${money(riskShares * fill)} at the fill`));
-      if (riskShares * fill > why.weight * why.equity) rows.push(row(`That is more than its weight, so the buy is capped at the weight`, ofThat));
+      if (riskShares * fill > why.weight * why.equity) rows.push(row(`That is more than its weight, so the ${this.short ? 'short sale' : 'buy'} is capped at the weight`, ofThat));
       else whole = riskShares * fill;
     } else if (spec.sizing.k === 'invvol') {
       const vol = ind.stdev(ind.returns(this.bars.c), spec.sizing.n)[inputIdx];
@@ -394,18 +428,26 @@ class Explainer {
     if (n > 1) rows.push(row(`Each of the ${n} entries is 1/${n} of a whole position, ${money(whole)}`, money(why.wanted)));
     rows.push(...this.paid(why, 'buy'));
     if (this.atClose) {
-      rows.push(row(`Filled at ${this.closeOf(trade.entryT)}${this.readAt(why.buyT, trade.entryT, why.rank ? 'ranking' : 'rule')}`, this.slipped(px, fill, 'plus')));
+      rows.push(row(`Filled at ${this.closeOf(trade.entryT)}${this.readAt(why.buyT, trade.entryT, why.rank ? 'ranking' : 'rule')}`, this.slipped(px, fill, this.entrySlip)));
     } else {
-      rows.push(row(`Filled at ${this.openOf(trade.entryT)}`, `${this.slipped(px, fill, 'plus')}${this.readBefore(trade.entryT, why.buyT)}`));
+      rows.push(row(`Filled at ${this.openOf(trade.entryT)}`, `${this.slipped(px, fill, this.entrySlip)}${this.readBefore(trade.entryT, why.buyT)}`));
     }
     return rows;
   }
 
-  /** The price filled at the open (or close) of the bar at `t`, before and after slippage. */
+  /** Slippage makes an entry dearer: a buy pays more, a short sale gets less. An exit the other way. */
+  private get entrySlip(): 'plus' | 'less' {
+    return this.short ? 'less' : 'plus';
+  }
+  private get exitSlip(): 'plus' | 'less' {
+    return this.short ? 'plus' : 'less';
+  }
+
+  /** The price an entry filled at the open (or close) of the bar at `t`, before and after slippage. */
   private fillOf(t: number): { px: number; fill: number } {
     const k = barAt(this.bars.t, t);
     const px = this.atClose ? this.bars.c[k] : this.bars.o[k];
-    return { px, fill: px * (1 + this.slip) };
+    return { px, fill: px * (1 + this.s * this.slip) };
   }
 
   private atFill(t: number): string {
@@ -418,20 +460,29 @@ class Explainer {
     return k > 0 && this.bars.t[k - 1] === read ? `; the close the rule read was ${price(this.bars.c[k - 1])}` : '';
   }
 
-  /** What is paid on top of a buy: any cut to the cash there was, then the money put in with its costs and commission. */
+  /**
+   * What is paid on top of a buy: any cut to the cash there was, then the money put in with its costs and commission. A
+   * block that can borrow is cut by its room instead, and a short sale takes money in, less its costs.
+   */
   private paid(b: Pick<TradeWhy, 'wanted' | 'spent' | 'cash' | 'shares'>, what: 'buy' | 'add'): Row[] {
     const rows: Row[] = [];
     const commission = this.bt.spec.commission;
+    const margin = this.bt.spec.margin;
     const fee = b.spent * this.cost;
     const comm = commission ? commissionFee(commission, b.spent, b.shares) : 0;
     const charges = [this.cost > 0 ? 'costs' : '', comm > 0 ? 'commission' : ''].filter(Boolean);
     if (b.spent < b.wanted * (1 - 1e-9)) {
       const onTop = charges.join(' and ') || 'costs';
-      if (b.cash >= b.wanted * (1 - 1e-9)) rows.push(row(`The ${onTop} ${onTop === 'commission' ? 'is' : 'are'} paid on top, so the ${money(b.cash)} in cash covered`, money(b.spent)));
-      else rows.push(row(`Only ${money(b.cash)} was in cash, so the ${what} was cut to what that covers${charges.length ? ` with its ${charges.join(' and ')}` : ''}`, money(b.spent)));
+      const withCharges = charges.length ? ` with its ${charges.join(' and ')}` : '';
+      if (margin) {
+        const order = what === 'add' ? 'add' : this.short ? 'short sale' : 'buy';
+        rows.push(row(`Positions, long and short together, may come to at most ${share(margin.cap)} of equity, so the ${order} was cut to the room left${withCharges}`, money(b.spent)));
+      } else if (b.cash >= b.wanted * (1 - 1e-9)) rows.push(row(`The ${onTop} ${onTop === 'commission' ? 'is' : 'are'} paid on top, so the ${money(b.cash)} in cash covered`, money(b.spent)));
+      else rows.push(row(`Only ${money(b.cash)} was in cash, so the ${what} was cut to what that covers${withCharges}`, money(b.spent)));
     }
     const extra = [fee > 0 ? `${money(fee)} costs` : '', comm > 0 ? `${money(comm)} commission` : ''].filter(Boolean);
-    rows.push(row('Money put in', `${money(b.spent)}${extra.length ? ` plus ${extra.join(' and ')}` : ''}, for ${shareCount(b.shares)} shares`));
+    if (this.short) rows.push(row('Money taken in', `${money(b.spent)}${extra.length ? ` less ${extra.join(' and ')}` : ''}, for ${shareCount(b.shares)} shares sold short`));
+    else rows.push(row('Money put in', `${money(b.spent)}${extra.length ? ` plus ${extra.join(' and ')}` : ''}, for ${shareCount(b.shares)} shares`));
     return rows;
   }
 
@@ -460,13 +511,19 @@ class Explainer {
       rows.push(row(`The position was worth ${money(add.held)}, so the entry was cut to what keeps it within a whole position`, money(add.wanted)));
     }
     rows.push(...this.paid(add, 'add'));
-    if (this.atClose) rows.push(row(`Filled at ${this.closeOf(entry.t)}${this.readAt(add.signalT, entry.t, 'rule')}`, this.slipped(px, fill, 'plus')));
-    else rows.push(row(`Filled at ${this.openOf(entry.t)}`, `${this.slipped(px, fill, 'plus')}${this.readBefore(entry.t, add.signalT)}`));
+    if (this.atClose) rows.push(row(`Filled at ${this.closeOf(entry.t)}${this.readAt(add.signalT, entry.t, 'rule')}`, this.slipped(px, fill, this.entrySlip)));
+    else rows.push(row(`Filled at ${this.openOf(entry.t)}`, `${this.slipped(px, fill, this.entrySlip)}${this.readBefore(entry.t, add.signalT)}`));
     rows.push(row(`Average entry price of the ${j + 2} entries`, price(add.average)));
     const stops = spec.stops[trade.asset];
-    if (add.stopLoss !== null && stops.stopLoss) rows.push(row('The stop loss moved to', `${price(add.stopLoss)}, ${this.distance(stops.stopLoss, 'under', 'the average')}`));
-    if (add.takeProfit !== null && stops.takeProfit) rows.push(row('The take profit moved to', `${price(add.takeProfit)}, ${this.distance(stops.takeProfit, 'over', 'the average')}`));
+    const [under, over] = this.ways;
+    if (add.stopLoss !== null && stops.stopLoss) rows.push(row('The stop loss moved to', `${price(add.stopLoss)}, ${this.distance(stops.stopLoss, under, 'the average')}`));
+    if (add.takeProfit !== null && stops.takeProfit) rows.push(row('The take profit moved to', `${price(add.takeProfit)}, ${this.distance(stops.takeProfit, over, 'the average')}`));
     return rows;
+  }
+
+  /** Where a stop sits from the price it is measured from, then a target: under and over for a long, over and under for a short. */
+  private get ways(): ['under' | 'over', 'under' | 'over'] {
+    return this.short ? ['over', 'under'] : ['under', 'over'];
   }
 
   /** A stop's or target's distance from a price, as set at the first entry. */
@@ -507,24 +564,61 @@ class Explainer {
     if (exit.k === 'level') return this.level(exit);
     const rows: Row[] = [];
     const j = barAt(this.bars.t, trade.exitT);
-    if (exit.k === 'rule') {
+    const rules = this.bt.spec.rules[trade.asset];
+    const written = this.bt.spec.written?.rules[trade.asset];
+    const verb = this.short ? 'Covered' : 'Sold';
+    let px = this.atClose ? this.bars.c[j] : this.bars.o[j];
+    let at = this.atClose ? `${verb} at ${this.closeOf(trade.exitT)}${this.readAt(exit.t, trade.exitT, exit.k === 'rank' ? 'ranking' : 'rule')}` : `${verb} at ${this.openOf(trade.exitT)}`;
+    if (exit.k === 'rule' && exit.flip) {
+      // The other side's entry rule, read as if flat: it closes this side whether or not the other then opens.
+      const [other, side] = this.short ? (['buy', 'short'] as const) : (['short', 'long'] as const);
       this.facts.sellT = exit.t;
-      rows.push(row(`The sell rule was read at ${this.closeOf(exit.t)}.`));
-      const written = this.bt.spec.written?.rules[trade.asset]?.sell;
-      const sell = this.bt.spec.rules[trade.asset].sell;
-      if (sell && written) {
-        const rule = this.rule('sell when', sell, written, barAt(this.bars.t, exit.t), this.position());
+      rows.push(row(`The ${other} rule was read at ${this.closeOf(exit.t)}. It closes a ${side} position.`));
+      const e = this.short ? rules.buy : rules.short;
+      const w = written?.[other];
+      if (e && w) {
+        const rule = this.rule(`${other} when`, e, w, barAt(this.bars.t, exit.t), null);
         this.facts.sellRule = rule.result;
         rows.push(...rule.rows);
       }
-    } else {
+      if (flipped(trade, this.bt.run.trades)) rows.push(row(`So the position flipped: a ${this.short ? 'long' : 'short'} position was opened at the same fill.`));
+    } else if (exit.k === 'rule') {
+      const name = this.short ? 'cover' : 'sell';
+      this.facts.sellT = exit.t;
+      rows.push(row(`The ${name} rule was read at ${this.closeOf(exit.t)}.`));
+      const w = written?.[name];
+      const e = this.short ? rules.cover : rules.sell;
+      if (e && w) {
+        const rule = this.rule(`${name} when`, e, w, barAt(this.bars.t, exit.t), this.position());
+        this.facts.sellRule = rule.result;
+        rows.push(...rule.rows);
+      }
+    } else if (exit.k === 'rank') {
       rows.push(row(`At the ranking made at ${this.closeOf(exit.rank.decision.t)}:`));
       rows.push(...this.ranking(exit.rank));
+    } else if (exit.k === 'margin') {
+      // Even with fill: close, a margin call closes at the next open.
+      const level = this.bt.spec.margin?.maintenance ?? 0;
+      rows.push(
+        row(
+          `A margin call was made at ${this.closeOf(exit.t)}: equity was below ${share(level)} of the value of the positions, long and short together, so every position was closed at the next open.`,
+          `${money(exit.equity)} against ${money(exit.gross)}, ${share(exit.equity / exit.gross)}`,
+        ),
+      );
+      px = this.bars.o[j];
+      at = `${verb} at ${this.openOf(trade.exitT)}`;
+    } else {
+      // A ruin closes at the open or the close it is found at; a ticker with no bar then at its last close.
+      const live = this.bars.t[j] === trade.exitT;
+      const raw = trade.exitPrice / (1 - this.s * this.slip);
+      const atOpen = live && Math.abs(raw - this.bars.o[j]) <= Math.abs(raw - this.bars.c[j]);
+      const when = !live ? `on ${this.date(exit.t)}` : atOpen ? `at ${this.openOf(exit.t)}` : `at ${this.closeOf(exit.t)}`;
+      rows.push(row(`Equity fell to ${money(exit.equity)} ${when}, so every position was closed there and the run stopped.`));
+      px = atOpen ? this.bars.o[j] : this.bars.c[j];
+      at = !live ? `${verb} at its last close, ${this.closeOf(this.bars.t[j])}` : `${verb} at ${atOpen ? this.openOf(trade.exitT) : this.closeOf(trade.exitT)}`;
     }
-    const px = this.atClose ? this.bars.c[j] : this.bars.o[j];
     this.exitAt(px, true);
-    const at = this.atClose ? `Sold at ${this.closeOf(trade.exitT)}${this.readAt(exit.t, trade.exitT, exit.k === 'rank' ? 'ranking' : 'rule')}` : `Sold at ${this.openOf(trade.exitT)}`;
-    rows.push(row(at, this.slipped(px, px * (1 - this.slip), 'less')));
+    rows.push(row(at, this.slipped(px, px * (1 - this.s * this.slip), this.exitSlip)));
     return rows;
   }
 
@@ -534,9 +628,12 @@ class Explainer {
     return { entryIdx: barAt(this.bars.t, this.trade.entryT), entryPrice: this.trade.entryPrice };
   }
 
-  /** The exit at `px`, slipped when `sold`, and the return after costs and commission from the entries' prices. */
+  /**
+   * The exit at `px`, slipped when `sold`, and the return after costs and commission from the entries' prices. A short's
+   * is measured on what it brought in a share, less what covering it cost and its borrow fees, as the engine does.
+   */
   private exitAt(px: number, sold: boolean): void {
-    const exitPrice = sold ? px * (1 - this.slip) : px;
+    const exitPrice = sold ? px * (1 - this.s * this.slip) : px;
     this.facts.exitPrice = exitPrice;
     const entries = this.facts.entries;
     if (entries && entries.length > 1) {
@@ -550,6 +647,22 @@ class Explainer {
     }
     const c = this.bt.spec.commission;
     const held = this.why.commission?.exitShares;
+    if (this.short) {
+      let entryFees = 0;
+      let entryShares = 0;
+      if (c) {
+        for (const e of entries && entries.length > 1 ? entries : [{ price: this.facts.entryPrice, shares: this.facts.shares }]) {
+          entryFees += commissionFee(c, e.price * e.shares, e.shares);
+          entryShares += e.shares;
+        }
+      }
+      const basis = this.facts.entryPrice * (1 - this.cost) - (c ? entryFees / entryShares : 0);
+      const cover = exitPrice * (1 + this.cost) + (c && held ? this.why.commission!.exit / held : 0);
+      const borrow = this.borrowPerShare();
+      this.shortReturn = { basis, cover, borrow };
+      this.facts.ret = (basis - exitPrice * (1 + this.cost) - (c && held ? this.why.commission!.exit / held : 0) - borrow) / basis;
+      return;
+    }
     if (!c || held === undefined) {
       this.facts.ret = (exitPrice * (1 - this.cost)) / (this.facts.entryPrice * (1 + this.cost)) - 1;
       return;
@@ -563,6 +676,21 @@ class Explainer {
       entryShares += e.shares;
     }
     this.facts.ret = (exitPrice * (1 - this.cost) - exitFee / held) / (this.facts.entryPrice * (1 + this.cost) + entryFees / entryShares) - 1;
+  }
+
+  /**
+   * A short's borrow fee a share over its life, as the engine accrued it: at each step of the run's timeline after the
+   * entry's, up to the exit's, the yearly fee on the ticker's last close before the step, for the step's days.
+   */
+  private borrowPerShare(): number {
+    const fee = this.bt.spec.margin?.borrowFee ?? 0;
+    const t = this.bt.run.t;
+    let total = 0;
+    for (let k = barAt(t, this.trade.entryT) + 1; k < t.length && t[k] <= this.trade.exitT; k++) {
+      const close = this.bars.c[barAt(this.bars.t, t[k - 1])];
+      total += (close * fee * (t[k] - t[k - 1])) / DAY / 365;
+    }
+    return total;
   }
 
   /** A stop or the target: where it sat, how it was set, and what the bar did. */
@@ -584,55 +712,68 @@ class Explainer {
     const smaller = seen ? `the ${size} bar starting ${seen.at}` : '';
     /** Why a bar with both levels inside it was read whole, so the stop came first. */
     const whole = inside?.k === 'whole' ? { none: `There are no ${size} bars for this bar`, missing: `Some of this bar's ${size} bars are missing`, mismatch: `This bar's ${size} bars do not match it` }[inside.why] : null;
+    // A short's prices move the other way: its target is below the fill and its stop above, `k` turns one into the other.
+    const k = this.s;
+    const short = this.short;
+    const past = (a: number, b: number) => k * a > k * b;
+    const best = (high: number, low: number) => (short ? low : high);
+    const worst = (high: number, low: number) => (short ? high : low);
+    const [beyond, behind] = short ? ['below', 'above'] : ['above', 'below'];
+    const [toward, against] = short ? ['fell to', 'rose to'] : ['reached', 'fell to'];
+    const [under, over] = this.ways;
+    const done = short ? 'it was covered' : 'it sold';
     let level: number;
     if (trade.reason === 'take profit') {
       const s = stops.takeProfit!;
-      level = s.k === 'pct' ? trade.entryPrice * (1 + s.v) : trade.entryPrice + s.mult * atr(s);
-      rows.push(row(`Take profit at ${price(level)}`, distance(s, fill, 'over')));
-      if (seen && so > level) rows.push(row(`On ${this.date(trade.exitT)}, ${smaller} opened at ${price(so)}, above the target, so it sold at that open.`));
-      else if (seen) rows.push(row(`On ${this.date(trade.exitT)}, in ${smaller}, the price reached ${price(sh)}, through the target, so it sold at the target.`));
-      else if (o > level) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, above the target, so it sold at the open.`));
-      else rows.push(row(`On ${this.date(trade.exitT)} the bar reached ${price(h)}, through the target, so it sold at the target.`));
-      if (seen && why.stopLoss !== null && l <= why.stopLoss) rows.push(row(`The stop at ${price(why.stopLoss)} was inside this bar too. Its ${size} bars show the target was reached first.`));
-      else if (o > level && why.stopLoss !== null && l <= why.stopLoss) rows.push(row(`The bar later fell through the stop at ${price(why.stopLoss)} too, but the open came first.`));
+      level = s.k === 'pct' ? trade.entryPrice * (1 + k * s.v) : trade.entryPrice + k * s.mult * atr(s);
+      rows.push(row(`Take profit at ${price(level)}`, distance(s, fill, over)));
+      if (seen && past(so, level)) rows.push(row(`On ${this.date(trade.exitT)}, ${smaller} opened at ${price(so)}, ${beyond} the target, so ${done} at that open.`));
+      else if (seen) rows.push(row(`On ${this.date(trade.exitT)}, in ${smaller}, the price ${toward} ${price(best(sh, sl))}, through the target, so ${done} at the target.`));
+      else if (past(o, level)) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, ${beyond} the target, so ${done} at the open.`));
+      else rows.push(row(`On ${this.date(trade.exitT)} the bar ${toward} ${price(best(h, l))}, through the target, so ${done} at the target.`));
+      const stopIn = why.stopLoss !== null && k * worst(h, l) <= k * why.stopLoss;
+      if (seen && stopIn) rows.push(row(`The stop at ${price(why.stopLoss!)} was inside this bar too. Its ${size} bars show the target was reached first.`));
+      else if (past(o, level) && stopIn) rows.push(row(`The bar later ${short ? 'rose' : 'fell'} through the stop at ${price(why.stopLoss!)} too, but the open came first.`));
       else if (whole) rows.push(row(`${whole}, so it was read whole.`));
     } else {
       if (trade.reason === 'trailing stop') {
         const s = stops.trailingStop!;
         const high = exit.high!;
-        level = s.k === 'pct' ? high * (1 - s.v) : high - s.mult * atr(s);
+        level = s.k === 'pct' ? high * (1 - k * s.v) : high - k * s.mult * atr(s);
         const first = j === barAt(this.bars.t, trade.entryT) + (this.atClose ? 1 : 0);
-        const since = this.entries.length > 1 ? 'the first entry' : 'the buy';
+        const since = this.entries.length > 1 ? 'the first entry' : short ? 'the short sale' : 'the buy';
+        const most = short ? 'lowest' : 'highest';
         const highest = seen
-          ? `${price(high)}, the highest price from ${since} to the ${size} bar before`
+          ? `${price(high)}, the ${most} price from ${since} to the ${size} bar before`
           : first
-            ? `${price(high)}, the ${this.atClose ? 'close' : 'open'} it was bought at`
-            : `${price(high)}, the highest price from ${since} to the bar before`;
-        rows.push(row(`Trailing stop at ${price(level)}`, distance(s, highest, 'under')));
-        if (why.stopLoss !== null) rows.push(row(`The stop loss, at ${price(why.stopLoss)}, was lower.`));
+            ? `${price(high)}, the ${this.atClose ? 'close' : 'open'} it was ${short ? 'sold short' : 'bought'} at`
+            : `${price(high)}, the ${most} price from ${since} to the bar before`;
+        rows.push(row(`Trailing stop at ${price(level)}`, distance(s, highest, under)));
+        if (why.stopLoss !== null) rows.push(row(`The stop loss, at ${price(why.stopLoss)}, was ${short ? 'higher' : 'lower'}.`));
       } else {
         const s = stops.stopLoss!;
-        level = s.k === 'pct' ? trade.entryPrice * (1 - s.v) : trade.entryPrice - s.mult * atr(s);
-        rows.push(row(`Stop loss at ${price(level)}`, distance(s, fill, 'under')));
+        level = s.k === 'pct' ? trade.entryPrice * (1 - k * s.v) : trade.entryPrice - k * s.mult * atr(s);
+        rows.push(row(`Stop loss at ${price(level)}`, distance(s, fill, under)));
       }
-      if (seen && so < level) rows.push(row(`On ${this.date(trade.exitT)}, ${smaller} opened at ${price(so)}, below the stop, so it sold at that open.`));
-      else if (seen) rows.push(row(`On ${this.date(trade.exitT)}, in ${smaller}, the price fell to ${price(sl)}, through the stop, so it sold at the stop.`));
-      else if (o < level) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, below the stop, so it sold at the open.`));
-      else rows.push(row(`On ${this.date(trade.exitT)} the bar fell to ${price(l)}, through the stop, so it sold at the stop.`));
-      if (why.takeProfit !== null && h >= why.takeProfit) {
+      if (seen && past(level, so)) rows.push(row(`On ${this.date(trade.exitT)}, ${smaller} opened at ${price(so)}, ${behind} the stop, so ${done} at that open.`));
+      else if (seen) rows.push(row(`On ${this.date(trade.exitT)}, in ${smaller}, the price ${against} ${price(worst(sh, sl))}, through the stop, so ${done} at the stop.`));
+      else if (past(level, o)) rows.push(row(`On ${this.date(trade.exitT)} the bar opened at ${price(o)}, ${behind} the stop, so ${done} at the open.`));
+      else rows.push(row(`On ${this.date(trade.exitT)} the bar ${against} ${price(worst(h, l))}, through the stop, so ${done} at the stop.`));
+      if (why.takeProfit !== null && k * best(h, l) >= k * why.takeProfit) {
         const target = `The take profit at ${price(why.takeProfit)} was inside this bar too.`;
         if (seen) rows.push(row(`${target} Its ${size} bars show the stop was reached first.`));
         else if (whole) rows.push(row(`${target} ${whole}, so the stop is taken first, as for any bar read whole.`));
-        else if (size && o < level) rows.push(row(`${target} The bar opened below the stop, so the stop came first.`));
+        else if (size && past(level, o)) rows.push(row(`${target} The bar opened ${behind} the stop, so the stop came first.`));
         else rows.push(row(`${target} When both are, the stop is taken first.`));
       } else if (whole) rows.push(row(`${whole}, so it was read whole.`));
     }
     this.facts.level = level;
-    const atOpen = trade.reason === 'take profit' ? so > level : so < level;
+    const atOpen = trade.reason === 'take profit' ? past(so, level) : past(level, so);
     const px = atOpen ? so : level;
     this.exitAt(px, true);
-    rows.push(row(`Sold at ${atOpen ? (seen ? `the open of that ${size} bar` : 'the open') : trade.reason === 'take profit' ? 'the target' : 'the stop'}`, this.slipped(px, px * (1 - this.slip), 'less')));
-    if (this.atClose && j === barAt(this.bars.t, trade.entryT) + 1) rows.push(row('Bought at a close, the position was watched by its stops from the next bar on.'));
+    const where = atOpen ? (seen ? `the open of that ${size} bar` : 'the open') : trade.reason === 'take profit' ? 'the target' : 'the stop';
+    rows.push(row(`${short ? 'Covered' : 'Sold'} at ${where}`, this.slipped(px, px * (1 - k * this.slip), this.exitSlip)));
+    if (this.atClose && j === barAt(this.bars.t, trade.entryT) + 1) rows.push(row(`${short ? 'Sold short' : 'Bought'} at a close, the position was watched by its stops from the next bar on.`));
     return rows;
   }
 
@@ -659,15 +800,23 @@ class Explainer {
     const j = barAt(this.bars.t, bt.run.t[bt.run.t.length - 1]);
     this.exitAt(this.bars.c[j], false);
     rows.push(row(`Still held at the end of the run. It is valued at the last close, ${this.date(this.bars.t[j])}.`, price(this.bars.c[j])));
-    const sell = bt.spec.rules[trade.asset].sell;
-    const written = bt.spec.written?.rules[trade.asset]?.sell;
-    if (sell && written) {
-      rows.push(row(`The sell rule at ${this.closeOf(this.bars.t[j])}:`));
-      rows.push(...this.rule('sell when', sell, written, j, this.position()).rows);
+    const name = this.short ? 'cover' : 'sell';
+    const exit = this.short ? bt.spec.rules[trade.asset].cover : bt.spec.rules[trade.asset].sell;
+    const written = bt.spec.written?.rules[trade.asset]?.[name];
+    if (exit && written) {
+      rows.push(row(`The ${name} rule at ${this.closeOf(this.bars.t[j])}:`));
+      rows.push(...this.rule(`${name} when`, exit, written, j, this.position()).rows);
     }
     const state = bt.run.states.find((s) => s.name === trade.asset);
-    if (state?.pending === 'sell') rows.push(row(`An order to sell it is waiting for the ${this.atClose ? 'next close' : 'next open'}.`));
-    else rows.push(row('No order to sell it is waiting.'));
+    const pending = state?.pending;
+    // An order to open the other side closes this one first: a flip.
+    const [closing, flip, order] = this.short ? (['cover', 'buy', 'cover it'] as const) : (['sell', 'short', 'sell it'] as const);
+    if (state?.marginCall) {
+      const level = share(bt.spec.margin?.maintenance ?? 0);
+      rows.push(row(`A margin call was made at the last close: equity was below ${level} of the value of the positions, long and short together, so an order to ${order} is waiting for the next open.`));
+    } else if (pending === closing || pending === flip) {
+      rows.push(row(`An order to ${order}${pending === flip ? (this.short ? ' and buy' : ' and sell short') : ''} is waiting for the ${this.atClose ? 'next close' : 'next open'}.`));
+    } else rows.push(row(`No order to ${order} is waiting.`));
     return rows;
   }
 
@@ -677,20 +826,32 @@ class Explainer {
     const { trade, why } = this;
     const rows: Row[] = [];
     const open = trade.reason === 'open';
+    const short = this.short;
     rows.push(row(open ? 'Return so far, after costs' : 'Return after costs', percent(trade.ret)));
+    const r = this.shortReturn;
+    if (r) {
+      rows.push(
+        row(
+          'A short is measured on what it brought in a share, less what covering it cost and its borrow fees, over what it brought in',
+          `(${price(r.basis)} − ${price(r.cover)} − ${price(r.borrow)}) ÷ ${price(r.basis)}`,
+        ),
+      );
+    }
     rows.push(row(open ? 'Profit so far' : 'Profit', `${trade.pnl > 0 ? '+' : ''}${money(trade.pnl)}`));
+    if (short) rows.push(row(open ? 'Borrow fees so far' : 'Borrow fees', `${money(trade.borrow ?? 0)}, part of the profit`));
     rows.push(row('Held', `${ungroupedPlural(trade.bars, 'bar')}, from ${this.date(trade.entryT)} to ${this.date(trade.exitT)}`));
-    if (this.entries.length > 1) rows.push(row(`Bought in ${this.entries.length} entries of the ${this.bt.spec.entries} allowed`, `at ${price(trade.entryPrice)} on average`));
+    if (this.entries.length > 1) rows.push(row(`${short ? 'Sold short' : 'Bought'} in ${this.entries.length} entries of the ${this.bt.spec.entries} allowed`, `at ${price(trade.entryPrice)} on average`));
     if (why.fees > 0) {
-      const toSell = open ? `; selling at the last close would cost ${money(trade.exitPrice * this.sharesHeld() * this.cost + (why.commission?.exit ?? 0))} more` : '';
+      const toSell = open ? `; ${short ? 'covering' : 'selling'} at the last close would cost ${money(trade.exitPrice * Math.abs(this.sharesHeld()) * this.cost + (why.commission?.exit ?? 0))} more` : '';
       const ofWhich = why.commission && why.commission.paid > 0 ? `, of which ${money(why.commission.paid)} commission` : '';
       rows.push(row(open ? 'Costs paid so far' : 'Costs paid', `${money(why.fees)}${ofWhich}${toSell}`));
     }
     if (why.topUps || why.trims) {
-      const parts = [why.topUps ? `topped it up ${times(why.topUps)}` : '', why.trims ? `trimmed it ${times(why.trims)}` : ''].filter(Boolean);
+      const [up, down] = short ? ['shorted more', 'covered part of it'] : ['topped it up', 'trimmed it'];
+      const parts = [why.topUps ? `${up} ${times(why.topUps)}` : '', why.trims ? `${down} ${times(why.trims)}` : ''].filter(Boolean);
       rows.push(row(`Rebalancing ${parts.join(' and ')}.`));
     }
-    if (open) rows.push(row('A position still held counts the cost of selling at the last close in its return, without slippage.'));
+    if (open) rows.push(row(short ? 'A short still held counts the cost of covering at the last close in its return, without slippage.' : 'A position still held counts the cost of selling at the last close in its return, without slippage.'));
     return rows;
   }
 

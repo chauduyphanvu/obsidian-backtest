@@ -136,7 +136,7 @@ export class StrategyBlocks {
           // Regimes and crises: right after "More statistics".
           (root) =>
             renderRegimes(root, {
-              run: { t: bt.run.t, equity: bt.run.equity, exposure: bt.run.exposure, benchmark: bt.benchmark.equity },
+              run: { t: bt.run.t, equity: bt.run.equity, exposure: bt.run.exposure, ...(bt.run.netExposure ? { netExposure: bt.run.netExposure } : {}), benchmark: bt.benchmark.equity },
               benchmarkLabel: bt.benchmark.label,
               intraday,
               universe: shown.spec.universe,

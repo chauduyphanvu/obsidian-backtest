@@ -130,6 +130,24 @@ test('pinned values come from the defaults, and a later change to them does not 
   assert.equal(stable(parseSpec(frozen, { defaults: OTHER }).spec), stable(parseSpec(STRATEGY, { defaults }).spec));
 });
 
+test('a block that can borrow also gets its borrow fee and margin rate pinned, so a later change to those settings does not move it', () => {
+  const rates: Defaults = { ...DEFAULTS, borrowFee: 0.35 / 100, marginRate: 7.25 / 100 };
+  const others = [rates, {}, OTHER, { ...OTHER, borrowFee: 0.03, marginRate: 0.12 }];
+  const short = [STRATEGY, 'short when close < sma(50)'].join('\n');
+  assert.deepEqual(lines(pinned(short, rates, others)).slice(-2), ['borrow fee: 0.35%', 'margin rate: 7.25%']);
+  // Weights above 100% borrow too, and the plugin's own rate is pinned when the settings give none. A block that never
+  // shorts pays no borrow fee, so none is pinned for it.
+  const levered = pinned('universe: SPY 150%\nbuy when close > sma(200)', DEFAULTS, others);
+  assert.deepEqual(lines(levered).slice(-2), ['data: yahoo', 'margin rate: 6%']);
+  assert.deepEqual(lines(pinned('universe: SPY 150%\nbuy when close > sma(200)\nshort when close < sma(50)', DEFAULTS, others)).slice(-2), ['borrow fee: 0.5%', 'margin rate: 6%']);
+  // A rate the block writes stays as it is, and only the other is pinned.
+  const own = pinned([short, 'borrow fee: 2%'].join('\n'), rates, others);
+  assert.equal(count(own, /^borrow fee:/gm), 1);
+  assert.equal(lines(own).at(-1), 'margin rate: 7.25%');
+  // A long-only block within 100% gets neither: it pays no borrow fee and no margin interest.
+  assert.ok(!/borrow fee|margin rate/.test(pinned(STRATEGY, rates, others)));
+});
+
 test('every form of commission, and none, reads back as the same charge', () => {
   const forms: [Defaults['commission'], string][] = [
     [undefined, 'commission: 0'],

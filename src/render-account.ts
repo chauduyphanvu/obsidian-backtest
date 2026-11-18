@@ -2,7 +2,21 @@
 // it between them, and the broker's fills set against the strategies' trades. The plugin runs the strategies and reads the
 // files; account.ts, allocate.ts and fills.ts do the working out.
 
-import { accountOrders, accountStrategy, allocations, parseAccount, type AccountConfig, type AccountPlan, type FollowedRun } from './account.ts';
+import {
+  accountOrders,
+  accountStrategy,
+  allocations,
+  borrowedError,
+  errorsBeforeRun,
+  minusMoney,
+  orderSteps,
+  orderText,
+  parseAccount,
+  stepWord,
+  type AccountConfig,
+  type AccountPlan,
+  type FollowedRun,
+} from './account.ts';
 import { weightDecimals } from './allocate.ts';
 import { alignCurves, cashIndex, type Aligned, type CompareEntry } from './compare.ts';
 import { h } from './dom.ts';
@@ -20,6 +34,8 @@ import {
   type MatchRow,
   type RawPrices,
   type Reconciliation,
+  type ShortAction,
+  type Side,
 } from './fills.ts';
 import { DAY, isIntraday, isoDate, minus, money, plural, price, shareCount, stamp } from './format.ts';
 import { renderCompareErrors, renderCompareMessage } from './render-compare.ts';
@@ -48,7 +64,7 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 
 export interface OrderRow {
   ticker: string;
-  /** What to do: "Buy", "Sell all", or why nothing is done. */
+  /** What to do: "Buy", "Sell all", "Sell short", "Flip: sell 50, then sell short 30", or why nothing is done. */
   order: string;
   shares: string;
   price: string;
@@ -58,14 +74,16 @@ export interface OrderRow {
   holding: string;
   /** Each strategy's own order at the account's size, and the drift of the holding from their positions. */
   from: string;
-  /** Above 0 for a purchase, below for a sale, 0 for none. */
+  /** Above 0 for a purchase or a cover, below for a sale or a short sale, 0 for none. */
   side: number;
 }
 
-/** The rows of the orders table, in the plan's order: sales, purchases, then positions with nothing to do. */
+/** The rows of the orders table, in the plan's order: sales and covers, purchases and short sales, then positions with nothing to do. */
 export function orderRows(plan: AccountPlan, labels: string[]): OrderRow[] {
   return plan.orders.map((o) => {
-    let order = o.shares > 0 ? 'Buy' : o.shares < 0 ? (o.kind === 'close' ? 'Sell all' : 'Sell') : o.skipped ? 'Skip: small' : 'Nothing to do';
+    const steps = orderSteps(o);
+    // A flip's two steps are written out, as the broker takes them one after the other.
+    let order = steps.length === 2 ? orderText(o, shareCount) : steps.length === 1 ? stepWord(o, steps[0]) : o.skipped ? 'Skip: small' : 'Nothing to do';
     if (o.cut) order += ', cut to the cash';
     const from = o.parts.flatMap((x, i) => (Math.abs(x) >= 0.5 ? [`${labels[i]} ${signedMoney(x)}`] : []));
     if (Math.abs(o.drift) >= 0.5) from.push(`drift ${signedMoney(o.drift)}`);
@@ -75,7 +93,7 @@ export function orderRows(plan: AccountPlan, labels: string[]): OrderRow[] {
       shares: o.shares === 0 ? '' : shareCount(Math.abs(o.shares)),
       price: price(o.price),
       value: o.shares === 0 ? '' : money(Math.abs(o.shares) * o.price),
-      holding: `${shareCount(o.holding)} → ${shareCount(Number(o.target.toFixed(4)))}`,
+      holding: `${shareCount(o.holding)} → ${shareCount(Number(o.target.toFixed(4)) + 0)}`,
       from: from.join(', '),
       side: Math.sign(o.shares),
     };
@@ -84,7 +102,7 @@ export function orderRows(plan: AccountPlan, labels: string[]): OrderRow[] {
 
 /** The sentences under the orders: what the strategies manage, what netting spared, the cash after, what is left alone, and the plan's notes. */
 export function planLines(plan: AccountPlan): string[] {
-  const out = [`The strategies manage ${money(plan.managed)}: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: ${money(plan.cashAfter)}.`];
+  const out = [`The strategies manage ${minusMoney(plan.managed)}: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: ${minusMoney(plan.cashAfter)}.`];
   if (plan.saved >= 0.5) out.push(`Trading their orders as one, rather than each strategy on its own, spares ${money(plan.saved)} of trades and ${dollars(plan.savedCost)} of their costs.`);
   if (plan.unmanaged.length) out.push(`Left as they are, as no strategy listed trades them: ${plan.unmanaged.map((x) => `${x.ticker} ${shareCount(x.shares)}`).join(', ')}.`);
   return [...out, ...plan.notes];
@@ -226,6 +244,14 @@ export function matchNotes(rec: Reconciliation, from: number): string[] {
   return out;
 }
 
+/** A trade of the strategies or of yours in words: "Buy", "Sell", "Sell short", "Buy to cover", or "Flip to short" through 0. */
+function tradeWord(t: { side: Side; action?: ShortAction }): string {
+  if (t.action === 'short') return 'Sell short';
+  if (t.action === 'cover') return 'Buy to cover';
+  if (t.action === 'flip') return t.side === 'buy' ? 'Flip to long' : 'Flip to short';
+  return t.side === 'buy' ? 'Buy' : 'Sell';
+}
+
 const CLASS_WORDS: Record<MatchRow['class'], string> = {
   'on time': 'On time',
   partial: 'Partial',
@@ -241,10 +267,9 @@ const CLASS_WORDS: Record<MatchRow['class'], string> = {
  * against theirs, and its cost.
  */
 export function matchCells(r: MatchRow): string[] {
-  const side = (s: 'buy' | 'sell') => (s === 'buy' ? 'Buy' : 'Sell');
   const known = (x: number) => (Number.isFinite(x) ? price(x) : 'unknown');
-  const model = r.model ? `${side(r.model.side)}${r.model.quantity === null ? '' : ` ${shareCount(Number(r.model.quantity.toFixed(4)))}`} at ${known(r.model.price)}` : '–';
-  const yours = r.yours ? `${side(r.yours.side)} ${shareCount(r.yours.quantity)} at ${price(r.yours.price)}` : '–';
+  const model = r.model ? `${tradeWord(r.model)}${r.model.quantity === null ? '' : ` ${shareCount(Number(r.model.quantity.toFixed(4)))}`} at ${known(r.model.price)}` : '–';
+  const yours = r.yours ? `${tradeWord(r.yours)} ${shareCount(r.yours.quantity)} at ${price(r.yours.price)}` : '–';
   let how = r.class === 'partial' ? 'Partial: the rest not made' : CLASS_WORDS[r.class];
   if (r.daysLate !== null) how += ` by ${plural(r.daysLate, 'trading day')}`;
   if ((r.class === 'skipped' || r.class === 'partial') && r.move !== null && Number.isFinite(r.move)) how += `, would have ${r.move >= 0 ? 'made' : 'lost'} ${(Math.abs(r.move) * 100).toFixed(1)}%`;
@@ -449,7 +474,9 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
 
 /** Draws an `account` block into `parent` (which the caller has emptied). Returns a cleanup function. */
 export function renderAccount(parent: HTMLElement, source: string, host: AccountHost): () => void {
-  const { config, entries, errors } = parseAccount(source);
+  const parsed = parseAccount(source);
+  const { config, entries } = parsed;
+  const errors = errorsBeforeRun(parsed);
   if (errors.length) {
     renderCompareErrors(parent, errors, source, "This account can't be worked out yet");
     return () => {};
@@ -468,6 +495,11 @@ export function renderAccount(parent: HTMLElement, source: string, host: Account
     }
     if (stopped) return;
     parent.replaceChildren();
+    const borrowed = borrowedError(parsed, runs);
+    if (borrowed) {
+      renderCompareErrors(parent, [borrowed], source, "This account can't be worked out yet");
+      return;
+    }
     const root = h(parent, 'div', 'bt-root bt-acct');
     h(root, 'div', 'bt-title', config.name ?? 'Account');
     for (const w of new Set(runs.flatMap((r) => r.out.warnings))) h(root, 'div', 'bt-warning', w);

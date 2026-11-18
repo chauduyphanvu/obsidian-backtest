@@ -5,6 +5,10 @@
   container-type: inline-size;
 }
 
+.bt-root .bt-table .bt-nowrap {
+  white-space: nowrap;
+}
+
 .bt-root .bt-table td.bt-why-cell {
   width: 1px;
   padding: 2px 0 2px 2px;

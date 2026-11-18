@@ -167,3 +167,56 @@ test('a forward test from start to log: frozen text, a later run, new bars logge
 });
 
 const stableRun = (xs: number[]) => JSON.stringify(xs);
+
+test('a strategy that goes short logs its short sales and covers, and a flip as both its orders, the exit first', () => {
+  const closes = [10, 11, 13, 14, 15, 11, 10, 13, 14, 15, 16];
+  const bt = run('universe: A\nshort when close < 12\ncover when close > 12', { A: closes });
+  assert.deepEqual(words(logRows(bt)), [
+    ['2020-01-01', ['short A 10']],
+    ['2020-01-03', ['cover A 13']],
+    ['2020-01-06', ['short A 11']],
+    ['2020-01-08', ['cover A 13']],
+  ]);
+  assert.deepEqual(bt.run.trades.map((t) => [t.side, day(t.entryT), day(t.exitT)]), [['short', '2020-01-02', '2020-01-04'], ['short', '2020-01-07', '2020-01-09']]);
+  // Long above 12 and short below it: the bar that crosses closes one side and opens the other.
+  const trend = 'universe: A\nbuy when close > 12\nshort when close < 12';
+  const flips = run(trend, { A: closes });
+  assert.deepEqual(words(logRows(flips)), [
+    ['2020-01-01', ['short A 10']],
+    ['2020-01-03', ['cover A 13', 'buy A 13']],
+    ['2020-01-06', ['sell A 11', 'short A 11']],
+    ['2020-01-08', ['cover A 13', 'buy A 13']],
+  ]);
+  // A flip still waiting at the last bar.
+  const waiting = run(trend, { A: [10, 11, 13, 14, 15, 11] });
+  assert.deepEqual(words(logRows(waiting)).at(-1), ['2020-01-06', ['sell A 11', 'short A 11']]);
+  assert.deepEqual([waiting.run.states[0].side, waiting.run.states[0].pending], ['long', 'short']);
+});
+
+test('the log of a short strategy in a note: its words, the exit before the entry, and today\'s run agreeing with it', () => {
+  const source = 'name: Flip\nuniverse: A\nbuy when close > sma(4)\nshort when close < sma(4)';
+  const closes = Array.from({ length: 70 }, (_, i) => 100 + 10 * Math.sin(i / 3) + i * 0.05);
+  const defaults: Defaults = { capital: 10_000, costBps: 5, slippageBps: 0, cashRate: '0%', dataSource: 'yahoo' };
+  const first = runBacktest(parseSpec(source, { defaults }).spec!, new Map([['A', bars(closes.slice(0, 50))]]));
+  const startedAt = first.run.t.at(-1)!;
+  const made = makeForward({ source, defaults, started: startedAt, intraday: false, link: '[[Flip note#Flip]]', name: 'Flip' });
+  assert.ok(made.ok);
+  const block = extractBlocks(made.note, 'forward')[0];
+  const { forward } = parseForward(block.source);
+  assert.ok(forward!.source.endsWith('borrow fee: 0.5%\nmargin rate: 6%'));
+  const later = runBacktest(parseSpec(forward!.source).spec!, new Map([['A', bars(closes)]]));
+  const rows = logRows(later);
+  const a = appendLog(made.note, block.line, rows, later.run.t.at(-1)!, Date.UTC(2026, 10, 17, 12));
+  assert.ok(a.ok && a.added >= 2, a.ok ? String(a.added) : a.message);
+  assert.match(a.note, /\| Buy to cover A; Buy A \| A [\d.]+; A [\d.]+ \|/);
+  assert.match(a.note, /\| Sell A; Sell short A \| A [\d.]+; A [\d.]+ \|/);
+  const log = readLog(a.note, block.line);
+  assert.ok(log.ok);
+  assert.deepEqual(revisions(log, rows), []);
+});
+
+test('a margin call waiting at the last bar is not logged: it is forced, as a stop is', () => {
+  const bt = run('universe: A 200%\ncapital: 10000\nmargin rate: 0%\nbuy when true', { A: [100, 100, 70, 66] });
+  assert.deepEqual([bt.run.states[0].pending, bt.run.states[0].marginCall], ['sell', true]);
+  assert.deepEqual(words(logRows(bt)), [['2020-01-01', ['buy A 100']]]);
+});

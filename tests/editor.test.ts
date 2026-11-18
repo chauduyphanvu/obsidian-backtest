@@ -63,8 +63,10 @@ test('tickers the block names', () => {
 
 test('line starts offer settings and rule openers', () => {
   assert.deepEqual(labels([], 'st'), ['stop loss']);
-  assert.deepEqual(labels([], 'b'), ['buy when', 'benchmark']);
-  assert.deepEqual(labels([], 's'), ['sell when', 'symbol', 'size', 'stop loss', 'slippage']);
+  assert.deepEqual(labels([], 'b'), ['buy when', 'benchmark', 'borrow fee']);
+  assert.deepEqual(labels([], 's'), ['sell when', 'short when', 'symbol', 'size', 'stop loss', 'slippage']);
+  assert.deepEqual(labels([], 'c'), ['cover when', 'capital', 'costs', 'cash rate', 'commission']);
+  assert.deepEqual(labels([], 'm'), ['magnify', 'margin rate']);
   assert.equal(labels([], ''), null);
   const r = complete(BLOCK, [], '  tr')!;
   assert.deepEqual([r.from, r.items[0].insert], [2, 'trailing stop: ']);
@@ -166,6 +168,20 @@ test('completions: position values in sell rules only, calendar values and param
   assert.deepEqual(labels([], 'hold: top 3 by ba', V2), ['bars_since']);
 });
 
+test('short and cover rules: coloured and completed like buy and sell, with position values in cover rules only', () => {
+  const block = ['universe: SPY', 'short when close < sma(200)', 'cover when bars held >= 5', '  or close > entry price * 1.1'];
+  const kinds = (i: number) => tokenizeBlock(block)[i].map((t) => `${t.kind}:${block[i].slice(t.from, t.to)}`);
+  assert.deepEqual(lineKinds(block), ['setting', 'rule', 'rule', 'continuation']);
+  assert.deepEqual(kinds(1), ['keyword:short', 'keyword:when', 'series:close', 'operator:<', 'function:sma', 'operator:(', 'number:200', 'operator:)']);
+  assert.deepEqual(kinds(2).slice(0, 3), ['keyword:cover', 'keyword:when', 'series:bars held']);
+  assert.deepEqual(labels([], 'short '), ['when']);
+  assert.deepEqual(labels([], 'cover '), ['when']);
+  assert.deepEqual(labels([], 'cover when ba', V2), ['bars held', 'bars_since']);
+  assert.deepEqual(labels([], 'short when ba', V2), ['bars_since']);
+  assert.deepEqual(labels(['cover when close > 1'], '  or en', V2), ['entry price', 'entries made']);
+  assert.equal(labels(['short when close < 1'], '  or en', V2), null);
+});
+
 test('completions: a two-word value goes on being offered after its space, and replaces the words typed', () => {
   const at = (before: string, above: string[] = []) => {
     const r = complete(V2, above, before);
@@ -191,9 +207,11 @@ test('completions: hints for the new settings, and only stops inside a for secti
   assert.deepEqual(labels([], 'stop loss: ', V2), ['10%', '2 atr(14)', 'stop']);
   assert.deepEqual(labels([], 'r'), ['rebalance', 'risk per trade']);
   assert.deepEqual(labels([], 'ca'), ['capital', 'cash rate']);
-  assert.deepEqual(labels(['for TLT:'], 's'), ['sell when', 'stop loss']);
-  assert.equal(labels(['for TLT:'], 'c'), null);
-  assert.deepEqual(labels(['for TLT:', 'for all:'], 'c'), ['capital', 'costs', 'cash rate', 'commission']);
+  assert.deepEqual(labels(['for TLT:'], 's'), ['sell when', 'short when', 'stop loss']);
+  assert.deepEqual(labels(['for TLT:'], 'c'), ['cover when']);
+  assert.deepEqual(labels(['for TLT:', 'for all:'], 'c'), ['cover when', 'capital', 'costs', 'cash rate', 'commission']);
+  assert.deepEqual(labels([], 'borrow fee: '), ['0.5%']);
+  assert.deepEqual(labels([], 'margin rate: '), ['6%']);
 });
 
 test('completion descriptions come from the help table', () => {

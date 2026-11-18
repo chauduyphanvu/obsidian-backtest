@@ -10,7 +10,7 @@ import { parseSpec, type Spec } from '../src/dsl.ts';
 import type { ExitReason } from '../src/engine.ts';
 import { Evaluator } from '../src/evaluate.ts';
 import type { Bars } from '../src/types.ts';
-import { generate, importFiles, periodOf, tickerCsv } from './data.ts';
+import { generate, importFiles, periodOf, tickerCsv, TWINS } from './data.ts';
 import { readEval, readRun, rvw, type RvFill, type RvRun } from './rearview.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,7 +57,7 @@ interface CaseConfig {
 
 const EXPLAIN: Record<string, string> = {
   halt: 'the ticker had no bar on the day after the signal: Rearview cancels the entry order, we fill it at the next bar',
-  rearm: 'after a stop or target exit our buy rule must stop holding before it fires again; Rearview enters again at once',
+  rearm: 'after a stop or target exit our entry rule of that side (after a margin call, of either side) must stop holding before it fires again; Rearview enters again at once',
   trail: "on its entry bar a trailing stop trails Rearview's fill price, slippage included, and our open",
   closetrail: "with close fills Rearview's trailing stop also trails the high of the bar it bought at, made before the fill; ours starts from the close it bought at",
   knock: 'knock-on of an explained difference: the other engine held a position from an explained trade at the time',
@@ -103,6 +103,8 @@ function prepareData(): Ctx {
     data.set(s.ticker, parseCsv(tickerCsv(barsCsv, s.id)));
     ids.set(s.id, s.ticker);
   }
+  // Rearview's trades and fills of a twin are those of the ticker it copies.
+  for (const w of TWINS) ids.set(w.id, w.of);
   return { data, ids, days: g.days, store };
 }
 
@@ -231,6 +233,9 @@ function checkIndicators(ctx: Ctx): IndicatorResult[] {
 
 interface T {
   asset: string;
+  side: 'long' | 'short';
+  /** The shares of the first entry. */
+  qty: number;
   entry: string;
   entryPx: number;
   exit: string | null;
@@ -249,6 +254,8 @@ const REASONS: Record<string, ExitReason> = {
   STOP: 'stop loss',
   TRAILING_STOP: 'trailing stop',
   TARGET: 'take profit',
+  // A sale to meet the maintenance requirement.
+  LIQUIDATION: 'margin call',
   '': 'open',
 };
 
@@ -283,9 +290,29 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   const dates = ours.run.t.map(iso);
 
   const rate = spec.cash.k === 'fixed' ? spec.cash.rate : 0;
-  // Rearview counts interest over a 360-day year, we over 365: the same daily rate is ours * 360/365.
-  const cashRate = (rate * 360 * 1e6) / 365;
-  if (Math.abs(cashRate - Math.round(cashRate)) > 1e-6) throw new Error(`${name}: pick a cash rate whose 360/365 is a whole number of millionths`);
+  // Rearview counts interest and borrow fees over a 360-day year, we over 365: the same daily rate is ours * 360/365.
+  const per360 = (yearly: number, what: string) => {
+    const x = (yearly * 360 * 1e6) / 365;
+    if (Math.abs(x - Math.round(x)) > 1e-6) throw new Error(`${name}: pick a ${what} whose 360/365 is a whole number of millionths`);
+    return Math.round(x);
+  };
+  const margin = spec.margin;
+  const shorts = Object.values(spec.rules).some((r) => r.short);
+  // A block that borrows runs in a margin account whose room is ours, L·E − gross: a limit on gross exposure of L times
+  // equity, inside Rearview's own 2× (initial margin 50%). Maintenance is ours too, 25% of the value of each position,
+  // so a margin call comes at the same close; what it closes differs (see README).
+  const borrowing = margin
+    ? {
+        account: {
+          type: 'reg_t',
+          maint_long: Math.round(margin.maintenance * 1e6),
+          maint_short_tiers: [{ min_price: 0, pct: Math.round(margin.maintenance * 1e6), per_share: 0 }],
+        },
+        exposure: { gross: Math.round(margin.cap * 1e6) },
+        margin_rate: per360(margin.rate, 'margin rate'),
+        borrow: { type: 'flat', rate: shorts ? per360(margin.borrowFee, 'borrow fee') : 0 },
+      }
+    : { account: { type: 'cash' } };
   const runDir = join(OUT, 'runs', name);
   rmSync(runDir, { recursive: true, force: true });
   mkdirSync(runDir, { recursive: true });
@@ -297,7 +324,6 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       start: dates[0],
       end: dates[dates.length - 1],
       initial_cash: Math.round(spec.capital * 1e6),
-      account: { type: 'cash' },
       quantity: { share_decimals: 6 },
       commission: {
         per_share: charge?.k === 'share' ? Math.round(charge.fee * 1e6) : 0,
@@ -306,7 +332,8 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
         min: charge?.k === 'share' ? Math.round(charge.min * 1e6) : 0,
       },
       slippage: Math.round(spec.slippageBps * 100),
-      cash_rate: Math.round(cashRate),
+      cash_rate: per360(rate, 'cash rate'),
+      ...borrowing,
       ...cfg.run,
     },
   };
@@ -333,6 +360,8 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   const steps = (spec.entries ?? 1) > 1;
   const mine: T[] = ours.run.trades.map((t) => ({
     asset: t.asset,
+    side: t.side ?? 'long',
+    qty: Math.abs(t.why!.shares),
     entry: iso(t.entryT),
     entryPx: t.entryPrice,
     exit: t.reason === 'open' ? null : iso(t.exitT),
@@ -348,12 +377,16 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   };
   const theirs: T[] = rv.trades.map((t) => {
     // A trade's entry_px averages its buys (rebalancing top-ups too); ours is the first fill, or with entries the
-    // average of the entries, and then each of Rearview's buys from the entry to the exit is an entry.
-    const entry = fillOf(t.id, t.entryDate, 'BUY', false)!;
-    const exit = t.exitDate === null ? null : fillOf(t.id, t.exitDate, 'SELL', true)!;
-    const buys = rv.fills.filter((f) => f.id === t.id && f.side === 'BUY' && f.date >= t.entryDate && (t.exitDate === null || f.date <= t.exitDate));
+    // average of the entries, and then each of Rearview's buys from the entry to the exit is an entry. A short's are its
+    // short sales.
+    const [opens, closes] = t.dir === 'SHORT' ? ['SHORT', 'COVER'] : ['BUY', 'SELL'];
+    const entry = fillOf(t.id, t.entryDate, opens, false)!;
+    const exit = t.exitDate === null ? null : fillOf(t.id, t.exitDate, closes, true)!;
+    const buys = rv.fills.filter((f) => f.id === t.id && f.side === opens && f.date >= t.entryDate && (t.exitDate === null || f.date <= t.exitDate));
     return {
       asset: ctx.ids.get(t.id)!,
+      side: t.dir === 'SHORT' ? 'short' : 'long',
+      qty: entry.qty,
       entry: fillDay(entry),
       entryPx: steps ? t.entryPx : entry.price,
       exit: exit === null ? null : fillDay(exit),
@@ -392,14 +425,23 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   // Matched trades: prices to Rearview's rounding, days and reasons exactly, bars held for closed
   // trades. A pair that differs only as a documented rule says is explained; if it left the market
   // on different days, those days are left out of the equity comparisons like an unmatched trade's.
+  const rvEquity = new Map(rv.daily.map((d) => [d.date, d.equity]));
+  /** How many shares at `price` the two runs' equity differed by at the close before `day`. */
+  const sharesApart = (day: string, price: number) => {
+    const k = dates.indexOf(day);
+    return k > 0 ? Math.abs(ours.run.equity[k - 1] - rvEquity.get(dates[k - 1])!) / price : 0;
+  };
   const problemsOf = (o: T, r: T) => {
     const problems: string[] = [];
+    if (o.side !== r.side) problems.push(`side ${o.side} vs ${r.side}`);
     if (Math.abs(o.entryPx - r.entryPx) > PRICE_TOL) problems.push(`entry ${o.entryPx} vs ${r.entryPx}`);
+    // Documented: Rearview sells short whole shares only, of its own equity, which whole shares moved from ours.
+    if (o.side === 'short' && Math.abs(o.qty - r.qty) > 1 + sharesApart(o.entry, o.entryPx)) problems.push(`shares ${o.qty} vs ${r.qty}`);
     if (o.exit !== r.exit) problems.push(`exit day ${o.exit} vs ${r.exit}`);
     if (o.reason !== r.reason) problems.push(`reason ${o.reason} vs ${r.reason}`);
     if (o.exitPx !== null && r.exitPx !== null) {
       // Documented: Rearview fills targets as limit orders, without slippage; we slip every fill.
-      const want = r.reason === 'take profit' ? r.exitPx * (1 - slip) : r.exitPx;
+      const want = r.reason === 'take profit' ? r.exitPx * (r.side === 'short' ? 1 + slip : 1 - slip) : r.exitPx;
       if (Math.abs(o.exitPx - want) > PRICE_TOL + 1e-9 * want) problems.push(`exit ${o.exitPx} vs ${want}`);
     }
     if (o.exit !== null && !cfg.rebalanceShift && o.bars !== r.bars) problems.push(`bars ${o.bars} vs ${r.bars}`);
@@ -413,7 +455,7 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   const trailPct = spec.stops[spec.universe[0].name]?.trailingStop;
   /** Rearview took a trailing stop on the entry bar from its fill price; ours trails the open there. */
   const entryBarTrail = (o: T, r: T) => {
-    if (!allowed.has('trail') || r.reason !== 'trailing stop' || r.exit !== r.entry || trailPct?.k !== 'pct') return false;
+    if (!allowed.has('trail') || r.side === 'short' || r.reason !== 'trailing stop' || r.exit !== r.entry || trailPct?.k !== 'pct') return false;
     const bars = ctx.data.get(r.asset)!;
     const k = barIndex(r.asset, r.entry);
     const [open, low] = [bars.o[k], bars.l[k]];
@@ -429,7 +471,7 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
    * Rearview's exit is the fill at the level it gives.
    */
   const closeEntryTrail = (o: T, r: T) => {
-    if (!atClose || !allowed.has('closetrail') || r.reason !== 'trailing stop' || r.exit === null || trailPct?.k !== 'pct') return false;
+    if (!atClose || !allowed.has('closetrail') || r.side === 'short' || r.reason !== 'trailing stop' || r.exit === null || trailPct?.k !== 'pct') return false;
     const bars = ctx.data.get(r.asset)!;
     const k = barIndex(r.asset, r.entry);
     const x = barIndex(r.asset, r.exit);
@@ -474,8 +516,10 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       // With close fills the entry's own close is the signal: Rearview can buy at the close of the day its stop hit.
       const signal = atClose ? k : k - 1;
       const signalDay = iso(ctx.data.get(r.asset)!.t[signal]);
-      const exited = [...mine, ...theirs].some((t) => t.asset === r.asset && t.exit === signalDay && protective(t));
-      if (exited && ev.eval(spec.rules[r.asset].buy, r.asset)[signal] === 1) why.set(r, 'rearm');
+      // Each side re-arms on its own entry rule, after its own stop or target, or after a margin call of either side.
+      const exited = [...mine, ...theirs].some((t) => t.asset === r.asset && t.exit === signalDay && ((t.side === r.side && protective(t)) || t.reason === 'margin call'));
+      const rules = spec.rules[r.asset];
+      if (exited && ev.eval(r.side === 'short' ? rules.short! : rules.buy, r.asset)[signal] === 1) why.set(r, 'rearm');
     }
   }
   if (allowed.has('halt')) {
@@ -535,15 +579,17 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   for (const t of apart) for (const d of dates) if (d >= span(t)[0] && d <= span(t)[1]) excluded.add(d);
   const firstExcluded = dates.find((d) => excluded.has(d)) ?? '9999';
 
-  // P&L where the sizing is the same and the money hasn't diverged yet.
+  // P&L where the sizing is the same and the money hasn't diverged yet; a short's at Rearview's whole shares.
   if (cfg.equity === 'direct') {
     for (const [o, r] of pairs) {
-      if (mismatchedPairs.has(o) || span(o)[1] >= firstExcluded || Math.abs(o.pnl - r.pnl) <= 1e-8 * spec.capital) continue;
+      const pnl = o.side === 'short' ? (o.pnl * r.qty) / o.qty : o.pnl;
+      if (mismatchedPairs.has(o) || span(o)[1] >= firstExcluded || Math.abs(pnl - r.pnl) <= 1e-8 * spec.capital) continue;
       matched--;
-      mismatches.push(`${key(o)}: pnl ${o.pnl} vs ${r.pnl}`);
+      mismatches.push(`${key(o)}: pnl ${pnl} vs ${r.pnl}`);
     }
   }
 
+  if (cfg.equity === 'replay' && margin) throw new Error(`${name}: replay is for one ticker held long; compare a block that borrows directly`);
   const ref = cfg.equity === 'direct' ? directReference(rv, dates) : replayReference(rv, dates, ctx.data.get(spec.universe[0].name)!, spec, theirs);
   const movedTo = new Set<string>();
   for (const f of rv.fills) {
@@ -574,9 +620,11 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       const d = Math.abs(ours.run.equity[k] / ours.run.equity[k - 1] - ref.equity[k] / ref.equity[k - 1]);
       if (d > returnWorst) [returnWorst, returnWorstDate] = [d, dates[k]];
     }
-    // On the day we rebalance and Rearview has yet to, the weights differ by design.
+    // On the day we rebalance and Rearview has yet to, the weights differ by design. Exposure is gross, long plus
+    // short; a block that borrows reports its net too.
     if (cfg.equity === 'direct' && !excluded.has(dates[k]) && !movedTo.has(dates[k])) {
       exposureWorst = Math.max(exposureWorst, Math.abs(ours.run.exposure[k] - ref.exposure![k]));
+      if (ours.run.netExposure) exposureWorst = Math.max(exposureWorst, Math.abs(ours.run.netExposure[k] - ref.net![k]));
     }
   }
 
@@ -592,10 +640,16 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
     check('costs', ours.run.costs, ref.costs, LEVEL_TOL);
     check('interest', ours.run.interest, ref.interest, LEVEL_TOL);
     if (cfg.equity === 'direct') {
+      if (margin) {
+        check('margin interest', ours.run.marginInterest!, rv.marginInterest, LEVEL_TOL);
+        check('borrow fees', ours.run.borrowFees!, rv.borrowFees, LEVEL_TOL);
+      }
       for (const s of ours.run.states) {
-        const id = [...ctx.ids].find(([, n]) => n === s.name)![0];
-        const held = rv.fills.filter((f) => f.id === id).reduce((q, f) => q + (f.side === 'BUY' ? f.qty : -f.qty), 0);
-        if (Math.abs(s.shares - held) > 1e-6 * Math.max(1, held) + 2e-6) {
+        // Signed, a short below 0, on the ticker and any twin of it; a short in whole shares, as at its entry.
+        const held = rv.fills.filter((f) => ctx.ids.get(f.id) === s.name).reduce((q, f) => q + (f.side === 'BUY' || f.side === 'COVER' ? f.qty : -f.qty), 0);
+        const short = s.shares < 0 ? mine.find((t) => t.asset === s.name && t.exit === null)! : null;
+        const tol = short ? 1 + sharesApart(short.entry, short.entryPx) : 1e-6 * Math.max(1, held) + 2e-6;
+        if (Math.abs(s.shares - held) > tol) {
           totals.push(`${s.name} shares ${s.shares} vs ${held}`);
           totalsOk = false;
         }
@@ -620,19 +674,18 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   // The orders the last close leaves for the next open: ours in each ticker's state, Rearview's as
   // pending market orders. (With a rebalance shift, Rearview decides a day after us.)
   if (!excluded.has(lastDay) && !cfg.rebalanceShift) {
-    const pending = new Map(rv.orders.filter((o) => o.status === 'PENDING' && o.kind === 'MARKET_OPEN').map((o) => [ctx.ids.get(o.id)!, o.side === 'BUY' ? 'buy' : 'sell']));
+    const orders = rv.orders.filter((o) => o.status === 'PENDING' && o.kind === 'MARKET_OPEN');
     for (const st of ours.run.states) {
-      const theirsPending = pending.get(st.name) ?? null;
-      // An add is a buy order to Rearview.
-      if ((st.pending === 'add' ? 'buy' : st.pending) !== theirsPending) {
+      const theirsPending = sideOf(orders.filter((o) => ctx.ids.get(o.id) === st.name).map((o) => o.side));
+      // An add is an order of the side held to Rearview.
+      if ((st.pending === 'add' ? (st.shares < 0 ? 'short' : 'buy') : st.pending) !== theirsPending) {
         totals.push(`${st.name} pending ${st.pending} vs ${theirsPending}`);
         totalsOk = false;
       }
       // With close fills what the last close decided has filled there: ours in `filled`, Rearview's as that day's signal fills.
       if (!atClose) continue;
-      const id = [...ctx.ids].find(([, n]) => n === st.name)![0];
-      const fill = rv.fills.find((f) => f.id === id && f.date === lastDay && (f.reason === 'ENTRY_SIGNAL' || f.reason === 'EXIT_SIGNAL'));
-      const theirsFilled = fill ? (fill.side === 'BUY' ? 'buy' : 'sell') : null;
+      const fills = rv.fills.filter((f) => ctx.ids.get(f.id) === st.name && f.date === lastDay && (f.reason === 'ENTRY_SIGNAL' || f.reason === 'EXIT_SIGNAL'));
+      const theirsFilled = sideOf(fills.map((f) => f.side));
       if ((st.filled?.side ?? null) !== theirsFilled) {
         totals.push(`${st.name} filled at the last close ${st.filled?.side ?? null} vs ${theirsFilled}`);
         totalsOk = false;
@@ -665,29 +718,43 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
   };
 }
 
-/** How our trades ended: signal exits, and stops (SL, TS) and targets (TP) inside the bar or at a gapped open (g); x: stop and target both in the bar. */
+/**
+ * Our order word for Rearview's orders or fills of one ticker (and its twin) at one time: an entry where there is one,
+ * as a flip is the entry of the other side to us, else the exit; null for none.
+ */
+function sideOf(sides: string[]): 'buy' | 'sell' | 'short' | 'cover' | null {
+  for (const side of ['BUY', 'SHORT', 'SELL', 'COVER']) if (sides.includes(side)) return side.toLowerCase() as 'buy' | 'sell' | 'short' | 'cover';
+  return null;
+}
+
+/** How our trades ended: signal exits, and stops (SL, TS) and targets (TP) inside the bar or at a gapped open (g); x: stop and target both in the bar; margin calls (MC). */
 function exitCoverage(trades: ReturnType<typeof runBacktest>['run']['trades'], data: Map<string, Bars>, spec: Spec): string {
   const n: Record<string, number> = {};
   const add = (k: string) => (n[k] = (n[k] ?? 0) + 1);
   const slip = spec.slippageBps / 10_000;
+  const tags: Record<ExitReason, string> = { signal: 'sig', 'stop loss': 'SL', 'trailing stop': 'TS', 'take profit': 'TP', open: 'open', 'margin call': 'MC', ruin: 'ruin' };
   for (const t of trades) {
-    const tag = { signal: 'sig', 'stop loss': 'SL', 'trailing stop': 'TS', 'take profit': 'TP', open: 'open' }[t.reason];
+    const tag = tags[t.reason];
     add(tag);
-    if (tag === 'sig' || tag === 'open') continue;
+    if (tag !== 'SL' && tag !== 'TS' && tag !== 'TP') continue;
     const bars = data.get(t.asset)!;
     const k = bars.t.indexOf(t.exitT);
-    const atOpen = bars.o[k] * (1 - slip);
+    // A short buys back: slippage raises its price, and its target lies below.
+    const short = t.side === 'short';
+    const atOpen = bars.o[k] * (short ? 1 + slip : 1 - slip);
     if (Math.abs(t.exitPrice - atOpen) < 1e-9 * atOpen) add(`${tag}g`);
     const tp = spec.stops[t.asset].takeProfit;
-    if (tag !== 'TP' && tp?.k === 'pct' && bars.h[k] >= t.entryPrice * (1 + tp.v)) add('x');
+    if (tag !== 'TP' && tp?.k === 'pct' && (short ? bars.l[k] <= t.entryPrice * (1 - tp.v) : bars.h[k] >= t.entryPrice * (1 + tp.v))) add('x');
   }
-  const order = ['sig', 'SL', 'SLg', 'TS', 'TSg', 'TP', 'TPg', 'x', 'open'];
+  const order = ['sig', 'SL', 'SLg', 'TS', 'TSg', 'TP', 'TPg', 'x', 'MC', 'ruin', 'open'];
   return order.filter((k) => n[k]).map((k) => `${k} ${n[k]}`).join(', ');
 }
 
 interface Reference {
   equity: number[];
+  /** Gross, long value plus short value, and net, long less short, as fractions of equity. */
   exposure?: number[];
+  net?: number[];
   costs: number;
   interest: number;
 }
@@ -695,13 +762,15 @@ interface Reference {
 function directReference(rv: RvRun, dates: string[]): Reference {
   const byDate = new Map(rv.daily.map((d) => [d.date, d]));
   // A Rearview run told to start a day later holds its starting cash before then.
-  const day = (d: string) => byDate.get(d) ?? (d < rv.daily[0].date ? { ...rv.daily[0], longMv: 0, equity: rv.daily[0].equity } : null);
+  const day = (d: string) => byDate.get(d) ?? (d < rv.daily[0].date ? { ...rv.daily[0], longMv: 0, shortMv: 0, equity: rv.daily[0].equity } : null);
+  const share = (d: string, value: (r: RvRun['daily'][number]) => number) => {
+    const r = day(d);
+    return r ? value(r) / r.equity : NaN;
+  };
   return {
     equity: dates.map((d) => day(d)?.equity ?? NaN),
-    exposure: dates.map((d) => {
-      const r = day(d);
-      return r ? r.longMv / r.equity : NaN;
-    }),
+    exposure: dates.map((d) => share(d, (r) => r.longMv + r.shortMv)),
+    net: dates.map((d) => share(d, (r) => r.longMv - r.shortMv)),
     costs: rv.fills.reduce((s, f) => s + f.commission, 0),
     interest: rv.interest,
   };
@@ -815,7 +884,7 @@ function main(): number {
     if (lines.length) console.log(`\n${r.name}: ${r.what}\n  ${lines.join('\n  ')}`);
     if (!r.ok) failed++;
   }
-  console.log(`\nExits: sig signal, SL stop loss, TS trailing stop, TP take profit, g at a gapped open, x stop taken with the target also in the bar.`);
+  console.log(`\nExits: sig signal, SL stop loss, TS trailing stop, TP take profit, g at a gapped open, x stop taken with the target also in the bar, MC margin call.`);
   console.log(`Explained differences:\n${Object.entries(EXPLAIN).map(([k, v]) => `  ${k}: ${v}`).join('\n')}`);
   writeFileSync(join(OUT, 'report.json'), JSON.stringify({ indicators: inds, cases: results }, null, 2));
   console.log(failed ? `\n${failed} check(s) failed. Details in ${join(OUT, 'report.json')}` : '\nAll checks passed.');

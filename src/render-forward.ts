@@ -147,7 +147,9 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
       tile('Since the start', signedPct(figs.strategy ?? NaN), vs(signedPct(figs.benchmark ?? NaN)));
       tile('Worst fall', pct(figs.worstFall ?? NaN), vs(pct(span.benchmarkStats.maxDrawdown)));
       tile('Bars', String(figs.bars), `after ${at(forward.started)}`);
-      tile('Time invested', pct(span.stats.exposure, 0), 'of the bars since');
+      // A block that can borrow may hold more than its equity, or short, as on the result's own tile.
+      if (bt.spec.margin) tile('Exposure', pct(span.stats.exposure, 0), `gross, net ${pct(span.stats.netExposure ?? NaN, 0)}`);
+      else tile('Time invested', pct(span.stats.exposure, 0), 'of the bars since');
       for (const line of windowLines(figs)) h(body, 'div', 'bt-note', line);
       if (figs.windows.ok) h(body, 'div', 'bt-note', 'The earlier stretches overlap and are the period the rules may have been chosen on, so this flatters them.');
     }

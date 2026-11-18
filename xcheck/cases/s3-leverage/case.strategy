@@ -1,0 +1,5 @@
+universe: TRND 75%, MREV 75%
+capital: 1000000000
+margin rate: 7.3%
+buy when close > sma(50)
+sell when close < sma(50)

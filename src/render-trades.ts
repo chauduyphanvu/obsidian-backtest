@@ -2,13 +2,13 @@ import type { Backtest } from './backtest.ts';
 import { h } from './dom.ts';
 import type { Trade } from './engine.ts';
 import { explainTrade, MARK, type Explanation } from './explain.ts';
-import { boughtText } from './export.ts';
+import { boughtText, hasShorts, positionText, sideText } from './export.ts';
 import { minus, money, pct, price, signedPct, stamp } from './format.ts';
 import { positionOrder } from './orders.ts';
+import { tradeExit } from './price-chart.ts';
 import { tickerText, type TriggerReport } from './trigger.ts';
 
 const MAX_TRADE_ROWS = 500;
-const COLUMNS = 9;
 /** For unique ids across every result on the page. */
 let explained = 0;
 
@@ -28,11 +28,9 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     const row = h(body, 'tr');
     h(row, 'td', undefined, st.name);
     h(row, 'td', 'bt-num', pct(st.weight, 0));
-    const steps = bt.spec.entries ?? 1;
-    const built = st.long && steps > 1 ? `, ${st.entries} of ${steps} entries` : '';
-    const now = st.long ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash';
+    const now = positionText(st, bt.spec.entries ?? 1, intraday);
     const order = positionOrder(st, bt.spec.fill);
-    h(row, 'td', undefined, order ? `${now}, ${order}` : now);
+    wordCell(row, order ? `${now}, ${order}` : now);
     if (triggers) {
       const cell = h(row, 'td', 'bt-next-close bt-next-close-waiting', '…');
       cell.setAttribute('aria-busy', 'true');
@@ -67,29 +65,43 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
       if (shown.length < all.length) h(d, 'div', 'bt-note', `Showing the latest ${shown.length} of ${all.length}.`);
       const table = h(h(d, 'div', 'bt-scroll bt-trades'), 'table', 'bt-table');
       const head = h(h(table, 'thead'), 'tr');
-      for (const [text, num] of [['Why', 0], ['Ticker', 0], ['Bought', 0], ['At', 1], ['Sold', 0], ['At', 1], ['Return', 1], ['Profit', 1], ['Exit', 0]] as const) {
-        h(head, 'th', num ? 'bt-num' : undefined, text);
-      }
+      // A run that shorts says each trade's side, and its entry and exit are opened and closed rather than bought and sold.
+      const sides = hasShorts(all);
+      const columns = sides
+        ? ([['Why', 0], ['Ticker', 0], ['Side', 0], ['Opened', 0], ['At', 1], ['Closed', 0], ['At', 1], ['Return', 1], ['Profit', 1], ['Exit', 0]] as const)
+        : ([['Why', 0], ['Ticker', 0], ['Bought', 0], ['At', 1], ['Sold', 0], ['At', 1], ['Return', 1], ['Profit', 1], ['Exit', 0]] as const);
+      for (const [text, num] of columns) h(head, 'th', num ? 'bt-num' : undefined, text);
       const body = h(table, 'tbody');
       for (const t of shown) {
         const row = h(body, 'tr');
-        explainButton(h(row, 'td', 'bt-why-cell'), row, bt, t);
+        explainButton(h(row, 'td', 'bt-why-cell'), row, bt, t, columns.length);
         h(row, 'td', undefined, t.asset);
-        h(row, 'td', undefined, boughtText(t, intraday));
+        if (sides) h(row, 'td', undefined, sideText(t));
+        wordCell(row, boughtText(t, intraday));
         h(row, 'td', 'bt-num', price(t.entryPrice));
-        h(row, 'td', undefined, t.reason === 'open' ? '–' : stamp(t.exitT, intraday));
+        if (t.reason === 'open') h(row, 'td', undefined, '–');
+        else wordCell(row, stamp(t.exitT, intraday));
         h(row, 'td', 'bt-num', price(t.exitPrice));
         h(row, 'td', 'bt-num', signedPct(t.ret));
         h(row, 'td', 'bt-num', (t.pnl > 0 ? '+' : '') + minus(money(t.pnl)));
-        h(row, 'td', undefined, t.reason === 'open' ? 'still held' : t.reason === 'signal' ? 'sell rule' : t.reason);
+        h(row, 'td', undefined, tradeExit(t, all));
       }
     },
     { once: true },
   );
 }
 
+/** A cell whose text breaks only at its spaces, so a date in it stays whole: a browser would break it at its hyphens. */
+function wordCell(row: HTMLElement, text: string): void {
+  const cell = h(row, 'td');
+  text.split(' ').forEach((word, i) => {
+    if (i > 0) cell.append(' ');
+    h(cell, 'span', 'bt-nowrap', word);
+  });
+}
+
 /** A button that opens the trade's explanation in a row right under it, worked out on the first click. */
-function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest, trade: Trade): void {
+function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest, trade: Trade, columns: number): void {
   const id = `bt-why-${++explained}`;
   const button = h(cell, 'button', 'bt-why');
   button.type = 'button';
@@ -108,7 +120,7 @@ function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest
     open = document.createElement('tr');
     open.className = 'bt-explain-tr';
     const td = h(open, 'td');
-    td.colSpan = COLUMNS;
+    td.colSpan = columns;
     const box = h(td, 'div', 'bt-explain');
     box.id = id;
     try {

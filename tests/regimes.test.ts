@@ -353,3 +353,22 @@ test('crisisResults never changes the series it is given', () => {
   crisisResults(run, CRISES);
   assert.equal(JSON.stringify(run), before);
 });
+
+test('a ruined run stops at its ruin: no state gets the steps after it, and a crisis after it is left out', () => {
+  const DAYS = 86_400_000;
+  const t = [0, 1, 2, 3, 4, 5].map((d) => Date.UTC(2022, 0, 3 + d) + 0 * DAYS);
+  const run: RunSeries = { t, equity: [100, 110, 50, 0, 0, 0], exposure: [1.5, 1.5, 1.5, 0, 0, 0], netExposure: [1.5, 1.5, 1.5, 0, 0, 0], benchmark: [100, 101, 102, 103, 104, 105] };
+  const [up, down, unknown] = bucketStats(run, [0, 1, 1, 0, 0, 0], 2);
+  assert.deepEqual([up.steps, down.steps, unknown.steps], [1, 2, 0]);
+  assert.ok(Math.abs(up.strategy.value - 0.1) < 1e-12);
+  assert.equal(down.strategy.value, -1);
+  assert.deepEqual([up.share, down.share], [1 / 3, 2 / 3]);
+  assert.equal(down.worstDrawdown, -1);
+  // A crisis from the day before the ruin to after it shows the ruin; one that starts after it is not shown.
+  const crises = [
+    { name: 'Into the ruin', market: 'stocks' as const, peak: '2022-01-04', trough: '2022-01-07' },
+    { name: 'After the ruin', market: 'stocks' as const, peak: '2022-01-06', trough: '2022-01-07' },
+  ];
+  const results = crisisResults(run, crises);
+  assert.deepEqual(results.map((r) => [r.crisis.name, r.strategy, r.worstDrawdown]), [['Into the ruin', -1, -1]]);
+});

@@ -109,14 +109,15 @@ sell when sma(fast) < sma(slow)`,
   },
   {
     description: 'Short the S&P 500 with 2x leverage when it breaks below its 50-day average, and hedge with put options.',
-    source: `name: SPY 50-day trend, long or cash
-universe: SPY
+    source: `name: SPY short at 2x below its 50-day average
+universe: SPY 200%
 
-buy when close > sma(50)
-sell when close < sma(50)`,
+short when close < sma(50)
+cover when close > sma(50)`,
     notes: [
-      'Shorting, leverage and options are not supported. This holds SPY only while it is above its 50-day average and sits in cash otherwise, which is the closest long-or-flat version.',
-      'SPY stands in for the S&P 500.',
+      'Options are not supported, so there is no put hedge: this is the short alone.',
+      'The description does not say when to cover, so the short is bought back when SPY closes above its 50-day average again.',
+      'SPY stands in for the S&P 500, and its weight of 200% sells short twice the equity.',
     ],
   },
 ];
@@ -138,15 +139,15 @@ Write nothing else: no greeting, no explanation of the rules, no text in the fen
 
 ## Limits
 
-A strategy is long or flat: each ticker is either held or not, and cash earns the cash rate. There is no shorting, no leverage (weights never exceed 100%), no options, no futures and no margin. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w), Tiingo (daily or weekly bars of US listings) or a CSV file in the vault, and economic series from FRED. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo or Tiingo, except as the numeric columns of a CSV file the description names.
-If the description asks for something outside these limits, write the closest long-or-flat strategy the language can express and say in a NOTE what you left out or changed. Never invent syntax to cover it.
+A strategy holds each ticker long, short or not at all, and cash earns the cash rate. A short sells shares the strategy borrows, so it gains as the price falls, and it pays a yearly borrow fee on its value (borrow fee: 0.5% unless set). Weights may add up to at most 200%: above 100% the strategy borrows money, and money borrowed pays a yearly margin rate (margin rate: 6% unless set). Long and short positions together may be worth up to the weights' total times the equity, and never more than twice it. There are no options, no futures and no crypto margin products such as perpetual swaps or margin loans on an exchange. Prices come from Yahoo Finance (daily or weekly bars), Binance (bars from 1m to 1w), Tiingo (daily or weekly bars of US listings) or a CSV file in the vault, and economic series from FRED. There are no fundamentals (earnings, valuations), no news or sentiment, and no intraday bars on Yahoo or Tiingo, except as the numeric columns of a CSV file the description names.
+If the description asks for something outside these limits, write the closest strategy the language can express and say in a NOTE what you left out or changed. Never invent syntax to cover it.
 
 ## Layout
 
 A strategy is lines in this order: settings, then parameters, then rules. A line is one of:
   key: value          a setting
   name = value        a parameter
-  buy when ...        a rule (so is "sell when ...")
+  buy when ...        a rule (so are "sell when ...", "short when ...", "cover when ..." and "add when ...")
   for TICKER:         starts rules for one ticker; "for all:" returns to the shared rules
   # note              a comment, also written // note
 A rule may continue on the next lines (indent them and start each with "and" or "or"). A blank line ends it.
@@ -166,29 +167,35 @@ Only universe is required. Add the others when the description asks for them or 
   costs: 5 bps                      cost of each trade, written 5 bps or 0.05% (100 bps = 1%)
   slippage: 5 bps                   how much worse each fill is than the price
   cash rate: 4%                     what cash earns a year, or a yield ticker such as ^IRX or fred:DGS3MO
-  size: 80%                         share of equity to use when the tickers have no weights (default 100%)
+  borrow fee: 0.5%                  yearly fee on the value of short positions (0.5% unless set)
+  margin rate: 6%                   yearly interest on money borrowed (6% unless set)
+  size: 80%                         share of equity to use when the tickers have no weights (default 100%, at most 200%)
   rebalance: monthly                never (the default), weekly, monthly, quarterly or yearly; held tickers return to their weights at the start of each period, and with hold the ranking is decided at the end of each period
   benchmark: QQQ                    ticker to compare with, bought and held
-  stop loss: 10%                    sell this far below the entry price; also written 2 atr(14), two average true ranges
-  trailing stop: 15%                sell this far below the highest price since entry; also 3 atr(14)
-  take profit: 20%                  sell this far above the entry price; also 4 atr(14)
+  stop loss: 10%                    sell this far below the entry price, or for a short buy back this far above it; also written 2 atr(14), two average true ranges
+  trailing stop: 15%                sell this far below the highest price since entry, or for a short buy back this far above the lowest; also 3 atr(14)
+  take profit: 20%                  sell this far above the entry price, or for a short buy back this far below it (a short never reaches 100% or more); also 4 atr(14)
   hold: top 3 by roc(126)           hold only the 3 tickers with the highest score, so the universe needs at least 3; the score is a number written like a value in a rule
   weighting: inverse volatility(60) calmer tickers get more weight; volatility is measured over the last 60 returns
-  risk per trade: 1% at 2 atr(14)   size each buy so that a fall of 2 average true ranges loses 1% of equity
+  risk per trade: 1% at 2 atr(14)   size each buy so that a fall of 2 average true ranges loses 1% of equity, and each short sale so that a rise of 2 does
   fill: close                       fill each order at the close the rule was read at; the default, next open, fills at the next bar's open
   commission: 1                     a charge per order in the account's money, added to costs; also 0.005 per share, or 0.005 per share, min 1, max 1%
   entries: 3                        build each position in up to 3 entries, each a third of its weight; needs an add when rule
   magnify: 1h                       follow stops and targets through 1h bars inside each bar, so a stop and a target in one bar are taken in the order they were reached; smaller than interval and dividing it; Yahoo gives 2m 5m 15m 30m 1h inside 1d bars (last 60 days, 730 for 1h) and 1d inside 1w bars; rules still read the strategy's own bars
-universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, tiingo:SPY for Tiingo, csv:Data/gold.csv for a CSV file in the vault; write tiingo: only when the description asks for Tiingo. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 100%; the rest stays in cash. With hold, give no weights.
-Stops are checked on top of the sell rule. With no sell rule a position is held until a stop closes it or the run ends.
+universe: write tickers as Yahoo spells them (SPY, BRK-B, BTC-USD, ^GSPC), binance:BTCUSDT for Binance, tiingo:SPY for Tiingo, csv:Data/gold.csv for a CSV file in the vault; write tiingo: only when the description asks for Tiingo. Weights are percentages: give every ticker one or none (none means equal shares), adding up to at most 200%; under 100% the rest stays in cash, and above 100% the strategy borrows. With hold, give no weights.
+Stops are checked on top of the sell and cover rules. With no exit rule a position is held until a stop or the other side's entry rule closes it, or the run ends.
 
 ## Rules
 
-buy when <condition>      opens a position when the condition holds and the ticker is not held
-sell when <condition>     closes it when the condition holds
-add when <condition>      with entries: 3, adds the next entry to a position held when the condition holds, until there are 3; write it only with an entries line
-A rule that holds at a close fills at the next open, or with fill: close at that same close. At most one buy rule, one sell rule and one add rule per scope, and an add rule only with an entries line. A buy rule is optional only when hold is set (then every ticker is eligible).
-Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, add when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
+buy when <condition>      opens a long position when the condition holds and the ticker is not held
+sell when <condition>     closes a long position when the condition holds
+short when <condition>    opens a short position when the condition holds and the ticker is not held
+cover when <condition>    closes a short position when the condition holds; write it only with a short rule
+add when <condition>      with entries: 3, adds the next entry to the position held, long or short, when the condition holds, until there are 3; write it only with an entries line
+A rule that holds at a close fills at the next open, or with fill: close at that same close. At most one buy rule, one sell rule and one add rule per scope, and an add rule only with an entries line. At most one short rule and one cover rule per scope too.
+A ticker needs a buy rule or a short rule; with hold the buy rule is optional (then every ticker is eligible), and hold cannot be combined with short or cover rules.
+A ticker held long is also closed when its short rule holds, and one held short when its buy rule holds; it then turns to the other side at the same fill when that side's rule holds and its exit rule does not (a flip). So buy when close > sma(200) with short when close < sma(200) is long above the average and short below it. When the buy and short rules both hold for a ticker not held, neither opens.
+Rules written outside any "for" section are shared and apply to every ticker that has none of its own. "for TLT:" starts rules for TLT; they replace the shared rule of the same side. Inside a "for TICKER:" section only buy when, sell when, add when, short when, cover when, stop loss, trailing stop and take profit may appear. "for all:" goes back to the shared rules, where any setting may follow again.
 
 ## Conditions and values
 
@@ -238,11 +245,11 @@ Functions, written with parentheses. A period is a plain number or a parameter, 
 Calendar values, read from each bar's date:
   month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), year such as 2024
   month_start and month_end are conditions: the first and the last bar of a month
-Position values, in sell and add rules only (written with a space, not inside functions, not with [n] or "of"):
-  bars held          completed bars since the buy filled, 0 on that bar
-  entry price        the price the position was bought at; with several entries, their average
+Position values, in sell, cover and add rules only (written with a space, not inside functions, not with [n] or "of"):
+  bars held          completed bars since the buy or short sale filled, 0 on that bar
+  entry price        the price the position was bought at, or for a short sold at; with several entries, their average
   last entry price   the price of the latest entry
-  entries made       how many entries the position has, 1 after the buy
+  entries made       how many entries the position has, 1 after the first
   Example: sell when bars held >= 10 or close > entry price * 1.1
   Example: add when close > last entry price * 1.03
 
@@ -253,19 +260,21 @@ A parameter is a named number on its own line: fast = 50. Use its name wherever 
 ## Do not
 
 - Do not invent settings, functions, series or words that this document does not list. If the language cannot say it, say so in a NOTE.
-- Do not write more than one "buy when" or one "sell when" in the same scope (the shared rules, or one "for TICKER:" section). Join conditions with "and" or "or" inside the one rule.
+- Do not write more than one "buy when" or one "sell when" in the same scope (the shared rules, or one "for TICKER:" section), nor more than one "short when" or one "cover when". Join conditions with "and" or "or" inside the one rule.
 - Do not put a setting after a "for TICKER:" line, except stop loss, trailing stop and take profit for that ticker. Put settings before the first "for" line, or after "for all:".
 - Do not set the same setting twice.
 - Do not write dates any way but YYYY-MM-DD, such as 2015-01-31.
-- Do not use shorting, leverage, options or margin, and do not let weights add up to more than 100%. A sell rule only closes a long position.
-- Do not use bars held, entry price, last entry price or entries made in a buy rule, inside a function, or with [n] or "of".
+- Do not short or borrow unless the description asks for it: then use short when and cover when, or weights adding up to more than 100%.
+- Do not use options, futures or crypto margin products, and do not let weights or size go above 200%. A sell rule only closes a long position, and a cover rule only a short one.
+- Do not write a cover rule without a short rule, or combine hold with short or cover rules.
+- Do not use bars held, entry price, last entry price or entries made in a buy or short rule, inside a function, or with [n] or "of".
 - Do not put an expression where a function wants a period: write sma(200), not sma(100 * 2).
 - Do not leave a blank line inside a rule, or put prose in the fence. A # comment line is fine.
 - Do not give universe weights when you use hold, and do not use weights together with size.
 - Do not combine risk per trade with weighting, or with a rebalance other than never.
-- Do not use "buy when true" (or "buy when always") together with stop loss, trailing stop or take profit. After a stop or target closes a position, the buy rule must be false at one close before the ticker can be bought again, and "buy when true" never is, so the ticker would never be held again. Use a condition that can turn false, such as a trend filter: buy when close > sma(200).
+- Do not use "buy when true" (or "buy when always") together with stop loss, trailing stop or take profit. After a stop or target closes a position, the buy rule must be false at one close before the ticker can be bought again, and "buy when true" never is, so the ticker would never be held again. Use a condition that can turn false, such as a trend filter: buy when close > sma(200). The same goes for "short when true".
 - Do not add settings the description did not ask for, other than name. Do not invent dates, costs or capital: leave them out unless the description gives them or the strategy needs one, and then say so in a NOTE.
-- Do not leave out universe, or the buy rule (except with hold).
+- Do not leave out universe, or leave a ticker with neither a buy rule nor a short rule (except with hold).
 
 ## Worked examples
 

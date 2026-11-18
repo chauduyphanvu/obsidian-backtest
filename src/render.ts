@@ -1,6 +1,7 @@
 import type { Backtest, Segment } from './backtest.ts';
 import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
 import { colourSource, h, s } from './dom.ts';
+import type { AssetState } from './engine.ts';
 import { hintFor } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, moneyTicks, niceStep, pct, signedPct, stamp, timeTicks } from './format.ts';
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
@@ -182,26 +183,57 @@ export interface CompactFacts {
 /** When a rule's order fills, as the result's fine print says it. */
 export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill === 'close' ? 'A rule seen at a close fills at that close.' : 'A rule seen at a close fills at the next open.');
 
-/** What a folded block shows besides its name, worded like the positions table. */
+/**
+ * What a folded block shows besides its name, worded like the positions table. A flip is said as its two orders: "sells A
+ * and sells short A", "buys to cover A and buys A".
+ */
 export function compactFacts(out: RunOutput): CompactFacts {
   const { stats, run } = out.backtest;
   const intraday = isIntraday(run.t);
-  const long = run.states.filter((st) => st.long);
+  const held = run.states.filter((st) => st.side !== null);
   const steps = out.spec.entries ?? 1;
-  const built = long.length === 1 && steps > 1 ? `, ${long[0].entries} of ${steps} entries` : '';
-  const holding = long.length === 0 ? 'In cash' : long.length === 1 ? `Long ${long[0].name} since ${stamp(long[0].since!, intraday)}${built}` : `Holds ${long.length} of ${run.states.length}`;
+  const one = held.length === 1 ? held[0] : null;
+  const built = one && steps > 1 ? `, ${one.entries} of ${steps} entries` : '';
+  const shorts = held.filter((st) => st.side === 'short').length;
+  const total = run.states.length;
+  const several = shorts === 0 ? `Holds ${held.length} of ${total}` : shorts === held.length ? `Short ${shorts} of ${total}` : `Long ${held.length - shorts}, short ${shorts} of ${total}`;
+  const holding = !one ? (held.length === 0 ? 'In cash' : several) : `${one.side === 'short' ? 'Short' : 'Long'} ${one.name} since ${stamp(one.since!, intraday)}${built}`;
   const list = (names: string[], most = 2, joiner = ' and ') => (names.length <= most ? names.join(joiner) : `${names.length} tickers`);
-  const named = (side: 'buy' | 'sell' | 'add') => run.states.filter((st) => st.pending === side).map((st) => st.name);
-  const buys = named('buy');
-  const sells = named('sell');
-  const adds = named('add');
-  const due = [...(buys.length ? [`buys ${list(buys)}`] : []), ...(adds.length ? [`adds to ${list(adds)}`] : []), ...(sells.length ? [`sells ${list(sells)}`] : [])];
-  const made = (side: 'buy' | 'sell' | 'add') => run.states.filter((st) => st.filled?.side === side).map((st) => st.name);
-  const bought = made('buy');
-  const added = made('add');
-  const sold = made('sell');
-  const done = [...(bought.length ? [`bought ${list(bought)}`] : []), ...(added.length ? [`added to ${list(added)}`] : []), ...(sold.length ? [`sold ${list(sold)}`] : [])];
+  const phrases = (groups: [string, (st: AssetState) => boolean][], of = run.states) =>
+    groups.flatMap(([verb, pick]) => {
+      const names = of.filter(pick).map((st) => st.name);
+      return names.length ? [`${verb} ${list(names)}`] : [];
+    });
+  // A margin call made at the last close closes its positions at the next open, whatever the block's fill.
+  const calledAt = run.states.filter((st) => st.marginCall);
+  const waiting = run.states.filter((st) => !st.marginCall);
+  const called = phrases(
+    [
+      ['sells', (st) => st.pending === 'sell'],
+      ['buys to cover', (st) => st.pending === 'cover'],
+    ],
+    calledAt,
+  );
+  // Covers come before buys and short sales after sells, so a flip reads in the order it fills.
+  const due = phrases(
+    [
+      ['buys to cover', (st) => st.pending === 'cover' || (st.pending === 'buy' && st.side === 'short')],
+      ['buys', (st) => st.pending === 'buy'],
+      ['adds to', (st) => st.pending === 'add'],
+      ['sells', (st) => st.pending === 'sell' || (st.pending === 'short' && st.side === 'long')],
+      ['sells short', (st) => st.pending === 'short'],
+    ],
+    waiting,
+  );
+  const done = phrases([
+    ['bought to cover', (st) => st.filled?.side === 'cover' || (st.filled?.side === 'buy' && !!st.filled.closed)],
+    ['bought', (st) => st.filled?.side === 'buy'],
+    ['added to', (st) => st.filled?.side === 'add'],
+    ['sold', (st) => st.filled?.side === 'sell' || (st.filled?.side === 'short' && !!st.filled.closed)],
+    ['sold short', (st) => st.filled?.side === 'short'],
+  ]);
   const order = [
+    ...(called.length ? [`margin call: ${called.join(' and ')} at the next open`] : []),
     ...(due.length ? [`${due.join(' and ')} ${timingPhrase(pendingTiming(out.spec.fill))}`] : []),
     ...(done.length ? [`${done.join(' and ')} at the last close`] : []),
   ];
@@ -261,7 +293,9 @@ function fillTiles(tiles: HTMLElement, bt: Backtest): void {
   tile('Total return', pct(stats.totalReturn, Math.abs(stats.totalReturn) >= 10 ? 0 : 1), vs(pct(benchmark.stats.totalReturn, Math.abs(benchmark.stats.totalReturn) >= 10 ? 0 : 1)));
   tile('Worst drawdown', pct(stats.maxDrawdown), vs(pct(benchmark.stats.maxDrawdown)));
   tile('Sharpe ratio', minus(stats.sharpe.toFixed(2)), vs(minus(benchmark.stats.sharpe.toFixed(2))));
-  tile('Time invested', pct(stats.exposure, 0), `${pct(stats.volatility)} volatility a year`);
+  // A block that can borrow may hold more than its equity, or short: its exposure is gross, with the net beside it.
+  if (bt.spec.margin) tile('Exposure', pct(stats.exposure, 0), `gross, net ${pct(stats.netExposure ?? NaN, 0)}`);
+  else tile('Time invested', pct(stats.exposure, 0), `${pct(stats.volatility)} volatility a year`);
   tile(
     'Trades',
     String(tradeStats.count),
@@ -292,6 +326,9 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], trigge
   const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, fillSentence(spec)];
   if (spec.magnify) facts.push(`A bar with a stop or target inside it is followed through its ${spec.magnify} bars, where it has them.`);
   if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}${run.commission ? `, of which ${money(run.commission)} commission` : ''}.`);
+  // Under half a dollar would read as "$0".
+  if (run.borrowFees && run.borrowFees >= 0.5) facts.push(`Borrow fees for shorts: ${money(run.borrowFees)}.`);
+  if (run.marginInterest && run.marginInterest >= 0.5) facts.push(`Interest on borrowed money: ${money(run.marginInterest)}.`);
   facts.push(bt.interest > 0 ? `${bt.cashRateNote}: ${money(bt.interest)} of interest.` : `${bt.cashRateNote}.`);
   h(root, 'div', 'bt-note', facts.join(' '));
   const traded = prices.filter((p) => spec.universe.some((a) => a.name === p.name));
@@ -451,11 +488,13 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': 'Strategy and benchmark value over time, with drawdowns below' });
   const x = (time: number) => left + ((time - t[0]) / (t[n - 1] - t[0])) * plotW;
 
-  // The benchmark has no value (NaN) before its first bar when its prices start later.
+  // The benchmark has no value (NaN) before its first bar when its prices start later. A ruined run's equity is 0 from
+  // the ruin on, which a log scale can't show: its line ends at the last close before.
+  const ruined = run.ruin ? run.t.indexOf(run.ruin.t) : n;
   let lo = Infinity;
   let hi = -Infinity;
   for (let i = 0; i < n; i++) {
-    for (const v of [run.equity[i], benchmark.equity[i]]) {
+    for (const v of [i < ruined ? run.equity[i] : NaN, benchmark.equity[i]]) {
       if (!Number.isFinite(v)) continue;
       lo = Math.min(lo, v);
       hi = Math.max(hi, v);
@@ -495,13 +534,13 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
 
   // About two points per pixel is all a line can show.
   const stride = Math.max(1, Math.floor(n / (plotW * 2)));
-  // A line starts at its first known value.
-  const path = (values: number[], y: (v: number) => number) => {
+  // A line starts at its first known value, and ends before `end`.
+  const path = (values: number[], y: (v: number) => number, end = n) => {
     let first = 0;
-    while (first < n && !Number.isFinite(values[first])) first++;
+    while (first < end && !Number.isFinite(values[first])) first++;
     let d = '';
-    for (let i = first; i < n; i += stride) d += `${d ? 'L' : 'M'}${x(t[i]).toFixed(1)},${y(values[i]).toFixed(1)}`;
-    if (first < n && (n - 1 - first) % stride !== 0) d += `L${x(t[n - 1]).toFixed(1)},${y(values[n - 1]).toFixed(1)}`;
+    for (let i = first; i < end; i += stride) d += `${d ? 'L' : 'M'}${x(t[i]).toFixed(1)},${y(values[i]).toFixed(1)}`;
+    if (first < end && (end - 1 - first) % stride !== 0) d += `L${x(t[end - 1]).toFixed(1)},${y(values[end - 1]).toFixed(1)}`;
     return d;
   };
   const ddPath = path(drawdown, yDd);
@@ -509,7 +548,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   s(svg, 'path', { d: path(benchmark.drawdown, yDd), class: 'bt-line bt-line-benchmark bt-line-thin' });
   s(svg, 'path', { d: ddPath, class: 'bt-line bt-line-strategy bt-line-thin' });
   s(svg, 'path', { d: path(benchmark.equity, yEq), class: 'bt-line bt-line-benchmark' });
-  s(svg, 'path', { d: path(run.equity, yEq), class: 'bt-line bt-line-strategy' });
+  s(svg, 'path', { d: path(run.equity, yEq, ruined), class: 'bt-line bt-line-strategy' });
 
   // Hover: one crosshair through both panels.
   const cross = s(svg, 'line', { y1: top, y2: ddTop + ddH, class: 'bt-cross', visibility: 'hidden' });
@@ -540,6 +579,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
     dotB.setAttribute('cy', String(yEq(benchmark.equity[i])));
     for (const el of [cross, dotB, dotS]) el.setAttribute('visibility', 'visible');
     if (!Number.isFinite(benchmark.equity[i])) dotB.setAttribute('visibility', 'hidden');
+    if (i >= ruined) dotS.setAttribute('visibility', 'hidden');
 
     tip.replaceChildren();
     h(tip, 'div', 'bt-tip-date', stamp(t[i], intraday));
@@ -552,7 +592,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
     };
     row('bt-swatch-strategy', 'Strategy', run.equity[i], drawdown[i]);
     row('bt-swatch-benchmark', benchmark.label, benchmark.equity[i], benchmark.drawdown[i]);
-    h(tip, 'div', 'bt-tip-foot', `${pct(run.exposure[i], 0)} invested`);
+    h(tip, 'div', 'bt-tip-foot', run.netExposure ? `Exposure ${pct(run.exposure[i], 0)} gross, net ${pct(run.netExposure[i], 0)}` : `${pct(run.exposure[i], 0)} invested`);
     tip.hidden = false;
     const flip = px > left + plotW / 2;
     tip.style.left = flip ? '' : `${px + 12}px`;

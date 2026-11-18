@@ -199,3 +199,31 @@ test('the key of a block starts with its note\'s prefix and its folders\', and n
   assert.ok(!key.startsWith(blockKeyPrefix('Trading/Id', true)));
   assert.ok(!blockStateKey('Trading/Ideas/ab.md', null, 0).startsWith(blockKeyPrefix('Trading/Ideas/a.md', false)));
 });
+
+test('a walk-forward whose picks are ruined stays at 0 from the ruin, with no gaps in its line', async () => {
+  // Six years rising gently, then at the start of the fifth an open 95% below the last close: bought at 200%, still above
+  // 100% after the rise, the long is ruined there.
+  const closes: number[] = [];
+  const opens: number[] = [];
+  let p = 100;
+  for (let i = 0; i < 6 * 260; i++) {
+    const o = i === 4 * 260 ? p * 0.05 : p;
+    p = o * 1.001;
+    opens.push(o);
+    closes.push(p);
+  }
+  const days = bars(closes, { opens, highs: closes.map((c, i) => Math.max(c, opens[i])), lows: closes.map((c, i) => Math.min(c, opens[i])), step: DAY * 7 / 5 });
+  const data = new Map([['A', days]]);
+  const w = (await walkForward('universe: A 200%\nmargin rate: 0%\nn = 10 in 10..20 step 10\nbuy when close > sma(n)', data, { trainYears: 2, testYears: 1 }))!;
+  assert.ok(w.equity.every(Number.isFinite), 'the stitched line has no gaps');
+  assert.equal(w.equity.at(-1), 0);
+  assert.ok(w.declared.equity.every(Number.isFinite) && w.hindsight.equity.every(Number.isFinite));
+  assert.ok(w.windows.every((x) => Number.isFinite(x.testReturn) && Number.isFinite(x.declaredReturn)));
+  assert.deepEqual([w.stats.totalReturn, w.stats.maxDrawdown], [-1, -1]);
+  // A training stretch with the ruin in it scores the ruin, below any gain, not the flat line after it.
+  const bySharpe = (await walkForward('universe: A 200%\nmargin rate: 0%\nn = 10 in 10..20 step 10\nbuy when close > sma(n)', data, { trainYears: 2, testYears: 1, metric: 'sharpe' }))!;
+  const ruinT = days.t[4 * 260];
+  const ruined = bySharpe.windows.filter((x) => x.trainFrom <= ruinT && ruinT <= x.trainTo);
+  assert.ok(ruined.length > 0);
+  for (const x of ruined) assert.ok(x.trainScore < 0, `${x.trainScore}`);
+});

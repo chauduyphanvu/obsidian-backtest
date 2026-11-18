@@ -37,6 +37,8 @@ export function periodReturns(t: number[], equity: number[], period: 'year' | 'm
     const end = period === 'year' ? Date.UTC(y + 1, 0, 1) : Date.UTC(y, m + 1, 1);
     let j = i;
     while (j + 1 < n && t[j + 1] < end) j++;
+    // A ruined run (backtest.ts) has nothing left to return on after its ruin.
+    if (i > 0 && equity[i - 1] <= 0) break;
     if (i > 0 || j > 0) {
       out.push({
         key: period === 'year' ? String(y) : `${y}-${String(m + 1).padStart(2, '0')}`,
@@ -57,17 +59,23 @@ export function periodReturns(t: number[], equity: number[], period: 'year' | 'm
  * beyond rounding noise.
  */
 export function sortino(t: number[], equity: number[], cashReturn?: number[]): number {
-  const steps = equity.length - 1;
+  // A ruined run's returns stop at its ruin.
+  let steps = equity.length - 1;
+  for (let i = 1; i < equity.length; i++) {
+    if (!(equity[i - 1] <= 0)) continue;
+    steps = i - 1;
+    break;
+  }
   let sum = 0;
   let downside = 0;
-  for (let i = 1; i < equity.length; i++) {
+  for (let i = 1; i <= steps; i++) {
     const r = equity[i] / equity[i - 1] - 1 - (cashReturn?.[i] ?? 0);
     sum += r;
     if (r < 0) downside += r * r;
   }
   const dev = Math.sqrt(downside / steps);
   if (dev < NOISE) return 0;
-  const perYear = steps / ((t[t.length - 1] - t[0]) / YEAR);
+  const perYear = steps / ((t[steps] - t[0]) / YEAR);
   return (sum / steps / dev) * Math.sqrt(perYear);
 }
 
@@ -88,6 +96,7 @@ export function rollingReturns(t: number[], equity: number[], windowDays: number
     const target = t[i] - windowDays * DAY;
     if (target < t[0]) continue;
     while (base + 1 < t.length && t[base + 1] <= target) base++;
+    if (equity[base] <= 0) continue;
     out.t.push(t[i]);
     out.ret.push(equity[i] / equity[base] - 1);
   }

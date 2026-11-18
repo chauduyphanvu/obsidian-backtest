@@ -6,7 +6,15 @@ import { barAt, type FillLog } from './engine.ts';
 import { DAY, isIntraday, median } from './format.ts';
 import type { Bars } from './types.ts';
 
+/** Which way a trade goes: a purchase or a cover buys, a sale or a short sale sells. */
 export type Side = 'buy' | 'sell';
+
+/**
+ * A trade on the short side, where the broker's file or the strategies' positions say so: a short sale (a sale), a cover
+ * (a purchase), or a flip, which goes through 0, closing one side and opening the other. Absent on a purchase or sale of
+ * a long position, and where the file does not say.
+ */
+export type ShortAction = 'short' | 'cover' | 'flip';
 
 /** One trade from the broker's file. */
 export interface Fill {
@@ -15,6 +23,7 @@ export interface Fill {
   /** As the strategies spell it when one of them trades it. */
   ticker: string;
   side: Side;
+  action?: ShortAction;
   /** Shares, above 0. */
   quantity: number;
   price: number;
@@ -63,13 +72,44 @@ interface Preset {
   /** Its words for a purchase and a sale in the action column; null when its quantities carry the sign. */
   buy: RegExp | null;
   sell: RegExp | null;
+  /** Its words for a short sale and for buying one back; null where its file does not say. */
+  short: RegExp | null;
+  cover: RegExp | null;
+  /** Headers, as `tidy` writes them, of a column whose codes O and C say a trade opened or closed a position. */
+  codes: readonly string[];
 }
 
 const PRESETS: readonly Preset[] = [
-  { name: 'Charles Schwab', signature: ['date', 'action', 'symbol', 'quantity', 'price', 'fees & comm'], buy: /^buy$/i, sell: /^sell$/i },
-  { name: 'Fidelity', signature: ['run date', 'action', 'symbol', 'quantity', 'price'], buy: /^you bought\b/i, sell: /^you sold\b/i },
-  { name: 'Interactive Brokers Flex query', signature: ['symbol', 'quantity', 'tradeprice'], buy: /^buy$/i, sell: /^sell$/i },
-  { name: 'Interactive Brokers activity statement', signature: ['datadiscriminator', 'symbol', 'date/time', 'quantity', 't price'], buy: null, sell: null },
+  {
+    name: 'Charles Schwab',
+    signature: ['date', 'action', 'symbol', 'quantity', 'price', 'fees & comm'],
+    buy: /^buy$/i,
+    sell: /^sell$/i,
+    short: /^sell short$/i,
+    cover: /^buy to cover$/i,
+    codes: [],
+  },
+  // Fidelity's words for a short sale and a cover are not documented: these read SHORT or COVER right after its usual
+  // words, never further on, where they can be part of a fund's name or of "PROSPECTUS UNDER SEPARATE COVER".
+  {
+    name: 'Fidelity',
+    signature: ['run date', 'action', 'symbol', 'quantity', 'price'],
+    buy: /^you bought\b/i,
+    sell: /^you sold\b/i,
+    short: /^you sold\s+short\b/i,
+    cover: /^you bought\s+(?:to\s+|short\s+)?cover\b/i,
+    codes: [],
+  },
+  { name: 'Interactive Brokers Flex query', signature: ['symbol', 'quantity', 'tradeprice'], buy: /^buy$/i, sell: /^sell$/i, short: null, cover: null, codes: ['open/closeindicator', 'notes/codes'] },
+  {
+    name: 'Interactive Brokers activity statement',
+    signature: ['datadiscriminator', 'symbol', 'date/time', 'quantity', 't price'],
+    buy: null,
+    sell: null,
+    short: null,
+    cover: null,
+    codes: ['code'],
+  },
 ];
 
 export type LeftOut = 'dividends' | 'reinvestments' | 'transfers' | 'other';
@@ -88,6 +128,10 @@ const LEFT_OUT: readonly { why: LeftOut; words: RegExp }[] = [
 // BOT and SLD are how Interactive Brokers writes them in its trade logs.
 const BUY_WORDS = /\b(?:buy|bought|purchased?|bot)\b/i;
 const SELL_WORDS = /\b(?:sell|sold|sale|sld)\b/i;
+// Short sales and covers as brokers write them, read before LEFT_OUT and only as the whole action: "short" and "cover"
+// are also in a short-term gain, a fund's name or a covered call, which stay left out.
+const SHORT_WORDS = /^(?:sell[\s_-]+short|sold[\s_-]+short|short[\s_-]+sale|short|ss|sshort)$/i;
+const COVER_WORDS = /^(?:buy[\s_-]+to[\s_-]+cover|bought[\s_-]+to[\s_-]+cover|cover|btc)$/i;
 
 /** A ticker as it is compared with the strategies': a broker writes BRK/B, BRK.B or BRK B for Yahoo's BRK-B. */
 const tickerKey = (s: string): string => s.trim().toUpperCase().replace(/[./\s]+/g, '-');
@@ -272,6 +316,7 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
     const level = names.findIndex((n) => n === 'datadiscriminator' || n === 'levelofdetail');
     const hasOrders = level >= 0 && table.rows.some((r) => /^order$/i.test(r.cells[level] ?? ''));
     const isTrade = (cell: string | undefined) => (hasOrders ? /^order$/i : /^(?:trade|execution)$/i).test(cell ?? '');
+    const codes = preset ? names.findIndex((n) => preset.codes.includes(n)) : -1;
     const wide = Math.max(3, Math.ceil(table.header.length / 2));
     const dayFirst = slashedDatesAreDayFirst(table.rows.map((r) => dateText(r.cells[at.date] ?? '')));
 
@@ -286,8 +331,13 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
       }
       const action = at.side >= 0 ? (cells[at.side] ?? '').trim() : '';
       let side: Side | null = null;
+      let short: ShortAction | undefined;
       if (action) {
-        if (preset?.buy?.test(action)) side = 'buy';
+        // A broker's own words are the only ones read in its file.
+        const own = preset?.buy ? preset : null;
+        if (own ? own.short?.test(action) : SHORT_WORDS.test(action)) [side, short] = ['sell', 'short'];
+        else if (own ? own.cover?.test(action) : COVER_WORDS.test(action)) [side, short] = ['buy', 'cover'];
+        else if (preset?.buy?.test(action)) side = 'buy';
         else if (preset?.sell?.test(action)) side = 'sell';
         else {
           const out = LEFT_OUT.find((l) => l.words.test(action));
@@ -332,7 +382,8 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
         continue;
       }
       const paid = fees.reduce((s, i) => s + (Math.abs(brokerNumber(cells[i])) || 0), 0);
-      fills.push({ date, ticker, side, quantity: Math.abs(signed), price, fees: paid, line });
+      short ??= codes >= 0 ? openClose(side, cells[codes]) : undefined;
+      fills.push({ date, ticker, side, ...(short ? { action: short } : {}), quantity: Math.abs(signed), price, fees: paid, line });
     }
   }
   return {
@@ -345,6 +396,21 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
     unread,
     ignored,
   };
+}
+
+/**
+ * What Interactive Brokers' open and close codes say of a trade: O opens a position and C closes one, so a sale that
+ * opens is a short sale and a purchase that closes is a cover, and both at once go through 0. A cell can hold other
+ * codes too, such as "O;P".
+ */
+function openClose(side: Side, cell: string | undefined): ShortAction | undefined {
+  const codes = new Set((cell ?? '').split(/[;,\s]+/));
+  const opens = codes.has('O');
+  const closes = codes.has('C');
+  if (opens && closes) return 'flip';
+  if (side === 'sell' && opens) return 'short';
+  if (side === 'buy' && closes) return 'cover';
+  return undefined;
 }
 
 const ROLE_FORMS = 'date, ticker, side, quantity, price and fees';
@@ -537,6 +603,8 @@ export type MatchClass = 'on time' | 'partial' | 'oversized' | 'late' | 'skipped
 export interface ModelTrade {
   day: number;
   side: Side;
+  /** From the account's position at the strategies' size, before and after the trade. */
+  action?: ShortAction;
   /** Shares and money at the account's size, with a capital at start; null without one. */
   quantity: number | null;
   value: number | null;
@@ -549,6 +617,8 @@ export interface ModelTrade {
 export interface YourTrade {
   day: number;
   side: Side;
+  /** As your file says; a flip where a day's fills on one side mix a sale and a short sale, or a cover and a purchase. */
+  action?: ShortAction;
   quantity: number;
   price: number;
   fees: number;
@@ -628,20 +698,37 @@ interface ModelSide {
   ticker: string;
   day: number;
   side: Side;
+  action?: ShortAction;
   parts: Part[];
   /** The parts' money, in the strategies' own prices: what is the same whatever a later split or dividend did. */
   value: number;
   strategies: number[];
 }
 
+/** Where a moment of the strategies' trades comes in a day: the open, then stops, then the close. */
+const MOMENT_ORDER = { open: 0, stop: 1, close: 2 } as const;
+
+/** What a trade on `side` that takes the account's position from `before` to `after` does on the short side. */
+function shortAction(side: Side, before: number, after: number): ShortAction | undefined {
+  const dust = 1e-9 * Math.max(Math.abs(before), Math.abs(after));
+  const was = before > dust ? 1 : before < -dust ? -1 : 0;
+  const is = after > dust ? 1 : after < -dust ? -1 : 0;
+  if (was * is < 0) return 'flip';
+  if (side === 'sell') return was <= 0 ? 'short' : undefined;
+  return was < 0 ? 'cover' : undefined;
+}
+
 /**
  * The strategies' trades from `from` on, sized to the account. A ticker's orders at one moment, such as the open of a
  * day, net into one, counted in shares as traded since each strategy's prices may be adjusted by another amount. A stop
  * is a moment of its own, and so is a strategy's close, so a position opened and stopped out the same day is a purchase
- * and a sale. A day's moments are then added up on each side apart.
+ * and a sale. A day's moments are then added up on each side apart. Whether a trade is a short sale, a cover or a flip
+ * is read from the account's position, the strategies' positions at its size added up, so one strategy's short that
+ * another's long outweighs is a plain sale.
  */
 function modelTrades(strategies: Followed[], opts: MatchOptions, asTraded: (k: number, ticker: string, day: number) => number): ModelSide[] {
-  const moments = new Map<string, { ticker: string; day: number; parts: (Part & { sign: number; traded: number })[] }>();
+  const moments = new Map<string, { ticker: string; day: number; parts: (Part & { sign: number; traded: number })[]; before?: number; after?: number }>();
+  const changes: { asset: string; t: number; at: number; amount: number; key: string | null }[] = [];
   strategies.forEach((s, k) => {
     const start = equityAt(s, opts.from);
     const scale = start > 0 ? (s.alloc * (opts.capital ?? 1)) / start : 0;
@@ -651,16 +738,31 @@ function modelTrades(strategies: Followed[], opts: MatchOptions, asTraded: (k: n
       const asset = log.asset[j];
       const change = log.sharesAfter[j] - (held.get(asset) ?? 0);
       held.set(asset, log.sharesAfter[j]);
+      if (change === 0 || scale === 0) continue;
       const day = Math.floor(log.t[j] / DAY) * DAY;
-      if (day < opts.from || change === 0 || scale === 0) continue;
-      const at = log.kind[j] === 'stop' ? 'stop' : s.closeFill ? 'close' : 'open';
+      // A margin call's or ruin's close is a moment of its own, like a stop's: it is not where the strategy's orders fill.
+      const at = log.kind[j] === 'stop' || log.kind[j] === 'margin' ? 'stop' : s.closeFill ? 'close' : 'open';
       const key = `${asset}\u0000${log.t[j]}\u0000${at}`;
+      changes.push({ asset, t: log.t[j], at: MOMENT_ORDER[at], amount: change * scale, key: day < opts.from ? null : key });
+      if (day < opts.from) continue;
       let m = moments.get(key);
       if (!m) moments.set(key, (m = { ticker: asset, day, parts: [] }));
       const shares = Math.abs(change * scale);
       m.parts.push({ strategy: k, shares, price: log.price[j], sign: Math.sign(change), traded: shares / asTraded(k, asset, day) });
     }
   });
+  // The account's position in each ticker through every change in time order, where a moment's changes come together.
+  changes.sort((a, b) => (a.asset < b.asset ? -1 : a.asset > b.asset ? 1 : a.t - b.t || a.at - b.at));
+  const position = new Map<string, number>();
+  for (const c of changes) {
+    const before = position.get(c.asset) ?? 0;
+    position.set(c.asset, before + c.amount);
+    const m = c.key === null ? undefined : moments.get(c.key);
+    if (m) {
+      m.before ??= before;
+      m.after = before + c.amount;
+    }
+  }
   const sides = new Map<string, ModelSide>();
   for (const m of moments.values()) {
     const bought = m.parts.reduce((s, p) => s + (p.sign > 0 ? p.traded : 0), 0);
@@ -671,8 +773,11 @@ function modelTrades(strategies: Followed[], opts: MatchOptions, asTraded: (k: n
     // What is left of the larger side, each of its strategies' orders cut in proportion.
     const kept = (Math.max(bought, sold) - Math.min(bought, sold)) / Math.max(bought, sold);
     const key = `${m.ticker}\u0000${m.day}\u0000${side}`;
+    const action = shortAction(side, m.before!, m.after!);
     let s = sides.get(key);
-    if (!s) sides.set(key, (s = { ticker: m.ticker, day: m.day, side, parts: [], value: 0, strategies: [] }));
+    if (!s) sides.set(key, (s = { ticker: m.ticker, day: m.day, side, ...(action ? { action } : {}), parts: [], value: 0, strategies: [] }));
+    // A day's moments on one side that do different things went through 0 between them.
+    else if (s.action !== action) s.action = 'flip';
     for (const p of m.parts) {
       if (!s.strategies.includes(p.strategy)) s.strategies.push(p.strategy);
       if ((p.sign > 0) !== (side === 'buy')) continue;
@@ -694,11 +799,13 @@ function yourTrades(fills: Fill[], from: number): { ticker: string; trade: YourT
   }
   return [...days.values()].map((day) => {
     const quantity = day.reduce((s, f) => s + f.quantity, 0);
+    const action = day.every((f) => f.action === day[0].action) ? day[0].action : 'flip';
     return {
       ticker: day[0].ticker,
       trade: {
         day: day[0].date,
         side: day[0].side,
+        ...(action ? { action } : {}),
         quantity,
         price: day.reduce((s, f) => s + f.quantity * f.price, 0) / quantity,
         fees: day.reduce((s, f) => s + f.fees, 0),
@@ -790,6 +897,7 @@ export function matchFills(strategies: Followed[], fills: Fill[], opts: MatchOpt
   const part = (m: ModelSide, amount: number, day: number): ModelTrade => ({
     day: m.day,
     side: m.side,
+    ...(m.action ? { action: m.action } : {}),
     quantity: sized ? amount : null,
     value: sized ? (amount / units(m, day)) * m.value : null,
     price: priceOn(m, day),

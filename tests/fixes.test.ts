@@ -339,6 +339,15 @@ test('an add rule\'s start misspelt is offered a fix as buy and sell are', () =>
   assert.equal(fixedBlock([HEAD, 'by when close > 3'])[1], 'buy when close > 3');
 });
 
+test('a short or cover rule\'s start misspelt is offered a fix as buy and sell are', () => {
+  assert.equal(fixedBlock([HEAD, 'shrt when close < sma(200)'])[1], 'short when close < sma(200)');
+  assert.equal(fixedBlock([HEAD, 'short wen close < sma(200)'])[1], 'short when close < sma(200)');
+  const short = [HEAD, 'short when close < sma(200)'];
+  assert.equal(fixedBlock([...short, 'covr when close > sma(200)'])[2], 'cover when close > sma(200)');
+  assert.equal(fixedBlock([...short, '  cvoer when close > sma(200)'])[2], '  cover when close > sma(200)');
+  assert.equal(firstFix([...short, 'cover wen close > 3'])!.fix.hint, 'Did you mean cover when?');
+});
+
 test('a parameter written for the number of entries, misspelt, is offered the parameter', () => {
   const lines = [HEAD, 'steps = 3 in 2..5', 'entries: stepz', RULE, 'add when close > last entry price * 1.01'];
   const found = firstFix(lines)!;

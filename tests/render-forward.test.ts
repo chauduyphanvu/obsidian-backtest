@@ -208,11 +208,12 @@ class El {
 const later = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /** A forward test over 70 bars of one ticker, started at bar 49, whose note is held in memory and written through `writeLog`. */
-function stage(over: { failRun?: boolean; refuse?: boolean } = {}) {
+function stage(over: { failRun?: boolean; refuse?: boolean; source?: string } = {}) {
   const closes = Array.from({ length: 70 }, (_, i) => 100 + 10 * Math.sin(i / 3) + i * 0.05);
   const data = new Map([['A', bars(closes)]]);
   const defaults = { capital: 10_000, costBps: 0, slippageBps: 0, cashRate: '0%', dataSource: 'yahoo' as const };
-  const made = makeForward({ source: 'name: Swing\nuniverse: A\nbuy when close > sma(4)\nsell when close < sma(4)', defaults, started: data.get('A')!.t[49], intraday: false, link: '[[Swing note#Swing]]', name: 'Swing' });
+  const source = over.source ?? 'name: Swing\nuniverse: A\nbuy when close > sma(4)\nsell when close < sma(4)';
+  const made = makeForward({ source, defaults, started: data.get('A')!.t[49], intraday: false, link: '[[Swing note#Swing]]', name: 'Swing' });
   assert.ok(made.ok);
   const file = { text: made.note };
   const calls = { run: 0, append: [] as { rows: LogRow[]; through: number }[], opened: [] as string[] };
@@ -270,6 +271,16 @@ test('a forward block runs its rules, shows its figures, and its button logs the
   assert.ok(root.has('The log is up to date through 2020-03-10.'));
   assert.equal(root.find('button', 'Add 2 new bars to the log'), undefined);
   assert.equal(x.calls.run, 1, 'the rules are not run again to draw the log');
+});
+
+test('a forward test of a block that can borrow shows its exposure, gross and net, as the result does', async () => {
+  const x = stage({ source: 'name: Swing\nuniverse: A\nbuy when close > sma(4)\nshort when close < sma(4)' });
+  const { root } = draw(x.source, x.host);
+  await later();
+  const tile = root.all().find((e) => e.className === 'bt-tile' && e.textContent.startsWith('Exposure'));
+  // Always long or short after the start: about 100% gross, and a net between −100% and 100%.
+  assert.match(tile?.textContent ?? '', /^Exposure\d+%gross, net −?\d+%$/);
+  assert.ok(!root.has('Time invested'));
 });
 
 test('a refused write is said, and the button can be pressed again', async () => {

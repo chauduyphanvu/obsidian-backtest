@@ -61,10 +61,12 @@ export function blockFor(bt: Backtest): number {
  * `blockBars` consecutive steps that start anywhere and wrap from the end to the start; each path
  * strings random blocks together until it is as long as the run. Blocks keep the short-term
  * streaks inside each month; anything slower than a block (a regime lasting years) is broken up.
- * The paths share the run's dates, so return per year is measured over the same span.
+ * The paths share the run's dates, so return per year is measured over the same span. A run ruined
+ * (its equity at 0) has no returns after that, so it ends there, its last step a fall of 100%.
  */
 export function bootstrap(t: number[], equity: number[], opts: { runs?: number; blockBars?: number; seed: number }): BootstrapResult {
-  const n = equity.length - 1;
+  const ruined = equity.findIndex((v) => v <= 0);
+  const n = ruined > 0 ? ruined : equity.length - 1;
   if (n < 2) throw new Error('The run is too short to reshuffle.');
   const runs = opts.runs ?? 1000;
   const block = Math.min(n, Math.max(1, Math.round(opts.blockBars ?? monthOfBars(t))));
@@ -99,7 +101,7 @@ export function bootstrap(t: number[], equity: number[], opts: { runs?: number; 
     cagr: spread(cagr),
     maxDrawdown: spread(worst),
     lossShare: losses / runs,
-    actual: { cagr: (equity[n] / equity[0]) ** (1 / years) - 1, maxDrawdown: maxDrawdown(equity) },
+    actual: { cagr: (equity[n] / equity[0]) ** (1 / years) - 1, maxDrawdown: maxDrawdown(ruined > 0 ? equity.slice(0, n + 1) : equity) },
   };
 }
 
@@ -111,6 +113,8 @@ export interface Holding {
   exit: number;
   /** With `entries`: how many bars after `entry` each later entry is made. */
   adds?: number[];
+  /** A short position. */
+  short?: true;
 }
 
 /** Return per year over the worst drawdown's size. */
@@ -142,9 +146,10 @@ function sampleDistinct(n: number, k: number, rng: Rng): number[] {
  * A 0-bar holding (stopped out on its entry bar) becomes 1 bar: an exit by signal fills a bar later.
  * That can overfill a ticker that was in the market almost without a break; the longest holdings
  * then give back a bar each until they fit, and drop the entries that no longer fall inside them.
- * `adds[k]` is how many bars after holding k's first entry each of its later entries is made; they move with the holding.
+ * `adds[k]` is how many bars after holding k's first entry each of its later entries is made; they move with the holding,
+ * as does `shorts[k]`, whether holding k is a short.
  */
-export function placeHoldings(lengths: number[], first: number, last: number, rng: Rng, adds?: number[][]): Holding[] {
+export function placeHoldings(lengths: number[], first: number, last: number, rng: Rng, adds?: number[][], shorts?: boolean[]): Holding[] {
   // Shuffling the indices draws the same permutation as shuffling the lengths, and keeps each holding's entries with it.
   const picks = shuffle(lengths.map((_, k) => k), rng);
   const order = picks.map((k) => Math.max(1, lengths[k]));
@@ -161,26 +166,34 @@ export function placeHoldings(lengths: number[], first: number, last: number, rn
     const entry = first + slot - j + used;
     used += order[j] + 1;
     const later = adds?.[picks[j]]?.filter((d) => d < order[j]);
-    return later?.length ? { entry, exit: entry + order[j], adds: later } : { entry, exit: entry + order[j] };
+    const side = shorts?.[picks[j]] ? { short: true as const } : {};
+    return later?.length ? { entry, exit: entry + order[j], adds: later, ...side } : { entry, exit: entry + order[j], ...side };
   });
 }
 
-/** Buy at the close before each entry, add at the close before each later entry and sell at the close before each exit, so they fill at the opens that follow, or at those closes with `fill: close`. */
+/**
+ * Buy (or short) at the close before each entry, add at the close before each later entry and sell (or cover) at the close
+ * before each exit, so they fill at the opens that follow, or at those closes with `fill: close`.
+ */
 function holdingSignals(bars: Bars, holdings: Holding[]): Signals {
   const buy = new Array<number>(bars.t.length).fill(0);
   const sell = new Array<number>(bars.t.length).fill(0);
   const add = new Array<number>(bars.t.length).fill(0);
+  const short = new Array<number>(bars.t.length).fill(0);
+  const cover = new Array<number>(bars.t.length).fill(0);
   for (const h of holdings) {
-    buy[h.entry - 1] = 1;
-    sell[h.exit - 1] = 1;
+    (h.short ? short : buy)[h.entry - 1] = 1;
+    (h.short ? cover : sell)[h.exit - 1] = 1;
     for (const d of h.adds ?? []) add[h.entry + d - 1] = 1;
   }
-  return { buy, sell: (i) => sell[i], score: null, add: (i) => add[i] };
+  const signals: Signals = { buy, sell: (i) => sell[i], score: null, add: (i) => add[i] };
+  return holdings.some((h) => h.short) ? { ...signals, short, cover: (i) => cover[i] } : signals;
 }
 
 /**
- * Random timing: each ticker keeps its number of trades and their holding lengths, placed at random. With `entries`, a
- * position keeps its number of entries and the bars between them: its later entries move with it.
+ * Random timing: each ticker keeps its number of trades, their sides and their holding lengths, placed at random. With
+ * `entries`, a position keeps its number of entries and the bars between them: its later entries move with it. A block
+ * that borrows keeps its leverage, borrow fee, margin rate and margin calls.
  */
 export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Holding[]>; run: RunResult } {
   const holdings = new Map<string, Holding[]>();
@@ -190,11 +203,28 @@ export function randomTiming(bt: Backtest, rng: Rng): { holdings: Map<string, Ho
     const mine = bt.run.trades.filter((t) => t.asset === a.name);
     const at = (t: number) => firstAtOrAfter(bars.t, t);
     const adds = mine.some((t) => t.entries) ? mine.map((t) => (t.entries ?? []).slice(1).map((e) => at(e.t) - at(t.entryT))) : undefined;
-    holdings.set(a.name, placeHoldings(mine.map((t) => t.bars), first + 1, last, rng, adds));
+    const shorts = mine.some((t) => t.side === 'short') ? mine.map((t) => t.side === 'short') : undefined;
+    holdings.set(a.name, placeHoldings(mine.map((t) => t.bars), first + 1, last, rng, adds, shorts));
   }
   const s = bt.spec;
   // The strategy's own setup with its stops off and no ranking: the placed holdings decide everything.
-  const params: SimParams = { assets: s.universe, from: s.from, to: s.to, capital: s.capital, costBps: s.costBps, slippageBps: s.slippageBps, rebalance: s.rebalance, stops: {}, cash: s.cash, sizing: s.sizing, rank: null, fill: s.fill, commission: s.commission, entries: s.entries };
+  const params: SimParams = {
+    assets: s.universe,
+    from: s.from,
+    to: s.to,
+    capital: s.capital,
+    costBps: s.costBps,
+    slippageBps: s.slippageBps,
+    rebalance: s.rebalance,
+    stops: {},
+    cash: s.cash,
+    sizing: s.sizing,
+    rank: null,
+    fill: s.fill,
+    commission: s.commission,
+    entries: s.entries,
+    ...(s.margin ? { margin: s.margin } : {}),
+  };
   const signals = new Map(s.universe.map((a) => [a.name, holdingSignals(bt.data.get(a.name)!, holdings.get(a.name)!)]));
   return { holdings, run: simulate(params, bt.data, signals) };
 }
@@ -269,7 +299,7 @@ export interface RandomEntriesResult {
   random: { cagr: number[]; maxDrawdown: number[]; ratio: number[]; trades: number[] };
   /** Random variants that did at least as well as the strategy: ties count against it. */
   atLeast: { cagr: number; ratio: number };
-  /** Share of the run the strategy spends in its tickers, averaged over them. Near 1, random timing is close to buy and hold. */
+  /** Share of the run the strategy spends in its tickers, long or short, averaged over them. Near 1, random timing is close to holding throughout. */
   invested: number;
   /** picks: the chance per bar that a ticker's random score is drawn again; null for timing. */
   redraw: number | null;
@@ -328,7 +358,7 @@ export async function randomEntries(
       break;
     }
     const run = rules ? randomPicks(bt, rng, result.redraw!, rules) : randomTiming(bt, rng).run;
-    const s = computeStats(run.t, run.equity, bt.spec.capital, run.exposure, run.cashReturn);
+    const s = computeStats(run.t, run.equity, bt.spec.capital, run.exposure, run.cashReturn, run.ruin ? run.t.indexOf(run.ruin.t) : undefined);
     const ratio = returnOverDrawdown(s);
     result.random.cagr.push(s.cagr);
     result.random.maxDrawdown.push(s.maxDrawdown);
@@ -412,7 +442,9 @@ export function walkWindows(t: number[], trainMonths: number, testMonths: number
 function windowScore(run: RunResult, [a, b]: [number, number], metric: Metric): number {
   const base = Math.max(0, a - 1);
   const slice = (xs: number[]) => xs.slice(base, b + 1);
-  const v = computeStats(slice(run.t), slice(run.equity), run.equity[base], run.exposure.slice(a, b + 1), slice(run.cashReturn))[metric];
+  // A ruin inside the window ends its returns there, as for the whole run; one before it leaves nothing to score.
+  const ruin = run.ruin ? run.t.indexOf(run.ruin.t) - base : -1;
+  const v = computeStats(slice(run.t), slice(run.equity), run.equity[base], run.exposure.slice(a, b + 1), slice(run.cashReturn), ruin >= 0 && ruin <= b - base ? ruin : undefined)[metric];
   return Number.isFinite(v) ? v : NaN;
 }
 
@@ -547,20 +579,24 @@ export async function walkForward(
   const tt = t.slice(start, end + 1);
   const cash = declared.backtest.run.cashReturn.slice(start, end + 1);
   const capital = spec.capital;
+  // A variant that was ruined has stopped trading: from then on it has nothing that could grow, so it is followed as
+  // unchanged, and a line that followed it into its ruin stays at 0.
+  const ratio = (r: RunResult, from: number, to: number) => (r.equity[from] > 0 ? r.equity[to] / r.equity[from] : 1);
   const stitch = (runFor: (k: number) => RunResult): WalkLine => {
     const equity = [capital];
     const exposure = [runFor(0).exposure[start]];
     windows.forEach((w, k) => {
       const r = runFor(k);
       for (let i = w.test[0]; i <= w.test[1]; i++) {
-        equity.push((equity[equity.length - 1] * r.equity[i]) / r.equity[i - 1]);
+        equity.push(equity[equity.length - 1] * ratio(r, i - 1, i));
         exposure.push(r.exposure[i]);
       }
     });
-    return { equity, stats: computeStats(tt, equity, capital, exposure, cash) };
+    const ruin = equity.findIndex((x) => x <= 0);
+    return { equity, stats: computeStats(tt, equity, capital, exposure, cash, ruin < 0 ? undefined : ruin) };
   };
   const walked = stitch((k) => runs.get(key(pickIndex(k)))!);
-  const growth = (r: RunResult, w: (typeof windows)[number]) => r.equity[w.test[1]] / r.equity[w.test[0] - 1] - 1;
+  const growth = (r: RunResult, w: (typeof windows)[number]) => ratio(r, w.test[0] - 1, w.test[1]) - 1;
 
   return {
     metric,

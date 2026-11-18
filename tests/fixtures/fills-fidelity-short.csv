@@ -1,0 +1,14 @@
+
+
+
+Run Date,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Accrued Interest ($),Amount ($),Settlement Date
+06/10/2026,YOU BOUGHT TO COVER SPDR S&P 500 ETF TRUST (SPY) (Margin), SPY,SPDR S&P 500 ETF TRUST,Margin,10,91,,,,-910,06/11/2026
+06/03/2026,YOU SOLD PROSHARES SHORT S&P500 (SH) (Cash), SH,PROSHARES SHORT S&P500,Cash,-30,40.2,,0.01,,1205.99,06/04/2026
+06/02/2026,YOU SOLD SHORT SPDR S&P 500 ETF TRUST (SPY) (Margin), SPY,SPDR S&P 500 ETF TRUST,Margin,-10,99.5,,0.02,,994.98,06/03/2026
+06/01/2026,YOU BOUGHT INVESCO QQQ TR UNIT SER 1 (QQQ) (Margin) PROSPECTUS UNDER SEPARATE COVER, QQQ,INVESCO QQQ TR UNIT SER 1,Margin,5,441.2,,,,-2206,06/02/2026
+06/01/2026,SHORT VS MARGIN MARK TO MARKET (Margin), ,No Description,Margin,0.000,,,,,0,
+
+
+
+"The data and information in this spreadsheet is provided to you solely for your use and is not for distribution."
+"Date downloaded 06/12/2026 9:12 pm"

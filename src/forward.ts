@@ -4,7 +4,7 @@
 import { maxDrawdown } from './backtest.ts';
 import { closesFence, extractBlocks, fenceOf, type Block } from './blocks.ts';
 import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic } from './dsl.ts';
-import { barAt, firstAtOrAfter, type RunResult } from './engine.ts';
+import { barAt, firstAtOrAfter, isFlip, type RunResult } from './engine.ts';
 import { isoDate, localDate, median, plural, price, stamp, tidy } from './format.ts';
 import { hash } from './result-cache.ts';
 import { NOTE_CHANGED } from './rewrite.ts';
@@ -66,6 +66,12 @@ function commissionText(c: Commission | undefined): string {
 /** A number in plain digits that reads back as the very same number: the language reads no exponent. */
 const plain = (x: number): string => x.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 });
 
+/** A yearly rate as `borrow fee:` and `margin rate:` read it back, "0.5%": as typed when that is the same rate, else in full. */
+function yearly(rate: number): string {
+  const typed = plain(tidy(rate * 100));
+  return `${Number(typed) / 100 === rate ? typed : plain(rate * 100)}%`;
+}
+
 /** The name rule the parser reads a setting line with (dsl.ts keeps it to itself). */
 const SETTING_NAME = /^([A-Za-z]+(?: +[A-Za-z]+)*)\s*:/;
 
@@ -104,8 +110,9 @@ export interface ForwardStart {
 
 /**
  * The strategy's text with the plugin defaults it leaves open written down as settings, so a later change to the
- * settings can't move a running test. A setting the block already writes is left as it is, since a second one is an error.
- * The lines go at the end, because a parameter's line number is part of the spec and must not move.
+ * settings can't move a running test; for a block that can borrow, its borrow fee and margin rate too. A setting the
+ * block already writes is left as it is, since a second one is an error. The lines go at the end, because a parameter's
+ * line number is part of the spec and must not move.
  */
 export function pinDefaults(source: string, defaults: Defaults): string {
   const pins: [string, string][] = [
@@ -116,6 +123,11 @@ export function pinDefaults(source: string, defaults: Defaults): string {
     ['cash rate', defaults.cashRate.trim()],
     ['data', defaults.dataSource],
   ];
+  const spec = parseSpec(source, { defaults }).spec;
+  if (spec?.margin) {
+    if (Object.values(spec.rules).some((r) => r.short)) pins.push(['borrow fee', yearly(spec.margin.borrowFee)]);
+    pins.push(['margin rate', yearly(spec.margin.rate)]);
+  }
   const { given, scoped } = scan(source, pins.map(([key]) => key));
   const open = pins.filter(([key]) => !given.has(key));
   const body = source.replace(/\r/g, '').trimEnd();
@@ -353,9 +365,9 @@ export function forwardFigures(t: number[], equity: number[], benchmark: number[
 // ---------------------------------------------------------------------------------------------------------------------
 // The log
 
-/** An order a bar gave, and the close it rested on. */
+/** An order a bar gave, and the close it rested on. A flip is two: a sell and a short sale, or a cover and a buy. */
 export interface LogOrder {
-  action: 'buy' | 'sell' | 'add';
+  action: 'buy' | 'sell' | 'add' | 'short' | 'cover';
   ticker: string;
   close: number;
 }
@@ -370,8 +382,8 @@ export interface LogRow {
 /**
  * The bars of a run where the rules gave an order, earliest first: each bar's orders, the close each rested on and what the
  * strategy was worth there. A buy or an add is dated at the bar its rule or ranking was read at, a sell at the bar its sell rule
- * or ranking was read at, and an order still waiting at the last bar at that bar. Stops, targets and rebalancing are left
- * out: the rules did not give them, and the run makes them by itself.
+ * or ranking was read at, and an order still waiting at the last bar at that bar. Stops, targets, margin calls and
+ * rebalancing are left out: the rules did not give them, and the run makes them by itself.
  */
 export function logRows(bt: { run: Pick<RunResult, 't' | 'equity' | 'trades' | 'states'>; data: Map<string, Bars> }): LogRow[] {
   const { run, data } = bt;
@@ -384,13 +396,20 @@ export function logRows(bt: { run: Pick<RunResult, 't' | 'equity' | 'trades' | '
   for (const trade of run.trades) {
     const why = trade.why;
     if (!why) continue;
-    give(why.rank ? why.rank.decision.t : why.buyT, 'buy', trade.asset);
+    const short = trade.side === 'short';
+    give(why.rank ? why.rank.decision.t : why.buyT, short ? 'short' : 'buy', trade.asset);
     for (const add of why.adds ?? []) give(add.signalT, 'add', trade.asset);
-    if (why.exit?.k === 'rule') give(why.exit.t, 'sell', trade.asset);
+    if (why.exit?.k === 'rule') give(why.exit.t, short ? 'cover' : 'sell', trade.asset);
     else if (why.exit?.k === 'rank') give(why.exit.rank.decision.t, 'sell', trade.asset);
   }
   const last = run.t[run.t.length - 1];
-  for (const st of run.states) if (st.pending) give(last, st.pending, st.name);
+  for (const st of run.states) {
+    // A margin call's close is forced, as a stop's is, so it is left out too.
+    if (!st.pending || st.marginCall) continue;
+    // A flip waiting: the position held closes and the other side opens at the same fill.
+    if (isFlip(st)) give(last, st.side === 'long' ? 'sell' : 'cover', st.name);
+    give(last, st.pending, st.name);
+  }
   return [...byBar]
     .sort(([a], [b]) => a - b)
     .map(([t, orders]) => ({ t, orders, value: run.equity[barAt(run.t, t)] }));
@@ -402,13 +421,13 @@ export interface LoggedBar {
   orders: string[];
 }
 
-const WORD: Record<LogOrder['action'], string> = { buy: 'Buy', sell: 'Sell', add: 'Add' };
+const WORD: Record<LogOrder['action'], string> = { buy: 'Buy', sell: 'Sell', add: 'Add', short: 'Sell short', cover: 'Buy to cover' };
 const HEAD = ['Bar', 'Orders', 'Closes', 'Value', 'Logged'];
 const CHECKED = 'Checked through:';
 
-/** Sells first, so the cash is there for the buys; then by ticker. */
-const inOrder = (orders: LogOrder[]): LogOrder[] =>
-  [...orders].sort((a, b) => Number(a.action !== 'sell') - Number(b.action !== 'sell') || a.ticker.localeCompare(b.ticker, 'en'));
+/** Sells, then covers, so the cash is there for the buys and adds, then short sales; then by ticker. */
+const RANK: Record<LogOrder['action'], number> = { sell: 0, cover: 1, buy: 2, add: 2, short: 3 };
+const inOrder = (orders: LogOrder[]): LogOrder[] => [...orders].sort((a, b) => RANK[a.action] - RANK[b.action] || a.ticker.localeCompare(b.ticker, 'en'));
 
 const orderWords = (orders: LogOrder[]): string[] => inOrder(orders).map((o) => `${WORD[o.action]} ${o.ticker}`);
 

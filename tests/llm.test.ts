@@ -52,9 +52,21 @@ test('every example in the prompt parses without errors and appears in the promp
   }
 });
 
-test('the examples between them use rebalancing, a for section, a stop, a ranking, parameters with ranges and test from', () => {
+test('the examples between them use rebalancing, a for section, a stop, a ranking, parameters with ranges, test from, a short and leverage', () => {
   const all = PROMPT_EXAMPLES.join('\n');
-  for (const part of [/^rebalance: /m, /^for \w+:/m, /^stop loss: /m, /^hold: top \d/m, / in \d+\.\.\d+ step /, /^test from: /m, /bars held/]) assert.match(all, part);
+  for (const part of [/^rebalance: /m, /^for \w+:/m, /^stop loss: /m, /^hold: top \d/m, / in \d+\.\.\d+ step /, /^test from: /m, /bars held/, /^short when /m, /^cover when /m, / 200%$/m]) {
+    assert.match(all, part);
+  }
+});
+
+test('the example that shorts with leverage says in a note what it left out and what it chose', () => {
+  const short = PROMPT_EXAMPLES.find((e) => /^short when /m.test(e))!;
+  const { spec } = parseSpec(short);
+  assert.ok(spec!.margin, 'the example can borrow');
+  assert.equal(spec!.margin!.cap, 2);
+  assert.ok(spec!.rules.SPY.short && spec!.rules.SPY.cover);
+  assert.match(SYSTEM_PROMPT, /NOTE: Options are not supported, so there is no put hedge/);
+  assert.match(SYSTEM_PROMPT, /NOTE: The description does not say when to cover/);
 });
 
 test('the prompt names every setting, function, series, calendar value and position value of the language', () => {
@@ -71,9 +83,26 @@ test('the prompt says where a rule fills, with both settings of fill', () => {
 });
 
 test('the prompt states the limits and the rules about what not to write', () => {
-  for (const part of [/no shorting/, /no leverage/, /no options/, /NOTE:/, /Never invent syntax/, /one "buy when" or one "sell when"/, /YYYY-MM-DD/, /Do not invent settings, functions/, /before the first "for" line/]) {
+  for (const part of [
+    /short when <condition> +opens a short position/,
+    /cover when <condition> +closes a short position/,
+    /Weights may add up to at most 200%/,
+    /borrow fee: 0\.5% unless set/,
+    /margin rate: 6% unless set/,
+    /no options, no futures and no crypto margin products/,
+    /write the closest strategy the language can express/,
+    /Do not short or borrow unless the description asks for it/,
+    /Do not use options, futures or crypto margin products/,
+    /NOTE:/,
+    /Never invent syntax/,
+    /one "buy when" or one "sell when"/,
+    /YYYY-MM-DD/,
+    /Do not invent settings, functions/,
+    /before the first "for" line/,
+  ]) {
     assert.match(SYSTEM_PROMPT, part);
   }
+  assert.doesNotMatch(SYSTEM_PROMPT, /no shorting|no leverage|long or flat|long-or-flat|at most 100%/i);
 });
 
 test('userMessage carries the description, and repairMessage the errors, the lines they point at and the draft', () => {
@@ -123,7 +152,7 @@ test('parseReply copes with a fence that is never closed, and with thinking prin
 
 test('parseReply returns null when there is no strategy', () => {
   assert.equal(parseReply(''), null);
-  assert.equal(parseReply("I can't short stocks, sorry."), null);
+  assert.equal(parseReply("I can't trade options, sorry."), null);
   assert.equal(parseReply(`${FENCE}strategy\n\n${FENCE}\nNOTE: nothing`), null);
   assert.equal(parseReply('NOTE: only a note'), null);
 });
@@ -271,7 +300,7 @@ test('a failed connection, an unreadable reply, a refusal, an empty reply and a 
   await assert.rejects(draftStrategy('x', ANTHROPIC, fake([{ status: 200, text: JSON.stringify({ stop_reason: 'refusal', content: [] }) }]).post), /declined/);
   await assert.rejects(draftStrategy('x', OPENAI, fake([openaiBody('')]).post), /did not contain a strategy\.$/);
   await assert.rejects(draftStrategy('x', OPENAI, fake([{ status: 200, text: '{"choices":[]}' }]).post), /did not contain a strategy/);
-  await assert.rejects(draftStrategy('x', ANTHROPIC, fake([anthropicBody("I can't short stocks, but a long-only version is possible.")]).post), /did not contain a strategy\. It said: "I can't short stocks/);
+  await assert.rejects(draftStrategy('x', ANTHROPIC, fake([anthropicBody("I can't trade options, but a strategy on the stock is possible.")]).post), /did not contain a strategy\. It said: "I can't trade options/);
 });
 
 test('a missing key or address stops before any request', async () => {
@@ -351,4 +380,13 @@ test('only the first 20,000 characters of a reply are read', () => {
 
 test('the prompt says how many rules of each side a scope may have, the add rule included', () => {
   assert.match(SYSTEM_PROMPT, /At most one buy rule, one sell rule and one add rule per scope, and an add rule only with an entries line\./);
+  assert.match(SYSTEM_PROMPT, /At most one short rule and one cover rule per scope too\./);
+});
+
+test('the prompt says how a flip works and that a conflict opens neither side', () => {
+  assert.match(SYSTEM_PROMPT, /A ticker held long is also closed when its short rule holds, and one held short when its buy rule holds/);
+  assert.match(SYSTEM_PROMPT, /When the buy and short rules both hold for a ticker not held, neither opens\./);
+  const flip = 'universe: SPY\nbuy when close > sma(200)\nshort when close < sma(200)';
+  assert.ok(SYSTEM_PROMPT.includes('buy when close > sma(200) with short when close < sma(200)'));
+  assert.deepEqual(parseSpec(flip).errors, []);
 });

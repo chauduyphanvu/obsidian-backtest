@@ -2,7 +2,7 @@ import { INSIDE_BARS } from './data.ts';
 import { YAHOO_INSIDE_DAYS, type Spec } from './dsl.ts';
 import { firstAtOrAfter, SMALL_TRADE, simulate, type RunResult, type SimParams, type Signals, type Skipped, type Trade } from './engine.ts';
 import { clocksApart, columnFiles, columnNotes, ofReads, specEvaluator } from './evaluate.ts';
-import { DAY, isIntraday, stamp, YEAR } from './format.ts';
+import { DAY, isIntraday, money, stamp, YEAR } from './format.ts';
 import { alignByEnd } from './indicators.ts';
 import { priceMemo } from './price-memo.ts';
 import { stable } from './result-cache.ts';
@@ -19,6 +19,8 @@ export interface Stats {
   sortino: number;
   /** Average fraction of equity invested. */
   exposure: number;
+  /** For a run that can borrow, the average of long value less short value over equity, over the bars `exposure` covers. */
+  netExposure?: number;
 }
 
 export interface TradeStats {
@@ -77,14 +79,19 @@ export function maxDrawdown(equity: number[]): number {
   return worst;
 }
 
-/** `cashReturn[i]` is what cash earned from bar i - 1 to bar i; Sharpe and Sortino measure returns above it. */
-export function computeStats(t: number[], equity: number[], capital: number, exposure: number[], cashReturn?: number[]): Stats {
+/**
+ * `cashReturn[i]` is what cash earned from bar i - 1 to bar i; Sharpe and Sortino measure returns above it. A run ruined at
+ * bar `ruin` (RunResult.ruin) has nothing left to return on after it, so its returns stop there: its equity of 0 after
+ * the ruin still makes the total return and CAGR -100% and the worst drawdown -100%.
+ */
+export function computeStats(t: number[], equity: number[], capital: number, exposure: number[], cashReturn?: number[], ruin?: number, netExposure?: number[]): Stats {
   if (equity.length < 2) return { totalReturn: NaN, cagr: NaN, maxDrawdown: NaN, volatility: NaN, sharpe: NaN, sortino: NaN, exposure: NaN };
   const years = (t[t.length - 1] - t[0]) / YEAR;
   const total = equity[equity.length - 1] / capital - 1;
   const rets: number[] = [];
   const excess: number[] = [];
-  for (let i = 1; i < equity.length; i++) {
+  const steps = ruin === undefined ? equity.length : Math.max(1, Math.min(equity.length, ruin + 1));
+  for (let i = 1; i < steps; i++) {
     const r = equity[i] / equity[i - 1] - 1;
     rets.push(r);
     excess.push(r - (cashReturn?.[i] ?? 0));
@@ -95,7 +102,8 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
   const meanExcess = avg(excess);
   const sdExcess = Math.sqrt(avg(excess.map((r) => (r - meanExcess) ** 2)));
   const downside = Math.sqrt(avg(excess.map((r) => Math.min(0, r) ** 2)));
-  const perYear = rets.length / years;
+  // Steps a year over the time the returns cover, which a ruin cuts short.
+  const perYear = rets.length / (rets.length === equity.length - 1 ? years : (t[rets.length] - t[0]) / YEAR);
   return {
     totalReturn: total,
     cagr: (1 + total) ** (1 / years) - 1,
@@ -103,8 +111,15 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
     volatility: sd * Math.sqrt(perYear),
     sharpe: sdExcess >= NOISE ? (meanExcess / sdExcess) * Math.sqrt(perYear) : 0,
     sortino: downside >= NOISE ? (meanExcess / downside) * Math.sqrt(perYear) : 0,
-    exposure: exposure.reduce((s, x) => s + x, 0) / exposure.length,
+    exposure: averageExposure(exposure, ruin === undefined ? 0 : equity.length - steps + 1),
+    ...(netExposure ? { netExposure: averageExposure(netExposure, ruin === undefined ? 0 : equity.length - steps + 1) } : {}),
   };
+}
+
+/** The average exposure, leaving out the last `after` bars: those from a ruin on, where nothing is held any more. */
+function averageExposure(exposure: number[], after: number): number {
+  const kept = exposure.length - after > 0 ? exposure.slice(0, exposure.length - after) : exposure;
+  return kept.reduce((s, x) => s + x, 0) / kept.length;
 }
 
 export function computeTradeStats(trades: Trade[]): TradeStats {
@@ -124,7 +139,10 @@ export function computeTradeStats(trades: Trade[]): TradeStats {
 function measure(run: RunResult, eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats {
   while (base < e && Number.isNaN(eq[base])) base++;
   const cut = (xs: number[]) => xs.slice(base, e);
-  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
+  // Only the strategy's own equity can be ruined; the benchmark never borrows.
+  const ruin = eq === run.equity && run.ruin ? run.t.indexOf(run.ruin.t) - base : undefined;
+  const net = ex === run.exposure ? run.netExposure?.slice(Math.max(s, base), e) : undefined;
+  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn), ruin, net);
 }
 
 /**
@@ -322,12 +340,15 @@ export function specSignals(spec: Spec, data: Map<string, Bars>): Map<string, Si
   const signals = new Map<string, Signals>();
   for (const a of spec.universe) {
     const r = spec.rules[a.name];
-    signals.set(a.name, {
+    const sig: Signals = {
       buy: evaluator.eval(r.buy, a.name),
       sell: r.sell ? evaluator.compile(r.sell, a.name) : null,
       score: spec.rank ? evaluator.eval(spec.rank.by, a.name) : null,
       add: r.add ? evaluator.compile(r.add, a.name) : null,
-    });
+    };
+    if (r.short) sig.short = evaluator.eval(r.short, a.name);
+    if (r.cover) sig.cover = evaluator.compile(r.cover, a.name);
+    signals.set(a.name, sig);
   }
   return signals;
 }
@@ -339,13 +360,13 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
 
   // The benchmark holds the same weights (or the named ticker) throughout, with the same costs
   // and rebalancing, bought at the same first open the strategy could have bought at. A ranking
-  // strategy is compared with holding every ticker in equal parts of the same size.
+  // strategy is compared with holding every ticker in equal parts of the same size. It never
+  // borrows: weights that add up to more than 100% are scaled down to 100%, and a ticker the
+  // strategy shorts is held long.
   const n = spec.universe.length;
-  const held: Asset[] = spec.benchmark
-    ? [{ ...spec.benchmark, weight: 1 }]
-    : spec.rank
-      ? spec.universe.map((a) => ({ ...a, weight: (a.weight * spec.rank!.top) / n }))
-      : spec.universe;
+  const ranked = spec.rank ? spec.universe.map((a) => ({ ...a, weight: (a.weight * spec.rank!.top) / n })) : spec.universe;
+  const total = ranked.reduce((s, a) => s + a.weight, 0);
+  const held: Asset[] = spec.benchmark ? [{ ...spec.benchmark, weight: 1 }] : total > 1 + 1e-9 ? ranked.map((a) => ({ ...a, weight: a.weight / total })) : ranked;
   const params: SimParams = {
     assets: held,
     from: run.t[0],
@@ -385,6 +406,20 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     notes.push(
       `${n} ${n === 1 ? 'add or rebalancing trade was' : 'adds and rebalancing trades were'} not made because the commission would have been ${SMALL_TRADE * 100}% of ${n === 1 ? 'its' : 'their'} value or more.`,
     );
+  }
+  if (run.marginCalls) {
+    const n = run.marginCalls;
+    const level = `${Number((spec.margin!.maintenance * 100).toFixed(1))}%`;
+    notes.push(`${n} ${n === 1 ? 'margin call' : 'margin calls'}: equity fell below ${level} of the positions' value, and every position was closed at the next open.`);
+  }
+  if (run.ruin) {
+    // A debt under half a dollar would read as "$0 more".
+    const owed = run.ruin.deficit >= 0.5 ? `; the account owed ${money(run.ruin.deficit)} more` : '';
+    notes.push(`Ruined on ${stamp(run.ruin.t, intraday)}: equity fell to zero and the run stopped there${owed}.`);
+  }
+  if (run.conflicts) {
+    const n = run.conflicts;
+    notes.push(`Buy and short rules both held on ${n} ${n === 1 ? 'bar' : 'bars'}, so neither opened a position.`);
   }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   notes.push(...insideNotes(spec, data, run, intraday));

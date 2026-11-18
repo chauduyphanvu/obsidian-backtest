@@ -277,6 +277,20 @@ test('defaults that change a result make it out of date; a block that says every
   assert.equal(defaultsMatter('universe: SPY', drawn, changed({ capital: 50_000 })), false);
 });
 
+test('a change to the borrow fee makes a block that shorts out of date, not one that only borrows to hold more', () => {
+  const drawn = defaultsFrom(normalizeSettings(null));
+  const fee = defaultsFrom(normalizeSettings({ borrowFee: '2%' }));
+  const rate = defaultsFrom(normalizeSettings({ marginRate: '8%' }));
+  const short = 'universe: SPY\nbuy when close > sma(200)\nshort when close < sma(200)';
+  const levered = 'universe: SPY 150%\nbuy when close > sma(200)';
+  assert.equal(defaultsMatter(short, drawn, fee), true);
+  assert.equal(defaultsMatter(levered, drawn, fee), false);
+  assert.equal(defaultsMatter(levered, drawn, rate), true);
+  // A long-only block within 100% borrows nothing, so neither rate is any part of it.
+  assert.equal(defaultsMatter('universe: SPY\nbuy when close > sma(200)', drawn, fee), false);
+  assert.equal(defaultsMatter('universe: SPY\nbuy when close > sma(200)', drawn, rate), false);
+});
+
 test('a kept result is as old as the oldest prices it was made from', () => {
   const fresh = (fetched: number) => ({ fetched, stale: false });
   assert.equal(pricesAsOf([fresh(500), fresh(200), fresh(800)], 1000), 200);

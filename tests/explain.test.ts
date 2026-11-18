@@ -395,7 +395,7 @@ function checkDates(bt: Backtest, t: Trade, ex: Explanation): number {
   if (exit && exit.k !== 'level') {
     const sold = section(ex, 'sold').at(-1)!.label;
     const head = section(ex, 'sold')[0].label;
-    assert.ok(head.includes(iso(exit.k === 'rule' ? exit.t : exit.rank.decision.t)), head);
+    assert.ok(head.includes(iso(exit.k === 'rank' ? exit.rank.decision.t : exit.t)), head);
     if (atClose) {
       const said = exit.k === 'rank' ? 'ranking' : 'rule';
       assert.ok(sold.startsWith(`Sold at the close of ${iso(t.exitT)}`), sold);

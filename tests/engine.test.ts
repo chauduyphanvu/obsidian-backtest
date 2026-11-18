@@ -44,7 +44,7 @@ test('weights, cash remainder and the same-weights benchmark', () => {
   assert.ok(near(r.run.exposure[2], 1300 / 1500));
   assert.deepEqual(r.benchmark.equity, r.run.equity);
   assert.equal(r.benchmark.label, 'Buy & hold');
-  assert.deepEqual(r.run.states.map((s) => [s.name, s.long, s.since]), [['A', true, day(1)], ['B', true, day(1)]]);
+  assert.deepEqual(r.run.states.map((s) => [s.name, s.side === 'long', s.since]), [['A', true, day(1)], ['B', true, day(1)]]);
 });
 
 test('rebalancing returns held assets to their weights at the first open of a period', () => {
@@ -164,7 +164,7 @@ test('a pending order on the last bar is reported, not filled', () => {
   const A = bars([10, 10, 12]);
   const r = run('universe: A\nbuy when close > 11', { A });
   assert.equal(r.run.trades.length, 0);
-  assert.deepEqual(r.run.states, [{ name: 'A', weight: 1, long: false, since: null, pending: 'buy', shares: 0, lastClose: 12, value: 0, targetWeight: 1 }]);
+  assert.deepEqual(r.run.states, [{ name: 'A', weight: 1, side: null, since: null, pending: 'buy', shares: 0, lastClose: 12, value: 0, targetWeight: 1 }]);
 });
 
 test('from and to bound the run, with earlier bars feeding the lookback', () => {
@@ -367,6 +367,6 @@ test('trade profits, interest and capital add up to the final equity', () => {
   assert.ok(r.run.trades.length >= 3);
   const pnl = r.run.trades.reduce((s, t) => s + t.pnl, 0);
   assert.ok(near(r.run.equity[r.run.equity.length - 1], 1000 + pnl + r.interest, 1e-9));
-  const open = r.run.states.filter((s) => s.long);
+  const open = r.run.states.filter((s) => s.side === 'long');
   assert.ok(open.every((s) => near(s.value, s.shares * s.lastClose)));
 });

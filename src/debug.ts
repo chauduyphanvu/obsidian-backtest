@@ -11,17 +11,18 @@ import { specEvaluator, type BarRule, type Evaluator, type PosState } from './ev
 import { csvLine } from './export.ts';
 import { fixed, isIntraday, pair, places, price, shareCount, stamp, ungroupedOrdinal } from './format.ts';
 import * as ind from './indicators.ts';
+import { flipped } from './price-chart.ts';
 import type { Bars } from './types.ts';
 
 export interface DebugColumn {
   id: string;
-  group: 'buy' | 'sell' | 'add' | 'rank';
+  group: 'buy' | 'sell' | 'short' | 'cover' | 'add' | 'rank';
   /**
    * test: a comparison; cross: crosses above or below; flag: a condition that compares nothing, such as month_end;
    * join: and, or or not; score and place: the ranking.
    */
   kind: 'test' | 'cross' | 'flag' | 'join' | 'score' | 'place';
-  /** The word above the heading: Buy, Sell, Add or Ranking. */
+  /** The word above the heading: Buy, Sell, Short, Cover, Add or Ranking. */
   caption: string;
   /** Short enough for a column; `text` has the whole of it. */
   heading: string;
@@ -51,27 +52,43 @@ export interface DebugCell {
 }
 
 export type DebugEvent =
-  /** `stage`: the buy rule or ranking decided it at this bar's close, the order filled at this bar, or both (fill: close). */
+  /**
+   * `stage`: the buy rule or ranking decided it at this bar's close, the order filled at this bar, or both (fill: close).
+   * `short` and `cover` are a short's entry and exit, as `buy` and `sell` are a long's.
+   */
   | { k: 'buy'; stage: 'decided' | 'filled' | 'both'; trade: Trade }
   | { k: 'sell'; stage: 'decided' | 'filled' | 'both'; trade: Trade }
-  /** The buy rule held with the position already open. */
+  | { k: 'short'; stage: 'decided' | 'filled' | 'both'; trade: Trade }
+  | { k: 'cover'; stage: 'decided' | 'filled' | 'both'; trade: Trade }
+  /** The other side's entry rule closed `from` and opened `to` at the same fill. */
+  | { k: 'flip'; stage: 'decided' | 'filled' | 'both'; from: Trade; to: Trade }
+  /** The buy rule held with the position already open; `short-held`, the short rule with a short already open. */
   | { k: 'long' }
-  /** The buy rule held after a stop or target exit, and had to stop holding before it could buy again. */
-  | { k: 'rearm'; trade: Trade }
-  /** The buy rule held but a sizing or stop input was still unknown. */
-  | { k: 'warmup'; input: WarmupInput; n: number }
-  /** The buy rule and the sell rule both held at this close. */
+  | { k: 'short-held' }
+  /**
+   * The buy rule (or with `side`, the short rule) held after a stop or target exit or a margin call, and had to stop
+   * holding before it could enter again.
+   */
+  | { k: 'rearm'; trade: Trade; side?: 'short' }
+  /** The buy rule (or the short rule) held but a sizing or stop input was still unknown. */
+  | { k: 'warmup'; input: WarmupInput; n: number; side?: 'short' }
+  /** The buy rule and the sell rule both held at this close; `cover-first`, the short rule and the cover rule. */
   | { k: 'sell-first' }
+  | { k: 'cover-first' }
+  /** The buy and short rules both held while flat, so neither side opened. */
+  | { k: 'conflict' }
+  /** An entry rule held after the run was ruined, when nothing more is traded. */
+  | { k: 'ruined' }
   /** An order from this last bar of the run, not filled. */
-  | { k: 'pending'; side: 'buy' | 'sell' | 'add' }
+  | { k: 'pending'; side: NonNullable<AssetState['pending']> }
   /** `entry`: which entry of the position this is (2 for the first add). `stage` as for a buy. */
   | { k: 'add'; stage: 'decided' | 'filled' | 'both'; trade: Trade; entry: number }
   /** The add rule held with the position already built in all its entries. */
   | { k: 'whole' }
   /** The add rule held with room for another entry, and none was made. */
   | { k: 'add-undone' }
-  /** The buy rule held and nothing stood in the way, but no buy was made: there was no cash. */
-  | { k: 'no-cash' }
+  /** The buy rule (or the short rule) held and nothing stood in the way, but no buy (or short sale) was made: there was no cash, or no room. */
+  | { k: 'no-cash'; side?: 'short' }
   /** A ranking decision kept the position, or chose a ticker that was not bought, or did not choose an eligible one. */
   | { k: 'kept' }
   | { k: 'chosen' }
@@ -99,12 +116,17 @@ export interface DebugRow {
   buy: Outcome;
   /** The top-level parts of the buy rule when it is an `and` chain, else the rule itself. Empty without a written rule. */
   buyChain: Outcome[];
-  /** The sell rule as the run reads it, with the position when one is held; null when there is none. */
+  /** The sell rule as the run reads it, with the position when a long is held; null when there is none. */
   sell: Outcome | null;
-  /** Long at the end of this bar, after its fills. */
+  /** The short rule, and the cover rule with the position when a short is held; null (or absent) when there is none. */
+  short?: Outcome | null;
+  cover?: Outcome | null;
+  /** A position held at the end of this bar, after its fills, and its side; absent for a long-only row made by hand. */
   held: boolean;
-  /** The sell rule had a position to read at this close. */
+  side?: 'long' | 'short' | null;
+  /** The rules had a position to read at this close, and its side. */
   readHeld: boolean;
+  readSide?: 'long' | 'short' | null;
   /** The shares bought, all entries together; rebalancing may have changed them since (`resized`). NaN when flat. */
   shares: number;
   resized: boolean;
@@ -137,6 +159,9 @@ function barFrom(t: number[], at: number): number {
 }
 
 const isLevelExit = (t: Trade) => t.reason === 'stop loss' || t.reason === 'trailing stop' || t.reason === 'take profit';
+const sideOf = (t: Trade): 'long' | 'short' => t.side ?? 'long';
+const ENTRY_KINDS = new Set<DebugEvent['k']>(['buy', 'short']);
+const MOVES = new Set<DebugEvent['k']>(['buy', 'sell', 'short', 'cover', 'flip']);
 const shorten = (text: string) => (text.length > SHORT ? `${text.slice(0, SHORT - 1).trimEnd()}…` : text);
 
 // ---------------------------------------------------------------- what is worked out once for a result
@@ -177,14 +202,16 @@ interface Plan {
   chain: number[];
 }
 
+const CAPTIONS = { buy: 'Buy', sell: 'Sell', short: 'Short', cover: 'Cover', add: 'Add' } as const;
+
 /** The parts of one rule, in the order the trade explanation lists them, then the whole rule. */
-function ruleColumns(group: 'buy' | 'sell' | 'add', e: Expr, w: Written, params: { name: string; percent: boolean }[]): { cols: PlanCol[]; chain: number[] } {
+function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: { name: string; percent: boolean }[]): { cols: PlanCol[]; chain: number[] } {
   const texts = new Map<Expr, string>();
   let k = 0;
   walk(e, (x) => texts.set(x, w.parts[k++] ?? ''));
   const text = (x: Expr) => texts.get(x) || '';
   const percentText = (s: string) => s.trim().endsWith('%') || params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
-  const caption = group === 'buy' ? 'Buy' : group === 'sell' ? 'Sell' : 'Add';
+  const caption = CAPTIONS[group];
 
   const order: { x: Expr; depth: number }[] = [];
   const visit = (x: Expr, depth: number) => {
@@ -237,6 +264,8 @@ function ruleColumns(group: 'buy' | 'sell' | 'add', e: Expr, w: Written, params:
 interface Sig {
   buy: number[];
   sell: BarRule | null;
+  short: number[] | null;
+  cover: BarRule | null;
   add: BarRule | null;
   score: number[] | null;
 }
@@ -312,6 +341,8 @@ class Ctx {
       sig = {
         buy: this.ev.eval(rules.buy, name),
         sell: rules.sell ? this.ev.compile(rules.sell, name) : null,
+        short: rules.short ? this.ev.eval(rules.short, name) : null,
+        cover: rules.cover ? this.ev.compile(rules.cover, name) : null,
         add: rules.add ? this.ev.compile(rules.add, name) : null,
         score: spec.rank ? this.ev.eval(spec.rank.by, name) : null,
       };
@@ -334,6 +365,8 @@ class Ctx {
       cols.push(...buy.cols);
     }
     if (rules.sell && written?.sell) cols.push(...ruleColumns('sell', rules.sell, written.sell, spec.params).cols);
+    if (rules.short && written?.short) cols.push(...ruleColumns('short', rules.short, written.short, spec.params).cols);
+    if (rules.cover && written?.cover) cols.push(...ruleColumns('cover', rules.cover, written.cover, spec.params).cols);
     if (rules.add && written?.add) cols.push(...ruleColumns('add', rules.add, written.add, spec.params).cols);
     if (spec.rank) {
       const by = spec.written?.rank?.text ?? 'the score';
@@ -378,6 +411,18 @@ class Ctx {
       byAsset.set(asset, first);
     }
     return first;
+  }
+
+  private calls: { t: number; trade: Trade }[] | null = null;
+
+  /** The run's margin calls, in order: the close each was made at, and a trade it closed. Each disarms every side of every ticker there. */
+  marginCalls(): { t: number; trade: Trade }[] {
+    if (!this.calls) {
+      const seen = new Map<number, Trade>();
+      for (const trade of this.bt.run.trades) if (trade.why?.exit?.k === 'margin' && !seen.has(trade.why.exit.t)) seen.set(trade.why.exit.t, trade);
+      this.calls = [...seen].sort((a, b) => a[0] - b[0]).map(([t, trade]) => ({ t, trade }));
+    }
+    return this.calls;
   }
 
   /** Whether the run held buy signals back for this ticker while an input warmed up. */
@@ -486,7 +531,8 @@ function wholeSeriesParts(cx: Ctx, asset: string): [Expr, string][] {
   };
   const { spec } = cx.bt;
   for (const name of spec.rank ? spec.universe.map((a) => a.name) : [asset]) {
-    for (const e of [spec.rules[name].buy, spec.rules[name].sell, spec.rules[name].add, spec.rank?.by]) if (e) visit(e, name);
+    const r = spec.rules[name];
+    for (const e of [r.buy, r.sell, r.short, r.cover, r.add, spec.rank?.by]) if (e) visit(e, name);
   }
   return out;
 }
@@ -628,21 +674,18 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
   const checkInputs = cx.everHeldBack(asset);
   const allowed = spec.entries ?? 1;
 
-  // After a stop or target exit the buy rule has to stop holding before it can buy again (rule 29); not with `hold`.
+  // After a stop or target exit a side's entry rule has to stop holding before it can enter again (rule 29), and after a
+  // margin call both sides' rules; not with `hold`.
+  const calls = cx.marginCalls();
+  let call = 0;
   let stopped: Trade | null = null;
+  let stoppedShort: Trade | null = null;
   if (!spec.rank) {
     const t0 = ix.bars.t[ix.first + lo];
-    let p = ix.trades.length - 1;
-    while (p >= 0 && !(ix.trades[p].reason !== 'open' && ix.trades[p].exitT < t0)) p--;
-    if (p >= 0 && isLevelExit(ix.trades[p])) {
-      stopped = ix.trades[p];
-      for (let j = barAt(ix.bars.t, stopped.exitT); j < ix.first + lo; j++) {
-        if (sig.buy[j] !== 1) {
-          stopped = null;
-          break;
-        }
-      }
-    }
+    while (call < calls.length && calls[call].t < t0) call++;
+    const before = calls.slice(0, call);
+    stopped = disarmedBefore(ix, t0, 'long', sig.buy, before, lo);
+    if (sig.short) stoppedShort = disarmedBefore(ix, t0, 'short', sig.short, before, lo);
   }
 
   for (let k = lo; k < hi; k++) {
@@ -651,30 +694,35 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     const after = openAfter(ix, t);
     const reading = openAtRead(ix, t, cx.atClose);
     const pos = reading ? posOf(ix, reading, t, cx.atClose) : null;
-    // The add rule is read only while a position has room for another entry.
+    const readSide = reading ? sideOf(reading) : null;
+    // The add rule is read only while a position has room for another entry, and each exit rule only with its own side held.
     const room = pos !== null && (pos.entries ?? 1) < allowed;
+    const posFor = (group: DebugColumn['group']) => (group === 'sell' ? (readSide === 'long' ? pos : null) : group === 'cover' ? (readSide === 'short' ? pos : null) : pos);
 
     const cells = readers.map((r): DebugCell => {
       // A part that compares a position value has nothing to compare while no position is held. Joins are still worked out
       // the way the engine does, with the position unknown, since a buy is skipped when the sell rule holds without it.
       if (r.col.group === 'add' && !room) return na();
-      if (r.out === null || (r.readsPos && !pos && (r.col.kind === 'test' || r.col.kind === 'cross'))) return na();
-      const o = outcome(r.out(b, pos));
+      const p = posFor(r.col.group);
+      if (r.out === null || (r.readsPos && !p && (r.col.kind === 'test' || r.col.kind === 'cross'))) return na();
+      const o = outcome(r.out(b, p));
       const cell: DebugCell = { outcome: o, a: NaN, b: NaN, pa: NaN, pb: NaN, note: '' };
       if (r.a && r.b) {
-        cell.a = r.a(b, pos);
-        cell.b = r.b(b, pos);
+        cell.a = r.a(b, p);
+        cell.b = r.b(b, p);
         if (r.col.kind === 'cross' && b > 0) {
-          cell.pa = r.a(b - 1, pos);
-          cell.pb = r.b(b - 1, pos);
+          cell.pa = r.a(b - 1, p);
+          cell.pb = r.b(b - 1, p);
         }
       }
-      if (o === 'unknown') cell.note = whyUnknown(cx, r.expr!, asset, b, pos);
+      if (o === 'unknown') cell.note = whyUnknown(cx, r.expr!, asset, b, p);
       return cell;
     });
 
     const buy = outcome(sig.buy[b]);
-    const sell = sig.sell ? outcome(sig.sell(b, pos)) : null;
+    const sell = sig.sell ? outcome(sig.sell(b, posFor('sell'))) : null;
+    const short = sig.short ? outcome(sig.short[b]) : null;
+    const cover = sig.cover ? outcome(sig.cover(b, posFor('cover'))) : null;
     const chain = plan.chain.map((n) => cells[n].outcome ?? 'unknown');
 
     const bought = ix.byBuy.get(t);
@@ -682,18 +730,28 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     const entered = ix.byEntry.get(t);
     const exited = ix.byExit.get(t);
     if (!spec.rank) {
-      if (exited && isLevelExit(exited)) stopped = exited;
-      if (reading) stopped = null;
+      // A margin call made at a close before this bar disarmed both sides.
+      while (call < calls.length && calls[call].t < t) stopped = stoppedShort = calls[call++].trade;
+      if (exited && isLevelExit(exited)) {
+        if (sideOf(exited) === 'short') stoppedShort = exited;
+        else stopped = exited;
+      }
+      if (readSide === 'long') stopped = null;
       else if (stopped && buy !== 'yes') stopped = null;
+      if (readSide === 'short') stoppedShort = null;
+      else if (stoppedShort && short !== 'yes') stoppedShort = null;
     }
 
     // In the order they happened within the bar: orders from the last close fill at the open, a stop or target is reached
-    // inside the bar, and the close reads the rules and decides, or with fill: close decides and fills.
+    // inside the bar, and the close reads the rules and decides, or with fill: close decides and fills. At one moment an
+    // exit comes before an entry, as orders fill.
+    const entryKind = (tr: Trade): 'buy' | 'short' => (sideOf(tr) === 'short' ? 'short' : 'buy');
+    const exitKind = (tr: Trade): 'sell' | 'cover' => (sideOf(tr) === 'short' ? 'cover' : 'sell');
     const timed: { at: 'open' | 'inside' | 'close'; event: DebugEvent }[] = [];
-    if (entered) timed.push({ at: bought === entered ? 'close' : 'open', event: { k: 'buy', stage: bought === entered ? 'both' : 'filled', trade: entered } });
-    if (exited) timed.push({ at: sold === exited ? 'close' : isLevelExit(exited) ? 'inside' : 'open', event: { k: 'sell', stage: sold === exited ? 'both' : 'filled', trade: exited } });
-    if (bought && bought !== entered) timed.push({ at: 'close', event: { k: 'buy', stage: 'decided', trade: bought } });
-    if (sold && sold !== exited) timed.push({ at: 'close', event: { k: 'sell', stage: 'decided', trade: sold } });
+    if (entered) timed.push({ at: bought === entered ? 'close' : 'open', event: { k: entryKind(entered), stage: bought === entered ? 'both' : 'filled', trade: entered } });
+    if (exited) timed.push({ at: sold === exited ? 'close' : isLevelExit(exited) ? 'inside' : 'open', event: { k: exitKind(exited), stage: sold === exited ? 'both' : 'filled', trade: exited } });
+    if (bought && bought !== entered) timed.push({ at: 'close', event: { k: entryKind(bought), stage: 'decided', trade: bought } });
+    if (sold && sold !== exited) timed.push({ at: 'close', event: { k: exitKind(sold), stage: 'decided', trade: sold } });
     const addFill = ix.addFills.get(t);
     const addSignal = ix.addSignals.get(t);
     const addMade = (a: AddAt) => ({ trade: a.trade, entry: a.k + 1 });
@@ -703,7 +761,11 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     }
     if (addSignal && (addSignal.trade !== addFill?.trade || addSignal.k !== addFill.k)) timed.push({ at: 'close', event: { k: 'add', stage: 'decided', ...addMade(addSignal) } });
     const moment = { open: 0, inside: 1, close: 2 };
-    const events: DebugEvent[] = timed.sort((x, y) => moment[x.at] - moment[y.at]).map((x) => x.event);
+    const entryLast = (e: DebugEvent) => Number(ENTRY_KINDS.has(e.k));
+    const events = flips(
+      timed.sort((x, y) => moment[x.at] - moment[y.at] || entryLast(x.event) - entryLast(y.event)).map((x) => x.event),
+      bt.run.trades,
+    );
 
     let rank: DebugRank | null = null;
     if (sig.score) {
@@ -726,16 +788,34 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
 
     const isLast = b === lastBar;
     const pending = isLast ? ix.state?.pending ?? null : null;
-    if (!spec.rank) {
-      if (buy === 'yes' && reading) {
-        // A bar that bought or sold already says more than that the rule holds with a position open.
-        if (pending !== 'sell' && !events.some((e) => e.k === 'buy' || e.k === 'sell')) events.push({ k: 'long' });
-      } else if (buy === 'yes' && !reading && !bought) {
-        const missing = checkInputs ? cx.missingInput(ix, b) : null;
-        if (sell === 'yes') events.push({ k: 'sell-first' });
-        else if (stopped) events.push({ k: 'rearm', trade: stopped });
-        else if (missing) events.push({ k: 'warmup', ...missing });
-        else if (pending !== 'buy') events.push({ k: 'no-cash' });
+    const ruin = bt.run.ruin;
+    if (ruin && t >= ruin.t) {
+      // The ruin's own bar says it in its exit; nothing is traded after it.
+      if (t > ruin.t && (buy === 'yes' || short === 'yes')) events.push({ k: 'ruined' });
+    } else if (!spec.rank) {
+      // A bar that bought or sold already says more than that the rule holds with a position open.
+      const moved = events.some((e) => MOVES.has(e.k));
+      const decided = (side: 'long' | 'short') => !!bought && sideOf(bought) === side;
+      if (buy === 'yes' && readSide === 'long') {
+        if (pending !== 'sell' && pending !== 'short' && !moved) events.push({ k: 'long' });
+      } else if (short === 'yes' && readSide === 'short') {
+        if (pending !== 'cover' && pending !== 'buy' && !moved) events.push({ k: 'short-held' });
+      } else if (!reading && buy === 'yes' && sell !== 'yes' && short === 'yes' && cover !== 'yes') {
+        events.push({ k: 'conflict' });
+      } else if (!reading) {
+        const missing = checkInputs && (buy === 'yes' || short === 'yes') ? cx.missingInput(ix, b) : null;
+        if (buy === 'yes' && !decided('long')) {
+          if (sell === 'yes') events.push({ k: 'sell-first' });
+          else if (stopped) events.push({ k: 'rearm', trade: stopped });
+          else if (missing) events.push({ k: 'warmup', ...missing });
+          else if (pending !== 'buy') events.push({ k: 'no-cash' });
+        }
+        if (short === 'yes' && !decided('short')) {
+          if (cover === 'yes') events.push({ k: 'cover-first' });
+          else if (stoppedShort) events.push({ k: 'rearm', trade: stoppedShort, side: 'short' });
+          else if (missing) events.push({ k: 'warmup', ...missing, side: 'short' });
+          else if (pending !== 'short') events.push({ k: 'no-cash', side: 'short' });
+        }
       }
     } else if (rank && rank.decision && rank.place >= 0) {
       const chosen = rank.place < top;
@@ -746,9 +826,11 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
         else if (pending !== 'buy') events.push({ k: 'chosen' });
       } else if (!reading && !chosen) events.push({ k: 'ranked-out' });
     }
-    if (reading && pos && sig.add && !sold && sell !== 'yes' && pending !== 'sell') {
+    // The rules that close the position held, or the orders that do, leave no add to speak of.
+    const exits = readSide === 'short' ? cover === 'yes' || buy === 'yes' || pending === 'cover' || pending === 'buy' : sell === 'yes' || short === 'yes' || pending === 'sell' || pending === 'short';
+    if (reading && pos && sig.add && !sold && !exits) {
       const addHeld = sig.add(b, pos) === 1;
-      const moved = events.some((e) => e.k === 'buy' || e.k === 'sell' || e.k === 'add');
+      const moved = events.some((e) => MOVES.has(e.k) || e.k === 'add');
       if (addHeld && !moved && !room) events.push({ k: 'whole' });
       else if (addHeld && !addSignal && pending !== 'add' && room) events.push({ k: 'add-undone' });
     }
@@ -763,8 +845,12 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
       buy,
       buyChain: chain,
       sell,
+      short,
+      cover,
       held: after !== null,
+      side: after ? sideOf(after) : null,
       readHeld: reading !== null,
+      readSide,
       shares: after?.entries ? after.entries.slice(0, entriesBy(after, t)).reduce((n, e) => n + e.shares, 0) : after?.why?.shares ?? NaN,
       resized: !!after?.why && after.why.topUps + after.why.trims > 0,
       entries: after ? entriesBy(after, t) : 0,
@@ -777,6 +863,48 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     rows.push(row);
   }
   return rows;
+}
+
+/**
+ * The trade whose exit disarmed a side before the time `t0` when its entry rule has held at every close since, so it is
+ * still waiting to stop holding: the side's last trade, closed by a stop or target, or a margin call (`calls`, those made
+ * before `t0`) after it. Null when the side is armed.
+ */
+function disarmedBefore(ix: AssetIx, t0: number, side: 'long' | 'short', rule: number[], calls: { t: number; trade: Trade }[], lo: number): Trade | null {
+  let p = ix.trades.length - 1;
+  while (p >= 0 && !(sideOf(ix.trades[p]) === side && ix.trades[p].reason !== 'open' && ix.trades[p].exitT < t0)) p--;
+  let by: Trade | null = p >= 0 && isLevelExit(ix.trades[p]) ? ix.trades[p] : null;
+  // A stop exit's own close reads the rule again; a margin call is made after its close was read. The later one counts:
+  // a side entered again since had stopped holding first, which the walk below finds.
+  let from = by ? barAt(ix.bars.t, by.exitT) : -1;
+  const last = calls.at(-1);
+  if (last && (!by || last.t >= by.exitT)) {
+    by = last.trade;
+    from = barAt(ix.bars.t, last.t) + 1;
+  }
+  if (!by) return null;
+  for (let j = from; j < ix.first + lo; j++) if (rule[j] !== 1) return null;
+  return by;
+}
+
+/** An exit by the other side's entry rule that opened that side at the same fill, and that entry, as one flip. */
+function flips(events: DebugEvent[], trades: Trade[]): DebugEvent[] {
+  const out: DebugEvent[] = [];
+  const joined = new Set<Trade>();
+  for (const e of events) {
+    if ((e.k === 'sell' || e.k === 'cover') && flipped(e.trade, trades)) {
+      const exit = e.trade;
+      const to = events.find((x): x is Extract<DebugEvent, { k: 'buy' | 'short' }> => (x.k === 'buy' || x.k === 'short') && x.stage === e.stage && x.trade.entryT === exit.exitT);
+      if (to) {
+        out.push({ k: 'flip', stage: e.stage, from: exit, to: to.trade });
+        joined.add(to.trade);
+        continue;
+      }
+    }
+    if ((e.k === 'buy' || e.k === 'short') && joined.has(e.trade)) continue;
+    out.push(e);
+  }
+  return out;
 }
 
 /** The place a trade recorded at the ranking that read this bar, when one did. */
@@ -851,40 +979,67 @@ const placeWords = (place: number, eligible: number) => `${ungroupedOrdinal(plac
 function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
   const when = (t: number) => stamp(t, cx.intraday);
   const ranked = cx.bt.spec.rank !== null;
-  /** Where an order that was decided at this bar fills: at this close, or at a later bar. */
-  const fillWords = (fillT: number, at: number) => {
+  /** Where an order that was decided at this bar fills: at this close, or at a later bar, at its open unless the block fills at the close. */
+  const fillWords = (fillT: number, at: number, atOpen = !cx.atClose) => {
     if (fillT === row.t) return `at this close at ${price(at)}`;
-    if (cx.atClose) return `at the close of ${when(fillT)} at ${price(at)}`;
+    if (!atOpen) return `at the close of ${when(fillT)} at ${price(at)}`;
     return `at ${fillT === ix.bars.t[row.bar + 1] ? 'the next open' : 'the open'} (${when(fillT)}) at ${price(at)}`;
+  };
+  const atFill = cx.atClose ? 'the close' : 'the open';
+  const marginCall = `Margin call (equity below ${Number(((cx.bt.spec.margin?.maintenance ?? 0) * 100).toFixed(1))}% of the positions' value)`;
+  /** What closed a position whose exit was decided at this bar. */
+  const closedBy = (tr: Trade): string => {
+    const exit = tr.why?.exit;
+    const short = sideOf(tr) === 'short';
+    if (exit?.k === 'rank') return 'The ranking no longer holds it';
+    if (exit?.k === 'margin') return marginCall;
+    if (exit?.k === 'rule' && exit.flip) return short ? 'Buy rule held' : 'Short rule held';
+    return short ? 'Cover rule held' : 'Sell rule held';
   };
   const out: string[] = [];
   for (const e of row.events) {
     switch (e.k) {
-      case 'buy': {
+      case 'buy':
+      case 'short': {
         const tr = e.trade;
+        const [did, rule] = e.k === 'short' ? ['sold short', 'Short rule held'] : ['bought', 'Buy rule held'];
         // With entries, the trade's entry price is the average of them all; the first entry filled at its own.
         const first = tr.entries?.[0].price ?? tr.entryPrice;
         const entry = tr.entries ? ` entry 1 of ${row.entriesAllowed}` : '';
         if (e.stage === 'filled') {
-          out.push(`Bought${entry} at ${cx.atClose ? 'the close' : 'the open'} at ${price(first)}.`);
+          out.push(`${did.replace(/^./, (c) => c.toUpperCase())}${entry} at ${atFill} at ${price(first)}.`);
         } else {
           const rank = tr.why?.rank;
-          const why = rank ? `Chosen by the ranking, ${placeWords(rank.place, rank.decision.eligible)}` : 'Buy rule held';
-          out.push(`${why}: bought${entry} ${fillWords(tr.entryT, first)}.`);
+          const why = rank ? `Chosen by the ranking, ${placeWords(rank.place, rank.decision.eligible)}` : rule;
+          out.push(`${why}: ${did}${entry} ${fillWords(tr.entryT, first)}.`);
         }
         break;
       }
-      case 'sell': {
+      case 'sell':
+      case 'cover': {
         const tr = e.trade;
-        if (e.stage === 'filled') {
-          if (tr.reason === 'stop loss') out.push(`Stopped out at ${price(tr.exitPrice)}.`);
-          else if (tr.reason === 'trailing stop') out.push(`Trailing stop hit: sold at ${price(tr.exitPrice)}.`);
-          else if (tr.reason === 'take profit') out.push(`Take profit hit: sold at ${price(tr.exitPrice)}.`);
-          else out.push(`Sold at ${cx.atClose ? 'the close' : 'the open'} at ${price(tr.exitPrice)}.`);
+        const did = e.k === 'cover' ? 'bought to cover' : 'sold';
+        const at = price(tr.exitPrice);
+        if (tr.why?.exit?.k === 'ruin') out.push(`Equity fell to zero, so every position was closed and the run stopped: ${did} at ${at}.`);
+        else if (e.stage === 'filled') {
+          if (tr.reason === 'stop loss') out.push(`Stopped out at ${at}.`);
+          else if (tr.reason === 'trailing stop') out.push(`Trailing stop hit: ${did} at ${at}.`);
+          else if (tr.reason === 'take profit') out.push(`Take profit hit: ${did} at ${at}.`);
+          else if (tr.reason === 'margin call') out.push(`Margin call: ${did} at the open at ${at}.`);
+          else out.push(`${did.replace(/^./, (c) => c.toUpperCase())} at ${atFill} at ${at}.`);
         } else {
-          const why = tr.why?.exit?.k === 'rank' ? 'The ranking no longer holds it' : 'Sell rule held';
-          out.push(`${why}: sold ${fillWords(tr.exitT, tr.exitPrice)}.`);
+          // A margin call closes at the next open whatever the block's fill.
+          out.push(`${closedBy(tr)}: ${did} ${fillWords(tr.exitT, tr.exitPrice, tr.reason === 'margin call' || !cx.atClose)}.`);
         }
+        break;
+      }
+      case 'flip': {
+        const to = e.to;
+        const short = sideOf(to) === 'short';
+        const both = short ? 'sold and sold short' : 'bought to cover and bought';
+        const first = to.entries?.[0].price ?? to.entryPrice;
+        if (e.stage === 'filled') out.push(`Flipped to ${short ? 'short' : 'long'}: ${both} at ${atFill} at ${price(first)}.`);
+        else out.push(`${short ? 'Short' : 'Buy'} rule held: flipped to ${short ? 'short' : 'long'}, ${both} ${fillWords(to.entryT, first)}.`);
         break;
       }
       case 'add': {
@@ -907,20 +1062,42 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
       case 'long':
         out.push('Buy rule held but already long.');
         break;
+      case 'short-held':
+        out.push('Short rule held but already short.');
+        break;
       case 'rearm':
-        out.push(`Buy rule held but waiting for the rule to stop holding after ${e.trade.exitT === row.t ? 'this' : 'the'} ${e.trade.reason}${e.trade.exitT === row.t ? '' : ` on ${when(e.trade.exitT)}`}.`);
+        out.push(
+          `${e.side === 'short' ? 'Short' : 'Buy'} rule held but waiting for the rule to stop holding after ${e.trade.exitT === row.t ? 'this' : 'the'} ${e.trade.reason}${e.trade.exitT === row.t ? '' : ` on ${when(e.trade.exitT)}`}.`,
+        );
         break;
       case 'warmup':
-        out.push(`${ranked ? 'Chosen, but the buy' : 'Buy rule held, but the buy'} waited: ${WARMUP_INPUT[e.input](e.n)} was still unknown.`);
+        if (e.side === 'short') out.push(`Short rule held, but the short sale waited: ${WARMUP_INPUT[e.input](e.n)} was still unknown.`);
+        else out.push(`${ranked ? 'Chosen, but the buy' : 'Buy rule held, but the buy'} waited: ${WARMUP_INPUT[e.input](e.n)} was still unknown.`);
         break;
       case 'sell-first':
         out.push('Buy rule held, but the sell rule held too, so no buy.');
         break;
-      case 'pending':
-        out.push(`Order pending: ${e.side} at the next ${cx.atClose ? 'close' : 'open'}.`);
+      case 'cover-first':
+        out.push('Short rule held, but the cover rule held too, so no short sale.');
         break;
+      case 'conflict':
+        out.push('Buy and short rules both held, so neither opened a position.');
+        break;
+      case 'ruined':
+        out.push(`Nothing more was traded after the ruin on ${when(cx.bt.run.ruin!.t)}.`);
+        break;
+      case 'pending': {
+        // An order for the other side closes the position held first: a flip, said as its two orders.
+        const held = ix.state?.side ?? null;
+        const order = { buy: held === 'short' ? 'buy to cover and buy' : 'buy', sell: 'sell', add: 'add', short: held === 'long' ? 'sell and sell short' : 'sell short', cover: 'buy to cover' }[e.side];
+        // A margin call made at this close closes the position at the next open, whatever the block's fill.
+        if (ix.state?.marginCall) out.push(`${marginCall}: order pending to ${order} at the next open.`);
+        else out.push(`Order pending: ${order} at the next ${cx.atClose ? 'close' : 'open'}.`);
+        break;
+      }
       case 'no-cash':
-        out.push('Buy rule held, but no buy was made: no cash was free.');
+        if (e.side === 'short') out.push('Short rule held, but no short sale was made: there was no room left for it.');
+        else out.push('Buy rule held, but no buy was made: no cash was free.');
         break;
       case 'kept':
         out.push(`Kept by the ranking, ${placeWords(row.rank!.place, row.rank!.eligible)}.`);
@@ -946,12 +1123,15 @@ function movedWords(trade: Trade, entry: number): string {
   return ` ${parts.join('; ').replace(/^./, (c) => c.toUpperCase())}.`;
 }
 
-/** "Flat", or "Long" with the entries made, when a position is built in several, and the shares that were bought. */
+/** "Flat", or "Long" or "Short" with the entries made, when a position is built in several, and the shares that were bought or sold short. */
 export function positionWords(row: DebugRow): string {
   if (!row.held) return 'Flat';
-  const long = row.entriesAllowed > 1 ? `Long, ${row.entries} of ${row.entriesAllowed} entries` : 'Long';
+  const short = row.side === 'short';
+  const side = short ? 'Short' : 'Long';
+  const long = row.entriesAllowed > 1 ? `${side}, ${row.entries} of ${row.entriesAllowed} entries` : side;
   if (Number.isNaN(row.shares)) return long;
-  return row.resized ? `${long}, bought ${shareCount(row.shares)} shares` : `${long}, ${shareCount(row.shares)} shares`;
+  if (!row.resized) return `${long}, ${shareCount(row.shares)} shares`;
+  return short ? `${long}, sold ${shareCount(row.shares)} shares short` : `${long}, bought ${shareCount(row.shares)} shares`;
 }
 
 /** The text of one cell: the values compared and, for a cross or an unknown, a second line. */
@@ -987,7 +1167,7 @@ export function nearMiss(row: DebugRow): boolean {
 
 /** Whether a bar is worth showing when only the ones where something happened or nearly happened are wanted. */
 export function interesting(row: DebugRow): boolean {
-  return row.events.length > 0 || row.held || row.buy === 'yes' || nearMiss(row);
+  return row.events.length > 0 || row.held || row.buy === 'yes' || row.short === 'yes' || nearMiss(row);
 }
 
 /** Each trade of the ticker with the rows of its decision and its fill, in order. */
@@ -1054,7 +1234,7 @@ function csvLayout(bt: Backtest, asset: string) {
   const cols = debugColumns(bt, asset);
   const entries = (bt.spec.entries ?? 1) > 1;
   const header = csvLine([cx.intraday ? 'time (UTC)' : 'date', 'close', ...cols.flatMap(csvHeads), 'position', 'shares', ...(entries ? ['entries'] : []), 'what happened']);
-  const row = (r: DebugRow) => csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? 'long' : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
+  const row = (r: DebugRow) => csvLine([stamp(r.t, cx.intraday), num(r.close), ...cols.flatMap((c, n) => csvFields(c, r.cells[n])), r.held ? (r.side ?? 'long') : 'flat', num(r.shares), ...(entries ? [r.entries] : []), r.what]);
   return { count: cx.asset(asset).count, header, row };
 }
 

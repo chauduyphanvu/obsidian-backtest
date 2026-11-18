@@ -1,0 +1,8 @@
+language 1
+strategy "s6: short with a trailing stop" {
+  universe   symbols("CHOP")
+  enter short when crosses_below(close, sma(close, 50)) and not crosses_above(close, sma(close, 50))
+  exit short when crosses_above(close, sma(close, 50))
+  trail      4%
+  size       100% of equity, max 1 positions
+}
