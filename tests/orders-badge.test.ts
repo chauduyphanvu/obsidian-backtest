@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
-import { failedStatus, sortStatuses, todoRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
+import { failedStatus, sortStatuses, todoRows, type OrderRow, type StrategyStatus, type WatchRow } from '../src/orders.ts';
 import { badgeView, ordersText, OrdersBadge, START_DELAY_MS, type BadgeElement, type BadgeHost } from '../src/orders-badge.ts';
 import { DAY, T0 } from './helpers.ts';
 
@@ -79,6 +79,29 @@ test('no orders says so and offers the holdings', () => {
   const v = ready([status('Trend'), status('Pullback')]);
   assert.deepEqual([v.text, v.mark, v.orders], ['No orders today', 'none', 0]);
   assert.equal(v.tooltip, 'No strategy has an order.\nClick to see what each one holds.');
+});
+
+test('the three nearest closes to watch follow the orders in the tooltip, and are not counted as orders', () => {
+  const watch = (ticker: string, distance: number, now = false): WatchRow => ({ ticker, side: 'buy', phrase: `Buys if it closes above ${ticker}`, when: 'at the following open', lastClose: 10, distance, now });
+  const v = ready([
+    status('Trend', [['sell', 'SPY']], { watch: [watch('QQQ', 0.015), watch('IWM', -0.019)] }),
+    status('Dip', [], { watch: [watch('TLT', 0.004), watch('GLD', 0.05, true)] }),
+  ]);
+  assert.deepEqual(v.tooltip.split('\n'), [
+    'Sell SPY at the next open, Trend',
+    'Watch at the next close:',
+    'GLD buys if it closes above GLD, Dip',
+    'TLT buys if it closes above TLT, Dip',
+    'QQQ buys if it closes above QQQ, Trend',
+    'Click to open the orders window.',
+  ]);
+  assert.deepEqual([v.text, v.orders], ['1 order today', 1]);
+  assert.deepEqual(ready([status('Dip', [], { watch: [watch('TLT', 0.004)] })]).tooltip.split('\n'), [
+    'No strategy has an order.',
+    'Watch at the next close:',
+    'TLT buys if it closes above TLT, Dip',
+    'Click to see what each one holds.',
+  ]);
 });
 
 test('a vault with no strategies shows nothing at all', () => {
