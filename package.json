@@ -11,9 +11,11 @@
     "generate": "node scripts/generate.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^26.6.6",
     "esbuild": "^0.28.2",
     "obsidian": "^1.14.4",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "zod": "^4.6.7"
   }
 }
