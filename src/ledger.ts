@@ -126,16 +126,16 @@ function capVersions(versions: Version[]): Version[] {
 
 /**
  * One record from the copy on disk and this session's, for JsonStore: every trial and version either holds, by hash,
- * less the trials first seen before the later of the two resets. A trial or version in both keeps its earlier sight.
+ * less the trials first seen before the later of the two resets. A trial or version in both keeps its earlier sight;
+ * for a trial, its earlier sight since that reset, so one counted again after the reset stays.
  */
 export function mergeLedgers(disk: Ledger, mine: Ledger): Ledger {
   const resetAt = Math.max(disk.resetAt, mine.resetAt);
-  const both = new Map(Object.entries(disk.trials));
-  for (const [id, t] of Object.entries(mine.trials)) {
-    const other = both.get(id);
-    if (!other || t[2] < other[2]) both.set(id, t);
+  const trials: Record<string, Trial> = {};
+  for (const [id, t] of [...Object.entries(disk.trials), ...Object.entries(mine.trials)]) {
+    if (t[2] < resetAt) continue;
+    if (!Object.hasOwn(trials, id) || t[2] < trials[id][2]) trials[id] = t;
   }
-  const trials = Object.fromEntries([...both].filter(([, t]) => t[2] >= resetAt));
   const byHash = new Map<string, Version>();
   for (const v of [...mine.versions, ...disk.versions]) {
     const other = byHash.get(v.hash);

@@ -359,3 +359,27 @@ test('records kept by a JsonStore merge with a copy a sync brought in', async ()
   const saved = parseLedger((JSON.parse(files.get(path)!) as { value: unknown }).value)!;
   assert.deepEqual(Object.keys(saved.trials).sort(), ['a1', 'b2', 'c3']);
 });
+
+test('a trial counted again after the count was started again stays, though a copy saw it before the reset', async () => {
+  const disk = ledger({ abc: [1.2, 252, 1000], def: [0.4, 252, 1000] }, [], 0);
+  const mine = ledger({ abc: [1.2, 252, 5001] }, [], 5000);
+  for (const m of [mergeLedgers(disk, mine), mergeLedgers(mine, disk)]) assert.deepEqual([m.trials, m.resetAt], [{ abc: [1.2, 252, 5001] }, 5000]);
+  // The same through a JsonStore: counted, written, started again and the run on screen counted again.
+  const files = new Map<string, string>();
+  const io: StoreFiles = {
+    exists: async (p) => files.has(p) || p === 'plugin/ledger',
+    read: async (p) => files.get(p)!,
+    write: async (p, text) => void files.set(p, text),
+    mkdir: async () => undefined,
+    remove: async (p) => void files.delete(p),
+    list: async () => ({ files: [...files.keys()] }),
+  };
+  const store = new JsonStore<Ledger>({ files: io, dir: 'plugin/ledger', parse: parseLedger, merge: mergeLedgers, setTimer: () => 0, clearTimer: () => undefined });
+  await store.update('Note.md#Trend', (l) => addTrial(addTrial(l ?? emptyLedger(), 'abc', 1.2, 252, 1000), 'def', 0.4, 252, 1000));
+  await store.flush();
+  await store.update('Note.md#Trend', (l) => addTrial(resetTrials(l!, 5000), 'abc', 1.2, 252, 5001));
+  await store.flush();
+  const [path] = [...files.keys()];
+  assert.deepEqual(Object.keys(parseLedger((JSON.parse(files.get(path)!) as { value: unknown }).value)!.trials), ['abc']);
+  assert.deepEqual(Object.keys((await store.get('Note.md#Trend'))!.trials), ['abc']);
+});
