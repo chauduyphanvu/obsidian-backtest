@@ -12,6 +12,7 @@ import {
   suggestWeights,
   VOLATILITY_MONTHS,
   weightsFrom,
+  weightDecimals,
   wholePercents,
 } from '../src/allocate.ts';
 import { alignCurves, combine, monthStarts, rebalanced, type Aligned } from '../src/compare.ts';
@@ -353,4 +354,25 @@ test('weights in whole percentages by largest remainders, adding up to exactly t
     assert.equal(sum(p), 95, `${k}`);
     assert.ok(p.every((x) => Number.isInteger(x) && x >= 0));
   }
+});
+
+test('weights at the precision the block writes them in, adding up to exactly its total', () => {
+  // Thirds written as 33.3% add up to 99.9%, and so does each set.
+  assert.deepEqual(wholePercents([0.333, 0.333, 0.333], 0.999, 1), [33.3, 33.3, 33.3]);
+  // Quotas 49.95, 24.975 and 24.975 tenths: the two larger remainders get the last two tenths.
+  assert.deepEqual(wholePercents([0.5, 0.25, 0.25], 0.999, 1), [49.9, 25, 25]);
+  // A small test allocation of 0.6% in all: 0.3% each, not 0% each.
+  assert.deepEqual(wholePercents([0.003, 0.003], 0.006, 1), [0.3, 0.3]);
+  assert.deepEqual(wholePercents([1, 2], 0.0025, 2), [0.08, 0.17]);
+  // Too little to give any line one step leaves every line at 0.
+  assert.deepEqual(wholePercents([1, 1], 0.00004, 2), [0, 0]);
+  // The precision is the most decimals among the weights written, at most 2.
+  assert.equal(weightDecimals([0.333, 0.333, 0.334]), 1);
+  assert.equal(weightDecimals([0.4, 0.6]), 0);
+  assert.equal(weightDecimals([0.003, 0.5]), 1);
+  assert.equal(weightDecimals([0.12345, 0.5]), 2);
+  assert.equal(weightDecimals([]), 0);
+  const sets = suggestWeights(curves(3, 900), 0.999, 1).suggestions;
+  assert.equal(sets.length, 4);
+  for (const s of sets) assert.ok(near(sum(s.percents), 99.9, 1e-9) && s.percents.every((p) => near(p * 10, Math.round(p * 10), 1e-9)), s.method);
 });

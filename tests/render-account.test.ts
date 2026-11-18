@@ -106,7 +106,8 @@ test('what the fills are set against: each ticker from the strategy whose prices
   assert.deepEqual([...setup.bars.keys()], ['SPY', 'BTCUSDT']);
   assert.equal(setup.bars.get('SPY'), longSpy);
   assert.deepEqual(setup.last, { SPY: 4, BTCUSDT: 7 });
-  assert.equal(setup.times.SPY, longSpy.t);
+  // Each strategy keeps its own bars of what it trades.
+  assert.deepEqual(setup.followed.map((f) => [...f.bars!.values()]), [[shortSpy], [longSpy, btc]]);
   assert.deepEqual([...setup.adjusted.values()], [{ name: 'SPY', source: 'tiingo', id: 'SPY' }]);
   assert.deepEqual(setup.followed.map((f) => [f.label, f.alloc, f.log.asset]), [['A', 0.5, ['SPY']], ['B', 0.5, ['BTCUSDT']]]);
   // Prices as they traded are wanted only for adjusted tickers traded from the day the account started following.
@@ -139,7 +140,7 @@ test('what was read from the file and what was left out, each kind counted', () 
 });
 
 function row(o: Partial<MatchRow>): MatchRow {
-  return { ticker: 'SPY', class: 'on time', model: null, yours: null, barsLate: null, bps: null, slippage: 0, late: 0, skipped: 0, fees: 0, move: null, outside: false, unpriced: false, ...o };
+  return { ticker: 'SPY', class: 'on time', model: null, yours: null, daysLate: null, bps: null, slippage: 0, late: 0, skipped: 0, fees: 0, move: null, outside: false, unpriced: false, ...o };
 }
 const model = (o: Partial<NonNullable<MatchRow['model']>> = {}) => ({ day: T, side: 'buy' as const, quantity: 10, value: 1000, price: 100, strategies: [0], ...o });
 const yours = (o: Partial<NonNullable<MatchRow['yours']>> = {}) => ({ day: T, side: 'buy' as const, quantity: 10, price: 100.5, fees: 1, lines: [2], ...o });
@@ -159,8 +160,8 @@ test('the headline is the sum of the parts: a cost, a gain, nothing, or no trade
 
 test('each trade in the table: how it went, both sides, your price against theirs and its cost', () => {
   assert.deepEqual(matchCells(row({ model: model(), yours: yours(), bps: 50, slippage: 5, fees: 1 })), ['2026-11-13', 'SPY', 'On time', 'Buy 10 at 100.00', 'Buy 10 at 100.50', '+50.0 bps', '$6.00']);
-  assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null, value: null }), yours: yours({ day: T + 2 * DAY }), barsLate: 2, late: 5, fees: 1 }))[2], 'Late by 2 bars');
-  assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null }), yours: yours(), barsLate: 1 }))[3], 'Buy at 100.00');
+  assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null, value: null }), yours: yours({ day: T + 2 * DAY }), daysLate: 2, late: 5, fees: 1 }))[2], 'Late by 2 trading days');
+  assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null }), yours: yours(), daysLate: 1 }))[3], 'Buy at 100.00');
   const skipped = matchCells(row({ class: 'skipped', model: model({ side: 'sell' }), move: -0.031, skipped: -31 }));
   assert.deepEqual(skipped.slice(2), ['Not made, would have lost 3.1%', 'Sell 10 at 100.00', '–', '', '−$31.00']);
   assert.equal(matchCells(row({ class: 'partial', model: model({ quantity: 4 }), move: 0.05, skipped: 20 }))[2], 'Partial: the rest not made, would have made 5.0%');

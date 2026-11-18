@@ -3,6 +3,7 @@
 // files; account.ts, allocate.ts and fills.ts do the working out.
 
 import { accountOrders, accountStrategy, allocations, parseAccount, type AccountConfig, type AccountPlan, type FollowedRun } from './account.ts';
+import { weightDecimals } from './allocate.ts';
 import { alignCurves, cashIndex, type Aligned, type CompareEntry } from './compare.ts';
 import { h } from './dom.ts';
 import {
@@ -20,7 +21,7 @@ import {
   type RawPrices,
   type Reconciliation,
 } from './fills.ts';
-import { isIntraday, isoDate, minus, money, plural, price, shareCount, stamp } from './format.ts';
+import { DAY, isIntraday, isoDate, minus, money, plural, price, shareCount, stamp } from './format.ts';
 import { renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderSplit } from './render-split.ts';
 import type { AssetRef, Bars } from './types.ts';
@@ -100,11 +101,11 @@ export function asOfLine(runs: { label: string; asOf: number }[]): string {
 // --- Fills -----------------------------------------------------------------------------------------------------------
 
 export interface FillsSetup {
+  /** Each strategy, with its own bars of the tickers it trades. */
   followed: Followed[];
-  /** Each traded ticker's bars, from the strategy whose prices for it end latest. */
+  /** Each traded ticker's bars, from the strategy whose prices for it end latest: its days' ranges, when they are as traded, and its last price. */
   bars: Map<string, Bars>;
   last: Record<string, number>;
-  times: Record<string, number[]>;
   /** The tickers whose prices are adjusted for later dividends and splits, Yahoo's and Tiingo's, and where they came from. */
   adjusted: Map<string, AssetRef>;
 }
@@ -113,7 +114,11 @@ export interface FillsSetup {
 export function fillsSetup(runs: Pick<FollowedRun, 'label' | 'alloc' | 'out'>[]): FillsSetup {
   const bars = new Map<string, Bars>();
   const adjusted = new Map<string, AssetRef>();
-  for (const { out } of runs) {
+  const followed: Followed[] = [];
+  for (const { label, alloc, out } of runs) {
+    const { run } = out.backtest;
+    const own = new Map(out.spec.universe.flatMap((a) => (out.data.has(a.name) ? [[a.name, out.data.get(a.name)!] as const] : [])));
+    followed.push({ label, alloc, log: run.fills, t: run.t, equity: run.equity, bars: own, closeFill: out.spec.fill === 'close' });
     for (const a of out.spec.universe) {
       const b = out.data.get(a.name);
       if (!b || b.t.length === 0) continue;
@@ -125,12 +130,29 @@ export function fillsSetup(runs: Pick<FollowedRun, 'label' | 'alloc' | 'out'>[])
     }
   }
   return {
-    followed: runs.map((r) => ({ label: r.label, alloc: r.alloc, log: r.out.backtest.run.fills, t: r.out.backtest.run.t, equity: r.out.backtest.run.equity })),
+    followed,
     bars,
     last: Object.fromEntries([...bars].map(([name, b]) => [name, b.c[b.c.length - 1]])),
-    times: Object.fromEntries([...bars].map(([name, b]) => [name, b.t])),
     adjusted,
   };
+}
+
+/** Bars of a day each: none shorter, and some a day apart. */
+const daily = (b: Bars) => !isIntraday(b.t) && b.t.some((t, i) => i > 0 && t - b.t[i - 1] === DAY);
+
+/**
+ * The days each ticker traded on, which lateness is counted in: those of its prices as traded where they were loaded
+ * (`raw`), else those of a strategy's own daily bars of it. A ticker with neither, such as one only weekly strategies
+ * trade, is left to matchFills, which counts Monday to Friday.
+ */
+export function tradingDays(setup: Pick<FillsSetup, 'followed' | 'bars'>, raw: Map<string, Bars>): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const ticker of setup.bars.keys()) {
+    const own = setup.followed.map((f) => f.bars?.get(ticker)).find((b) => b !== undefined && daily(b));
+    const from = raw.get(ticker) ?? own;
+    if (from) out[ticker] = [...new Set(from.t.map((t) => Math.floor(t / DAY) * DAY))];
+  }
+  return out;
 }
 
 /** The tickers to load prices as they traded for: the adjusted ones that you or the strategies traded from `from` on. */
@@ -219,7 +241,7 @@ export function matchCells(r: MatchRow): string[] {
   const model = r.model ? `${side(r.model.side)}${r.model.quantity === null ? '' : ` ${shareCount(Number(r.model.quantity.toFixed(4)))}`} at ${known(r.model.price)}` : '–';
   const yours = r.yours ? `${side(r.yours.side)} ${shareCount(r.yours.quantity)} at ${price(r.yours.price)}` : '–';
   let how = r.class === 'partial' ? 'Partial: the rest not made' : CLASS_WORDS[r.class];
-  if (r.barsLate !== null) how += ` by ${plural(r.barsLate, 'bar')}`;
+  if (r.daysLate !== null) how += ` by ${plural(r.daysLate, 'trading day')}`;
   if ((r.class === 'skipped' || r.class === 'partial') && r.move !== null && Number.isFinite(r.move)) how += `, would have ${r.move >= 0 ? 'made' : 'lost'} ${(Math.abs(r.move) * 100).toFixed(1)}%`;
   const vs = r.bps !== null ? `${r.bps > 0 ? '+' : ''}${minus(r.bps.toFixed(1))} bps` : r.outside ? 'outside the day' : '';
   const cost = r.class === 'waiting' ? '' : dollars(r.slippage + r.late + r.skipped + r.fees);
@@ -351,6 +373,7 @@ function drawSplit(root: HTMLElement, entries: CompareEntry[], runs: FollowedRun
     aligned,
     labels: runs.map((r) => r.label),
     weights: allocations(entries),
+    decimals: weightDecimals(entries.flatMap((e) => (e.weight === null ? [] : [e.weight]))),
     use: write ? (percents) => write(entries.map((e, i) => ({ line: e.line, percent: percents[i] }))) : null,
   });
 }
@@ -377,15 +400,17 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   }
   const wanted = read.fills.some((f) => f.date >= from) ? rawWanted(setup, read.fills, from) : [];
   let raw: RawPrices | undefined;
+  let asTraded = new Map<string, Bars>();
   if (wanted.length) {
     const loading = say('Loading the prices as they traded…');
     const got = await host.raw(wanted);
     if (stopped()) return;
     loading.remove();
     for (const w of got.warnings) say(w, 'bt-warning');
-    raw = rawPrices(setup.bars, got.data, new Set(setup.adjusted.keys()));
+    asTraded = got.data;
+    raw = rawPrices(setup.bars, asTraded, new Set(setup.adjusted.keys()));
   }
-  const rec = matchFills(setup.followed, read.fills, { from, capital: config.capitalAtStart, last: setup.last, times: setup.times, raw });
+  const rec = matchFills(setup.followed, read.fills, { from, capital: config.capitalAtStart, last: setup.last, days: tradingDays(setup, asTraded), raw });
 
   for (const line of readLines(read)) say(line);
   say(costHeadline(rec, from), 'bt-acct-total');

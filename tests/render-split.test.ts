@@ -77,3 +77,15 @@ test('the note under the chart names the strategies at 0% and the cash', () => {
   assert.equal(combinedNote(lines.slice(0, 2), [0.5, 0.5]), 'Combined: each strategy at 50%. It goes back to those weights on the first date of each month.');
   assert.equal(combinedNote(lines, [0.5, 0, 0]), 'Combined: 1 at 50%. It goes back to those weights on the first date of each month. 2, 3 are listed at 0%: drawn, but not in Combined. The other 50% is cash that earns nothing.');
 });
+
+test('weights too small to write in the block offer no set to use, and say why', () => {
+  const a = aligned(800);
+  // 0.004% in all, written to 2 decimals: not one step of 0.01% to give.
+  const alloc = suggestWeights(a, 0.00004, 2);
+  const rows = splitRows({ aligned: a, weights: [0.00002, 0.00001, 0.00001] }, alloc);
+  assert.ok(rows.slice(1).every((r) => r.percents === null));
+  assert.ok(splitNotes(alloc, ['A', 'B', 'C'], 2).includes('The weights add up to 0.004%, less than the 0.01% they are written in steps of, so no other set can be written.'));
+  // At 0.6% written in tenths, each method gives a set that adds up to 0.6%.
+  const small = suggestWeights(a, 0.006, 1);
+  for (const r of splitRows({ aligned: a, weights: [0.002, 0.002, 0.002] }, small).slice(1)) assert.ok(Math.abs(r.percents!.reduce((s, p) => s + p, 0) - 0.6) < 1e-9, r.name);
+});

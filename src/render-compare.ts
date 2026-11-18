@@ -2,6 +2,7 @@
 
 import { alignCurves, cashReturns, combine, correlations, lineStats, weightedCashReturn, type Aligned, type Curve } from './compare.ts';
 import { h, s } from './dom.ts';
+import { weightDecimals } from './allocate.ts';
 import { renderSplit } from './render-split.ts';
 import type { Diagnostic } from './dsl.ts';
 import { isIntraday, minus, money, moneyTicks, pct, stamp, timeTicks } from './format.ts';
@@ -98,7 +99,7 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
 
   figures(root, listed, t);
   alike(root, lines, aligned);
-  if (input.weights) renderSplit(root, { aligned, labels: lines.map((l) => `${l.mark} ${l.label}`), weights: input.weights, use: input.use ?? null });
+  if (input.weights) renderSplit(root, { aligned, labels: lines.map((l) => `${l.mark} ${l.label}`), weights: input.weights, decimals: weightDecimals(input.weights), use: input.use ?? null });
   return () => observer.disconnect();
 }
 

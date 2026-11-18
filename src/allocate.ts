@@ -192,7 +192,7 @@ export interface Suggestion {
   method: Method;
   /** From every full month, as fractions adding up to the total. */
   weights: number[];
-  /** The same as whole percentages, by largest remainders. */
+  /** The same as percentages at the block's precision, by largest remainders. */
   percents: number[];
   /** The combined line with the weights worked out each month from the months before it; starts at 1. */
   values: number[];
@@ -210,8 +210,11 @@ export interface Allocation {
   suggestions: Suggestion[];
 }
 
-/** Weights by each method that has the months it needs, for strategies whose curves are aligned, adding up to `total`. */
-export function suggestWeights(aligned: Aligned, total: number): Allocation {
+/**
+ * Weights by each method that has the months it needs, for strategies whose curves are aligned, adding up to `total`;
+ * as percentages with `decimals` decimals, the precision the block writes its weights in.
+ */
+export function suggestWeights(aligned: Aligned, total: number, decimals = 0): Allocation {
   const returns = monthlyReturns(aligned);
   const count = returns[0].length;
   const cash = cashReturns(aligned);
@@ -225,7 +228,7 @@ export function suggestWeights(aligned: Aligned, total: number): Allocation {
     return {
       method,
       weights,
-      percents: wholePercents(weights, total),
+      percents: wholePercents(weights, total, decimals),
       values: rebalanced(aligned, (i) => set.get(i)!),
       cashReturn: scheduledCash(cash, set, aligned.t.length),
     };
@@ -253,19 +256,33 @@ export function strategyAdds(aligned: Aligned, weights: number[]): { values: num
   };
 }
 
+/** Decimals a percentage is written with, at most. */
+export const MAX_DECIMALS = 2;
+
+/** The most decimals among weights as a block writes them (0.333 is 33.3%, one decimal), at most `MAX_DECIMALS`. */
+export function weightDecimals(weights: number[]): number {
+  let most = 0;
+  for (const w of weights) {
+    const written = String(Number((w * 100).toPrecision(12)));
+    most = Math.max(most, written.includes('.') ? written.length - written.indexOf('.') - 1 : 0);
+  }
+  return Math.min(most, MAX_DECIMALS);
+}
+
 /**
- * Weights as whole percentages adding up to exactly the whole percentages of `total` (rounded down, so never above it),
- * by largest remainders: each gets the whole part of its share, and the percentages left go to the largest fractions,
- * the first strategy first among equal ones.
+ * Weights as percentages with `decimals` decimals adding up to exactly `total` at that precision (rounded down, so never
+ * above it), by largest remainders: each gets the whole steps of its share, and the steps left go to the largest
+ * fractions, the first strategy first among equal ones. All 0 when `total` is less than one step.
  */
-export function wholePercents(weights: number[], total: number): number[] {
-  const units = Math.floor(total * 100 + 1e-9);
+export function wholePercents(weights: number[], total: number, decimals = 0): number[] {
+  const scale = 10 ** decimals;
+  const units = Math.floor(total * 100 * scale + 1e-6);
   const sum = weights.reduce((s, w) => s + w, 0);
   if (!(sum > 0)) return weights.map(() => 0);
   const quotas = weights.map((w) => (w / sum) * units);
-  const out = quotas.map((q) => Math.floor(q));
-  const order = quotas.map((q, i) => ({ i, rest: q - Math.floor(q) })).sort((a, b) => b.rest - a.rest || a.i - b.i);
+  const out = quotas.map((q) => Math.floor(q + 1e-9));
+  const order = quotas.map((q, i) => ({ i, rest: q - Math.floor(q + 1e-9) })).sort((a, b) => b.rest - a.rest || a.i - b.i);
   const left = units - out.reduce((s, x) => s + x, 0);
   for (let k = 0; k < left; k++) out[order[k].i]++;
-  return out;
+  return out.map((x) => x / scale);
 }
