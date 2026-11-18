@@ -236,6 +236,18 @@ test('what the made-up bar assumes is listed: its open, high and low, volume, ot
   assert.equal(tickerText(report('universe: A\nbuy when close > open and close < 1', { A, V }).report, 'A').note, 'Assumes it opens at its last close.');
 });
 
+test('a series given a bar keeps its own flags, which decide when its rows are known, and its columns their last values', () => {
+  const A = walkBars(80, 3);
+  // A CSV file of columns, its rows known by their date, with a flag of a kind the copy does not name.
+  const signals: Bars & { marker: string } = { ...walkBars(80, 4), unpriced: true, columns: [{ name: 'level', header: 'Level', v: Array.from({ length: 80 }, (_, i) => i) }], marker: 'kept' };
+  const { bt, data, report: said } = report('universe: A\nbuy when close > sma(5) and column(level) of csv:Data/signals.csv > 0 and close < 1', { A, signals });
+  assert.deepEqual(only(said).assumptions, ['signals keeps its last values']);
+  const next = nextBarData(bt.spec, data, bt.run.states[0], 50).get('signals') as typeof signals;
+  assert.equal(next.t.length, 81);
+  assert.deepEqual([next.unpriced, next.columns![0].v.at(-1), next.marker], [true, 79, 'kept']);
+  assert.deepEqual([signals.t.length, signals.columns![0].v.length], [80, 80]);
+});
+
 test('another clock: a stock read by Bitcoin\'s close waits for Bitcoin\'s bar that ends with its own; with fill: close Bitcoin is read a bar early, already known', () => {
   // SPY trades on weekdays and ends on Friday 13 November 2026; Bitcoin trades every day and ends on Sunday the 15th.
   const SPY = walkBars(300, 6, { end: Date.UTC(2026, 10, 13) });

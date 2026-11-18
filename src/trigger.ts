@@ -177,11 +177,14 @@ function planFor(data: Map<string, Bars>, apart: Apart | undefined, asset: strin
   return { driver, added, assumptions };
 }
 
-/** A copy of `b` with bars added at `times`: each opens at the close before it, the last closes at `close` and the others where they opened. */
+/**
+ * A copy of `b` with bars added at `times`: each opens at the close before it, the last closes at `close` and the others
+ * where they opened. The series' own flags are kept as they are, since they decide when its rows are known.
+ */
 function withBars(b: Bars, times: number[], close: number): Bars {
   const last = b.c[b.c.length - 1];
   const volume = b.v[b.v.length - 1];
-  const out: Bars = { t: [...b.t, ...times], o: [...b.o], h: [...b.h], l: [...b.l], c: [...b.c], v: [...b.v] };
+  const out: Bars = { ...b, t: [...b.t, ...times], o: [...b.o], h: [...b.h], l: [...b.l], c: [...b.c], v: [...b.v] };
   times.forEach((_, k) => {
     const c = k === times.length - 1 ? close : last;
     out.o.push(last);
@@ -191,8 +194,6 @@ function withBars(b: Bars, times: number[], close: number): Bars {
     out.v.push(volume);
   });
   if (b.columns) out.columns = b.columns.map((col) => ({ ...col, v: [...col.v, ...times.map(() => col.v[col.v.length - 1])] }));
-  if (b.unread) out.unread = b.unread;
-  if (b.unpriced) out.unpriced = true;
   return out;
 }
 
