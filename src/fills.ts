@@ -59,18 +59,16 @@ interface Preset {
   name: string;
   /** Headers, as `tidy` writes them, that together tell this broker's file apart. */
   signature: readonly string[];
-  /** Its words for a purchase and a sale in the action column; empty when its quantities carry the sign. */
+  /** Its words for a purchase and a sale in the action column; null when its quantities carry the sign. */
   buy: RegExp | null;
   sell: RegExp | null;
 }
-
-export const STATEMENT = 'Interactive Brokers activity statement';
 
 const PRESETS: readonly Preset[] = [
   { name: 'Charles Schwab', signature: ['date', 'action', 'symbol', 'quantity', 'price', 'fees & comm'], buy: /^buy$/i, sell: /^sell$/i },
   { name: 'Fidelity', signature: ['run date', 'action', 'symbol', 'quantity', 'price'], buy: /^you bought\b/i, sell: /^you sold\b/i },
   { name: 'Interactive Brokers Flex query', signature: ['symbol', 'quantity', 'tradeprice'], buy: /^buy$/i, sell: /^sell$/i },
-  { name: STATEMENT, signature: ['datadiscriminator', 'symbol', 'date/time', 'quantity', 't price'], buy: null, sell: null },
+  { name: 'Interactive Brokers activity statement', signature: ['datadiscriminator', 'symbol', 'date/time', 'quantity', 't price'], buy: null, sell: null },
 ];
 
 export type LeftOut = 'dividends' | 'reinvestments' | 'transfers' | 'other';
