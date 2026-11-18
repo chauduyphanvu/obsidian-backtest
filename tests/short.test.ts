@@ -236,10 +236,14 @@ test('short and cover rules: heads, position values, short-only blocks and the m
   assert.equal(s.written!.rules.SPY.cover!.text, 'bars held > 20');
   assert.deepEqual(s.margin, { cap: 1, borrowFee: BORROW_FEE, rate: MARGIN_RATE, maintenance: 0.25 });
   assert.deepEqual([BORROW_FEE, MARGIN_RATE], [0.005, 0.06]);
-  // Rule heads are read in any case; short and cover are reserved.
+  // Rule heads are read in any case. short and cover stay free as parameter names, as strategies written before shorts
+  // use them (sma(short) > sma(long)), and a rule head and a parameter of the same name live side by side.
   assert.ok(ok('universe: SPY\nSHORT WHEN close < 1\nCover When close > 2').rules.SPY.cover);
-  assert.ok(RESERVED.has('short') && RESERVED.has('cover'));
-  assert.match(errorsOf('universe: SPY\nshort = 5\nbuy when true')[0], /"short" is a built-in name/);
+  assert.ok(!RESERVED.has('short') && !RESERVED.has('cover'));
+  const crossover = ok('universe: SPY\nshort = 20\nlong = 50\nbuy when sma(short) > sma(long)\nsell when sma(short) < sma(long)');
+  assert.deepEqual([crossover.rules.SPY.short ?? null, crossover.margin ?? null], [null, null]);
+  const both = ok('universe: SPY\nshort = 20\ncover = 50\nshort when close < sma(short)\ncover when close > sma(cover)');
+  assert.deepEqual([both.written!.rules.SPY.short!.text, both.written!.rules.SPY.cover!.text], ['close < sma(short)', 'close > sma(cover)']);
   // A short rule reads no position, as a buy rule does; a cover rule can.
   assert.match(errorsOf('universe: SPY\nshort when bars held > 1')[0], /"bars held" only makes sense in a sell, cover or add rule/);
   assert.match(errorsOf('universe: SPY\nbuy when true\ncover when close > 1')[0], /"cover when" closes a short, so it needs a short rule that says when to go short/);
@@ -286,4 +290,18 @@ test('a percentage take profit of 100% or more is flagged where a short can neve
   assert.deepEqual(warned('universe: SPY\ntake profit: 150%\nbuy when true'), []);
   assert.deepEqual(warned('universe: SPY\ntake profit: 90%\nshort when true'), []);
   assert.deepEqual(warned('universe: SPY, QQQ\nfor QQQ:\n  take profit: 100%\nshort when true').map(([l]) => l), [3]);
+});
+
+test('a margin call is not held open by a ticker whose prices have ended, so a later one is still made', () => {
+  const px = (cs: number[]) => ohlc(cs.map((c, i) => { const o = i ? cs[i - 1] : c; return [o, Math.max(o, c), Math.min(o, c), c]; }));
+  // A's prices end on day 2. B rallies into a margin call at day 3's close, is covered at day 4's open, re-arms above
+  // 100, is shorted again at day 6's open and rallies until a second margin call.
+  const A = px([100, 100, 100]);
+  const B = px([90, 90, 90, 135, 105, 95, 90, 99, 110, 120, 130, 140, 150, 160]);
+  const r = run('universe: A 10%, B 150%\ncapital: 10000\nborrow fee: 0%\nmargin rate: 0%\nfor A:\n  short when true\nfor B:\n  short when close < 100\n  cover when close > 400', { A, B }).run;
+  assert.equal(r.marginCalls, 2);
+  assert.equal(r.ruin, null);
+  assert.deepEqual(r.trades.map((t) => [t.asset, t.reason]), [['B', 'margin call'], ['A', 'open'], ['B', 'margin call']]);
+  // A can't be closed, so it is not reported as closing at the next open either.
+  assert.deepEqual([r.states[0].side, r.states[0].pending, r.states[0].marginCall], ['short', null, undefined]);
 });

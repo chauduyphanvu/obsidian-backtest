@@ -489,7 +489,7 @@ export function orderSteps(o: Pick<AccountOrder, 'shares' | 'holding'>): OrderSt
   return [];
 }
 
-const STEP_WORDS: Record<OrderAction, string> = { buy: 'Buy', sell: 'Sell', short: 'Sell short', cover: 'Buy to cover' };
+export const STEP_WORDS: Record<OrderAction, string> = { buy: 'Buy', sell: 'Sell', short: 'Sell short', cover: 'Buy to cover' };
 
 /** The single step of an order in words, with "all" when it closes the whole holding as the strategies ask: "Sell all", "Buy to cover all". */
 export const stepWord = (o: Pick<AccountOrder, 'kind'>, step: OrderStep): string => `${STEP_WORDS[step.action]}${o.kind === 'close' || o.kind === 'flip' ? ' all' : ''}`;

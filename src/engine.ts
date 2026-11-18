@@ -1376,6 +1376,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
           a.called = false;
           close(a, t, a.bars.o[a.i], 'margin call', call);
         }
+        // A ticker whose prices have ended has no open to close at, so it no longer holds the call open.
+        for (const a of assets) if (a.called && a.i >= a.bars.t.length - 1) a.called = false;
         if (!assets.some((a) => a.called)) call = null;
       }
     }

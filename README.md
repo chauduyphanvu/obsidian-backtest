@@ -436,7 +436,7 @@ stop = 8% in 4%..12% step 2%
 - `step` is optional. It defaults to 1, or to 1% for a percentage.
 - A range can hold at most 200 values.
 - Write `%` on every number of a percentage parameter. In a stop distance's share (`stop loss: stop`) and in `risk per trade`, use a percentage parameter. In a period, a `top` count, an ATR multiple or `entries`, use a plain one. Inside a rule either works as a number: `limit = 3%` is 0.03.
-- A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below is of buy sell short cover when for all in step at top by true false always never min max abs bars entry bars_held entry_price last_entry_price entries_made`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
+- A name is letters, digits and underscores, and starts with a letter or underscore. It cannot be a word the language already uses: a series, a function, a one-word setting, a calendar value, or one of `and or not crosses above below is of buy sell when for all in step at top by true false always never min max abs bars entry bars_held entry_price last_entry_price entries_made`. `fast_ma`, `slow_ma` and `stop_pct` are safe.
 - Declare a name once. Names do not care about capital letters. A parameter can sit anywhere in the block.
 
 A range changes nothing by itself: the block runs with the value written. Every declared parameter gets a slider in the result (see "The Parameters bar" under "Reading a result"), and a range also enables "Try other parameter values".

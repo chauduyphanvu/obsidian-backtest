@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { accountOrderText, ordersMarkdown, scanAccounts, sortAccounts, type AccountScanHost, type AccountStatus } from '../src/orders.ts';
+import { accountOrderBadge, accountOrderText, ordersMarkdown, scanAccounts, sortAccounts, type AccountScanHost, type AccountStatus } from '../src/orders.ts';
+import type { AccountOrder } from '../src/account.ts';
 import type { RunOutput } from '../src/runner.ts';
 import { bars } from './helpers.ts';
 
@@ -58,9 +59,9 @@ test('an account that holds what its strategies hold has nothing to trade, and o
 });
 
 test('an order in words, and accounts by name', () => {
-  assert.equal(accountOrderText({ shares: 12, kind: 'open' }), 'Buy 12 shares');
-  assert.equal(accountOrderText({ shares: -1, kind: 'resize' }), 'Sell 1 share');
-  assert.equal(accountOrderText({ shares: -0.5, kind: 'close' }), 'Sell all 0.5 shares');
+  assert.equal(accountOrderText({ shares: 12, kind: 'open', holding: 0 }), 'Buy 12 shares');
+  assert.equal(accountOrderText({ shares: -1, kind: 'resize', holding: 3 }), 'Sell 1 share');
+  assert.equal(accountOrderText({ shares: -0.5, kind: 'close', holding: 0.5 }), 'Sell all 0.5 shares');
   const a = (name: string): AccountStatus => ({ note: `${name}.md`, name, orders: [], asOf: null, error: null });
   assert.deepEqual(sortAccounts([a('b 10'), a('B 9'), a('a')]).map((x) => x.name), ['a', 'B 9', 'b 10']);
 });
@@ -99,4 +100,14 @@ test("the saved note lists each account's orders in a table, and the others in a
   );
   // Without accounts the note has no such section.
   assert.ok(!ordersMarkdown([status], Date.UTC(2026, 10, 17)).includes('## Accounts'));
+});
+
+test('an account order in the orders window: its badge, and the words after it', () => {
+  const badge = (shares: number, kind: AccountOrder['kind'], holding: number) => accountOrderBadge({ shares, kind, holding });
+  assert.deepEqual(badge(12, 'open', 0), { action: 'Buy', style: 'buy', text: '12 shares' });
+  assert.deepEqual(badge(-30, 'close', 30), { action: 'Sell', style: 'sell', text: 'all 30 shares' });
+  assert.deepEqual(badge(-5, 'open', 0), { action: 'Sell short', style: 'short', text: '5 shares' });
+  assert.deepEqual(badge(10, 'close', -10), { action: 'Buy to cover', style: 'cover', text: 'all 10 shares' });
+  assert.deepEqual(badge(-80, 'flip', 30), { action: 'Flip', style: 'sell', text: 'sell 30 shares, then sell short 50 shares' });
+  assert.deepEqual(badge(80, 'flip', -20), { action: 'Flip', style: 'buy', text: 'buy to cover 20 shares, then buy 60 shares' });
 });

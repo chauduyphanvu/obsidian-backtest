@@ -442,7 +442,9 @@ export function walkWindows(t: number[], trainMonths: number, testMonths: number
 function windowScore(run: RunResult, [a, b]: [number, number], metric: Metric): number {
   const base = Math.max(0, a - 1);
   const slice = (xs: number[]) => xs.slice(base, b + 1);
-  const v = computeStats(slice(run.t), slice(run.equity), run.equity[base], run.exposure.slice(a, b + 1), slice(run.cashReturn))[metric];
+  // A ruin inside the window ends its returns there, as for the whole run; one before it leaves nothing to score.
+  const ruin = run.ruin ? run.t.indexOf(run.ruin.t) - base : -1;
+  const v = computeStats(slice(run.t), slice(run.equity), run.equity[base], run.exposure.slice(a, b + 1), slice(run.cashReturn), ruin >= 0 && ruin <= b - base ? ruin : undefined)[metric];
   return Number.isFinite(v) ? v : NaN;
 }
 

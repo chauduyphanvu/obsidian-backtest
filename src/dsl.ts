@@ -277,7 +277,7 @@ export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 
 /** Names a parameter can't take. */
 export const RESERVED = new Set([
-  'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'short', 'cover', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
+  'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
   'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
   ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
 ]);

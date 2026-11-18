@@ -220,4 +220,10 @@ test('a walk-forward whose picks are ruined stays at 0 from the ruin, with no ga
   assert.ok(w.declared.equity.every(Number.isFinite) && w.hindsight.equity.every(Number.isFinite));
   assert.ok(w.windows.every((x) => Number.isFinite(x.testReturn) && Number.isFinite(x.declaredReturn)));
   assert.deepEqual([w.stats.totalReturn, w.stats.maxDrawdown], [-1, -1]);
+  // A training stretch with the ruin in it scores the ruin, below any gain, not the flat line after it.
+  const bySharpe = (await walkForward('universe: A 200%\nmargin rate: 0%\nn = 10 in 10..20 step 10\nbuy when close > sma(n)', data, { trainYears: 2, testYears: 1, metric: 'sharpe' }))!;
+  const ruinT = days.t[4 * 260];
+  const ruined = bySharpe.windows.filter((x) => x.trainFrom <= ruinT && ruinT <= x.trainTo);
+  assert.ok(ruined.length > 0);
+  for (const x of ruined) assert.ok(x.trainScore < 0, `${x.trainScore}`);
 });

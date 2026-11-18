@@ -1,4 +1,4 @@
-import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderText, parseAccount, runAccount, type AccountOrder } from './account.ts';
+import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountOrder } from './account.ts';
 import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
@@ -489,9 +489,20 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
 }
 
 /** An account's order in words: "Buy 12 shares", "Sell all 30 shares", "Sell short 5 shares", "Flip: sell 50 shares, then sell short 30 shares". */
-export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind'> & { holding?: number }): string {
-  // Without the holding, a sale is of a long one.
-  return orderText({ ...o, holding: o.holding ?? Math.max(0, -o.shares) }, (n) => `${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`);
+export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind' | 'holding'>): string {
+  return orderText(o, (n) => `${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`);
+}
+
+/**
+ * An account's order as the orders window lists it: the badge ("Buy", "Sell short", "Flip"), its style (a flip's by its
+ * direction), and the rest of accountOrderText after the badge's words.
+ */
+export function accountOrderBadge(o: Pick<AccountOrder, 'shares' | 'kind' | 'holding'>): { action: string; style: OrderRow['action']; text: string } {
+  const steps = orderSteps(o);
+  const text = accountOrderText(o);
+  if (steps.length === 2) return { action: 'Flip', style: o.shares > 0 ? 'buy' : 'sell', text: text.slice('Flip: '.length) };
+  const action = STEP_WORDS[steps[0].action];
+  return { action, style: steps[0].action, text: text.slice(action.length + 1) };
 }
 
 /** Accounts by name, as the window and the note list them. */

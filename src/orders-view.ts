@@ -4,7 +4,7 @@ import { price, shareCount, signedPct } from './format.ts';
 import {
   ACCOUNTS_HEADING,
   ACCOUNTS_NOTE,
-  accountOrderText,
+  accountOrderBadge,
   actionWord,
   barLabel,
   barTime,
@@ -209,16 +209,19 @@ export class OrdersModal extends Modal {
         continue;
       }
       const list = h(box, 'ul', 'bt-orders-list');
-      for (const o of a.orders) {
+      const badges = a.orders.map(accountOrderBadge);
+      if (badges.some((b) => b.action.length > 4)) list.classList.add('bt-orders-wide');
+      a.orders.forEach((o, k) => {
+        const badge = badges[k];
         const row = h(list, 'li', 'bt-orders-row');
-        h(row, 'span', `bt-orders-action bt-orders-${o.shares > 0 ? 'buy' : 'sell'}`, o.shares > 0 ? 'Buy' : 'Sell');
+        h(row, 'span', `bt-orders-action bt-orders-${badge.style}`, badge.action);
         const what = h(row, 'div', 'bt-orders-what');
         h(what, 'span', 'bt-orders-ticker', o.ticker);
-        h(what, 'span', undefined, accountOrderText(o).replace(/^\S+ /, ''));
+        h(what, 'span', undefined, badge.text);
         const detail = h(row, 'div', 'bt-orders-detail');
         h(detail, 'span', undefined, `Last close ${price(o.price)}`);
         h(detail, 'span', undefined, `Held ${shareCount(o.holding)}`);
-      }
+      });
     }
   }
 
