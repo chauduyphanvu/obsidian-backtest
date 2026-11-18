@@ -153,6 +153,21 @@ cash: 4,200
 | Save this note's results to its properties | Writes each strategy's figures to `bt_` properties. |
 | Clear saved prices | Removes the price cache. |
 
+## With an AI assistant
+
+A model can learn the language from [`llms.txt`](llms.txt) and [`llms-full.txt`](llms-full.txt): the whole guide for a writer, with worked examples. Also made for models, in `docs/`: every word with its meaning (`language.json`), worked examples and common mistakes with their fixes (`corpus/`), and a Lark and a GBNF grammar for generating under a grammar (`grammar/`).
+
+Each release also carries `backtest-blocks.mjs`, a command line and MCP server for Node.js 20 or later, so an assistant can check and run what it writes outside Obsidian:
+
+```
+node backtest-blocks.mjs check note.md           # each problem with its line; exit 1 on errors
+node backtest-blocks.mjs run note.md --block 2   # backtest one block on live prices (--json for data)
+node backtest-blocks.mjs explain "stop loss"     # what a word means
+node backtest-blocks.mjs mcp                     # the same, as MCP tools
+```
+
+In Claude Code: `claude mcp add backtest-blocks -- node /path/to/backtest-blocks.mjs mcp`. In Claude Desktop or Codex, give the same command (`node`, with the arguments `/path/to/backtest-blocks.mjs mcp`) as an MCP server. It offers the tools `check_strategy`, `run_backtest`, `explain_word` and `list_words`, the guide, word list, examples and grammars as resources, and a `write_strategy` prompt. Prices are saved in `~/.cache/backtest-blocks`, and Tiingo and FRED read their keys from `TIINGO_API_KEY` and `FRED_API_KEY`.
+
 ## Settings
 
 Defaults for starting money, costs, slippage, commission, cash interest, the borrow fee and margin interest; where plain tickers come from; how long saved prices are kept; API keys for Tiingo, FRED and drafting, picked from Obsidian's secret storage, never stored by the plugin; and switches for the start-up order check and the ticker lookup.
