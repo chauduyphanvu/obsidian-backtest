@@ -20,7 +20,7 @@ export const MAX_COLUMNS = 50;
 
 /**
  * OHLCV bars, oldest first. `t` is epoch milliseconds; daily bars sit at UTC midnight of their trading date.
- * Only a CSV file can carry the optional fields; every other source leaves them out.
+ * Only a CSV file can carry `columns`, `unread` and `unpriced`, and only a FRED series `values`; other sources leave them out.
  */
 export interface Bars {
   t: number[];
@@ -35,15 +35,32 @@ export interface Bars {
   unread?: UnreadColumn[];
   /** A file with only a date and columns, no prices: `o`, `h`, `l` and `c` are NaN and `v` is 0, and it cannot be traded. */
   unpriced?: true;
+  /**
+   * A series of values rather than prices, such as a FRED series: each row is dated the day its value was first published,
+   * with the value in `o`, `h`, `l` and `c` (zero and below included) and `v` 0. It cannot be traded or be the benchmark.
+   */
+  values?: true;
 }
 
-export type Source = 'yahoo' | 'binance' | 'csv';
+/** Where a ticker's bars come from, as a block writes it before a colon: `binance:BTCUSDT`. */
+export const SOURCES = ['yahoo', 'binance', 'csv', 'tiingo', 'fred'] as const;
+export type Source = (typeof SOURCES)[number];
+
+/** The sources a block's plain tickers can come from (`data:` and the plugin setting). */
+export const DATA_SOURCES = ['yahoo', 'binance', 'tiingo'] as const;
+export type DataSource = (typeof DATA_SOURCES)[number];
+
+/** A source written in front of a ticker, as in `fred:T10Y2Y`; group 1 is the source. */
+export const SOURCE_PREFIX = new RegExp(`^(${SOURCES.join('|')}):`, 'i');
+
+/** The services whose requests carry an API key from the user's secret storage. */
+export type KeyedService = 'tiingo' | 'fred';
 
 export interface AssetRef {
   /** How the spec and the results refer to it: the ticker, or a CSV file's base name. */
   name: string;
   source: Source;
-  /** Ticker for yahoo and binance, vault path for csv. */
+  /** Ticker for yahoo, binance and tiingo, series ID for fred, vault path for csv. */
   id: string;
 }
 
@@ -77,5 +94,6 @@ export function sliceBars(bars: Bars, from: number): Bars {
   if (bars.columns) out.columns = bars.columns.map((c) => ({ ...c, v: c.v.slice(from) }));
   if (bars.unread) out.unread = bars.unread;
   if (bars.unpriced) out.unpriced = true;
+  if (bars.values) out.values = true;
   return out;
 }

@@ -567,7 +567,8 @@ export function clockOf(source: string, t: number[]): string {
   // Day 0 of the epoch was a Thursday.
   for (const x of t) count[(((Math.floor(x / DAY) + 4) % 7) + 7) % 7]++;
   const weekdays = count.flatMap((n, d) => (n > 0 && n >= TRADING_DAY * t.length ? [d] : [])).join('');
-  return `${source} ${length} ${weekdays}`;
+  // Tiingo dates a listing's bars by its exchange day, as Yahoo does, so the two keep one clock.
+  return `${source === 'tiingo' ? 'yahoo' : source} ${length} ${weekdays}`;
 }
 
 /** 1 on the first bar of each period; unknown on the series' first bar, whose period may have begun earlier. */

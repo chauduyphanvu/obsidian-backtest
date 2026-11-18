@@ -9,7 +9,8 @@ import type { Defaults } from './dsl.ts';
 import { fixChanges, type Fix } from './fixes.ts';
 import { lineKinds, TICKER_SETTINGS, type TokenKind } from './highlight.ts';
 import { ResultCache } from './result-cache.ts';
-import { blockSource, blockTickers, type SymbolLookup, type TickerRef } from './symbols.ts';
+import { blockSource, blockTickers, isLookupSource, type SymbolLookup, type TickerRef } from './symbols.ts';
+import { SOURCE_PREFIX, type DataSource } from './types.ts';
 
 const KINDS: Record<TokenKind, true> = { key: true, keyword: true, function: true, series: true, number: true, ticker: true, value: true, operator: true, comment: true, param: true };
 const TOKEN_MARKS = Object.fromEntries(Object.keys(KINDS).map((k) => [k, Decoration.mark({ class: `bt-tok bt-tok-${k}` })])) as Record<TokenKind, Decoration>;
@@ -384,7 +385,8 @@ export interface SuggestOptions {
 /** A ticker being typed, and what the lookup is asked for it. */
 interface TickerAsk {
   word: string;
-  source: 'yahoo' | 'binance';
+  /** Where the block's plain tickers come from. */
+  source: DataSource;
   lookup: SymbolLookup;
 }
 
@@ -419,10 +421,12 @@ export class StrategySuggest extends EditorSuggest<Completion> {
     if (!lookup || !pos) return null;
     const taken = writtenTickers([line], TICKER_SETTINGS);
     this.items = localTickers(around.block, pos, taken, this.options.csvPaths?.() ?? []);
-    if (/^csv:/i.test(pos.word)) {
+    const source = blockSource(around.block, this.options.defaults?.());
+    if (!isLookupSource(pos.word.match(SOURCE_PREFIX)?.[1].toLowerCase() ?? source)) {
+      // A CSV file, a Tiingo ticker or a FRED series is never looked up, so only what is known here is offered.
       if (!this.items.length) return null;
     } else if (pos.word) {
-      this.ask = { word: pos.word, source: blockSource(around.block, this.options.defaults?.()), lookup };
+      this.ask = { word: pos.word, source, lookup };
     } else if (!this.items.length) {
       return null;
     }

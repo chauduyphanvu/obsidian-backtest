@@ -122,6 +122,8 @@ export interface RunOutput {
   data: Map<string, Bars>;
   /** Things the reader should know that did not stop the run, such as stale prices. */
   warnings: string[];
+  /** How the prices loaded were dated, such as a FRED series' backfill (fred.ts); unlike `warnings`, nothing to put right. */
+  notes?: string[];
   prices: PriceInfo[];
 }
 
@@ -152,7 +154,7 @@ export class Runner {
     return parseSpec(source, { defaults: this.defaults, overrides });
   }
 
-  async loadPrices(spec: Spec, force = false): Promise<{ data: Map<string, Bars>; warnings: string[]; prices: PriceInfo[] }> {
+  async loadPrices(spec: Spec, force = false): Promise<{ data: Map<string, Bars>; warnings: string[]; notes: string[]; prices: PriceInfo[] }> {
     const refs = new Map<string, AssetRef>();
     const cash = spec.cash.k === 'ticker' ? [spec.cash.ref] : [];
     for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...cash]) {
@@ -162,11 +164,11 @@ export class Runner {
     const sinceFor = (step: number) => (spec.from === null ? 0 : spec.from - Math.ceil(lookback * (step >= DAY ? NON_TRADING : 1)) * step);
     const since = sinceFor(Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)]);
     /**
-     * A CSV file's bars are the size its rows are, which `interval` does not set, so its lookback is worked out from its own
-     * rows: from the shortest gap between them as for a download, and at least `lookback` rows, which counts the nights and
-     * weekends of intraday rows. A daily file keeps what the daily interval gave it.
+     * A CSV file's bars, and a FRED series' rows, are the size their rows are, which `interval` does not set, so their
+     * lookback is worked out from their own rows: from the shortest gap between them as for a download, and at least
+     * `lookback` rows, which counts the nights and weekends of intraday rows. A daily file keeps what the daily interval gave it.
      */
-    const csvSince = (t: number[]): number => {
+    const rowsSince = (t: number[]): number => {
       if (spec.from === null) return 0;
       let gap = Infinity;
       for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) gap = Math.min(gap, t[i] - t[i - 1]);
@@ -185,17 +187,18 @@ export class Runner {
         throw new Error(`${why} It is the ticker the cash rate is read from: the block's "cash rate" line, or without one the plugin's "Interest on cash" setting.`);
       }
     };
-    const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, csv: r.source === 'csv', ...(await load(r)) })));
+    const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, rows: r.source === 'csv' || r.source === 'fred', ...(await load(r)) })));
     const warnings = loaded.flatMap((l) => (l.warning ? [l.warning] : []));
+    const notes = loaded.flatMap((l) => (l.note ? [l.note] : []));
     // Saved prices can reach further back than this run asks for; the same block must give the same answer.
-    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, l.csv ? csvSince(l.bars.t) : since)]));
+    const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, l.rows ? rowsSince(l.bars.t) : since)]));
     if (spec.magnify) {
       for (const inside of await this.loadInside(spec, spec.magnify, force)) {
         if (inside.warning) warnings.push(inside.warning);
         if (inside.bars) data.set(insideKey(inside.name, spec.magnify), inside.bars);
       }
     }
-    return { data, warnings, prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })) };
+    return { data, warnings, notes, prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })) };
   }
 
   /**
@@ -208,7 +211,7 @@ export class Runner {
     const now = this.deps.now();
     return Promise.all(
       spec.universe
-        .filter((a) => a.source !== 'csv')
+        .filter((a) => a.source === 'yahoo' || a.source === 'binance')
         .map(async (a) => {
           const since = Math.max(spec.from ?? 0, insideReach(a.source, interval, now));
           if (spec.to !== null && spec.to < since) return { name: a.name, bars: emptyBars(), warning: null };
@@ -224,7 +227,7 @@ export class Runner {
   }
 
   async run(spec: Spec, force = false): Promise<RunOutput> {
-    const { data, warnings, prices } = await this.loadPrices(spec, force);
-    return { spec, backtest: runBacktest(spec, data), data, warnings, prices };
+    const { data, warnings, notes, prices } = await this.loadPrices(spec, force);
+    return { spec, backtest: runBacktest(spec, data), data, warnings, notes, prices };
   }
 }

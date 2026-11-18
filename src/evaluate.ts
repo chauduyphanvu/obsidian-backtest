@@ -34,8 +34,8 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
   return (from, to) => clock(from) !== clock(to);
 }
 
-/** When each row of a series is known: a bar of prices when it ends, a row of a file of dated values by ind.valueEnds. */
-const rowEnds = (b: Bars): number[] => (b.unpriced ? ind.valueEnds(b.t) : ind.barEnds(b.t));
+/** When each row of a series is known: a bar of prices when it ends, a row of dated values (a file's, FRED's) by ind.valueEnds. */
+const rowEnds = (b: Bars): number[] => (b.unpriced || b.values ? ind.valueEnds(b.t) : ind.barEnds(b.t));
 
 /** Functions given a series that still read the ticker's own prices: its closes, or its average true range. */
 const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];
@@ -427,7 +427,7 @@ export class Evaluator {
     const src = e.src ? this.eval(e.src, asset) : bars.c;
     const [a, b, c] = e.args;
     if (NEEDS_VOLUME.includes(e.fn) && !bars.v.some((x) => x > 0)) {
-      throw new Error(`${asset} has no volume, which ${e.fn}() needs. A CSV file needs a volume column, and some indexes have none.`);
+      throw new Error(`${asset} has no volume, which ${e.fn}() needs. A FRED series and some indexes have none, and a CSV file needs a volume column.`);
     }
     switch (e.fn) {
       case 'sma':

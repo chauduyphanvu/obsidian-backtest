@@ -30,7 +30,11 @@ export interface PriceStoreOptions {
   /** A path as the vault writes it (Obsidian's normalizePath). */
   normalize: (path: string) => string;
   /** GET a URL and return its body (data.ts DataDeps). */
-  fetchText: (url: string) => Promise<string>;
+  fetchText: DataDeps['fetchText'];
+  /** A service's API key from the user's secret storage, read at each request (data.ts DataDeps). */
+  secret?: DataDeps['secret'];
+  /** Whether Tiingo stands in for Yahoo (data.ts DataDeps). */
+  tiingoFallback?: DataDeps['tiingoFallback'];
 }
 
 export class PriceStore {
@@ -78,6 +82,8 @@ export class PriceStore {
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
       fetchText: this.o.fetchText,
+      secret: this.o.secret,
+      tiingoFallback: this.o.tiingoFallback,
       readVaultFile: async (path) => {
         const p = normalizePath(path);
         if (!(await adapter.exists(p))) {
