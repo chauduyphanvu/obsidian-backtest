@@ -1,0 +1,21 @@
+/* Trigger prices: the positions table's "Next close" column, and the closes to watch in the orders window. */
+
+/* A sentence or two a cell, so the column takes a reader's width rather than squeezing the numbers beside it. */
+.bt-root .bt-table td.bt-next-close {
+  min-width: 16em;
+  max-width: 34em;
+}
+.bt-root .bt-table td.bt-next-close-waiting {
+  color: var(--text-faint);
+}
+.bt-next-close-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* A close to watch is not an order yet: its word is outlined with a dashed line, a sell still filled. */
+.bt-orders-watch .bt-orders-action {
+  border-style: dashed;
+}

@@ -11,6 +11,7 @@ import { renderDeepStats } from './render-stats.ts';
 import { renderPositions, renderTrades } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
 import type { Source } from './types.ts';
+import type { TriggerReport } from './trigger.ts';
 
 /** The strategy as written: the block replaces its own text, so the result has to show it. */
 function source(el: HTMLElement, text: string): void {
@@ -150,6 +151,11 @@ export interface ResultView {
   remember?: { get(): boolean | undefined; set(open: boolean): void };
   /** Sliders for the strategy's parameters; ignored when it declares none. */
   params?: ParamsHook;
+  /**
+   * The trigger prices of a run on screen, asked for when its positions are drawn: for the block as written and for a
+   * slider once let go, never while it is dragged. Null when the run has none to show.
+   */
+  triggers?: (out: RunOutput) => Promise<TriggerReport | null> | null;
 }
 
 /** Keys the remembered state of a block: its note and its name, or its place among the note's blocks when it has no name. */
@@ -271,7 +277,7 @@ function fillLegend(legend: HTMLElement, bt: Backtest): void {
 const PRICES_FROM: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'your CSV files', tiingo: 'Tiingo', fred: 'FRED' };
 
 /** The parts of a result that are heavy to draw or rarely needed. Returns what to run when they are drawn again or go away. */
-function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() => void)[] {
+function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], triggers: Promise<TriggerReport | null> | null): (() => void)[] {
   const { spec, backtest: bt, prices } = out;
   const { run } = bt;
   const intraday = isIntraday(bt.run.t);
@@ -289,7 +295,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() =
   }
 
   segments(root, bt);
-  renderPositions(root, bt, intraday);
+  renderPositions(root, bt, intraday, triggers);
   renderTrades(root, bt, intraday);
   stops.push(renderDeepStats(root, { t: run.t, strategy: run.equity, benchmark: bt.benchmark.equity, benchmarkLabel: bt.benchmark.label, cashReturn: run.cashReturn }));
   for (const section of sections) {
@@ -384,7 +390,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
       stopRest();
       rest.replaceChildren();
       rest.classList.remove('bt-stale');
-      stops = fillRest(rest, out, view.sections?.(out) ?? []);
+      stops = fillRest(rest, out, view.sections?.(out) ?? [], view.triggers?.(out) ?? null);
     };
     // Between two frames of a drag only what is at the top is worth redrawing; the rest says it is out of date.
     show = (out, settled) => {

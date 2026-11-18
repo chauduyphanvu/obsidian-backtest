@@ -85,11 +85,12 @@ export default class BacktestBlocks extends Plugin {
     },
     startForward: (input) => this.startForward(input),
   });
-  /** The scan of the vault for today's orders. */
+  /** The scan of the vault for today's orders, with each result's trigger prices worked out before its runs close. */
   private orders: ScanHost = {
     clear: () => this.results.clear(),
     find: () => this.findStrategies(),
-    run: (source, opts) => this.results.runSource(source, opts),
+    run: (source, opts) => this.results.runSource(source, { ...opts, triggers: true }),
+    triggers: (out) => this.results.triggers(out),
   };
   private ordersBadge: OrdersBadge | null = null;
   private symbolLookup: SymbolLookup | null = null;
