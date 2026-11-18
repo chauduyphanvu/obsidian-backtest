@@ -807,10 +807,14 @@ class Explainer {
       rows.push(row(`The ${name} rule at ${this.closeOf(this.bars.t[j])}:`));
       rows.push(...this.rule(`${name} when`, exit, written, j, this.position()).rows);
     }
-    const pending = bt.run.states.find((s) => s.name === trade.asset)?.pending;
+    const state = bt.run.states.find((s) => s.name === trade.asset);
+    const pending = state?.pending;
     // An order to open the other side closes this one first: a flip.
     const [closing, flip, order] = this.short ? (['cover', 'buy', 'cover it'] as const) : (['sell', 'short', 'sell it'] as const);
-    if (pending === closing || pending === flip) {
+    if (state?.marginCall) {
+      const level = share(bt.spec.margin?.maintenance ?? 0);
+      rows.push(row(`A margin call was made at the last close: equity was below ${level} of the value of the positions, long and short together, so an order to ${order} is waiting for the next open.`));
+    } else if (pending === closing || pending === flip) {
       rows.push(row(`An order to ${order}${pending === flip ? (this.short ? ' and buy' : ' and sell short') : ''} is waiting for the ${this.atClose ? 'next close' : 'next open'}.`));
     } else rows.push(row(`No order to ${order} is waiting.`));
     return rows;

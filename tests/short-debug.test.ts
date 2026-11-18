@@ -137,6 +137,13 @@ test('a margin call: decided at a close, filled at the next open even with fill:
   }
 });
 
+test('a margin call made at the last close is an order pending for the next open, whatever the fill', () => {
+  for (const fill of ['', 'fill: close\n']) {
+    const rows = rowsOf(run(fill + LEVERED, { A: ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66]]) }));
+    assert.ok(rows.at(-1)!.what.endsWith("Margin call (equity below 25% of the positions' value): order pending to sell at the next open."), rows.at(-1)!.what);
+  }
+});
+
 test('a ruin closes everything, and nothing more is traded after it', () => {
   const bt = run(LEVERED, { A: ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66], [45, 65, 45, 60], [60, 80, 60, 80], [80, 90, 80, 90]]) });
   const rows = rowsOf(bt);
@@ -172,4 +179,75 @@ test('the parts of the short and cover rules are worked out ahead with the other
   assert.equal(both, total('universe: A\nbuy when close < sma(3)\nsell when close > sma(5)') + 1);
   const rows = rowsOf(run('universe: A\nshort when close < 11', { A: bars([12, 12, 10, 10]) }));
   assert.deepEqual(rows.map(interesting), [false, false, true, true]);
+});
+
+// ------------------------------------------------------------------ the table agrees with the trade list
+
+function walk(n: number, seed: number, drift: number): Bars {
+  let x = seed;
+  const rnd = () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const out: Bars = { t: [], o: [], h: [], l: [], c: [], v: [] };
+  let p = 50 + rnd() * 50;
+  for (let d = T0; out.t.length < n; d += DAY) {
+    const o = p * (1 + (rnd() < 0.08 ? (rnd() - 0.5) * 0.12 : (rnd() - 0.5) * 0.01));
+    const c = o * (1 + drift + (rnd() - 0.5) * 0.05);
+    out.t.push(d);
+    out.o.push(o);
+    out.c.push(c);
+    out.h.push(Math.max(o, c) * (1 + rnd() * 0.02));
+    out.l.push(Math.min(o, c) * (1 - rnd() * 0.02));
+    out.v.push(1000);
+    p = c;
+  }
+  return out;
+}
+
+const AGREE = [
+  'universe: A, B\ntrailing stop: 2 atr(10)\nborrow fee: 1%\nbuy when close > sma(10)\nshort when close < sma(10)',
+  'universe: A\nslippage: 3 bps\nstop loss: 4%\ntake profit: 7%\nshort when sma(5) crosses below sma(20)\ncover when sma(5) crosses above sma(20)',
+  'universe: A 100%, B 50%\nmargin rate: 8%\nrebalance: weekly\nfor A:\nbuy when close > sma(15)\nsell when close < sma(15)\nfor B:\nshort when close < sma(15)\ncover when close > sma(15) or bars held >= 12',
+  'universe: A\nentries: 3\nstop loss: 8%\nshort when roc(5) < -2%\nadd when entries made < 3 and close > last entry price\ncover when close < entry price * 0.95 or bars held >= 10',
+];
+
+test('over shorts, flips and leverage, each bar\'s position and every entry and exit the table names agree with the trade list', () => {
+  const data = { A: walk(300, 7, -0.0004), B: walk(300, 11, 0.0003) };
+  const seen = new Set<string>();
+  for (const src of AGREE) {
+    for (const fill of ['', 'fill: close\n']) {
+      const bt = run(fill + src, data);
+      for (const asset of ['A', 'B'].filter((a) => bt.spec.rules[a])) {
+        const trades = bt.run.trades.filter((t) => t.asset === asset);
+        const rows = rowsOf(bt, asset);
+        const where = (r: DebugRow) => `${fill + src}\n${asset} ${new Date(r.t).toISOString().slice(0, 10)}: ${r.what}`;
+        const opened = new Set<unknown>();
+        const closed = new Set<unknown>();
+        for (const r of rows) {
+          const on = trades.find((t) => t.entryT <= r.t && (t.reason === 'open' || r.t < t.exitT)) ?? null;
+          assert.equal(r.side, on ? (on.side ?? 'long') : null, where(r));
+          assert.ok(!kinds(r).includes('no-cash'), where(r));
+          for (const e of r.events) {
+            seen.add(e.k);
+            const entry = e.k === 'buy' || e.k === 'short' ? e.trade : e.k === 'flip' ? e.to : null;
+            const exit = e.k === 'sell' || e.k === 'cover' ? e.trade : e.k === 'flip' ? e.from : null;
+            const filled = 'stage' in e && e.stage !== 'decided';
+            if (entry) assert.equal(entry.side === 'short', e.k === 'short' || (e.k === 'flip' && e.to.side === 'short'), where(r));
+            if (entry && filled) {
+              assert.equal(entry.entryT, r.t, where(r));
+              opened.add(entry);
+            }
+            if (exit && filled) {
+              assert.equal(exit.exitT, r.t, where(r));
+              closed.add(exit);
+            }
+          }
+        }
+        // Every trade's entry and exit is named at the bar it filled.
+        for (const t of trades) {
+          assert.ok(opened.has(t), `${fill + src}\n${asset}: no entry named for the trade of ${new Date(t.entryT).toISOString()}`);
+          if (t.reason !== 'open') assert.ok(closed.has(t), `${fill + src}\n${asset}: no exit named for the trade closed ${new Date(t.exitT).toISOString()}`);
+        }
+      }
+    }
+  }
+  for (const k of ['buy', 'sell', 'short', 'cover', 'flip', 'short-held', 'rearm', 'add']) assert.ok(seen.has(k), `no event ${k}: ${[...seen]}`);
 });

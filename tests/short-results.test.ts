@@ -70,6 +70,19 @@ test('with fill: close a flip made at the last close is said in the past, and so
   assert.equal(covered.order, 'bought to cover A at the last close');
 });
 
+test('a margin call made at the last close is said as such, for the next open even with fill: close', () => {
+  // The call is made at the close of 66, the last bar.
+  const called = ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66]]);
+  for (const fill of ['', 'fill: close\n']) {
+    const facts = compactFacts(run(fill + LEVERED, { A: called }));
+    assert.deepEqual([facts.holding, facts.order], [`Long A since ${fill ? date(0) : date(1)}`, 'margin call: sells A at the next open']);
+  }
+  const short = ohlc([[100, 100, 100, 100], [100, 100, 100, 100], [100, 140, 100, 140], [140, 190, 140, 190]]);
+  const out = run('universe: A\ncapital: 10000\nmargin rate: 0%\nborrow fee: 0%\nshort when true', { A: short });
+  assert.equal(out.backtest.run.states[0].marginCall, true);
+  assert.equal(compactFacts(out).order, 'margin call: buys to cover A at the next open');
+});
+
 // ------------------------------------------------------------------ exit words
 
 test('a trade\'s exit: the cover rule for a short, a flip when the other side opened, else the rule that closed it', () => {

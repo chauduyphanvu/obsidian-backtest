@@ -222,6 +222,26 @@ test('a margin call closes at the next open even with fill: close, and says how 
   assert.deepEqual([ex.facts.exitPrice, ex.facts.ret], [t.exitPrice, t.ret]);
 });
 
+test('after a margin call the buy rule has to stop holding before it buys again, and the next buy says so', () => {
+  const A = ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66], [65, 65, 60, 60], [60, 70, 60, 70], [70, 70, 40, 40], [40, 60, 40, 60], [60, 60, 60, 60]]);
+  const bt = run('universe: A 200%\ncapital: 10000\nmargin rate: 0%\nbuy when close > 50', { A });
+  const [called, again] = bt.run.trades;
+  assert.deepEqual([called.reason, again.why!.rearm], ['margin call', { exitT: day(2), heldT: day(4), clearedT: day(5) }]);
+  assert.equal(
+    section(explainTrade(bt, again), 'bought').at(-1)!.label,
+    'After the margin call on 2020-01-03 the buy rule still held, last on 2020-01-05. After a margin call the rule has to stop holding before it can buy again: it did not hold on 2020-01-06, and held again at the next close.',
+  );
+});
+
+test('a position a margin call made at the last close is closing waits for the next open, whatever the fill', () => {
+  const bt = run('universe: A 200%\ncapital: 10000\nmargin rate: 0%\nfill: close\nbuy when true', { A: ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66]]) });
+  const ex = explainTrade(bt, bt.run.trades[0]);
+  assert.equal(
+    section(ex, 'sold').at(-1)!.label,
+    'A margin call was made at the last close: equity was below 25% of the value of the positions, long and short together, so an order to sell it is waiting for the next open.',
+  );
+});
+
 test('a ruin is priced where it was found: at a close when equity fell below 0 at the close, at the open when at the open', () => {
   const src = 'universe: A 200%\ncapital: 10000\nmargin rate: 0%\nslippage: 10 bps\nbuy when true';
   // The open of 95 leaves equity above 0; the close of 45 does not.

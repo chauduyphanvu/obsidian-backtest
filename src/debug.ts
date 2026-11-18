@@ -9,9 +9,9 @@ import { barAt, missingInputAt, periodKey, SMALL_TRADE, type AssetState, type Ra
 import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
 import { csvLine } from './export.ts';
-import { flipped } from './price-chart.ts';
 import { fixed, isIntraday, pair, places, price, shareCount, stamp, ungroupedOrdinal } from './format.ts';
 import * as ind from './indicators.ts';
+import { flipped } from './price-chart.ts';
 import type { Bars } from './types.ts';
 
 export interface DebugColumn {
@@ -761,9 +761,9 @@ export function debugRows(bt: Backtest, asset: string, from: number, to: number)
     }
     if (addSignal && (addSignal.trade !== addFill?.trade || addSignal.k !== addFill.k)) timed.push({ at: 'close', event: { k: 'add', stage: 'decided', ...addMade(addSignal) } });
     const moment = { open: 0, inside: 1, close: 2 };
-    const entryFirst = (e: DebugEvent) => Number(ENTRY_KINDS.has(e.k));
+    const entryLast = (e: DebugEvent) => Number(ENTRY_KINDS.has(e.k));
     const events = flips(
-      timed.sort((x, y) => moment[x.at] - moment[y.at] || entryFirst(x.event) - entryFirst(y.event)).map((x) => x.event),
+      timed.sort((x, y) => moment[x.at] - moment[y.at] || entryLast(x.event) - entryLast(y.event)).map((x) => x.event),
       bt.run.trades,
     );
 
@@ -986,12 +986,13 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
     return `at ${fillT === ix.bars.t[row.bar + 1] ? 'the next open' : 'the open'} (${when(fillT)}) at ${price(at)}`;
   };
   const atFill = cx.atClose ? 'the close' : 'the open';
+  const marginCall = `Margin call (equity below ${Number(((cx.bt.spec.margin?.maintenance ?? 0) * 100).toFixed(1))}% of the positions' value)`;
   /** What closed a position whose exit was decided at this bar. */
   const closedBy = (tr: Trade): string => {
     const exit = tr.why?.exit;
     const short = sideOf(tr) === 'short';
     if (exit?.k === 'rank') return 'The ranking no longer holds it';
-    if (exit?.k === 'margin') return `Margin call (equity below ${Number(((cx.bt.spec.margin?.maintenance ?? 0) * 100).toFixed(1))}% of the positions' value)`;
+    if (exit?.k === 'margin') return marginCall;
     if (exit?.k === 'rule' && exit.flip) return short ? 'Buy rule held' : 'Short rule held';
     return short ? 'Cover rule held' : 'Sell rule held';
   };
@@ -1089,7 +1090,9 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
         // An order for the other side closes the position held first: a flip, said as its two orders.
         const held = ix.state?.side ?? null;
         const order = { buy: held === 'short' ? 'buy to cover and buy' : 'buy', sell: 'sell', add: 'add', short: held === 'long' ? 'sell and sell short' : 'sell short', cover: 'buy to cover' }[e.side];
-        out.push(`Order pending: ${order} at the next ${cx.atClose ? 'close' : 'open'}.`);
+        // A margin call made at this close closes the position at the next open, whatever the block's fill.
+        if (ix.state?.marginCall) out.push(`${marginCall}: order pending to ${order} at the next open.`);
+        else out.push(`Order pending: ${order} at the next ${cx.atClose ? 'close' : 'open'}.`);
         break;
       }
       case 'no-cash':

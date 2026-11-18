@@ -1,8 +1,8 @@
 import type { Backtest, Segment } from './backtest.ts';
-import type { AssetState } from './engine.ts';
-import { average } from './export.ts';
 import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
 import { colourSource, h, s } from './dom.ts';
+import type { AssetState } from './engine.ts';
+import { average } from './export.ts';
 import { hintFor } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, moneyTicks, niceStep, pct, signedPct, stamp, timeTicks } from './format.ts';
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
@@ -197,19 +197,32 @@ export function compactFacts(out: RunOutput): CompactFacts {
   const built = one && steps > 1 ? `, ${one.entries} of ${steps} entries` : '';
   const holding = !one ? (held.length === 0 ? 'In cash' : `Holds ${held.length} of ${run.states.length}`) : `${one.side === 'short' ? 'Short' : 'Long'} ${one.name} since ${stamp(one.since!, intraday)}${built}`;
   const list = (names: string[], most = 2, joiner = ' and ') => (names.length <= most ? names.join(joiner) : `${names.length} tickers`);
-  const phrases = (groups: [string, (st: AssetState) => boolean][]) =>
+  const phrases = (groups: [string, (st: AssetState) => boolean][], of = run.states) =>
     groups.flatMap(([verb, pick]) => {
-      const names = run.states.filter(pick).map((st) => st.name);
+      const names = of.filter(pick).map((st) => st.name);
       return names.length ? [`${verb} ${list(names)}`] : [];
     });
+  // A margin call made at the last close closes its positions at the next open, whatever the block's fill.
+  const calledAt = run.states.filter((st) => st.marginCall);
+  const waiting = run.states.filter((st) => !st.marginCall);
+  const called = phrases(
+    [
+      ['sells', (st) => st.pending === 'sell'],
+      ['buys to cover', (st) => st.pending === 'cover'],
+    ],
+    calledAt,
+  );
   // Covers come before buys and short sales after sells, so a flip reads in the order it fills.
-  const due = phrases([
-    ['buys to cover', (st) => st.pending === 'cover' || (st.pending === 'buy' && st.side === 'short')],
-    ['buys', (st) => st.pending === 'buy'],
-    ['adds to', (st) => st.pending === 'add'],
-    ['sells', (st) => st.pending === 'sell' || (st.pending === 'short' && st.side === 'long')],
-    ['sells short', (st) => st.pending === 'short'],
-  ]);
+  const due = phrases(
+    [
+      ['buys to cover', (st) => st.pending === 'cover' || (st.pending === 'buy' && st.side === 'short')],
+      ['buys', (st) => st.pending === 'buy'],
+      ['adds to', (st) => st.pending === 'add'],
+      ['sells', (st) => st.pending === 'sell' || (st.pending === 'short' && st.side === 'long')],
+      ['sells short', (st) => st.pending === 'short'],
+    ],
+    waiting,
+  );
   const done = phrases([
     ['bought to cover', (st) => st.filled?.side === 'cover' || (st.filled?.side === 'buy' && !!st.filled.closed)],
     ['bought', (st) => st.filled?.side === 'buy'],
@@ -218,6 +231,7 @@ export function compactFacts(out: RunOutput): CompactFacts {
     ['sold short', (st) => st.filled?.side === 'short'],
   ]);
   const order = [
+    ...(called.length ? [`margin call: ${called.join(' and ')} at the next open`] : []),
     ...(due.length ? [`${due.join(' and ')} ${timingPhrase(pendingTiming(out.spec.fill))}`] : []),
     ...(done.length ? [`${done.join(' and ')} at the last close`] : []),
   ];
@@ -478,8 +492,8 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, bt: Back
   let lo = Infinity;
   let hi = -Infinity;
   for (let i = 0; i < n; i++) {
-    for (const v of [run.equity[i], benchmark.equity[i]]) {
-      if (!Number.isFinite(v) || v <= 0) continue;
+    for (const v of [i < ruined ? run.equity[i] : NaN, benchmark.equity[i]]) {
+      if (!Number.isFinite(v)) continue;
       lo = Math.min(lo, v);
       hi = Math.max(hi, v);
     }
