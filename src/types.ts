@@ -50,6 +50,12 @@ export type Source = (typeof SOURCES)[number];
 export const DATA_SOURCES = ['yahoo', 'binance', 'tiingo'] as const;
 export type DataSource = (typeof DATA_SOURCES)[number];
 
+/**
+ * Where a ticker written without a prefix comes from: one that starts with ^, an index or a yield such as ^VIX or ^IRX,
+ * from Yahoo, the only source that has them, whatever `data` says; any other from `data`.
+ */
+export const plainSource = <S extends string>(ticker: string, data: S): S | 'yahoo' => (ticker.startsWith('^') ? 'yahoo' : data);
+
 /** A source written in front of a ticker, as in `fred:T10Y2Y`; group 1 is the source. */
 export const SOURCE_PREFIX = new RegExp(`^(${SOURCES.join('|')}):`, 'i');
 

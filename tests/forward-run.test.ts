@@ -144,7 +144,7 @@ test('a forward test from start to log: frozen text, a later run, new bars logge
   const later = runBacktest(parseSpec(forward!.source).spec!, new Map([['A', bars(closes)]]));
   assert.equal(stableRun(later.run.equity.slice(0, 50)), stableRun(first.run.equity), 'the frozen text reads back as the same strategy, so the first 50 bars agree');
   const rows = logRows(later);
-  const fresh = newRows({ forward: forward!, bars: [] }, rows);
+  const fresh = newRows({ forward: forward!, bars: [], checkedThrough: null }, rows);
   assert.ok(fresh.length >= 2 && fresh.every((r) => r.t > startedAt));
 
   const through = later.run.t[later.run.t.length - 1];

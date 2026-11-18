@@ -91,7 +91,7 @@ const check = (o: Partial<Pbo>): Pbo => ({ pbo: 0.3, short: null, variants: 40, 
 
 test('the overfitting check in words: the share, what it means, and that one sweep\'s figure swings', () => {
   const words = pboWords(check({}));
-  assert.match(words, /^The history was cut into 16 parts and split into two halves in all 12,870 ways\. In 30% of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other\. /);
+  assert.match(words, /^The history was cut into 16 parts and split into two halves in all 12,870 ways\. In 30% of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other, one exactly in the middle counting as half\. /);
   assert.match(words, /often did not hold up/);
   assert.match(words, /Bailey, Borwein, López de Prado and Zhu/);
   assert.match(words, /swings widely from one sweep to the next/);

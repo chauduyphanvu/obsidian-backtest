@@ -126,16 +126,16 @@ function capVersions(versions: Version[]): Version[] {
 
 /**
  * One record from the copy on disk and this session's, for JsonStore: every trial and version either holds, by hash,
- * less the trials first seen before the later of the two resets. A trial or version in both keeps its earlier sight.
+ * less the trials first seen before the later of the two resets. A trial or version in both keeps its earlier sight;
+ * for a trial, its earlier sight since that reset, so one counted again after the reset stays.
  */
 export function mergeLedgers(disk: Ledger, mine: Ledger): Ledger {
   const resetAt = Math.max(disk.resetAt, mine.resetAt);
-  const both = new Map(Object.entries(disk.trials));
-  for (const [id, t] of Object.entries(mine.trials)) {
-    const other = both.get(id);
-    if (!other || t[2] < other[2]) both.set(id, t);
+  const trials: Record<string, Trial> = {};
+  for (const [id, t] of [...Object.entries(disk.trials), ...Object.entries(mine.trials)]) {
+    if (t[2] < resetAt) continue;
+    if (!Object.hasOwn(trials, id) || t[2] < trials[id][2]) trials[id] = t;
   }
-  const trials = Object.fromEntries([...both].filter(([, t]) => t[2] >= resetAt));
   const byHash = new Map<string, Version>();
   for (const v of [...mine.versions, ...disk.versions]) {
     const other = byHash.get(v.hash);
@@ -235,8 +235,11 @@ export interface BlockLedger {
 export class Ledgers {
   private store: LedgerStore;
   private now: () => number;
-  private listeners = new Set<{ key: string; fn: (ledger: Ledger) => void }>();
-  /** Keys moved this session, in order, so a block drawn before its note was renamed still writes to its new key. */
+  private listeners = new Set<{ key: string; since: number; fn: (ledger: Ledger) => void }>();
+  /**
+   * Keys moved this session, in order, so a block drawn before its note was renamed still writes to its new key. A block
+   * drawn after a rename follows only the later ones: a new note at the old path is another note.
+   */
   private moved: [string, string][] = [];
 
   constructor(store: LedgerStore, now: () => number = Date.now) {
@@ -244,8 +247,9 @@ export class Ledgers {
     this.now = now;
   }
 
-  private current(key: string): string {
-    for (const [from, to] of this.moved) if (key.startsWith(from)) key = to + key.slice(from.length);
+  /** Where the record of a block drawn as `key`, when `since` moves had been made, is kept now. */
+  private current(key: string, since: number): string {
+    for (const [from, to] of this.moved.slice(since)) if (key.startsWith(from)) key = to + key.slice(from.length);
     return key;
   }
 
@@ -257,15 +261,16 @@ export class Ledgers {
   }
 
   forBlock(key: string): BlockLedger {
+    const since = this.moved.length;
     const change = async (edit: (ledger: Ledger) => Ledger): Promise<void> => {
-      const at = this.current(key);
+      const at = this.current(key, since);
       const now = (await this.store.get(at)) ?? emptyLedger();
       if (edit(now) === now) return;
       const next = await this.store.update(at, (l) => edit(l ?? emptyLedger()));
-      for (const w of this.listeners) if (this.current(w.key) === at) w.fn(next);
+      for (const w of this.listeners) if (this.current(w.key, w.since) === at) w.fn(next);
     };
     return {
-      read: async () => (await this.store.get(this.current(key))) ?? emptyLedger(),
+      read: async () => (await this.store.get(this.current(key, since))) ?? emptyLedger(),
       add: (runs, version) =>
         change((ledger) => {
           const at = this.now();
@@ -275,7 +280,7 @@ export class Ledgers {
         }),
       reset: () => change((ledger) => resetTrials(ledger, this.now())),
       watch: (fn) => {
-        const w = { key, fn };
+        const w = { key, since, fn };
         this.listeners.add(w);
         return () => void this.listeners.delete(w);
       },

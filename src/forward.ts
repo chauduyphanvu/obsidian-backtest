@@ -513,9 +513,13 @@ export function readLog(note: string, forwardBlockLine?: number): ForwardLog | R
   return found.ok ? { ok: true, forward: found.at.forward, checkedThrough: found.at.checkedThrough, bars: found.at.bars } : found;
 }
 
-/** The rows that are new to the log: after the last bar logged (after the start, for an empty log), one for each bar, earliest first. */
-export function newRows(log: Pick<ForwardLog, 'forward' | 'bars'>, rows: LogRow[]): LogRow[] {
-  const last = Math.max(log.forward.started, ...log.bars.map((b) => b.t));
+/**
+ * The rows that are new to the log: after the start, the last bar logged and the last bar checked, one for each bar,
+ * earliest first. A bar already checked is not new, even when today's prices give it an order the log does not have:
+ * that is a revision, and the log keeps what it said.
+ */
+export function newRows(log: Pick<ForwardLog, 'forward' | 'bars' | 'checkedThrough'>, rows: LogRow[]): LogRow[] {
+  const last = Math.max(log.forward.started, log.checkedThrough ?? -Infinity, ...log.bars.map((b) => b.t));
   const unseen = new Map<number, LogRow>();
   for (const r of rows) if (r.t > last && r.orders.length > 0 && !unseen.has(r.t)) unseen.set(r.t, r);
   return [...unseen.values()].sort((a, b) => a.t - b.t);
@@ -540,7 +544,7 @@ function insertAfter(lines: string[], after: number, chunk: string[], cr: string
 
 /**
  * The note with new rows added to its log and `Checked through` brought up to `checkedThrough`, or why not. Only the bars
- * after the last logged one are added (after the start, for an empty log), so asking again changes nothing, and a row that is
+ * after the last one logged and the last one checked are added (after the start, for a new log), so asking again changes nothing, and a row that is
  * there is never rewritten. Refused when the note is not one the plugin made as a forward test, when the frozen rules were
  * changed, when there is no log heading, and when the table was changed by hand so that its last bar can't be read.
  * `forwardBlockLine` is the 0-based line the block opened on when it was drawn.
@@ -554,7 +558,7 @@ export function appendLog(note: string, forwardBlockLine: number | undefined, ro
 
   const intraday = forward.intraday;
   const logged = localDate(now);
-  const added = newRows({ forward, bars }, rows).map((r) =>
+  const added = newRows({ forward, bars, checkedThrough: found.at.checkedThrough }, rows).map((r) =>
     tableLine([stamp(r.t, intraday), orderWords(r.orders).join('; '), inOrder(r.orders).map((o) => `${o.ticker} ${price(o.close)}`).join('; '), `$${price(r.value)}`, logged]),
   );
 

@@ -8,6 +8,7 @@ import { insideKey } from '../src/engine.ts';
 import { clocksApart } from '../src/evaluate.ts';
 import { fixFor } from '../src/fixes.ts';
 import { clockOf } from '../src/indicators.ts';
+import { blockTickers, writtenAs } from '../src/symbols.ts';
 import type { AssetRef, Bars } from '../src/types.ts';
 import { bars, DAY } from './helpers.ts';
 
@@ -293,6 +294,23 @@ test('tiingo: tickers and data: tiingo read as Tiingo tickers, on 1d and 1w bars
   assert.deepEqual(errorsOf('universe: tiingo:SPY\ninterval: 1h\nbuy when true'), ['Tiingo data comes as 1d or 1w bars, not "1h"']);
   assert.deepEqual(errorsOf('universe: tiingo:SPY\nbenchmark: binance:BTCUSDT\ninterval: 1h\nbuy when true'), ['Tiingo data comes as 1d or 1w bars, not "1h"']);
   assert.deepEqual(errorsOf('universe: SPY\ndata: tiingoo\nbuy when true'), ['data must be one of: yahoo, binance, tiingo']);
+});
+
+test('a plain ^ ticker comes from Yahoo whatever the source of plain tickers, so the default cash rate ^IRX works with Tiingo', () => {
+  const sources = (src: string, defaults = {}) => {
+    const { spec, errors } = parseSpec(src, { defaults });
+    assert.deepEqual(errors, [], src);
+    return [...spec!.universe, ...spec!.extras, ...(spec!.benchmark ? [spec!.benchmark] : []), ...(spec!.cash.k === 'ticker' ? [spec!.cash.ref] : [])].map((a) => `${a.source}:${a.id}`);
+  };
+  assert.deepEqual(sources('universe: SPY\ndata: tiingo\ncash rate: ^IRX\nbenchmark: ^GSPC\nbuy when close > sma(200) and close of ^VIX < 30'), ['tiingo:SPY', 'yahoo:^VIX', 'yahoo:^GSPC', 'yahoo:^IRX']);
+  assert.deepEqual(sources('universe: SPY\nbuy when close > sma(200)', { dataSource: 'tiingo', cashRate: '^IRX' }), ['tiingo:SPY', 'yahoo:^IRX']);
+  assert.deepEqual(sources('universe: BTCUSDT\ndata: binance\nbuy when close of ^VIX < 30'), ['binance:BTCUSDT', 'yahoo:^VIX']);
+  // Written with a prefix, a ticker keeps the source it names.
+  assert.deepEqual(sources('universe: SPY\ndata: tiingo\nbuy when close of tiingo:^VIX < 30'), ['tiingo:SPY', 'tiingo:^VIX']);
+  // Looked up, offered and written as Yahoo tickers too.
+  assert.deepEqual(blockTickers(['data: tiingo', 'universe: SPY', 'buy when close of ^VIX < 30']).map((r) => [r.ticker, r.source]), [['^VIX', 'yahoo']]);
+  assert.equal(writtenAs({ ticker: '^VIX', name: '', detail: '', source: 'yahoo' }, 'tiingo'), '^VIX');
+  assert.equal(writtenAs({ ticker: 'SPY', name: '', detail: '', source: 'yahoo' }, 'tiingo'), 'yahoo:SPY');
 });
 
 test('did you mean: a misspelt data: tiingo and a wrong interval for Tiingo', () => {

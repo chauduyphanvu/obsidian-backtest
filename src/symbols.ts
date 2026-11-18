@@ -1,6 +1,6 @@
 import type { Defaults } from './dsl.ts';
 import { lineKinds, tokenizeBlock } from './highlight.ts';
-import { DATA_SOURCES, SOURCE_PREFIX, type DataSource } from './types.ts';
+import { DATA_SOURCES, plainSource, SOURCE_PREFIX, type DataSource } from './types.ts';
 
 export interface LookupDeps {
   /** GET a URL and return its body; rejects on a network error. */
@@ -217,7 +217,7 @@ export class SymbolLookup {
   private plan(word: string, blockSource: DataSource): { prefix: string; query: string; sources: LookupSource[] } {
     const m = word.match(SOURCE_PREFIX);
     const prefix = m ? m[0] : '';
-    const source = m ? m[1].toLowerCase() : blockSource;
+    const source = m ? m[1].toLowerCase() : plainSource(word, blockSource);
     if (!isLookupSource(source)) return { prefix, query: '', sources: [] };
     const sources: LookupSource[] = m ? [source] : [source, source === 'yahoo' ? 'binance' : 'yahoo'];
     return { prefix, query: word.slice(prefix.length), sources };
@@ -323,7 +323,7 @@ export interface Suggestion {
 /** How a hit is written in a block whose plain tickers come from `blockSource`; `typedPrefix` is a prefix the user already wrote. */
 export function writtenAs(hit: SymbolHit, blockSource: DataSource, typedPrefix = ''): string {
   if (typedPrefix) return typedPrefix + hit.ticker;
-  return hit.source === blockSource ? hit.ticker : `${hit.source}:${hit.ticker}`;
+  return hit.source === plainSource(hit.ticker, blockSource) ? hit.ticker : `${hit.source}:${hit.ticker}`;
 }
 
 const DATA_LINE = new RegExp(String.raw`^\s*data\s*:\s*(${DATA_SOURCES.join('|')})\s*$`, 'i');
@@ -383,7 +383,7 @@ export function blockTickers(lines: string[], defaults: Partial<Defaults> = {}):
       if (t.kind !== 'ticker') continue;
       const written = line.slice(t.from, t.to);
       const m = written.match(SOURCE_PREFIX);
-      const source = m ? m[1].toLowerCase() : plain;
+      const source = m ? m[1].toLowerCase() : plainSource(written, plain);
       const id = written.slice(m ? m[0].length : 0);
       if (!isLookupSource(source) || !/^[A-Za-z0-9^._=-]+$/.test(id) || /^[\d.]+$/.test(id)) continue;
       if (!m && others.has(id.toLowerCase())) continue;

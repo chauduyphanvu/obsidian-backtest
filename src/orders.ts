@@ -2,7 +2,7 @@ import { accountOrders, accountStrategy, parseAccount, runAccount, type AccountO
 import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
-import { DAY, isoDate, money, price, shareCount, signedPct, stamp } from './format.ts';
+import { DAY, isoDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
 
@@ -73,7 +73,11 @@ export interface WatchRow {
   /** The rule's part in words, such as "Buys if it closes above 512.30 (+1.2%)", and when its order fills, such as "at the following open". */
   phrase: string;
   when: string;
-  /** The ticker whose close it is about (trigger.ts Trigger.driver), its last close, and the signed share of that to the nearest price where the outcome changes (NaN when none was found). */
+  /**
+   * The ticker whose close it is about (trigger.ts Trigger.driver), its last close, and the signed share of that to the
+   * nearest price where the outcome changes (NaN when none was found, or when the driver is a series of values, whose
+   * changes are not shares of it).
+   */
   driver: string;
   lastClose: number;
   distance: number;
@@ -149,12 +153,13 @@ function localDate(t: number): string {
 /** A trigger is worth watching within this share of the last close, and always for a strategy with `fill: close`. */
 export const WATCH_WITHIN = 0.02;
 
-/** How near a watch row is, for listing the nearest first: 0 for one that fires at an unchanged close. */
-const nearness = (w: WatchRow) => (w.now || Number.isNaN(w.distance) ? 0 : Math.abs(w.distance));
+/** How near a watch row is, for listing the nearest first: 0 for one that fires at an unchanged close, last for one with no share to go by. */
+const nearness = (w: WatchRow) => (w.now ? 0 : Number.isNaN(w.distance) ? Infinity : Math.abs(w.distance));
 
 /**
  * The trigger prices worth watching at the next close: those that give an order at an unchanged close or within
  * WATCH_WITHIN of it, and every one of a strategy that fills at the close, whose orders have to be placed before it.
+ * A rule solved for a series of values has no close to be within a share of, so it is watched only in the other two cases.
  */
 export function watchRows(report: TriggerReport): WatchRow[] {
   const rows: WatchRow[] = [];
@@ -162,14 +167,14 @@ export function watchRows(report: TriggerReport): WatchRow[] {
     const phrase = rulePhrase(t);
     const near = nearest(t);
     if (t.side === 'rearm' || phrase === null || near === null) continue;
-    if (!report.closeFill && !near.now && !(Math.abs(near.distance) <= WATCH_WITHIN)) continue;
-    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), driver: t.driver, lastClose: t.last, distance: near.distance, now: near.now });
+    if (!report.closeFill && !near.now && (t.values || !(Math.abs(near.distance) <= WATCH_WITHIN))) continue;
+    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), driver: t.driver, lastClose: t.last, distance: t.values ? NaN : near.distance, now: near.now });
   }
   return rows.sort((a, b) => nearness(a) - nearness(b) || compare(a.ticker, b.ticker));
 }
 
 /** The last close a row to watch is about, with the ticker named when its rule reads another's: "512.30", "512.30 (SPY)". */
-export const watchClose = (row: WatchRow): string => `${price(row.lastClose)}${row.driver === row.ticker ? '' : ` (${row.driver})`}`;
+export const watchClose = (row: WatchRow): string => `${minus(price(row.lastClose))}${row.driver === row.ticker ? '' : ` (${row.driver})`}`;
 
 /** Every strategy's rows to watch as one list, nearest first. */
 export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row: WatchRow }[] {

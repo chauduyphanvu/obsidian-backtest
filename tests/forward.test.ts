@@ -636,7 +636,9 @@ test('a table the reader trimmed of rows, or of its Checked through line, is add
 
   const noRows = once.replace(/\| 2026-11-1[69] [^\n]*\n/g, '');
   assert.equal(logOf(noRows).bars.length, 0);
-  assert.equal(added(noRows, [R1, R2], utc(2026, 11, 20)).added, 2, 'with no rows left, the log starts from the start of the test again');
+  assert.equal(added(noRows, [R1, R2], utc(2026, 11, 20)).added, 0, 'the bars checked stay checked, rows or no rows');
+  const bare = noRows.replace('Checked through: 2026-11-20\n\n', '');
+  assert.equal(added(bare, [R1, R2], utc(2026, 11, 20)).added, 2, 'with no rows and no check line left, the log starts from the start of the test again');
 
   const unreadable = once.replace('Checked through: 2026-11-20', 'Checked through: soon');
   assert.equal(logOf(unreadable).checkedThrough, null);
@@ -700,6 +702,21 @@ test('newRows are the bars with orders after the last one logged, one each, earl
   assert.deepEqual(newRows(log, [later, R2, R1, row(utc(2026, 11, 18), []), later]), [R2, later]);
   assert.deepEqual(newRows(log, [R1]), []);
   assert.deepEqual(newRows(logOf(started()), [R1, row(utc(2026, 11, 13), [order('buy', 'SPY', 1)])]), [R1], 'with nothing logged, the bars after the start');
+});
+
+test('a bar already checked is never added, though revised prices now give an order there: the log keeps what it said', () => {
+  const note = added(started(), [R1], utc(2026, 11, 20)).note;
+  // Today's prices give an order on the 18th, checked with none, and on the 23rd, not checked yet.
+  const revised = row(utc(2026, 11, 18), [order('sell', 'SPY', 98)]);
+  const fresh = row(utc(2026, 11, 23), [order('buy', 'SPY', 99)]);
+  const log = logOf(note);
+  assert.deepEqual(revisions(log, [R1, revised]).map((r) => r.t), [utc(2026, 11, 18)]);
+  assert.deepEqual(newRows(log, [R1, revised, fresh]), [fresh]);
+  assert.deepEqual(newRows(log, [R1, revised]), []);
+  const again = added(note, [R1, revised], utc(2026, 11, 20));
+  assert.deepEqual([again.added, again.note], [0, note]);
+  const later = added(note, [R1, revised, fresh], utc(2026, 11, 23));
+  assert.deepEqual(logOf(later.note).bars.map((b) => b.t), [utc(2026, 11, 16), utc(2026, 11, 23)]);
 });
 
 // --- Revisions --------------------------------------------------------------------------------------------------------

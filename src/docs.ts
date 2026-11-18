@@ -54,7 +54,7 @@ setting(
   'data',
   'data: yahoo | binance | tiingo',
   'where plain tickers come from: yahoo, binance or tiingo',
-  'Where tickers written without a prefix come from. Without it the plugin setting decides, and yahoo:, binance:, tiingo:, fred: or csv: in front of a ticker picks that ticker’s own source.',
+  'Where tickers written without a prefix come from, the plugin setting deciding without it, though a plain ticker that starts with ^, such as ^VIX or ^IRX, comes from Yahoo whatever data says. yahoo:, binance:, tiingo:, fred: or csv: in front of a ticker picks that ticker’s own source.',
   'data: binance',
 );
 setting(
@@ -610,11 +610,11 @@ value(
   'Plain tickers come from Yahoo, spelt the way Yahoo spells them, such as SPY, BRK-B, BTC-USD or ^GSPC. Yahoo gives 1d and 1w bars.',
   'data: yahoo',
 );
-value('data=binance', 'Binance market symbols, such as BTCUSDT', 'Plain tickers are Binance market symbols, such as BTCUSDT. Binance gives bars from 1m up to 1w.', 'data: binance');
+value('data=binance', 'Binance market symbols, such as BTCUSDT', 'Plain tickers are Binance market symbols, such as BTCUSDT, though one that starts with ^, such as ^VIX, still comes from Yahoo. Binance gives bars from 1m up to 1w.', 'data: binance');
 value(
   'data=tiingo',
   'Tiingo prices, adjusted for splits and dividends',
-  'Plain tickers come from Tiingo, with the key chosen under Tiingo API key in the plugin settings. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
+  'Plain tickers come from Tiingo, with the key chosen under Tiingo API key in the plugin settings, though one that starts with ^, such as ^VIX or the cash rate ^IRX, still comes from Yahoo, which alone has them. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
   'data: tiingo',
 );
 for (const v of BINANCE_INTERVALS) {

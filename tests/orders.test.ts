@@ -639,6 +639,17 @@ test('the closes to watch: those that give an order unchanged or within 2%, near
   assert.equal(close[0].when, 'at that close');
 });
 
+test('a rule solved for a series of values is watched when it gives its order at an unchanged value, or with fill: close, after the closes', () => {
+  // Within 0.01 of a value of 0.05 is no share of a close, so it is not "within 2%".
+  const spread = (ticker: string, fires: Trigger['fires']) => trigger(ticker, 'buy', fires, { driver: 'T10Y2Y', last: -0.05, range: { lo: -0.2, hi: 0.1 }, values: true });
+  const triggers = [...SAMPLE_TRIGGERS, spread('X', [{ lo: -0.04, hi: null }]), spread('Y', [{ lo: null, hi: -0.04 }])];
+  const rows = watchRows(reportOf(triggers));
+  assert.deepEqual(rows.map((r) => [r.ticker, r.now]), [['C', true], ['Y', true], ['G', false], ['A', false]]);
+  assert.equal(rows[1].phrase, "Buys unless T10Y2Y's next value is above −0.04 (+0.01)");
+  assert.equal(watchClose(rows[1]), '−0.05 (T10Y2Y)');
+  assert.deepEqual(watchRows(reportOf(triggers, true)).map((r) => r.ticker), ['C', 'Y', 'G', 'A', 'B', 'X']);
+});
+
 test('a status carries its closes to watch only when trigger prices were worked out', () => {
   const out = run('universe: A\ncapital: 1000\nbuy when close > sma(3)', { A: bars([10, 10, 10, 10, 9.8]) });
   assert.ok(!('watch' in statusFrom('n.md', 'S', out, NOW)));

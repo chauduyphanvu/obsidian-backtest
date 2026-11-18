@@ -307,14 +307,15 @@ test('a saved FRED series with its note is ready to run with no download', async
 
 // ------------------------------------------------------------------------------------------------ ticker lookup
 
-test('a Tiingo ticker, a FRED series, a bare name for one and every ticker of a Tiingo block are never looked up', async () => {
+test('a Tiingo ticker, a FRED series, a bare name for one and every plain ticker of a Tiingo block but a ^ one are never looked up', async () => {
   const lines = ['universe: SPY, tiingo:QQQ, binance:BTCUSDT', 'cash rate: fred:DGS3MO', 'buy when close of fred:T10Y2Y > 0 and close of t10y2y > 0 and close of qqq > 1 and close of ^VIX < 30'];
   assert.deepEqual(
     blockTickers(lines).map((r) => [r.ticker, r.source]),
     [['SPY', 'yahoo'], ['BTCUSDT', 'binance'], ['^VIX', 'yahoo']],
   );
-  assert.deepEqual(blockTickers(['data: tiingo', ...lines]).map((r) => r.ticker), ['BTCUSDT']);
-  assert.deepEqual(blockTickers(lines, { dataSource: 'tiingo' }).map((r) => r.ticker), ['BTCUSDT']);
+  // A plain ^ ticker comes from Yahoo whatever the block's source, so it is looked up there.
+  assert.deepEqual(blockTickers(['data: tiingo', ...lines]).map((r) => [r.ticker, r.source]), [['BTCUSDT', 'binance'], ['^VIX', 'yahoo']]);
+  assert.deepEqual(blockTickers(lines, { dataSource: 'tiingo' }).map((r) => [r.ticker, r.source]), [['BTCUSDT', 'binance'], ['^VIX', 'yahoo']]);
   assert.equal(blockSource(['data: Tiingo']), 'tiingo');
 
   const urls: string[] = [];
