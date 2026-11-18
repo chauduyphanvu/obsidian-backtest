@@ -402,20 +402,42 @@ const insideCount = (source: string, span: number, small: number): number => (so
 
 /** The period of time `t` for a rebalance or ranking: bars with the same key fall in one period. */
 export function periodKey(t: number, mode: Rebalance): number {
-  const d = new Date(t);
   switch (mode) {
     case 'weekly':
       // Epoch day 0 was a Thursday; shifting by 3 starts weeks on Monday.
       return Math.floor((Math.floor(t / DAY) + 3) / 7);
     case 'monthly':
-      return d.getUTCFullYear() * 12 + d.getUTCMonth();
+      return monthIndex(Math.floor(t / DAY));
     case 'quarterly':
-      return d.getUTCFullYear() * 4 + Math.floor(d.getUTCMonth() / 3);
+      return Math.floor(monthIndex(Math.floor(t / DAY)) / 3);
     case 'yearly':
-      return d.getUTCFullYear();
+      return Math.floor(monthIndex(Math.floor(t / DAY)) / 12);
     case 'never':
       return 0;
   }
+}
+
+const seriesKeys = new WeakMap<number[], Partial<Record<Rebalance, number[]>>>();
+
+/** periodKey of each of the times `t`, worked out once per series, since every run of a sweep reads them on every bar. */
+export function periodKeys(t: number[], mode: Rebalance): number[] {
+  let byMode = seriesKeys.get(t);
+  if (!byMode) seriesKeys.set(t, (byMode = {}));
+  return (byMode[mode] ??= t.map((x) => periodKey(x, mode)));
+}
+
+/**
+ * The UTC year times 12 plus the month (0 for January) of the day `day` days after the epoch, as Date gives them, without
+ * a Date for every bar: Howard Hinnant's civil_from_days. Its years start in March, which only moves January and February
+ * to the end of the year before, and the count of months comes out the same.
+ */
+function monthIndex(day: number): number {
+  const z = day + 719_468;
+  const era = Math.floor(z / 146_097);
+  const doe = z - era * 146_097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36_524) - Math.floor(doe / 146_096)) / 365);
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  return (era * 400 + yoe) * 12 + Math.floor((5 * doy + 2) / 153) + 2;
 }
 
 /**
@@ -577,11 +599,12 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const clocks = atClose && p.rank ? assets.map((a) => ind.clockOf(a.source, a.bars.t)) : null;
   const mixed = clocks !== null && new Set(clocks).size > 1;
   const endedAt = mixed ? assets.map((a) => ind.endedBy(a.bars.t, timeline)) : null;
+  const keys = assets.map((a) => periodKeys(a.bars.t, p.rebalance));
   /** Whether the asset's current bar is the one its rebalance fills at: its first bar of a period (at the open), or its last (at the close). */
   const rebalances = (a: A) =>
     atClose
       ? p.rebalance !== 'never' && cached(`end ${a.name}`, () => ind.periodEnds(a.bars.t, (x) => periodKey(x, p.rebalance)))[a.i] === 1
-      : a.i > 0 && periodKey(a.bars.t[a.i], p.rebalance) !== periodKey(a.bars.t[a.i - 1], p.rebalance);
+      : a.i > 0 && keys[a.order][a.i] !== keys[a.order][a.i - 1];
 
   const cost = p.costBps / 10_000;
   const slip = p.slippageBps / 10_000;
@@ -887,7 +910,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
           buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0 });
           held = target;
         }
-      } else if (a.shares > 0 && a.owed === periodKey(a.bars.t[a.i], p.rebalance)) {
+      } else if (a.shares > 0 && a.owed === keys[a.order][a.i]) {
         // The rest of this period's top-up; a debt from an earlier period has lapsed.
         const target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
         const delta = target - held;
@@ -933,7 +956,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         // The debt is for the period the rebalance opens: this one at an open, the next one at a close. A top-up left
         // undone because it was too small for its commission is owed nothing; one short of cash is.
         const owes = notional - spent > 1e-9 * notional && (!charge || spent > 0 || short);
-        a.owed = owes ? periodKey(a.bars.t[a.i], p.rebalance) + (atClose ? 1 : 0) : null;
+        a.owed = owes ? keys[a.order][a.i] + (atClose ? 1 : 0) : null;
         if (spent > 0) a.topUps++;
         if (spent < notional) fellShort.add(a);
       }
