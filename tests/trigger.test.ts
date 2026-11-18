@@ -15,6 +15,7 @@ import {
   levelsSentence,
   nearest,
   nextBarData,
+  rulePhrase,
   PRECISION,
   search,
   tickerText,
@@ -25,7 +26,7 @@ import {
 } from '../src/trigger.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY, near, T0 } from './helpers.ts';
-import { tally, verify, walkBars } from './trigger-helpers.ts';
+import { signalFile, tally, valueSeries, verify, walkBars } from './trigger-helpers.ts';
 
 function parsed(src: string): Spec {
   const { spec, errors } = parseSpec(src);
@@ -238,14 +239,61 @@ test('what the made-up bar assumes is listed: its open, high and low, volume, ot
 
 test('a series given a bar keeps its own flags, which decide when its rows are known, and its columns their last values', () => {
   const A = walkBars(80, 3);
-  // A CSV file of columns, its rows known by their date, with a flag of a kind the copy does not name.
-  const signals: Bars & { marker: string } = { ...walkBars(80, 4), unpriced: true, columns: [{ name: 'level', header: 'Level', v: Array.from({ length: 80 }, (_, i) => i) }], marker: 'kept' };
+  // A CSV file of prices and columns, with a flag of a kind the copy does not name.
+  const signals: Bars & { marker: string } = { ...walkBars(80, 4), columns: [{ name: 'level', header: 'Level', v: Array.from({ length: 80 }, (_, i) => i) }], marker: 'kept' };
   const { bt, data, report: said } = report('universe: A\nbuy when close > sma(5) and column(level) of csv:Data/signals.csv > 0 and close < 1', { A, signals });
-  assert.deepEqual(only(said).assumptions, ['signals keeps its last values']);
+  assert.deepEqual(only(said).assumptions, ['signals is unchanged']);
   const next = nextBarData(bt.spec, data, bt.run.states[0], 50).get('signals') as typeof signals;
   assert.equal(next.t.length, 81);
-  assert.deepEqual([next.unpriced, next.columns![0].v.at(-1), next.marker], [true, 79, 'kept']);
+  assert.deepEqual([next.columns![0].v.at(-1), next.marker], [79, 'kept']);
   assert.deepEqual([signals.t.length, signals.columns![0].v.length], [80, 80]);
+});
+
+test('a FRED series and a file of columns with no prices get no row at the next bar: unless a value is published, the engine has none', () => {
+  const A = walkBars(80, 3);
+  const signals = signalFile(walkBars(80, 4).t, Array.from({ length: 80 }, (_, i) => i));
+  // A monthly series whose shortest gap would put a row before the next bar.
+  const U = valueSeries([Date.UTC(2026, 8, 4), Date.UTC(2026, 9, 2), Date.UTC(2026, 10, 6)], [4.4, 4.3, 4.2]);
+  const src = 'universe: A\nbuy when close > sma(5) and column(score) of csv:Data/signals.csv > column(score)[1] of signals and close of fred:U < close[1] of fred:U and close < 1';
+  const { bt, data, report: said } = report(src, { A, signals, U });
+  assert.equal(only(said).driver, 'A');
+  assert.deepEqual(only(said).assumptions, ['signals has no new row by that close', 'U publishes no new value by that close']);
+  const next = nextBarData(bt.spec, data, bt.run.states[0], 50);
+  assert.deepEqual([next.get('A')!.t.length, next.get('signals'), next.get('U')], [81, signals, U]);
+});
+
+test('solved for a FRED series, its next value is tried as one published in time for the next bar, read a bar early with fill: close', () => {
+  // A ends on Friday 13 November 2026; F was last published on Wednesday the 11th and has gone below zero.
+  const A = walkBars(120, 3);
+  const vs = Array.from({ length: 118 }, (_, i) => 0.6 - i * 0.01);
+  const F = valueSeries(A.t.slice(0, 118), vs);
+  for (const [fill, day] of [['', '2026-11-16'], ['fill: close\n', '2026-11-15']]) {
+    const { bt, data, report: said } = report(`universe: A\n${fill}buy when close of fred:F > sma(5) of fred:F\nsell when close of fred:F < -1`, { A, F });
+    const t = only(said);
+    assert.deepEqual([t.driver, t.values, t.assumptions], ['F', true, ['F publishes one new value by that close']]);
+    const next = nextBarData(bt.spec, data, bt.run.states[0], -0.5).get('F')!;
+    assert.deepEqual([new Date(next.t.at(-1)!).toISOString().slice(0, 10), next.o.at(-1), next.h.at(-1), next.l.at(-1), next.c.at(-1), next.values], [day, -0.5, -0.5, -0.5, -0.5, true]);
+  }
+});
+
+test('solved for a FRED series below zero, values are tried evenly around the last one and the words give changes, not percentages', () => {
+  const A = walkBars(400, 1);
+  // A spread falling by 0.003 a day to −0.597: it buys when its next value is above the average of its last four.
+  const F = valueSeries([...A.t], A.t.map((_, i) => 0.6 - i * 0.003));
+  const { report: said } = report('universe: A\nbuy when close of fred:F > sma(5) of fred:F', { A, F });
+  const t = only(said);
+  assert.ok(near(t.last, -0.597, 1e-12));
+  // Five times the root mean square of its changes, 0.003, either side.
+  assert.ok(near(t.range.lo, -0.612, 1e-9) && near(t.range.hi, -0.582, 1e-9), JSON.stringify(t.range));
+  assert.equal(t.fires.length, 1);
+  assert.ok(Math.abs(t.fires[0].lo! - -0.5925) <= PRECISION * 0.03 && t.fires[0].hi === null, JSON.stringify(t.fires));
+  assert.equal(tickerText(said, 'A').text, 'Buys if F\'s next value is above −0.5925 (+0.0045), at the following open.');
+  assert.equal(tickerText(said, 'A').note, 'Assumes F publishes one new value by that close.');
+  const none = only(report('universe: A\nbuy when close of fred:F > 0\nsell when close of fred:F < -1', { A, F }).report);
+  assert.equal(rulePhrase(none), 'The sell rule gives no order at any next value of F from −0.612 (−0.015) to −0.582 (+0.015)');
+  assert.equal(condition({ fires: [{ lo: null, hi: null }], last: -0.597, values: true }, 'F'), "whatever F's next value is");
+  assert.equal(condition({ fires: [{ lo: null, hi: -0.59 }], last: -0.597, values: true }, 'F'), "unless F's next value is above −0.59 (+0.007)");
+  assert.deepEqual(nearest({ fires: [{ lo: -0.5925, hi: null }], last: -0.597, values: true }), { distance: -0.5925 - -0.597, now: false });
 });
 
 test('another clock: a stock read by Bitcoin\'s close waits for Bitcoin\'s bar that ends with its own; with fill: close Bitcoin is read a bar early, already known', () => {
