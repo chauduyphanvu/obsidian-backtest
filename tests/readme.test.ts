@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { parseAccount } from '../src/account.ts';
 import { runBacktest } from '../src/backtest.ts';
@@ -355,8 +355,17 @@ test('the README names every command and every host the plugin contacts, and poi
   assert.ok(short.includes('](https://github.com/chauduyphanvu/obsidian-backtest/blob/main/docs/reference.md'), 'no link to the reference');
 });
 
-test('the README holds no path from anyone\'s own machine, no images and no promises of later features', () => {
+test('the README holds no path from anyone\'s own machine, no broken image and no promises of later features', () => {
   assert.doesNotMatch(short, /\/Users\/|\/home\/[a-z]|[A-Z]:\\Users/);
-  assert.ok(!/!\[[^\]]*\]\(/.test(short) && !/<img\b/i.test(short), 'an image is linked');
+  assert.doesNotMatch(short, /!\[[^\]]*\]\(/, 'an image is an <img> tag with alt text, not Markdown');
+  // A picture is a file in the repository, so it can't point at a page that moves or a screenshot nobody kept.
+  const tags = [...short.matchAll(/<(img|source)\b[^>]*>/gi)].map((m) => m[0]);
+  assert.ok(tags.length > 0);
+  for (const tag of tags) {
+    const path = tag.match(/\b(?:src|srcset)="([^"]+)"/)?.[1] ?? '';
+    assert.match(path, /^docs\/images\/[a-z-]+\.png$/, tag);
+    assert.ok(existsSync(new URL(`../${path}`, import.meta.url)), `${path} is missing`);
+    if (tag.startsWith('<img')) assert.match(tag, /\balt="[^"]{20,}"/, `${path} needs alt text`);
+  }
   assert.ok(!/coming soon|\bTODO\b/i.test(short));
 });
