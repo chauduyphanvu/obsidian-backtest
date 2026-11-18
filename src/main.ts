@@ -223,6 +223,8 @@ export default class BacktestBlocks extends Plugin {
     this.blocks.checkDefaults.cancel();
     shutdownWorkers();
     this.properties.cancel();
+    // Obsidian does not wait for onunload, which returns nothing, so the writes can only be started here: flush queues the
+    // write of every changed record before it returns.
     void this.ledgerFiles.flush();
   }
 

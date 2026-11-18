@@ -124,12 +124,23 @@ export class JsonStore<T> {
     });
   }
 
-  /** Moves the record of `from` to `to`, merged with any record `to` already has, and removes the old file. */
+  /**
+   * Moves the record of `from` to `to`, merged with what a sync put in its file since it was read and with any record `to`
+   * already has. The new file is written before the old one is removed, so the record is on disk throughout.
+   */
   async rename(from: string, to: string): Promise<void> {
     if (from === to) return;
-    const moving = await this.get(from);
-    if (moving === null) return;
-    await this.update(to, (current) => (current === null ? moving : this.o.merge(current, moving)));
+    await this.get(from);
+    let moving = null as T | null;
+    await this.chain(from, async () => {
+      const disk = await this.readDisk(from);
+      const mine = this.entries.get(from)?.value ?? null;
+      moving = disk === null ? mine : mine === null ? disk : this.o.merge(disk, mine);
+    });
+    const moved = moving;
+    if (moved === null) return;
+    await this.update(to, (current) => (current === null ? moved : this.o.merge(current, moved)));
+    await this.write(to);
     await this.delete(from);
   }
 

@@ -101,6 +101,46 @@ test('rename moves a record, merged with one already under the new key, and remo
   assert.equal(await s.store.get('old'), null);
 });
 
+test('rename takes along what a sync put in the old file since it was read, and what was not written yet', async () => {
+  const s = setup({ [path('old')]: file('old', [1]) });
+  assert.deepEqual(await s.store.get('old'), [1]);
+  await s.store.update('old', (v) => [...v!, 2]);
+  // Another device's copy arrives in the old file before this one is written.
+  s.map.set(path('old'), file('old', [1, 3]));
+  await s.store.rename('old', 'new');
+  await s.store.flush();
+  assert.deepEqual(JSON.parse(s.map.get(path('new'))!).value, [1, 2, 3]);
+  assert.deepEqual(await s.store.get('new'), [1, 2, 3]);
+  assert.equal(s.map.has(path('old')), false);
+});
+
+test('rename writes the new file before it removes the old one, so the record is on disk throughout', async () => {
+  const s = setup({ [path('old')]: file('old', [1]) });
+  const removed: [string, boolean][] = [];
+  const store = new JsonStore<number[]>({
+    files: {
+      exists: async (p) => s.map.has(p) || p === 'plugin/ledger',
+      read: async (p) => s.map.get(p)!,
+      write: async (p, text) => void s.map.set(p, text),
+      mkdir: async () => undefined,
+      remove: async (p) => {
+        removed.push([p, s.map.has(path('new'))]);
+        s.map.delete(p);
+      },
+      list: async () => ({ files: [...s.map.keys()] }),
+    },
+    dir: 'plugin/ledger',
+    parse: (raw) => raw as number[],
+    merge: (disk, mine) => [...new Set([...disk, ...mine])],
+    setTimer: () => 0,
+    clearTimer: () => undefined,
+  });
+  // Quitting right after the rename, before any timer fires, leaves the record under its new key.
+  await store.rename('old', 'new');
+  assert.deepEqual(removed, [[path('old'), true]]);
+  assert.deepEqual(JSON.parse(s.map.get(path('new'))!).value, [1]);
+});
+
 test('two writes of one record never interleave', async () => {
   const s = setup();
   await s.store.update('a', () => [1]);
