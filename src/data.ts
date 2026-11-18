@@ -102,12 +102,41 @@ function exchangeDay(timeZone: unknown, fallbackOffsetMs: number): (ms: number) 
  * Today's daily bar counts once the regular session it belongs to has closed.
  */
 export function parseYahoo(json: string, now: number, weekly = false): Bars {
+  return yahooBars(json, now, weekly, (r, i, c) => (r.adj[i] != null ? r.adj[i]! / c : 1));
+}
+
+/**
+ * Yahoo chart JSON to daily bars as they traded that day, for comparing a broker's fills with: Yahoo's prices are adjusted
+ * for splits but not for dividends ("Close price adjusted for splits", its historical data page says), so each bar is
+ * multiplied back by the splits after it, from the chart's split events.
+ */
+export function parseYahooRaw(json: string, now: number): Bars {
+  return yahooBars(json, now, false, (r, i) => {
+    let f = 1;
+    for (const s of r.splits) if (s.t > r.ts[i] * 1000 && s.numerator > 0 && s.denominator > 0) f *= s.numerator / s.denominator;
+    return f;
+  });
+}
+
+interface YahooChart {
+  ts: number[];
+  adj: (number | null)[];
+  splits: { t: number; numerator: number; denominator: number }[];
+}
+
+/** Yahoo chart JSON to bars, each price of row `i` (close `c`) multiplied by `factor`, without a bar that is still trading. */
+function yahooBars(json: string, now: number, weekly: boolean, factor: (r: YahooChart, i: number, c: number) => number): Bars {
   const body = JSON.parse(json);
   const result = body?.chart?.result?.[0];
   if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo returned no data');
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
-  const adj: (number | null)[] = result.indicators?.adjclose?.[0]?.adjclose ?? [];
+  const splits = Object.values((result.events?.splits ?? {}) as Record<string, { date?: number; numerator?: number; denominator?: number }>).map((s) => ({
+    t: Number(s.date) * 1000,
+    numerator: Number(s.numerator),
+    denominator: Number(s.denominator),
+  }));
+  const chart: YahooChart = { ts, adj: result.indicators?.adjclose?.[0]?.adjclose ?? [], splits };
   const localDay = exchangeDay(result.meta?.exchangeTimezoneName, (result.meta?.gmtoffset ?? 0) * 1000);
   const today = localDay(now);
   const span = weekly ? 7 * DAY : DAY;
@@ -119,7 +148,7 @@ export function parseYahoo(json: string, now: number, weekly = false): Bars {
     if (day + span > today && !(closedToday && day === today)) break;
     const c = q.close?.[i];
     if (c == null) continue;
-    const f = adj[i] != null ? adj[i]! / c : 1;
+    const f = factor(chart, i, c);
     push(bars, day, q.open?.[i] * f, q.high?.[i] * f, q.low?.[i] * f, c * f, q.volume?.[i] ?? 0);
   }
   return bars;
@@ -219,6 +248,26 @@ function weeksOf(daily: Bars, today: number): Bars {
  * counts once the regular session in New York has closed. Weekly bars are made from the daily ones (weeksOf).
  */
 export function parseTiingo(json: string, now: number, weekly = false): Bars {
+  const daily = emptyBars();
+  const ny = tiingoRows(json, now, (r, t) => {
+    const close = field(r.close);
+    const f = field(r.adjClose) > 0 && close > 0 ? field(r.adjClose) / close : 1;
+    const price = (adjusted: string, raw: string) => (Number.isFinite(field(r[adjusted])) ? field(r[adjusted]) : field(r[raw]) * f);
+    const volume = Number.isFinite(field(r.adjVolume)) ? field(r.adjVolume) : field(r.volume);
+    push(daily, t, price('adjOpen', 'open'), price('adjHigh', 'high'), price('adjLow', 'low'), price('adjClose', 'close'), volume);
+  });
+  return weekly ? weeksOf(daily, ny.day) : daily;
+}
+
+/** Tiingo's daily prices JSON to bars as they traded that day: its open, high, low and close, which no later dividend or split changes. */
+export function parseTiingoRaw(json: string, now: number): Bars {
+  const daily = emptyBars();
+  tiingoRows(json, now, (r, t) => push(daily, t, field(r.open), field(r.high), field(r.low), field(r.close), field(r.volume)));
+  return daily;
+}
+
+/** Calls `row` for each row of Tiingo's daily prices whose New York session has closed, with its exchange day; gives the time in New York. */
+function tiingoRows(json: string, now: number, row: (r: Record<string, unknown>, t: number) => void): ReturnType<typeof newYork> {
   const rows: unknown = JSON.parse(json);
   if (!Array.isArray(rows)) {
     const detail = (rows as { detail?: unknown } | null)?.detail;
@@ -226,18 +275,12 @@ export function parseTiingo(json: string, now: number, weekly = false): Bars {
   }
   const ny = newYork(now);
   const last = ny.minutes >= US_CLOSE ? ny.day : ny.day - DAY;
-  const daily = emptyBars();
   for (const r of rows as Record<string, unknown>[]) {
     const m = typeof r?.date === 'string' ? r.date.match(/^(\d{4})-(\d{2})-(\d{2})/) : null;
     const t = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
-    if (!(t <= last)) continue;
-    const close = field(r.close);
-    const f = field(r.adjClose) > 0 && close > 0 ? field(r.adjClose) / close : 1;
-    const price = (adjusted: string, raw: string) => (Number.isFinite(field(r[adjusted])) ? field(r[adjusted]) : field(r[raw]) * f);
-    const volume = Number.isFinite(field(r.adjVolume)) ? field(r.adjVolume) : field(r.volume);
-    push(daily, t, price('adjOpen', 'open'), price('adjHigh', 'high'), price('adjLow', 'low'), price('adjClose', 'close'), volume);
+    if (t <= last) row(r, t);
   }
-  return weekly ? weeksOf(daily, ny.day) : daily;
+  return ny;
 }
 
 /** Binance kline rows to bars, without the kline that has not closed yet. */
@@ -483,7 +526,7 @@ export function parseCsv(text: string): Bars {
 /** The pieces parseCsv reads a file with, for code that has to agree with it exactly. */
 export { SLASHED as CSV_SLASHED_DATE, detectSeparator as detectCsvSeparator, parseTime as parseCsvTime, slashedDatesAreDayFirst, splitLine as splitCsvLine };
 
-async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Promise<Bars> {
+async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw = false): Promise<Bars> {
   const now = Math.floor(deps.now() / 1000);
   // Intraday bars come for a recent window only, asked for whole (see insideReach).
   const days = YAHOO_INSIDE_DAYS[interval];
@@ -508,7 +551,8 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps): Prom
       continue;
     }
     try {
-      return days ? parseYahooInside(text, deps.now(), intervalMs(interval)) : parseYahoo(text, deps.now(), interval === '1w');
+      if (days) return parseYahooInside(text, deps.now(), intervalMs(interval));
+      return raw ? parseYahooRaw(text, deps.now()) : parseYahoo(text, deps.now(), interval === '1w');
     } catch (e) {
       if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Check the ticker.`);
       throw e;
@@ -569,14 +613,14 @@ function said(text: string, name: string): string | undefined {
 }
 
 /** A ticker's whole daily history from Tiingo, with the key in the Authorization header only. */
-async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps): Promise<Bars> {
+async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps, raw = false): Promise<Bars> {
   const key = keyFor('tiingo', ref, deps);
   return keyed(key, async () => {
     const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ref.id)}/prices?startDate=${TIINGO_START}&resampleFreq=daily`;
     const text = await deps.fetchText(url, { Authorization: `Token ${key}` });
     if (!/^\s*[[{]/.test(text)) throw new Error('Tiingo sent something other than price data');
     try {
-      return parseTiingo(text, deps.now(), interval === '1w');
+      return raw ? parseTiingoRaw(text, deps.now()) : parseTiingo(text, deps.now(), interval === '1w');
     } catch (e) {
       const detail = said(text, 'detail');
       if (detail === undefined) throw e;
@@ -628,14 +672,14 @@ function loaded(source: Source, bars: Bars, fetched: number, warning: string | n
   return { bars: own, warning, note, source, through: own.t[own.t.length - 1], fetched, stale };
 }
 
-async function fetchBars(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps): Promise<{ bars: Bars; note: string | null }> {
+async function fetchBars(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps, raw = false): Promise<{ bars: Bars; note: string | null }> {
   switch (ref.source) {
     case 'yahoo':
-      return { bars: await fetchYahoo(ref, interval, deps), note: null };
+      return { bars: await fetchYahoo(ref, interval, deps, raw), note: null };
     case 'binance':
       return { bars: await fetchBinance(ref, interval, since, cached?.bars ?? null, deps), note: null };
     case 'tiingo':
-      return { bars: await fetchTiingo(ref, interval, deps), note: null };
+      return { bars: await fetchTiingo(ref, interval, deps, raw), note: null };
     case 'fred':
       return fetchFred(ref, deps);
     case 'csv':
@@ -649,6 +693,8 @@ interface RefreshOptions {
   force?: boolean;
   /** False keeps Tiingo from standing in for Yahoo, as for magnify's smaller bars. */
   fallback?: boolean;
+  /** Prices as they traded, unadjusted (parseYahooRaw, parseTiingoRaw), for Yahoo and Tiingo. */
+  raw?: boolean;
 }
 
 /**
@@ -659,7 +705,7 @@ interface RefreshOptions {
 async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null, o: RefreshOptions = {}): Promise<Loaded> {
   const keepFrom = o.keepFrom ?? -Infinity;
   try {
-    const got = await fetchBars(ref, interval, since, cached, deps);
+    const got = await fetchBars(ref, interval, since, cached, deps, o.raw);
     const bars = keepFrom > -Infinity ? barsFrom(got.bars, keepFrom) : got.bars;
     if (bars.t.length === 0) throw new Error('no bars returned');
     const fetched = deps.now();
@@ -702,7 +748,7 @@ export async function loadBars(
   since: number,
   deps: DataDeps,
   force = false,
-  opts?: { freshForMs?: number; keepFrom?: number; key?: string; fallback?: boolean },
+  opts?: { freshForMs?: number; keepFrom?: number; key?: string; fallback?: boolean; raw?: boolean },
 ): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
@@ -737,12 +783,21 @@ export async function loadBars(
   let download = byKey.get(slot);
   if (!download) {
     const map = byKey;
-    download = refresh(ref, interval, since, deps, key, cached, { keepFrom: opts?.keepFrom, freshForMs: opts?.freshForMs, force, fallback: opts?.fallback }).finally(() =>
+    download = refresh(ref, interval, since, deps, key, cached, { keepFrom: opts?.keepFrom, freshForMs: opts?.freshForMs, force, fallback: opts?.fallback, raw: opts?.raw }).finally(() =>
       map.delete(slot),
     );
     byKey.set(slot, download);
   }
   return download;
+}
+
+/**
+ * A Yahoo or Tiingo ticker's daily bars as they traded each day, unadjusted for later dividends and splits, to compare a
+ * broker's fills with. They are saved apart from the adjusted bars, under the same name with `raw-` in front, and Tiingo
+ * never stands in for Yahoo here.
+ */
+export function loadRawBars(ref: AssetRef, deps: DataDeps, opts: { freshForMs?: number } = {}): Promise<Loaded> {
+  return loadBars(ref, '1d', 0, deps, false, { freshForMs: opts.freshForMs, key: `raw-${cacheKey(ref, '1d')}`, fallback: false, raw: true });
 }
 
 /** The name a source's bars of one ticker and interval are saved under. A FRED series is the same whatever the interval. */

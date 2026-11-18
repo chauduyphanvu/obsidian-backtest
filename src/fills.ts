@@ -3,7 +3,8 @@
 
 import { detectCsvSeparator, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
 import type { FillLog } from './engine.ts';
-import { DAY } from './format.ts';
+import { DAY, isIntraday } from './format.ts';
+import type { Bars } from './types.ts';
 
 export type Side = 'buy' | 'sell';
 
@@ -372,10 +373,54 @@ export interface Followed {
 
 /** Prices as the broker sees them, unadjusted for later dividends and splits. */
 export interface RawPrices {
-  /** What a price of the run at time `t` is multiplied by to be the broker's price that day. */
+  /** What a price of the run at time `t` is multiplied by to be the broker's price that day; NaN when that is not known. */
   factor(ticker: string, t: number): number;
   /** The unadjusted low and high of the ticker's day; null when they are not known. */
   range(ticker: string, day: number): { low: number; high: number } | null;
+}
+
+/** The index of the last of the ascending `t` at or before `at`; -1 for none. */
+function atOrBefore(t: number[], at: number): number {
+  let lo = 0;
+  let hi = t.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (t[mid] <= at) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo - 1;
+}
+
+/**
+ * The broker's prices for each ticker from the runs' own bars (`own`) and, for the tickers in `adjusted` (Yahoo's and
+ * Tiingo's, whose prices are adjusted for later dividends and splits), their bars as traded (`raw`, daily). A run's bar is
+ * converted by its close against the raw close of the last day it covers, so a weekly bar is converted at its Friday; an
+ * intraday bar, whose close is no day's close, is not converted, and neither is a ticker whose raw bars are missing.
+ */
+export function rawPrices(own: Map<string, Bars>, raw: Map<string, Bars>, adjusted: Set<string>): RawPrices {
+  return {
+    factor(ticker, t) {
+      if (!adjusted.has(ticker)) return 1;
+      const bars = own.get(ticker);
+      const r = raw.get(ticker);
+      if (!bars || !r || isIntraday(bars.t)) return NaN;
+      const i = atOrBefore(bars.t, t);
+      if (i < 0) return NaN;
+      const j = atOrBefore(r.t, (bars.t[i + 1] ?? Infinity) - 1);
+      return j >= 0 && r.t[j] >= bars.t[i] ? r.c[j] / bars.c[i] : NaN;
+    },
+    range(ticker, day) {
+      const bars = adjusted.has(ticker) ? raw.get(ticker) : own.get(ticker);
+      if (!bars) return null;
+      let low = Infinity;
+      let high = -Infinity;
+      for (let i = atOrBefore(bars.t, day + DAY - 1); i >= 0 && bars.t[i] >= day; i--) {
+        low = Math.min(low, bars.l[i]);
+        high = Math.max(high, bars.h[i]);
+      }
+      return low <= high ? { low, high } : null;
+    },
+  };
 }
 
 export interface MatchOptions {
@@ -445,6 +490,8 @@ export interface MatchRow {
   move: number | null;
   /** Your price is outside the day's range by more than `OUTSIDE`, most likely from a split: it is not compared. */
   outside: boolean;
+  /** The broker's price of the strategies' trade is not known (RawPrices.factor), so yours is not compared with it. */
+  unpriced: boolean;
 }
 
 export interface TickerCost {
@@ -607,7 +654,7 @@ export function matchFills(strategies: Followed[], fills: Fill[], opts: MatchOpt
     price: (b.weighted / b.gross) * raw.factor(b.ticker, b.t),
     strategies: [...new Set(b.parts.map((p) => p.strategy))],
   });
-  const blank = (ticker: string, cls: MatchClass): MatchRow => ({ ticker, class: cls, model: null, yours: null, barsLate: null, bps: null, slippage: 0, late: 0, skipped: 0, fees: 0, move: null, outside: false });
+  const blank = (ticker: string, cls: MatchClass): MatchRow => ({ ticker, class: cls, model: null, yours: null, barsLate: null, bps: null, slippage: 0, late: 0, skipped: 0, fees: 0, move: null, outside: false, unpriced: false });
 
   const rows: MatchRow[] = [];
   const matched = new Set<number>();
@@ -619,18 +666,21 @@ export function matchFills(strategies: Followed[], fills: Fill[], opts: MatchOpt
     const m = model(models[mi]);
     const y = yours[yi].trade;
     const range = raw.range(yours[yi].ticker, y.day);
+    const unpriced = !Number.isFinite(m.price);
     const outside = range !== null && (y.price < range.low * (1 - OUTSIDE) || y.price > range.high * (1 + OUTSIDE));
-    const worse = outside ? 0 : sign(m.side) * (y.price - m.price) * y.quantity;
+    const compared = !outside && !unpriced;
+    const worse = compared ? sign(m.side) * (y.price - m.price) * y.quantity : 0;
     rows.push({
       ...blank(yours[yi].ticker, cls),
       model: m,
       yours: y,
       barsLate,
-      bps: outside || barsLate !== null ? null : (sign(m.side) * (y.price - m.price) * 1e4) / m.price,
+      bps: !compared || barsLate !== null ? null : (sign(m.side) * (y.price - m.price) * 1e4) / m.price,
       slippage: barsLate === null ? worse : 0,
       late: barsLate === null ? 0 : worse,
       fees: y.fees,
       outside,
+      unpriced,
     });
   };
 

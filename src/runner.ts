@@ -1,5 +1,5 @@
 import { runBacktest, type Backtest } from './backtest.ts';
-import { barsFrom, insideReach, loadBars, loadInsideBars, type DataDeps, type Loaded } from './data.ts';
+import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
 import { MAX_PERIOD, paramValues, parseSpec, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
@@ -243,6 +243,30 @@ export class Runner {
       data: new Map(loaded.map((l) => [l.name, barsFrom(l.bars, since)])),
       warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
       prices: loaded.map((l) => ({ name: l.name, source: l.source, through: l.through, fetched: l.fetched, stale: l.stale })),
+    };
+  }
+
+  /**
+   * Daily prices as they traded of Yahoo and Tiingo tickers, whose usual prices are adjusted for later dividends and
+   * splits, to compare a broker's fills with; other sources' prices are as traded already and are not asked for. A ticker
+   * that can't be loaded gives a warning and is left out. Like loadExtras, they are never added to a run's data.
+   */
+  async loadRaw(refs: AssetRef[]): Promise<{ data: Map<string, Bars>; warnings: string[] }> {
+    const wanted = refs.filter((r) => r.source === 'yahoo' || r.source === 'tiingo');
+    const loaded = await Promise.all(
+      wanted.map(async (r) => {
+        try {
+          const l = await loadRawBars(r, this.deps, { freshForMs: this.freshForMs });
+          return { name: r.name, bars: l.bars, warning: l.warning };
+        } catch (e) {
+          const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
+          return { name: r.name, bars: null, warning: `${why}. ${r.name}'s fills are not compared on price.` };
+        }
+      }),
+    );
+    return {
+      data: new Map(loaded.flatMap((l) => (l.bars ? [[l.name, l.bars] as const] : []))),
+      warnings: loaded.flatMap((l) => (l.warning ? [l.warning] : [])),
     };
   }
 
