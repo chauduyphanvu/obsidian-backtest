@@ -468,6 +468,201 @@ export function supertrend(h: number[], l: number[], c: number[], n: number, mul
   return { line, up };
 }
 
+/** The sum of each window of `n` known values. */
+export function sum(src: number[], n: number): number[] {
+  return rolling(src, n, (s, e) => {
+    let total = 0;
+    for (let i = s; i <= e; i++) total += src[i];
+    return total;
+  });
+}
+
+/** Double exponential average: 2 * e1 - e2, where e1 is ema(src, n) and e2 is the ema of e1. */
+export function dema(src: number[], n: number): number[] {
+  const e1 = ema(src, n);
+  const e2 = ema(e1, n);
+  return e1.map((x, i) => 2 * x - e2[i]);
+}
+
+/** Triple exponential average: 3 * e1 - 3 * e2 + e3, where e1 is ema(src, n) and each next one is the ema of the one before. */
+export function tema(src: number[], n: number): number[] {
+  const e1 = ema(src, n);
+  const e2 = ema(e1, n);
+  const e3 = ema(e2, n);
+  return e1.map((x, i) => 3 * x - 3 * e2[i] + e3[i]);
+}
+
+/**
+ * Kaufman's efficiency ratio over `n` bars: how far the value moved, |x - x[n]|, over how far it travelled, the sum of
+ * |x - x[1]| over those bars; 0 to 1. `still` is what a window that did not move gives.
+ */
+function efficiencyRatio(src: number[], n: number, still: number): number[] {
+  return rolling(src, n + 1, (s, e) => {
+    let path = 0;
+    for (let i = s + 1; i <= e; i++) path += Math.abs(src[i] - src[i - 1]);
+    return path === 0 ? still : Math.min(1, Math.abs(src[e] - src[s]) / path);
+  });
+}
+
+/** Kaufman's efficiency ratio over the last `n` bars; unknown when the window did not move. */
+export function efficiency(src: number[], n: number): number[] {
+  return efficiencyRatio(src, n, NaN);
+}
+
+/**
+ * Kaufman's adaptive average: prev + sc * (x - prev), where sc = (ER * (2 / (fast + 1) - 2 / (slow + 1)) + 2 / (slow + 1)) squared
+ * and ER is the efficiency ratio over `n` bars, 0 when the window did not move. It starts at the first bar where ER is known,
+ * from the value of the bar before it, as TA-Lib does. Once started, an unknown value leaves it unknown for good, as it does an average.
+ */
+export function kama(src: number[], n: number, fast: number, slow: number): number[] {
+  const er = efficiencyRatio(src, n, 0);
+  const [f, s] = [2 / (fast + 1), 2 / (slow + 1)];
+  const out = filled(src.length);
+  let value = NaN;
+  let started = false;
+  for (let i = 0; i < src.length; i++) {
+    if (Number.isNaN(er[i])) {
+      if (started) break;
+      continue;
+    }
+    if (!started) [value, started] = [src[i - 1], true];
+    value += (er[i] * (f - s) + s) ** 2 * (src[i] - value);
+    out[i] = value;
+  }
+  return out;
+}
+
+/**
+ * Bars since the highest (`sign` 1) or lowest (-1) of each window of the last `n + 1` known values, a tie going to the most
+ * recent, in one pass with a queue of candidates.
+ */
+function sinceExtreme(src: number[], n: number, sign: 1 | -1): number[] {
+  const out = filled(src.length);
+  const keep: number[] = [];
+  let head = 0;
+  let valid = 0;
+  for (let i = 0; i < src.length; i++) {
+    const x = src[i];
+    if (Number.isNaN(x)) {
+      keep.length = 0;
+      head = 0;
+      valid = 0;
+      continue;
+    }
+    valid++;
+    while (keep.length > head && sign * src[keep[keep.length - 1]] <= sign * x) keep.pop();
+    keep.push(i);
+    if (keep[head] <= i - n - 1) head++;
+    if (valid >= n + 1) out[i] = i - keep[head];
+  }
+  return out;
+}
+
+/** Aroon up: 100 * (n - bars since the highest high of the last n + 1 bars) / n, from 0 to 100. */
+export function aroonUp(h: number[], n: number): number[] {
+  return sinceExtreme(h, n, 1).map((since) => (100 * (n - since)) / n);
+}
+
+/** Aroon down: 100 * (n - bars since the lowest low of the last n + 1 bars) / n, from 0 to 100. */
+export function aroonDown(l: number[], n: number): number[] {
+  return sinceExtreme(l, n, -1).map((since) => (100 * (n - since)) / n);
+}
+
+/**
+ * Wilder's parabolic SAR, a stop that trails the price: under the lows in an uptrend, over the highs in a downtrend. It starts
+ * at the first two bars that have a high, low and close: the trend is up when the second close is above the first and down
+ * otherwise, the SAR is the first bar's low in an uptrend and its high in a downtrend, and the extreme point is the second
+ * bar's high or low; the second bar is then tested for a reversal like any later one. Each next bar the SAR moves the share
+ * `af` of the way to the extreme point, but not past the lows (uptrend) or highs (downtrend) of the two bars before. `af`
+ * starts at `step`, grows by `step` each time the trend makes a new extreme, and stops at `max`. A bar that crosses the SAR
+ * reverses the trend: the SAR becomes the old extreme point (or that bar's high or low, if further out), the extreme point
+ * becomes that bar's low or high, and `af` starts again. Once started, an unknown bar leaves it unknown for good.
+ */
+export function psar(h: number[], l: number[], c: number[], step: number, max: number): number[] {
+  const out = filled(h.length);
+  const known = (i: number) => !Number.isNaN(h[i] + l[i] + c[i]);
+  let [rising, sar, ep, af] = [false, NaN, NaN, step];
+  let started = false;
+  for (let i = 1; i < h.length; i++) {
+    if (!started) {
+      if (!known(i) || !known(i - 1)) continue;
+      started = true;
+      rising = c[i] > c[i - 1];
+      sar = rising ? l[i - 1] : h[i - 1];
+      ep = rising ? h[i] : l[i];
+    } else {
+      if (!known(i)) break;
+      sar += af * (ep - sar);
+      for (let k = 1; k <= 2; k++) sar = rising ? Math.min(sar, l[i - k]) : Math.max(sar, h[i - k]);
+    }
+    if (rising ? l[i] < sar : h[i] > sar) {
+      rising = !rising;
+      sar = rising ? Math.min(ep, l[i]) : Math.max(ep, h[i]);
+      ep = rising ? h[i] : l[i];
+      af = step;
+    } else if (rising ? h[i] > ep : l[i] < ep) {
+      ep = rising ? h[i] : l[i];
+      af = Math.min(af + step, max);
+    }
+    out[i] = sar;
+  }
+  return out;
+}
+
+/** Chaikin money flow: the sum of ((close - low) - (high - close)) / (high - low) * volume over the last `n` bars, over their volume; a bar with no range adds 0 to the top. Unknown while none of the bars traded. */
+export function cmf(h: number[], l: number[], c: number[], v: number[], n: number): number[] {
+  const flow = h.map((hi, i) => (Number.isNaN(hi + l[i] + c[i] + v[i]) ? NaN : hi === l[i] ? 0 : (((c[i] - l[i]) - (hi - c[i])) / (hi - l[i])) * v[i]));
+  const [money, volume, traded] = [windowSum(flow, n), windowSum(v, n), windowSum(v.map((x) => (x > 0 ? 1 : 0)), n)];
+  return money.map((m, i) => (traded[i] > 0 ? m / volume[i] : NaN));
+}
+
+/** The value at the last bar of the least-squares line through each window of `n` values, against the bar number: the line `slope` gives the slope of. */
+export function linreg(src: number[], n: number): number[] {
+  const mid = (n - 1) / 2;
+  const spread = (n * (n * n - 1)) / 12;
+  return rolling(src, n, (s, e) => {
+    let [total, top] = [0, 0];
+    for (let i = s; i <= e; i++) {
+      total += src[i] - src[s];
+      top += (i - s - mid) * (src[i] - src[s]);
+    }
+    return src[s] + total / n + (top / spread) * mid;
+  });
+}
+
+/** The share of the spread of each window of `n` values that the least-squares line through it explains, 0 to 1; unknown when they are all equal. */
+export function rsquared(src: number[], n: number): number[] {
+  const mid = (n - 1) / 2;
+  const spread = (n * (n * n - 1)) / 12;
+  return rolling(src, n, (s, e) => {
+    let total = 0;
+    for (let i = s; i <= e; i++) total += src[i] - src[s];
+    const mean = total / n;
+    let [top, own] = [0, 0];
+    for (let i = s; i <= e; i++) {
+      const d = src[i] - src[s] - mean;
+      top += (i - s - mid) * d;
+      own += d * d;
+    }
+    return own === 0 ? NaN : Math.min(1, (top * top) / (spread * own));
+  });
+}
+
+/**
+ * Consecutive bars the value rose (1, 2, 3, ...) or fell (-1, -2, ...), 0 on a bar equal to the one before. It needs a known
+ * change, so it is unknown on the first bar and where either value is unknown, and counts again from the next known change.
+ */
+export function streak(src: number[]): number[] {
+  const out = filled(src.length);
+  for (let i = 1; i < src.length; i++) {
+    const d = src[i] - src[i - 1];
+    if (Number.isNaN(d)) continue;
+    const before = out[i - 1];
+    out[i] = d > 0 ? (before > 0 ? before + 1 : 1) : d < 0 ? (before < 0 ? before - 1 : -1) : 0;
+  }
+  return out;
+}
+
 function isWeekend(t: number): boolean {
   const d = new Date(t).getUTCDay();
   return d === 0 || d === 6;
@@ -477,6 +672,11 @@ export function monthKey(t: number): number {
   const d = new Date(t);
   return d.getUTCFullYear() * 12 + d.getUTCMonth();
 }
+
+/** The Monday-to-Sunday week of `t` as a number that rises by 1 each Monday, as `rebalance: weekly` counts weeks. */
+export const weekKey = (t: number): number => Math.floor((Math.floor(t / DAY) + 3) / 7);
+export const quarterKey = (t: number): number => Math.floor(monthKey(t) / 3);
+export const yearKey = (t: number): number => new Date(t).getUTCFullYear();
 
 /**
  * Where the bar after one starting at a given time would start, in a series whose bars start at `t`: one step on (the
@@ -504,6 +704,52 @@ export const nextBarTime = (t: number[]): number => barStepper(t)(t[t.length - 1
 export function periodEnds(t: number[], key: (t: number) => number): number[] {
   const after = t.length > 0 ? nextBarTime(t) : NaN;
   return t.map((x, i) => (key(i + 1 < t.length ? t[i + 1] : after) !== key(x) ? 1 : 0));
+}
+
+/**
+ * The number of each bar's day within its month, counting the days that have a bar: 1 on the month's first such day, the same
+ * for every bar of a day. Unknown through the series' first month, which may have begun before its first bar.
+ */
+export function tradingDay(t: number[]): number[] {
+  const month = t.map(monthKey);
+  let [count, day] = [0, NaN];
+  return t.map((x, i) => {
+    const today = Math.floor(x / DAY);
+    if (i === 0 || month[i] !== month[i - 1]) count = 1;
+    else if (today !== day) count++;
+    day = today;
+    return month[i] === month[0] ? NaN : count;
+  });
+}
+
+/**
+ * The days with a bar after each bar's day in its month: 0 on the month's last such day. Past the final bar they are the days
+ * the series would go on to have, stepping as nextBarTime does, so a holiday after the last price is not known.
+ */
+export function tradingDaysLeft(t: number[]): number[] {
+  const out = filled(t.length);
+  if (t.length === 0) return out;
+  const month = t.map(monthKey);
+  const days = t.map((x) => Math.floor(x / DAY));
+  const last = t.length - 1;
+  const step = barStepper(t);
+  let [left, day, next] = [0, days[last], step(t[last])];
+  while (monthKey(next) === month[last]) {
+    const today = Math.floor(next / DAY);
+    if (today !== day) [left, day] = [left + 1, today];
+    // The rest of this day's bars add no day, so go on from its end. A series with repeated times has a step of 0.
+    const after = step(Math.max(next, (today + 1) * DAY - 1));
+    if (after <= next) break;
+    next = after;
+  }
+  for (let i = last; i >= 0; i--) {
+    if (i < last) {
+      if (month[i + 1] !== month[i]) left = 0;
+      else if (days[i + 1] !== days[i]) left++;
+    }
+    out[i] = left;
+  }
+  return out;
 }
 
 /**

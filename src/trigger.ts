@@ -119,10 +119,12 @@ const MAX_COVER = 64;
 /** Bars at most walked forward to find a ranking's next decision. */
 const MAX_WALK = 200_000;
 /** Functions whose value at a bar depends on every bar before it rather than on a window, so a series cut short gives another value. */
-const WHOLE = ['bars_since', 'obv'];
+const WHOLE = ['bars_since', 'obv', 'streak', 'psar'];
 /** Functions given no series that read each bar's high, low and close, and those that read its volume as well. */
-const HLC = ['atr', 'stoch_k', 'stoch_d', 'adx', 'plus_di', 'minus_di', 'cci', 'williams_r', 'supertrend', 'supertrend_up', 'keltner_upper', 'keltner_lower'];
-const VOLUME: Record<string, SeriesName[]> = { mfi: ['high', 'low', 'close', 'volume'], vwap: ['high', 'low', 'close', 'volume'], obv: ['close', 'volume'] };
+const HLC = ['atr', 'stoch_k', 'stoch_d', 'adx', 'plus_di', 'minus_di', 'cci', 'williams_r', 'supertrend', 'supertrend_up', 'keltner_upper', 'keltner_lower', 'psar'];
+const VOLUME: Record<string, SeriesName[]> = { mfi: ['high', 'low', 'close', 'volume'], vwap: ['high', 'low', 'close', 'volume'], obv: ['close', 'volume'], cmf: ['high', 'low', 'close', 'volume'] };
+/** Functions given no series that read only each bar's high, or only its low. */
+const ONE_SIDE: Record<string, SeriesName[]> = { aroon_up: ['high'], aroon_down: ['low'] };
 
 /** What the rules read of one series: the fewest bars back they read it, and what of its newest bar they read. */
 interface Read {
@@ -148,6 +150,7 @@ function readsOf(exprs: Expr[], asset: string): Map<string, Read> {
     else if (e.k === 'ind') {
       if (HLC.includes(e.fn)) note(at, lag, ['high', 'low', 'close']);
       if (VOLUME[e.fn]) note(at, lag, VOLUME[e.fn]);
+      if (ONE_SIDE[e.fn]) note(at, lag, ONE_SIDE[e.fn]);
       if (e.fn === 'correl') note(at, lag, ['close']);
     }
     for (const c of children(e)) visit(c, at, lag);
