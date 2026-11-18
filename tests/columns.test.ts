@@ -517,5 +517,5 @@ test('a column adds no history of its own, and the unknown-name message lists co
   const look = (src: string) => lookbackBars(parseSpec(src).spec!);
   assert.equal(look('universe: SPY\nbuy when column(x) of csv:Data/s.csv > 0'), 250);
   assert.equal(look('universe: SPY\nbuy when sma(column(x) of csv:Data/s.csv, 300)[10] > 0'), 310);
-  assert.match(parseSpec('universe: SPY\nbuy when close > smaa(200)').errors[0].message, /Functions: sma, .*, min, max, abs, column\. Dates:/);
+  assert.match(parseSpec('universe: SPY\nbuy when close > smaa(200)').errors[0].message, /Functions: sma, .*, min, max, abs, sqrt, log, exp, if, column\. Dates:/);
 });

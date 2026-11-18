@@ -15,7 +15,7 @@ export type LineKind = 'blank' | 'for' | 'rule' | 'setting' | 'param' | 'continu
 export const RULE_HEADS = ['buy', 'sell', 'add', 'short', 'cover'];
 const KEYWORDS = ['buy', 'sell', 'short', 'cover', 'when', 'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of'];
 const CONSTANTS = ['true', 'false', 'always', 'never'];
-const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
+const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'sqrt', 'log', 'exp', 'if'];
 /** Words that read like series: calendar values and the one-word spellings of position values. */
 const VALUES: string[] = [...CALENDAR, ...Object.keys(POSITION)];
 /** The words that must follow the first word of a position value written in several words. */

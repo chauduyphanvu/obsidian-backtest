@@ -11,6 +11,9 @@ const MIN_LOOKBACK = 250;
 const SETTLE = 5;
 /** How far back before the run `bars_since` looks for the last bar its condition held, on top of what the condition itself needs. */
 const BARS_SINCE_REACH = 250;
+/** How far back `streak` counts, and how far back `psar` starts before its trend is taken to have settled, on top of what they read. */
+const STREAK_REACH = 250;
+const PSAR_REACH = 250;
 /** Daily and longer bars skip weekends and holidays, so a run of trading bars spans more calendar time. */
 const NON_TRADING = 1.6;
 
@@ -72,6 +75,16 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
           return Math.max(src + SETTLE * a, 1 + SETTLE * c);
         case 'bars_since':
           return src + BARS_SINCE_REACH;
+        case 'dema':
+          return src + 2 * SETTLE * a;
+        case 'tema':
+          return src + 3 * SETTLE * a;
+        case 'kama':
+          return src + a + SETTLE * c;
+        case 'streak':
+          return src + STREAK_REACH;
+        case 'psar':
+          return PSAR_REACH;
         default:
           return src + a;
       }

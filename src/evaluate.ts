@@ -56,7 +56,7 @@ export const rowEnds = (b: Bars): number[] => (b.unpriced || b.values ? ind.valu
 const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];
 
 /** Functions that weigh bars by volume, and so mean nothing on prices that have none. */
-const NEEDS_VOLUME = ['mfi', 'obv', 'vwap'];
+const NEEDS_VOLUME = ['mfi', 'obv', 'vwap', 'cmf'];
 
 /**
  * The Evaluator a spec's rules are read with, by the run and by everything that explains or redoes it.
@@ -229,6 +229,23 @@ function logic(op: 'and' | 'or', a: number, b: number): number {
   return a === 1 || b === 1 ? 1 : a === 0 && b === 0 ? 0 : NaN;
 }
 
+/** `sqrt`, `log` or `exp` of one value; unknown where the result is not a number, as the root of a negative or the log of 0 or less, or is too large to hold. */
+function unary(fn: 'sqrt' | 'log' | 'exp', x: number): number {
+  switch (fn) {
+    case 'sqrt':
+      return x < 0 ? NaN : Math.sqrt(x);
+    case 'log':
+      return x > 0 ? Math.log(x) : NaN;
+    case 'exp': {
+      const y = Math.exp(x);
+      return y === Infinity ? NaN : y;
+    }
+  }
+}
+
+/** `if(condition, a, b)` at one bar: `a` where the condition holds, `b` where it does not, unknown where it is. */
+const choose = (condition: number, a: number, b: number): number => (Number.isNaN(condition) ? NaN : condition === 1 ? a : b);
+
 function calendar(name: CalName, t: number[]): number[] {
   const each = (fn: (d: Date) => number) => t.map((x) => fn(new Date(x)));
   switch (name) {
@@ -301,7 +318,13 @@ export class Evaluator {
       case 'math': {
         const a = this.compile(e.args[0], asset);
         if (e.fn === 'abs') return (i, p) => Math.abs(a(i, p));
+        const fn = e.fn;
+        if (fn === 'sqrt' || fn === 'log' || fn === 'exp') return (i, p) => unary(fn, a(i, p));
         const b = this.compile(e.args[1], asset);
+        if (fn === 'if') {
+          const c = this.compile(e.args[2], asset);
+          return (i, p) => choose(a(i, p), b(i, p), c(i, p));
+        }
         return e.fn === 'min' ? (i, p) => Math.min(a(i, p), b(i, p)) : (i, p) => Math.max(a(i, p), b(i, p));
       }
       case 'bin': {
@@ -390,7 +413,13 @@ export class Evaluator {
       case 'math': {
         const a = this.eval(e.args[0], asset);
         if (e.fn === 'abs') return each((i) => Math.abs(a[i]));
+        const fn = e.fn;
+        if (fn === 'sqrt' || fn === 'log' || fn === 'exp') return each((i) => unary(fn, a[i]));
         const b = this.eval(e.args[1], asset);
+        if (fn === 'if') {
+          const c = this.eval(e.args[2], asset);
+          return each((i) => choose(a[i], b[i], c[i]));
+        }
         // Math.min and Math.max already give NaN when either side is NaN.
         return each((i) => (e.fn === 'min' ? Math.min(a[i], b[i]) : Math.max(a[i], b[i])));
       }
@@ -529,6 +558,30 @@ export class Evaluator {
         return ind.supertrend(bars.h, bars.l, bars.c, a, b).line;
       case 'supertrend_up':
         return ind.supertrend(bars.h, bars.l, bars.c, a, b).up;
+      case 'sum':
+        return ind.sum(src, a);
+      case 'dema':
+        return ind.dema(src, a);
+      case 'tema':
+        return ind.tema(src, a);
+      case 'kama':
+        return ind.kama(src, a, b, c);
+      case 'aroon_up':
+        return ind.aroonUp(bars.h, a);
+      case 'aroon_down':
+        return ind.aroonDown(bars.l, a);
+      case 'psar':
+        return ind.psar(bars.h, bars.l, bars.c, a, b);
+      case 'cmf':
+        return ind.cmf(bars.h, bars.l, bars.c, bars.v, a);
+      case 'linreg':
+        return ind.linreg(src, a);
+      case 'rsquared':
+        return ind.rsquared(src, a);
+      case 'efficiency':
+        return ind.efficiency(src, a);
+      case 'streak':
+        return ind.streak(src);
     }
     throw new Error(`Unknown function ${e.fn}`);
   }

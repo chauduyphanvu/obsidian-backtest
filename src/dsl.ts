@@ -15,7 +15,7 @@ export type Expr =
   | { k: 'bool'; v: boolean }
   | { k: 'series'; name: SeriesName }
   | { k: 'ind'; fn: string; src: Expr | null; args: number[]; params?: (string | null)[] }
-  | { k: 'math'; fn: 'min' | 'max' | 'abs'; args: Expr[] }
+  | { k: 'math'; fn: 'min' | 'max' | 'abs' | 'sqrt' | 'log' | 'exp' | 'if'; args: Expr[] }
   | { k: 'bin'; op: '+' | '-' | '*' | '/'; a: Expr; b: Expr }
   | { k: 'neg'; a: Expr }
   | { k: 'cmp'; op: CmpOp; a: Expr; b: Expr }
@@ -241,6 +241,18 @@ export const INDICATORS: Record<string, IndicatorDef> = {
   slope: { src: 'close', params: [null], min: 2 },
   correl: { src: 'close', params: [null], min: 2, lead: 'series' },
   bars_since: { src: null, params: [], lead: 'condition' },
+  sum: { src: 'close', params: [null] },
+  dema: { src: 'close', params: [null] },
+  tema: { src: 'close', params: [null] },
+  kama: { src: 'close', params: [10, 2, 30] },
+  aroon_up: { src: null, params: [25] },
+  aroon_down: { src: null, params: [25] },
+  psar: { src: null, params: [0.02, 0.2], real: { 0: 'step', 1: 'maximum' } },
+  cmf: { src: null, params: [20] },
+  linreg: { src: 'close', params: [null], min: 2 },
+  rsquared: { src: 'close', params: [null], min: 2 },
+  efficiency: { src: 'close', params: [null] },
+  streak: { src: 'close', params: [] },
 };
 
 /** Functions whose value is a condition, 1 or 0, so a rule can be written with them alone. */
@@ -278,7 +290,7 @@ export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 /** Names a parameter can't take. */
 export const RESERVED = new Set([
   'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
-  'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
+  'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'sqrt', 'log', 'exp', 'if', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
   ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
 ]);
 
@@ -774,6 +786,7 @@ class ExprParser {
       if (t.s === 'false' || t.s === 'never') return { k: 'bool', v: false };
       if ((SERIES as string[]).includes(t.s)) return { k: 'series', name: t.s as SeriesName };
       if (t.s === 'min' || t.s === 'max' || t.s === 'abs') return this.math(t);
+      if (t.s === 'sqrt' || t.s === 'log' || t.s === 'exp' || t.s === 'if') return this.pointwise(t);
       if (t.s === 'column' && this.isOp('(')) return this.column(t);
       if (t.s in INDICATORS) return this.indicator(t);
       if ((CALENDAR as string[]).includes(t.s)) return { k: 'cal', name: t.s as CalName };
@@ -789,7 +802,7 @@ class ExprParser {
       if (t.s === 'column') throw new SpecError(at(t), COLUMN_USAGE);
       const known = [
         `Series: ${SERIES.join(', ')}`,
-        `Functions: ${Object.keys(INDICATORS).join(', ')}, min, max, abs, column`,
+        `Functions: ${Object.keys(INDICATORS).join(', ')}, min, max, abs, sqrt, log, exp, if, column`,
         `Dates: ${CALENDAR.join(', ')}`,
         ...(this.ctx.params.size ? [`Parameters: ${[...this.ctx.params.values()].map((x) => x.name).join(', ')}`] : []),
       ];
@@ -870,10 +883,31 @@ class ExprParser {
     return this.node({ k: 'math', fn, args: args.map((a) => a.e) }, t, ...args.map((a) => a.e));
   }
 
+  /** `sqrt(x)`, `log(x)`, `exp(x)` and `if(condition, a, b)`. */
+  private pointwise(t: Tok): Expr {
+    const fn = t.s as 'sqrt' | 'log' | 'exp' | 'if';
+    const start = this.i - 1;
+    const args = this.args();
+    if (fn !== 'if') {
+      const example = { sqrt: 'sqrt(stdev(20))', log: 'log(close)', exp: 'exp(slope(log(close), 90) * 252)' }[fn];
+      if (args.length !== 1) throw new SpecError(this.spanFrom(start), `${fn}() takes 1 value, as in ${example}`);
+      this.needNum(args[0].e, t, `${fn}()`);
+      return this.node({ k: 'math', fn, args: [args[0].e] }, t, args[0].e);
+    }
+    const example = 'if(close > sma(200), roc(126), 0)';
+    if (args.length !== 3) throw new SpecError(this.spanFrom(start), `if() takes a condition and two numbers, as in ${example}`);
+    if (!isBool(args[0].e)) throw new SpecError(args[0].at, `if() needs a condition first, not a number, as in ${example}`);
+    for (const a of args.slice(1)) if (isBool(a.e)) throw new SpecError(a.at, `if() chooses between two numbers, not conditions, as in ${example}`);
+    return this.node({ k: 'math', fn, args: args.map((a) => a.e) }, t, ...args.map((a) => a.e));
+  }
+
   private indicator(t: Tok): Expr {
     const def = INDICATORS[t.s];
     const start = this.i - 1;
     const args = this.args();
+    if (def.src && def.params.length === 0 && args[0]?.e.k === 'num') {
+      throw new SpecError(args[0].at, `${t.s}() takes no numbers, only a series, as in ${t.s}(close)`);
+    }
     let src: Expr | null = def.src ? { k: 'series', name: def.src } : null;
     let rest = args;
     if (def.lead === 'condition') {
@@ -912,6 +946,9 @@ class ExprParser {
       }
       return n;
     });
+    if (t.s === 'psar' && nums[0] > nums[1]) {
+      throw new SpecError(this.spanFrom(start), `psar(): the step ${nums[0]} is above the maximum ${nums[1]}. Use a step no larger than the maximum, as in psar(0.02, 0.2)`);
+    }
     const params = def.params.map((_, i) => (rest[i] ? (this.paramOf.get(rest[i].e) ?? null) : null));
     const e: Expr = params.some((p) => p !== null) ? { k: 'ind', fn: t.s, src, args: nums, params } : { k: 'ind', fn: t.s, src, args: nums };
     return this.node(e, t, ...(src ? [src] : []));

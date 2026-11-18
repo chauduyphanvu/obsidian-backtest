@@ -421,6 +421,83 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: 'buy when bars_since(close crosses above sma(50)) < 10',
     series: 'It takes no series, only a condition.',
   },
+  sum: {
+    args: ['n'],
+    short: 'sum of the last n values',
+    text: 'Sum of the last n values.',
+    example: 'buy when sum(volume, 5) > 5 * sma(volume, 50)',
+  },
+  dema: {
+    args: ['n'],
+    short: 'double exponential average, less lag than ema',
+    text: 'Double exponential average, 2 * e1 - e2 with e1 = ema(n) and e2 the ema of e1 over n bars, which follows the price with less lag than ema.',
+    example: 'buy when close > dema(50)',
+  },
+  tema: {
+    args: ['n'],
+    short: 'triple exponential average, less lag than ema',
+    text: 'Triple exponential average, 3 * e1 - 3 * e2 + e3 with e1 = ema(n) and each next one the ema of the one before, which follows the price with less lag than dema.',
+    example: 'buy when close > tema(30)',
+  },
+  kama: {
+    args: ['n', 'fast', 'slow'],
+    short: 'Kaufman adaptive average',
+    text: 'Kaufman’s adaptive average, which follows the price closely while it runs and slowly while it chops: each bar it moves the share sc = (ER * (2 / (fast + 1) - 2 / (slow + 1)) + 2 / (slow + 1)) squared of the way to the price, ER being the efficiency ratio over n bars, and it starts from the price of the bar before the first bar where ER is known.',
+    example: 'buy when close > kama(10, 2, 30)',
+  },
+  aroon_up: {
+    args: ['n'],
+    short: 'aroon up, 0 to 100: how recent the high is',
+    text: 'Aroon up, from 0 to 100: 100 * (n - bars since the highest high of the last n + 1 bars) / n, so 100 on a bar that makes the high and 0 when it was n bars ago, a tie going to the most recent bar.',
+    example: 'buy when aroon_up(25) > 70 and aroon_down(25) < 30',
+    series: 'It takes no series and reads the ticker’s own highs.',
+  },
+  aroon_down: {
+    args: ['n'],
+    short: 'aroon down, 0 to 100: how recent the low is',
+    text: 'Aroon down, from 0 to 100: 100 * (n - bars since the lowest low of the last n + 1 bars) / n, so 100 on a bar that makes the low and 0 when it was n bars ago, a tie going to the most recent bar.',
+    example: 'sell when aroon_down(25) > 70',
+    series: 'It takes no series and reads the ticker’s own lows.',
+  },
+  psar: {
+    args: ['step', 'max'],
+    short: 'parabolic SAR, a stop that trails the price',
+    text: 'Wilder’s parabolic SAR, a stop that trails the price, under the lows in an uptrend and over the highs in a downtrend: its pace starts at step, grows by step with each new extreme and stops at max, a bar that crosses it reverses the trend, and the first trend is up when the second close is above the first.',
+    example: 'buy when close crosses above psar()',
+    series: 'It takes no series, and step may not be above max.',
+  },
+  cmf: {
+    args: ['n'],
+    short: 'Chaikin money flow, -1 to 1',
+    text: 'Chaikin money flow, from -1 to 1: the sum over the last n bars of ((close - low) - (high - close)) / (high - low) * volume, over the sum of their volume, a bar with no range adding 0.',
+    example: 'buy when cmf(20) > 0.1',
+    series: 'It takes no series and needs volume.',
+  },
+  linreg: {
+    args: ['n'],
+    short: 'least-squares line, at this bar',
+    text: 'The value at this bar of the least-squares straight line through the last n values, against the bar number, whose slope per bar is slope(n).',
+    example: 'buy when close > linreg(50)',
+  },
+  rsquared: {
+    args: ['n'],
+    short: 'how well a line fits the last n values, 0 to 1',
+    text: 'How well the least-squares straight line through the last n values fits them, from 0 to 1 (1 when they lie on a line), and unknown when they are all equal.',
+    example: 'buy when slope(90) > 0 and rsquared(90) > 0.8',
+  },
+  efficiency: {
+    args: ['n'],
+    short: 'Kaufman efficiency ratio, 0 to 1',
+    text: 'Kaufman’s efficiency ratio, from 0 to 1: how far the value moved over n bars, |x - x[n]|, over how far it travelled, the sum of |x - x[1]| over those bars, so 1 is a straight run, and unknown when it did not move.',
+    example: 'buy when efficiency(20) > 0.3 and close > sma(50)',
+  },
+  streak: {
+    args: [],
+    short: 'bars in a row up (1, 2, ...) or down (-1, -2, ...)',
+    text: 'Consecutive bars the value rose (1, 2, 3, ...) or fell (-1, -2, ...), 0 on a bar equal to the one before, and unknown on the first bar and where a value is unknown, counting again from the next known change.',
+    example: 'buy when streak() <= -3',
+    series: 'Without a series it reads close; write another first, as in streak(volume).',
+  },
 };
 
 /** The call as written, with each default from INDICATORS: `rsi(n = 14)`, `sma(n)`, and a leading series or condition where the function needs one. */
@@ -441,6 +518,17 @@ for (const name of Object.keys(INDICATORS)) {
 add('function', 'min', 'min(a, b)', 'the smaller value', 'The smaller of two values.', 'buy when close > min(sma(20), sma(50))');
 add('function', 'max', 'max(a, b)', 'the larger value', 'The larger of two values.', 'buy when close > max(sma(20), sma(50))');
 add('function', 'abs', 'abs(x)', 'value without its sign', 'The value without its sign.', 'buy when abs(close - open) > atr(14)');
+add('function', 'sqrt', 'sqrt(x)', 'square root', 'The square root of the value, unknown below 0.', 'buy when stdev(roc(1), 20) * sqrt(252) < 20%');
+add('function', 'log', 'log(x)', 'natural logarithm', 'The natural logarithm of the value, unknown at 0 and below.', 'buy when slope(log(close), 90) > 0.1%');
+add('function', 'exp', 'exp(x)', 'e to the power x', 'e raised to the power of the value, unknown when too large to hold.', 'buy when exp(slope(log(close), 90) * 252) - 1 > 20%');
+add(
+  'function',
+  'if',
+  'if(condition, a, b)',
+  'a where the condition holds, otherwise b',
+  'The number a where the condition holds and b where it does not, and unknown where the condition is unknown; a and b are numbers, not conditions.',
+  'buy when if(close > sma(200), roc(126), 0) > 5%',
+);
 add(
   'function',
   'column',

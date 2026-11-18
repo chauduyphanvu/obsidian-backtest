@@ -77,7 +77,7 @@ for GLD:
 **Values**
 
 - Series: `open`, `high`, `low`, `close`, `volume`.
-- Indicators: `sma` `ema` `wma` `hma` `rsi` `roc` `stdev` `highest` `lowest` `atr` `macd` `macd_signal` `bb_upper` `bb_lower` `keltner_upper` `keltner_lower` `stoch_k` `stoch_d` `adx` `plus_di` `minus_di` `cci` `williams_r` `mfi` `obv` `vwap` `supertrend` `supertrend_up` `median` `zscore` `percent_rank` `slope` `correl` `bars_since` `min` `max` `abs`.
+- Indicators: `sma` `ema` `wma` `hma` `rsi` `roc` `stdev` `highest` `lowest` `atr` `macd` `macd_signal` `bb_upper` `bb_lower` `keltner_upper` `keltner_lower` `stoch_k` `stoch_d` `adx` `plus_di` `minus_di` `cci` `williams_r` `mfi` `obv` `vwap` `supertrend` `supertrend_up` `median` `zscore` `percent_rank` `slope` `correl` `bars_since` `sum` `dema` `tema` `kama` `aroon_up` `aroon_down` `psar` `cmf` `linreg` `rsquared` `efficiency` `streak` `min` `max` `abs` `sqrt` `log` `exp` `if(condition, a, b)`.
 - Calendar: `month`, `day`, `weekday`, `year`, `month_start`, `month_end`.
 - The open position: `bars held`, `entry price`, `last entry price`, `entries made`.
 - A CSV column: `column(score) of signals`.

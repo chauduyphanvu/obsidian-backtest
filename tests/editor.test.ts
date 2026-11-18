@@ -86,11 +86,11 @@ test('setting values', () => {
 });
 
 test('inside a rule: series, functions and words', () => {
-  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'column', 'crosses above', 'crosses below']);
-  assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev', 'stoch_k', 'stoch_d', 'supertrend', 'supertrend_up', 'slope']);
+  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'cmf', 'column', 'crosses above', 'crosses below']);
+  assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev', 'stoch_k', 'stoch_d', 'supertrend', 'supertrend_up', 'slope', 'sum', 'streak', 'sqrt']);
   assert.equal(complete(BLOCK, [], 'buy when close > sm')!.items[0].insert, 'sma(');
   assert.deepEqual(labels([], 'buy when close > sma(h'), ['high', 'highest', 'hma']);
-  assert.deepEqual(labels(['buy when close > 1'], '   or rs'), ['rsi']);
+  assert.deepEqual(labels(['buy when close > 1'], '   or rs'), ['rsi', 'rsquared']);
   assert.deepEqual(labels([], 'buy '), ['when']);
   assert.deepEqual(labels([], 'sell when close crosses '), ['above', 'below']);
   // Nothing while typing a number, after a finished word, or outside a rule.

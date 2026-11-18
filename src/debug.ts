@@ -928,10 +928,15 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
       return k < 0 ? `${x.asset} had no finished bar yet` : visit(x.a, x.asset, k);
     }
     if (x.k === 'lag') return j - x.n < 0 ? 'looks back past the first bar' : visit(x.a, a, j - x.n);
+    if (x.k === 'math' && x.fn === 'if') {
+      const c = value(x.args[0], a, j);
+      return visit(x.args[Number.isNaN(c) ? 0 : c === 1 ? 1 : 2], a, j);
+    }
     for (const c of children(x)) {
       const why = visit(c, a, j);
       if (why) return why;
     }
+    if (x.k === 'math') return x.fn === 'sqrt' ? 'the square root of a negative number' : x.fn === 'log' ? 'the log of 0 or less' : x.fn === 'exp' ? 'too large a number' : '';
     if (x.k === 'ind') return whyIndicator(cx, x, a, j);
     if (x.k === 'bin' && x.op === '/') return 'divides by 0';
     if (x.k === 'cmp' && (x.op === 'xup' || x.op === 'xdn')) return 'the bar before is unknown';
@@ -955,9 +960,10 @@ function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j:
     return w && !w.some(Number.isNaN) ? w : null;
   };
   const same = (w: number[] | null) => w !== null && w.every((v) => v === w[0]);
-  if (x.fn === 'zscore') {
+  if (x.fn === 'zscore' || x.fn === 'rsquared' || x.fn === 'efficiency') {
     const series = x.src ? cx.ev.eval(x.src, asset) : cx.bt.data.get(asset)?.c;
-    return series && same(window(series, n)) ? 'every value in the window is the same' : warming;
+    // efficiency compares the value with the one n bars back, so its window has one more.
+    return series && same(window(series, x.fn === 'efficiency' ? n + 1 : n)) ? 'every value in the window is the same' : warming;
   }
   if (x.fn === 'correl' && x.src) {
     const both = [cx.bt.data.get(asset)?.c, cx.ev.eval(x.src, asset)];

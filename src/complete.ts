@@ -60,7 +60,7 @@ const VALUE_HINTS: Record<string, Completion[]> = {
 };
 
 /** Every function a rule can call. */
-export const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'column'];
+export const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'sqrt', 'log', 'exp', 'if', 'column'];
 
 /** A function's signature and what it does, as one line. */
 const functionDetail = (f: string) => `${docFor(f)!.signature} \u00b7 ${shortOf(f)}`;

@@ -240,8 +240,21 @@ Functions, written with parentheses. A period is a plain number or a parameter, 
   slope(n)                     least-squares slope over n bars, per bar; n at least 2
   correl(other, n)             correlation of the one-bar changes of this ticker's close and of another series over n bars, n at least 2: correl(close of SPY, 60)
   bars_since(condition)        bars since the condition was last true; unknown until it has been: bars_since(close crosses above sma(50)) < 10
-  Like atr, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, supertrend and supertrend_up take no series: they read the ticker's own bars. keltner_upper and keltner_lower take one first, for the average only.
-  min(a, b)  max(a, b)  abs(x)
+  sum(n)                       sum of the last n values: sum(volume, 5)
+  dema(n)  tema(n)             double and triple exponential averages, with less lag than ema
+  kama(n, fast, slow)          Kaufman's adaptive average, quick in a trend and slow in chop; defaults 10, 2, 30
+  aroon_up(n)  aroon_down(n)   0 to 100: how recent the highest high and the lowest low of the last n + 1 bars are; n defaults to 25
+  psar(step, max)              parabolic SAR, a stop that trails the price; defaults 0.02, 0.2; step may not be above max: buy when close crosses above psar()
+  cmf(n)                       Chaikin money flow, -1 to 1; needs volume; n defaults to 20
+  linreg(n)                    value at this bar of the least-squares line through the last n values; n at least 2
+  rsquared(n)                  how well that line fits them, 0 to 1; n at least 2
+  efficiency(n)                Kaufman's efficiency ratio, 0 (chop) to 1 (a straight run)
+  streak()                     bars in a row the value rose (1, 2, 3 ...) or fell (-1, -2 ...), 0 if unchanged: rsi(streak(), 2)
+  Like atr, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, supertrend, supertrend_up, aroon_up, aroon_down, psar and cmf take no series: they read the ticker's own bars. keltner_upper and keltner_lower take one first, for the average only.
+  min(a, b)  max(a, b)  abs(x)  sqrt(x)  log(x)  exp(x)
+  if(condition, a, b)          a where the condition holds, else b, both numbers: if(close > sma(200), roc(126), 0)
+  Example: hold: top 5 by (exp(slope(log(close), 90) * 252) - 1) * rsquared(log(close), 90)
+  Example: buy when (rsi(3) + rsi(streak(), 2) + percent_rank(roc(1), 100)) / 3 < 10
 Calendar values, read from each bar's date:
   month 1 to 12, day 1 to 31, weekday 1 (Monday) to 7 (Sunday), year such as 2024
   month_start and month_end are conditions: the first and the last bar of a month

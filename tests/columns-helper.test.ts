@@ -117,7 +117,7 @@ test('the reference has the subsection, its names and its dating rule, and the s
   for (const part of ['`column(score) of signals`', '`column("News Sentiment")`', 'news_sentiment', 'A row dated Tuesday is known at Tuesday\'s close', 'the order it gives fills at Wednesday\'s open', 'the classic way to cheat by accident', 'At most 50 columns', 'This file has no prices. A strategy can read its columns but cannot trade it.']) {
     assert.ok(readme.includes(part), part);
   }
-  assert.ok(readme.includes('abs, column. Dates:'));
+  assert.ok(readme.includes('if, column. Dates:'));
   assert.ok(readme.includes(`"${'This file has no prices. A strategy can read its columns but cannot trade it.'}"`));
   // The reference's account of the dating is the helper window's.
   assert.ok(SIGNAL_DATING.includes("A row counts as known at the end of the day it is dated."));
