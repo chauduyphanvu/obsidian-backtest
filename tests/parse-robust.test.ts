@@ -40,6 +40,43 @@ test('parseSpec never throws on random text made of the language and odd charact
   }
 });
 
+const NEWER = [
+  'universe: SPY, TLT', 'buy when', 'sell when', 'for SPY, TLT:', 'for SPY,:', 'for all, SPY:', 'up =', 'up = close > 1', 'down = not up', 'x = x + 1', 'n = 3', 'n = 3 in 2..9',
+  'up', 'down', 'x', 'n', 'between', 'within', 'for', 'bars', 'bar', 'for 3 bars', 'within 2 bars', 'for n bars', 'count(', 'count(close > 1, 3)', 'close crosses', 'crosses',
+  'highest since entry', 'lowest since entry', 'position return', 'highest_since_entry', 'position', 'since', 'highest since', 'and', 'or', 'not', '(', ')', ',', ':',
+  'close', 'sma(5)', '> 1', '< 2', '== false', 'of SPY', '[1]', '\n', '\n', '  ', ' ',
+];
+
+test('parseSpec never throws on random text made of definitions, ranges, windows and lists', () => {
+  const rng = makeRng(11);
+  for (let k = 0; k < 4000; k++) {
+    const parts: string[] = [];
+    const n = 1 + rng.int(30);
+    for (let i = 0; i < n; i++) parts.push(NEWER[rng.int(NEWER.length)]);
+    const src = parts.join(rng.int(3) === 0 ? '' : rng.int(2) ? ' ' : '\n');
+    const out = attempt(src);
+    assert.ok(!(out instanceof Error), `${JSON.stringify(src)} threw ${out instanceof Error ? out.message : ''}`);
+  }
+});
+
+test('long chains and loops of definitions are normal errors, and a long list of tickers is read', () => {
+  const chain = (n: number, backwards: boolean) => {
+    const lines = Array.from({ length: n }, (_, i) => `a${i} = ${i === 0 ? 'close > 1' : `a${i - 1} and close > 1`}`);
+    return ['universe: SPY', ...(backwards ? lines.reverse() : lines), `buy when a${n - 1}`].join('\n');
+  };
+  for (const backwards of [false, true]) {
+    const out = attempt(chain(3000, backwards));
+    assert.ok(!(out instanceof Error), `a chain of 3000 definitions, ${backwards ? 'last first' : 'in order'}: ${out instanceof Error ? out.message : ''}`);
+    assert.ok(out.errors.some((e) => /nests too deeply/.test(e.message)));
+  }
+  assert.deepEqual(attempt(chain(40, true)) instanceof Error ? ['threw'] : (attempt(chain(40, true)) as ReturnType<typeof parseSpec>).errors, []);
+  const loop = attempt(['universe: SPY', ...Array.from({ length: 2000 }, (_, i) => `a${i} = a${(i + 1) % 2000} and close > 1`), 'buy when a0'].join('\n'));
+  assert.ok(!(loop instanceof Error) && loop.errors.length > 0);
+  const names = Array.from({ length: 50_000 }, (_, i) => `T${i}`);
+  const out = attempt(`universe: ${names.join(', ')}\nbuy when true\nfor ${names.join(', ')}:\n  sell when close < 1`);
+  assert.ok(!(out instanceof Error) && out.errors.length === 0);
+});
+
 const deep = (rule: string) => `universe: SPY\nbuy when ${rule}`;
 
 test('parseSpec never throws on adversarial text, and nesting past 64 levels is a normal error', () => {
