@@ -174,6 +174,8 @@ export class OrdersModal extends Modal {
       this.heading(section, heading);
       if (when === 'last close') h(section, 'p', 'bt-orders-muted', LAST_CLOSE_NOTE);
       const list = h(section, 'ul', when === 'last close' ? 'bt-orders-list bt-orders-done' : 'bt-orders-list');
+      // "Sell short" and "Buy to cover" need a wider first column than "Buy" and "Sell".
+      if (group.some(({ order }) => order.action === 'short' || order.action === 'cover')) list.classList.add('bt-orders-wide');
       for (const { status, order } of group) {
         const row = h(list, 'li', 'bt-orders-row');
         h(row, 'span', `bt-orders-action bt-orders-${order.action}`, actionWord(order));
@@ -228,9 +230,10 @@ export class OrdersModal extends Modal {
     this.heading(section, WATCH_HEADING);
     h(section, 'p', 'bt-orders-muted', WATCH_NOTE);
     const items = h(section, 'ul', 'bt-orders-list bt-orders-watch');
+    if (rows.some(({ row }) => row.side === 'short' || row.side === 'cover')) items.classList.add('bt-orders-wide');
     for (const { status, row } of rows) {
       const item = h(items, 'li', 'bt-orders-row');
-      h(item, 'span', `bt-orders-action bt-orders-${row.side === 'sell' ? 'sell' : 'buy'}`, { buy: 'Buy', sell: 'Sell', add: 'Add' }[row.side]);
+      h(item, 'span', `bt-orders-action bt-orders-${row.side === 'add' ? 'buy' : row.side}`, { buy: 'Buy', sell: 'Sell', add: 'Add', short: 'Sell short', cover: 'Buy to cover' }[row.side]);
       const what = h(item, 'div', 'bt-orders-what');
       h(what, 'span', 'bt-orders-ticker', row.ticker);
       h(what, 'span', undefined, `${row.phrase}, ${row.when}`);
@@ -260,7 +263,7 @@ export class OrdersModal extends Modal {
         const item = h(items, 'li');
         h(item, 'span', 'bt-orders-ticker', p.ticker);
         const since = `since ${barTime(s, p.since)}`;
-        h(item, 'span', 'bt-orders-muted', `${share(p.weight)} of the strategy, ${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`);
+        h(item, 'span', 'bt-orders-muted', `${share(p.weight)} of the strategy, ${p.short ? 'short, ' : ''}${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`);
       }
     }
   }

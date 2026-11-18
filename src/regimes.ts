@@ -105,11 +105,15 @@ export function regimeBuckets(regime: Regime, home: Bars, runT: number[]): numbe
   });
 }
 
-/** What a run made, aligned: its time, value and exposure at each bar's close, and the benchmark's value (NaN before its prices start). */
+/**
+ * What a run made, aligned: its time, value and exposure at each bar's close, and the benchmark's value (NaN before its
+ * prices start). The exposure is gross, longs and shorts together; a block that can borrow also has its net exposure.
+ */
 export interface RunSeries {
   t: number[];
   equity: number[];
   exposure: number[];
+  netExposure?: number[];
   benchmark: number[];
 }
 
@@ -126,8 +130,9 @@ export interface BucketStats {
   strategy: Growth;
   /** Over the same steps, leaving out those where the benchmark's value is unknown; NaN when none is known. */
   benchmark: Growth;
-  /** The average of the exposure at the close of each step. */
+  /** The average of the exposure at the close of each step, and of the net exposure for a run that has one. */
   exposure: number;
+  netExposure?: number;
   /** The worst fall from a high within one unbroken stretch of the state, the value at the stretch's start counting as a high. 0 when it never fell. */
   worstDrawdown: number;
 }
@@ -140,8 +145,8 @@ const growth = (product: number, covered: number): Growth => (covered >= YEAR ? 
  * the last close before it, so a state is never read from the step it is judged by.
  */
 export function bucketStats(run: RunSeries, bucket: number[], count: number): BucketStats[] {
-  const { t, equity, exposure, benchmark } = run;
-  const sums = Array.from({ length: count + 1 }, () => ({ steps: 0, covered: 0, product: 1, benchSteps: 0, benchCovered: 0, benchProduct: 1, exposure: 0, worst: 0 }));
+  const { t, equity, exposure, netExposure, benchmark } = run;
+  const sums = Array.from({ length: count + 1 }, () => ({ steps: 0, covered: 0, product: 1, benchSteps: 0, benchCovered: 0, benchProduct: 1, exposure: 0, net: 0, worst: 0 }));
   let stretch = -1;
   let peak = 0;
   for (let i = 1; i < t.length; i++) {
@@ -152,6 +157,7 @@ export function bucketStats(run: RunSeries, bucket: number[], count: number): Bu
     s.covered += span;
     s.product *= equity[i] / equity[i - 1];
     s.exposure += exposure[i];
+    if (netExposure) s.net += netExposure[i];
     const bench = benchmark[i] / benchmark[i - 1];
     if (Number.isFinite(bench)) {
       s.benchSteps++;
@@ -171,6 +177,7 @@ export function bucketStats(run: RunSeries, bucket: number[], count: number): Bu
     strategy: growth(s.product, s.covered),
     benchmark: s.benchSteps > 0 ? growth(s.benchProduct, s.benchCovered) : { value: NaN, perYear: false },
     exposure: s.exposure / s.steps,
+    ...(netExposure ? { netExposure: s.net / s.steps } : {}),
     worstDrawdown: s.worst,
   }));
 }
@@ -211,8 +218,9 @@ export interface CrisisResult {
   /** NaN when the benchmark's prices start after the fall's first day. */
   benchmark: number;
   worstDrawdown: number;
-  /** The average exposure at the close of each step. */
+  /** The average exposure at the close of each step, and the net exposure for a run that has one. */
   exposure: number;
+  netExposure?: number;
   recovery: Recovery;
 }
 
@@ -233,7 +241,7 @@ function recovery(t: number[], equity: number[], start: number, end: number): Re
  * the closing bar of a daily run. A fall that lies within one bar is left out.
  */
 export function crisisResults(run: RunSeries, crises: Crisis[]): CrisisResult[] {
-  const { t, equity, exposure, benchmark } = run;
+  const { t, equity, exposure, netExposure, benchmark } = run;
   const out: CrisisResult[] = [];
   for (const crisis of crises) {
     const [peak, trough] = [Date.parse(`${crisis.peak}T00:00:00Z`), Date.parse(`${crisis.trough}T00:00:00Z`)];
@@ -242,10 +250,12 @@ export function crisisResults(run: RunSeries, crises: Crisis[]): CrisisResult[] 
     let top = equity[start];
     let worst = 0;
     let invested = 0;
+    let net = 0;
     for (let i = start + 1; i <= end; i++) {
       top = Math.max(top, equity[i]);
       worst = Math.min(worst, equity[i] / top - 1);
       invested += exposure[i];
+      if (netExposure) net += netExposure[i];
     }
     out.push({
       crisis,
@@ -253,6 +263,7 @@ export function crisisResults(run: RunSeries, crises: Crisis[]): CrisisResult[] 
       benchmark: benchmark[end] / benchmark[start] - 1,
       worstDrawdown: worst,
       exposure: invested / (end - start),
+      ...(netExposure ? { netExposure: net / (end - start) } : {}),
       recovery: recovery(t, equity, start, end),
     });
   }

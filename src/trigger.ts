@@ -11,7 +11,12 @@ import * as ind from './indicators.ts';
 import { lookbackBars } from './runner.ts';
 import { sliceBars, type Bars } from './types.ts';
 
-export type TriggerSide = 'buy' | 'sell' | 'add' | 'rearm';
+/**
+ * The order a close would give: `sell` closes a long and `cover` a short, whether or not the other side opens at the same
+ * fill; `short` while long, or `buy` while short, is that other side opening, a flip. `rearm` and `rearmShort` are the buy
+ * and short rules ceasing to hold after a stop or target exit, which lets that side enter again.
+ */
+export type TriggerSide = 'buy' | 'sell' | 'add' | 'rearm' | 'short' | 'cover' | 'rearmShort';
 
 /** Closes at which a rule gives its order, from `lo` up to `hi`; null where that reaches past the closes searched, or for a held ticker to its stop or target. */
 export interface Band {
@@ -36,16 +41,18 @@ export interface Trigger {
   /** The ticker's own last close, which its stop and target are measured from. */
   ownLast: number;
   /**
-   * Why no price is worked out: an order already waits for the next open (or close), an input of the buy or the rule
-   * itself is still warming up, only a ranking buys the ticker, or the ticker is a CSV file.
+   * Why no price is worked out: an order already waits for the next open (or close), an input of the buy (or short sale)
+   * or the rule itself is still warming up, only a ranking buys the ticker, or the ticker is a CSV file.
    */
   blocked?: 'pending' | 'warmup' | 'ranking' | 'csv';
-  /** With `blocked: 'warmup'`: the input still unknown at the next close, or null when it is the buy rule. */
+  /** With `blocked: 'warmup'`: the input still unknown at the next close, or null when it is the buy (or short) rule itself. */
   warmup?: { input: WarmupInput; n: number } | null;
-  /** Held with no sell rule and no add to make: only the stop, the target or a ranking sell it. */
+  /** Held with no rule to close it and no add to make: only the stop, the target or a ranking close it. */
   noRule?: true;
   /** Held: the stop and target in force for the next bar. */
   levels?: { stop: number | null; target: number | null };
+  /** Held short, so its stop lies above the last close and its target below. */
+  short?: true;
   /** True when nothing about the next bar is assumed but the close; otherwise `assumptions` says what is, in words that follow "Assumes". */
   exact: boolean;
   assumptions: string[];
@@ -381,9 +388,6 @@ export function search(lo: number, hi: number, label: (x: number) => string, eve
   return out;
 }
 
-/** What one try of the next bar says for the ticker. */
-type Outcome = TriggerSide | 'none';
-
 /** The start of the bar at whose close a ranking next decides: the last bar of the period the next bar falls in, or the next bar with `rebalance: never`. */
 function nextDecision(t: number[], rebalance: Spec['rebalance']): number | null {
   const step = ind.barStepper(t);
@@ -417,12 +421,36 @@ export function computeTriggers(spec: Spec, data: Map<string, Bars>, run: Trigge
   return report;
 }
 
-/** The rules that decide a ticker's next order: sell and add while held, the buy rule (and the sell rule, which can veto it) while flat. */
+/**
+ * The rules that decide a ticker's next order: sell and add while held, the buy rule (and the sell rule, which can veto it)
+ * while flat. A ticker that also shorts reads them all whatever it holds: an exit, the other side's entry that flips it,
+ * and each side's veto.
+ */
 function rulesFor(spec: Spec, st: AssetState): { read: Expr[]; addable: boolean } {
   const rules = spec.rules[st.name];
-  const addable = st.side === 'long' && !!rules.add && (st.entries ?? 1) < (spec.entries ?? 1);
-  const exprs = st.side === 'long' ? [rules.sell, addable ? rules.add! : null] : st.rearming ? [rules.buy] : [rules.buy, rules.sell];
+  const addable = st.side !== null && !!rules.add && (st.entries ?? 1) < (spec.entries ?? 1);
+  const exprs = rules.short
+    ? [rules.buy, rules.sell, addable ? rules.add! : null, rules.short, rules.cover]
+    : st.side === 'long'
+      ? [rules.sell, addable ? rules.add! : null]
+      : st.rearming
+        ? [rules.buy]
+        : [rules.buy, rules.sell];
   return { read: exprs.filter((e): e is Expr => e !== null && e !== undefined), addable };
+}
+
+/** Whether a ticker can go long: one with only short rules has the parser's `false` for a buy rule. */
+const goesLong = (rules: Spec['rules'][string]): boolean => !rules.short || !(rules.buy.k === 'bool' && rules.buy.v === false);
+
+/** The sides of a ticker's trigger prices, in the order they are told: what closes the position held, the other side's entry or re-arming, then an add. */
+function sidesFor(rules: Spec['rules'][string], st: AssetState, addable: boolean): TriggerSide[] {
+  const long = goesLong(rules);
+  const entryLong: TriggerSide[] = long ? [st.rearming ? 'rearm' : 'buy'] : [];
+  const entryShort: TriggerSide[] = rules.short ? [st.rearmingShort ? 'rearmShort' : 'short'] : [];
+  const add: TriggerSide[] = addable ? ['add'] : [];
+  if (st.side === 'long') return [...(rules.sell || rules.short ? (['sell'] as const) : []), ...entryShort, ...add];
+  if (st.side === 'short') return [...(rules.cover || long ? (['cover'] as const) : []), ...entryLong, ...add];
+  return [...entryLong, ...entryShort];
 }
 
 /** The plain parts of a ticker's trigger, before any price is worked out. */
@@ -434,11 +462,14 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   const name = st.name;
   const rules = spec.rules[name];
   const levels = st.levels ? { levels: { ...st.levels } } : {};
-  if (csv) return [{ ...blank(st, st.side === 'long' ? 'sell' : 'buy'), blocked: 'csv' }];
-  if (st.pending) return [{ ...blank(st, st.pending === 'short' ? 'sell' : st.pending === 'cover' ? 'buy' : st.pending), blocked: 'pending' }];
-  if (st.side !== 'long' && spec.rank) return [{ ...blank(st, 'buy'), blocked: 'ranking' }];
+  const short = st.side === 'short' ? { short: true as const } : {};
+  if (csv) return [{ ...blank(st, st.side === 'long' ? 'sell' : st.side === 'short' ? 'cover' : goesLong(rules) ? 'buy' : 'short'), blocked: 'csv' }];
+  if (st.pending) return [{ ...blank(st, st.pending), blocked: 'pending' }];
+  if (st.side === null && spec.rank) return [{ ...blank(st, 'buy'), blocked: 'ranking' }];
   const { read, addable } = rulesFor(spec, st);
-  if (st.side === 'long' && !rules.sell && !addable) return [{ ...blank(st, 'sell'), noRule: true, ...levels }];
+  const sides = sidesFor(rules, st, addable);
+  if (st.side === 'long' && !sides.includes('sell') && !addable) return [{ ...blank(st, 'sell'), noRule: true, ...levels }];
+  if (st.side === 'short' && !sides.includes('cover') && !addable) return [{ ...blank(st, 'cover'), noRule: true, ...levels, ...short }];
 
   const plan = planFor(data, apart, name, read, intraday);
   const { driver, added } = plan;
@@ -447,7 +478,6 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   const last = driverBars.c[driverBars.c.length - 1];
   const r = values ? 0 : spread(driverBars.c);
   let range = values ? valueRange(driverBars.c) : { lo: last * (1 - r), hi: last * (1 + r) };
-  const sides: TriggerSide[] = st.side === 'long' ? [...(rules.sell ? (['sell'] as const) : []), ...(addable ? (['add'] as const) : [])] : [st.rearming ? 'rearm' : 'buy'];
   const made = (fires: Band[], side: TriggerSide, more: Partial<Trigger> = {}): Trigger => ({
     ticker: name,
     side,
@@ -458,6 +488,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
     ...(values ? { values: true as const } : {}),
     ownLast: st.lastClose,
     ...levels,
+    ...short,
     ...more,
     exact: plan.assumptions.length === 0,
     assumptions: plan.assumptions,
@@ -491,7 +522,10 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   const pos = posIn(base);
   const n = base.get(name)!.t.length;
 
-  if (st.side !== 'long' && !st.rearming) {
+  // A flat ticker's entry waits for its sizing and stop inputs; a held one had them when it entered, and keeps them.
+  const entering = st.side === null ? sides.filter((side) => side === 'buy' || side === 'short') : [];
+  const blocked = new Map<TriggerSide, Partial<Trigger>>();
+  if (entering.length > 0) {
     const own = withBars(base.get(name)!, added.get(name)!, base.get(name)!.c.at(-1)!);
     const missing = missingInputAt(
       spec.sizing,
@@ -499,21 +533,28 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
       (k) => ind.atr(own.h, own.l, own.c, k)[n],
       (k) => ind.stdev(ind.returns(own.c), k)[n],
     );
-    if (missing) return [made([], 'buy', { blocked: 'warmup', warmup: missing })];
+    if (missing) {
+      if (entering.length === sides.length) return sides.map((side) => made([], side, { blocked: 'warmup', warmup: missing }));
+      for (const side of entering) blocked.set(side, { blocked: 'warmup', warmup: missing });
+    }
   }
 
   // A held ticker's stop and target act inside the bar before its close, so the closes searched stop short of them; one
-  // the bar opens beyond (at the last close, as it is taken to open) sells it at the open whatever the close.
-  if (st.side === 'long' && st.levels) {
+  // the bar opens beyond (at the last close, as it is taken to open) closes it at the open whatever the close. A short's
+  // stop lies above and its target below.
+  if (st.side !== null && st.levels) {
     const { stop, target } = st.levels;
-    if ((stop !== null && st.lastClose <= stop) || (target !== null && st.lastClose >= target)) return sides.map((side) => made([], side));
-    if (driver === name) range = { lo: stop === null ? range.lo : Math.max(range.lo, stop * (1 + 1e-9)), hi: target === null ? range.hi : Math.min(range.hi, target * (1 - 1e-9)) };
+    const [floor, ceiling] = st.side === 'long' ? [stop, target] : [target, stop];
+    if ((floor !== null && st.lastClose <= floor) || (ceiling !== null && st.lastClose >= ceiling)) return sides.map((side) => made([], side));
+    if (driver === name) range = { lo: floor === null ? range.lo : Math.max(range.lo, floor * (1 + 1e-9)), hi: ceiling === null ? range.hi : Math.min(range.hi, ceiling * (1 - 1e-9)) };
   }
   if (!(values ? Number.isFinite(last) : last > 0) || !(range.lo < range.hi)) return sides.map((side) => made([], side));
 
   let known = false;
-  const outcome = (x: number): Outcome => {
+  let knownShort = false;
+  const outcome = (x: number): string => {
     const ev = specEvaluator(spec, tryData(base, x));
+    if (rules.short) return bothSides(ev, x);
     if (st.side === 'long') {
       if (rules.sell && ev.compile(rules.sell, name)(n, pos) === 1) return 'sell';
       if (!addable || ev.compile(rules.add!, name)(n, pos) !== 1) return 'none';
@@ -526,9 +567,68 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
     if (st.rearming) return buy !== 1 ? 'rearm' : 'none';
     return buy === 1 && !(rules.sell && ev.compile(rules.sell, name)(n, null) === 1) ? 'buy' : 'none';
   };
+  /**
+   * The bar of a ticker that also shorts, read as the engine reads its close: the order it gives, then R and S when the buy
+   * and short rules re-arm. Held, the exit rule or the other side's entry signal closes the position, and the other side
+   * opens at the same fill when its entry holds alone and is armed; flat, a side enters when its entry holds alone.
+   */
+  const bothSides = (ev: Evaluator, x: number): string => {
+    const holds = (e: Expr | null | undefined, p: PosState | null) => !!e && ev.compile(e, name)(n, p) === 1;
+    const buy = ev.eval(rules.buy, name)[n];
+    const shortSignal = ev.eval(rules.short!, name)[n];
+    if (!Number.isNaN(buy)) known = true;
+    if (!Number.isNaN(shortSignal)) knownShort = true;
+    const [wantsBuy, wantsShort] = [buy === 1, shortSignal === 1];
+    const longEntry = wantsBuy && !holds(rules.sell, null);
+    const shortEntry = wantsShort && !holds(rules.cover, null);
+    const longAlone = longEntry && !shortEntry && (!st.rearming || !wantsBuy);
+    const shortAlone = shortEntry && !longEntry && (!st.rearmingShort || !wantsShort);
+    // An add is made only while the position is below its whole size (engine.ts, the state of an add at the end).
+    const adds = () => {
+      if (!addable || !holds(rules.add, pos)) return false;
+      const value = st.shares * (driver === name ? x : st.lastClose);
+      return st.targetWeight * (run.equity - st.value + value) - Math.abs(value) > 0;
+    };
+    let order: string;
+    if (st.side === 'long') order = holds(rules.sell, pos) || wantsShort ? (shortAlone ? 'short' : 'sell') : adds() ? 'add' : 'none';
+    else if (st.side === 'short') order = holds(rules.cover, pos) || wantsBuy ? (longAlone ? 'buy' : 'cover') : adds() ? 'add' : 'none';
+    else order = longAlone ? 'buy' : shortAlone ? 'short' : 'none';
+    const rearmed = `${st.rearming && !wantsBuy ? 'R' : ''}${st.rearmingShort && !wantsShort ? 'S' : ''}`;
+    return rearmed ? `${order} ${rearmed}` : order;
+  };
+  /** Whether the outcome `label` gives the order of `side`; a flip gives both the exit and the other side's entry. */
+  const gives = (side: TriggerSide, label: string): boolean => {
+    if (!rules.short) return label === side;
+    const [order, rearmed = ''] = label.split(' ');
+    if (side === 'rearm') return rearmed.includes('R');
+    if (side === 'rearmShort') return rearmed.includes('S');
+    if (side === 'sell') return order === 'sell' || order === 'short';
+    if (side === 'cover') return order === 'cover' || order === 'buy';
+    return order === side;
+  };
   const stretches = search(range.lo, range.hi, outcome, values);
-  if (st.side !== 'long' && !st.rearming && !known) return [made([], 'buy', { blocked: 'warmup', warmup: null })];
-  return sides.map((side) => made(stretches.filter((s) => s.label === side).map((s) => ({ lo: s.from, hi: s.to })), side));
+  if (!rules.short && st.side !== 'long' && !st.rearming && !known) return [made([], 'buy', { blocked: 'warmup', warmup: null })];
+  if (st.side === null && rules.short) {
+    if (!known && sides.includes('buy') && !blocked.has('buy')) blocked.set('buy', { blocked: 'warmup', warmup: null });
+    if (!knownShort && sides.includes('short') && !blocked.has('short')) blocked.set('short', { blocked: 'warmup', warmup: null });
+  }
+  /** The closes that give the order of `side`: its stretches, with those next to each other joined. */
+  const bands = (side: TriggerSide): Band[] => {
+    const out: Band[] = [];
+    let joined = false;
+    for (const s of stretches) {
+      const on = gives(side, s.label);
+      if (on && joined) out[out.length - 1].hi = s.to;
+      else if (on) out.push({ lo: s.from, hi: s.to });
+      joined = on;
+    }
+    return out;
+  };
+  // An exit with no rule of its own comes only with the other side's entry, which is told for itself when it gives none.
+  const ownRule = (side: TriggerSide) => (side === 'sell' ? !!rules.sell : side === 'cover' ? !!rules.cover : true);
+  return sides
+    .map((side) => (blocked.has(side) ? made([], side, blocked.get(side)) : made(bands(side), side)))
+    .filter((t) => t.fires.length > 0 || t.blocked || ownRule(t.side));
 }
 
 /**
@@ -558,7 +658,7 @@ function priced(x: number, from: number, values?: true): string {
   return `${shown(x)} (${change > 0 ? '+' : ''}${shown(change)})`;
 }
 
-const VERB: Record<Exclude<TriggerSide, 'rearm'>, string> = { buy: 'Buys', sell: 'Sells', add: 'Adds' };
+const VERB: Record<Exclude<TriggerSide, 'rearm' | 'rearmShort'>, string> = { buy: 'Buys', sell: 'Sells', add: 'Adds', short: 'Shorts', cover: 'Covers' };
 
 /**
  * Where a band's closes lie, after "closes": "above 512.30 (+1.2%)", "below …", "between … and …", each price the shown one
@@ -593,36 +693,59 @@ export function condition(t: Pick<Trigger, 'fires' | 'last' | 'values'>, who: st
 /** When an order given at the next close fills. */
 export const fillPhrase = (closeFill: boolean): string => (closeFill ? 'at that close' : 'at the following open');
 
-/** Whether a held ticker's stop or target lies beyond its last close, so the next open sells it whatever its rules say. */
-const actsAtOpen = (t: Pick<Trigger, 'levels' | 'ownLast'>): boolean =>
-  !!t.levels && ((t.levels.stop !== null && t.levels.stop >= t.ownLast) || (t.levels.target !== null && t.levels.target <= t.ownLast));
+/** A held ticker's levels by where they lie: below its last close a long's stop or a short's target, above it the other. */
+const belowAbove = (t: Pick<Trigger, 'short'>) => (t.short ? (['target', 'stop'] as const) : (['stop', 'target'] as const));
+
+/** Whether a held ticker's stop or target lies beyond its last close, so the next open closes it whatever its rules say. */
+const actsAtOpen = (t: Pick<Trigger, 'levels' | 'ownLast' | 'short'>): boolean => {
+  if (!t.levels) return false;
+  const [below, above] = belowAbove(t).map((k) => t.levels![k]);
+  return (below !== null && below >= t.ownLast) || (above !== null && above <= t.ownLast);
+};
 
 /**
  * The rule's part, such as "Buys if it closes above 512.30 (+1.2%)", without when it fills; null for a trigger with no
- * price worked out, or a held ticker its stop or target sells at the next open.
+ * price worked out, or a held ticker its stop or target closes at the next open.
  */
 export function rulePhrase(t: Trigger): string | null {
   if (t.blocked || t.noRule || actsAtOpen(t)) return null;
   const who = t.driver === t.ticker ? 'it' : t.driver;
   const range = `from ${priced(t.range.lo, t.last, t.values)} to ${priced(t.range.hi, t.last, t.values)}`;
   const close = `${t.values ? 'next value' : 'close'}${t.driver === t.ticker ? '' : ` of ${t.driver}`}`;
-  if (t.side === 'rearm') {
+  if (t.side === 'rearm' || t.side === 'rearmShort') {
     const cond = condition(t, t.driver);
-    return `After a stop or target exit, the buy rule must stop holding before ${t.ticker} is bought again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
+    const [rule, again] = t.side === 'rearm' ? ['buy', 'bought'] : ['short', 'shorted'];
+    return `After a stop or target exit, the ${rule} rule must stop holding before ${t.ticker} is ${again} again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
   }
   const cond = condition(t, who);
   return cond ? `${VERB[t.side]} ${cond}` : `The ${t.side} rule gives no order at any ${close} ${range}`;
 }
 
-/** The stop and target of a held ticker in a sentence; null when it has neither. */
-export function levelsSentence(t: Pick<Trigger, 'levels' | 'ownLast'>): string | null {
+/** The stop and target of a held ticker in a sentence; null when it has neither. A short's stop is above and its target below. */
+export function levelsSentence(t: Pick<Trigger, 'levels' | 'ownLast' | 'short'>): string | null {
   if (!t.levels) return null;
   const { stop, target } = t.levels;
-  if (stop !== null && stop >= t.ownLast) return `The stop at ${priced(stop, t.ownLast)} is above the last close, so it sells at the next open unless the price opens above it.`;
-  if (target !== null && target <= t.ownLast) return `The target at ${priced(target, t.ownLast)} is below the last close, so it sells at the next open unless the price opens below it.`;
+  const [below, above] = belowAbove(t);
+  const [verb, verbs] = t.short ? ['cover', 'covers'] : ['sell', 'sells'];
+  const [low, high] = [t.levels[below], t.levels[above]];
+  if (low !== null && low >= t.ownLast) return `The ${below} at ${priced(low, t.ownLast)} is above the last close, so it ${verbs} at the next open unless the price opens above it.`;
+  if (high !== null && high <= t.ownLast) return `The ${above} at ${priced(high, t.ownLast)} is below the last close, so it ${verbs} at the next open unless the price opens below it.`;
   const parts = [stop !== null ? `the stop at ${priced(stop, t.ownLast)}` : '', target !== null ? `the target at ${priced(target, t.ownLast)}` : ''].filter(Boolean);
-  const text = `${parts.join(' and ')} ${parts.length > 1 ? 'sell' : 'sells'} during the bar if the price reaches ${parts.length > 1 ? 'them' : 'it'}.`;
+  const text = `${parts.join(' and ')} ${parts.length > 1 ? verb : verbs} during the bar if the price reaches ${parts.length > 1 ? 'them' : 'it'}.`;
   return text[0].toUpperCase() + text.slice(1);
+}
+
+/** Why a flat ticker can't enter at the next close, one sentence for each input: "Can't buy or short at the next close: …". */
+function warmupText(ts: Trigger[]): string[] {
+  const out: { what: string; verbs: string[] }[] = [];
+  for (const t of ts) {
+    const what = t.warmup ? WARMUP_INPUT[t.warmup.input](t.warmup.n) : `the ${t.side} rule`;
+    const verb = t.side === 'short' ? 'short' : 'buy';
+    const same = out.find((o) => o.what === what);
+    if (same) same.verbs.push(verb);
+    else out.push({ what, verbs: [verb] });
+  }
+  return out.map((o) => `Can't ${o.verbs.join(' or ')} at the next close: ${o.what} is still unknown there.`);
 }
 
 /** "A", "A and B", "A, B and C". */
@@ -645,16 +768,16 @@ export function tickerText(report: TriggerReport, ticker: string): { text: strin
   const decision = decisionPhrase(report);
   const first = mine[0];
   if (first.blocked === 'ranking') return { text: decision ? `Bought only when the ranking picks it, next ${decision}.` : 'Bought only when the ranking picks it.', note: null };
-  if (first.blocked === 'warmup') {
-    const what = first.warmup ? WARMUP_INPUT[first.warmup.input](first.warmup.n) : 'the buy rule';
-    return { text: `Can't buy at the next close: ${what} is still unknown there.`, note: null };
-  }
+  const waiting = mine.filter((t) => t.blocked === 'warmup');
+  if (waiting.length === mine.length) return { text: warmupText(waiting).join(' '), note: null };
   const out: string[] = [];
   for (const t of mine) {
+    if (t.blocked) continue;
     if (t.noRule) out.push(`No ${t.side} rule.`);
     const phrase = rulePhrase(t);
-    if (phrase) out.push(t.side === 'rearm' || t.fires.length === 0 ? `${phrase}.` : `${phrase}, ${fillPhrase(report.closeFill)}.`);
+    if (phrase) out.push(t.side === 'rearm' || t.side === 'rearmShort' || t.fires.length === 0 ? `${phrase}.` : `${phrase}, ${fillPhrase(report.closeFill)}.`);
   }
+  out.push(...warmupText(waiting));
   const levels = levelsSentence(first);
   if (levels) out.push(levels);
   if (decision && first.side !== 'rearm') out.push(`The ranking decides again ${decision}.`);
