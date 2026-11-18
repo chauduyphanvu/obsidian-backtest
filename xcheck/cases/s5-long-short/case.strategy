@@ -1,0 +1,10 @@
+universe: TRND 100%, CHOP 100%
+capital: 1000000000
+borrow fee: 0%
+margin rate: 0%
+for TRND:
+  buy when close > sma(50)
+  sell when close < sma(50)
+for CHOP:
+  short when close < sma(50)
+  cover when close > sma(50)

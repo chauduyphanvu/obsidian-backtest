@@ -1,0 +1,6 @@
+universe: CHOP
+capital: 1000000000
+borrow fee: 0.365%
+margin rate: 7.3%
+short when sma(20) crosses below sma(100)
+cover when sma(20) crosses above sma(100)

@@ -1,0 +1,6 @@
+language 1
+strategy "s7: margin calls" {
+  universe   symbols("LATE")
+  enter short when crosses_below(close, sma(close, 20))
+  size       100% of equity, max 1 positions
+}

@@ -27,13 +27,15 @@ function table(path: string): Record<string, string>[] {
 
 export interface RvTrade {
   id: number;
+  dir: 'LONG' | 'SHORT';
   entryDate: string;
   exitDate: string | null;
-  /** The average of the trade's buys. */
+  /** The average of the trade's entry fills: its buys, or for a short its short sales. */
   entryPx: number;
   exitPx: number | null;
   qty: number;
   pnl: number;
+  borrowFees: number;
   reason: string;
   barsHeld: number;
 }
@@ -42,6 +44,7 @@ export interface RvFill {
   seq: number;
   date: string;
   id: number;
+  /** BUY and SELL for a long, SHORT and COVER for a short. */
   side: string;
   qty: number;
   price: number;
@@ -50,25 +53,37 @@ export interface RvFill {
 }
 
 export interface RvRun {
-  daily: { date: string; cash: number; longMv: number; equity: number }[];
+  /** Cash leaves out the proceeds of short sales, which Rearview holds apart at what they brought in. */
+  daily: { date: string; cash: number; shortProceeds: number; longMv: number; shortMv: number; equity: number }[];
   trades: RvTrade[];
   fills: RvFill[];
   interest: number;
+  marginInterest: number;
+  borrowFees: number;
   warnings: { code: string; message: string }[];
   summary: Record<string, number>;
   orders: { id: number; side: string; kind: string; status: string }[];
 }
 
 export function readRun(dir: string): RvRun {
-  const daily = table(join(dir, 'daily.csv')).map((r) => ({ date: r.date, cash: Number(r.cash) / M, longMv: Number(r.long_mv) / M, equity: Number(r.equity) / M }));
+  const daily = table(join(dir, 'daily.csv')).map((r) => ({
+    date: r.date,
+    cash: Number(r.cash) / M,
+    shortProceeds: Number(r.short_proceeds) / M,
+    longMv: Number(r.long_mv) / M,
+    shortMv: Number(r.short_mv) / M,
+    equity: Number(r.equity) / M,
+  }));
   const trades = table(join(dir, 'trades.csv')).map((r) => ({
     id: Number(r.id),
+    dir: r.dir as RvTrade['dir'],
     entryDate: r.entry_date,
     exitDate: r.exit_date || null,
     entryPx: Number(r.entry_px) / M,
     exitPx: r.exit_px ? Number(r.exit_px) / M : null,
     qty: Number(r.qty) / M,
     pnl: Number(r.pnl) / M,
+    borrowFees: Number(r.borrow_fees) / M,
     reason: r.exit_reason,
     barsHeld: Number(r.bars_held),
   }));
@@ -82,13 +97,13 @@ export function readRun(dir: string): RvRun {
     commission: Number(r.commission) / M,
     reason: r.reason,
   }));
-  const interest = table(join(dir, 'events.csv'))
-    .filter((r) => r.kind === 'CASH_INTEREST')
-    .reduce((s, r) => s + Number(r.amount) / M, 0);
+  const events = table(join(dir, 'events.csv'));
+  // Charges are negative amounts; each total is returned as what was earned or paid.
+  const total = (kind: string) => Math.abs(events.filter((r) => r.kind === kind).reduce((s, r) => s + Number(r.amount) / M, 0));
   const warnings = JSON.parse(readFileSync(join(dir, 'warnings.json'), 'utf8')) as { code: string; message: string }[];
   const summary = JSON.parse(readFileSync(join(dir, 'summary.json'), 'utf8')) as Record<string, number>;
   const orders = table(join(dir, 'orders.csv')).map((r) => ({ id: Number(r.id), side: r.side, kind: r.kind, status: r.status }));
-  return { daily, trades, fills, interest, warnings, summary, orders };
+  return { daily, trades, fills, interest: total('CASH_INTEREST'), marginInterest: total('MARGIN_INTEREST'), borrowFees: total('BORROW_FEE'), warnings, summary, orders };
 }
 
 /** `rvw eval` values: ticker -> name -> date -> value (NaN where Rearview leaves it empty). */
