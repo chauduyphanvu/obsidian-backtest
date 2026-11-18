@@ -41,6 +41,7 @@ const TICKER = /^[A-Za-z0-9^._=-]+$/;
 /** A comma that separates holdings, not one inside a number such as 1,200. */
 const BETWEEN_HOLDINGS = /;|,(?!\d{3}(?!\d))/;
 
+const BORROWED = "Cash can't be below 0: the account holds no borrowed money";
 const NOT_A_LINE =
   'This line is neither a setting nor a strategy. A setting is written such as cash: 10,000, and a strategy as [[Note name]] 40% or [[Note name#Strategy name]] 40%';
 const settingList = () => `${SETTINGS.slice(0, -1).join(', ')} and ${SETTINGS[SETTINGS.length - 1]}`;
@@ -59,7 +60,10 @@ function span(raw: string, token: string, after: number): { from: number; to: nu
   return { from, to: from + token.length };
 }
 
-/** The holdings of a `holdings:` line, such as "SPY 120, TLT 50, QQQ 10", or the problem with the first that is wrong. */
+/** A minus sign, typed or typographic, before an amount. */
+const NEGATIVE = /^[-−]\s*/;
+
+/** The holdings of a `holdings:` line, such as "SPY 120, TLT 50, QQQ 10" or "SPY -50" for a short, or the problem with the first that is wrong. */
 function holdingsOf(raw: string, value: string, line: number): Holding[] | Diagnostic {
   if (value === '' || /^none$/i.test(value)) return [];
   const out: Holding[] = [];
@@ -68,11 +72,11 @@ function holdingsOf(raw: string, value: string, line: number): Holding[] | Diagn
     const where: { from?: number; to?: number } = item ? span(raw, item, at) : {};
     at = where.to ?? at;
     const m = item.match(/^(\S+)\s+(\S+)$/);
-    const shares = m ? amount(m[2]) : NaN;
+    const shares = m ? (NEGATIVE.test(m[2]) ? -1 : 1) * amount(m[2].replace(NEGATIVE, '')) : NaN;
     if (!m || !TICKER.test(m[1]) || /[kKmM$]/.test(m[2]) || Number.isNaN(shares)) {
       return { line, message: `"${item}" is not a holding. Write each as a ticker and its shares, such as SPY 120`, ...where };
     }
-    if (!(shares > 0)) return { line, message: `${m[1].toUpperCase()} has no shares: leave it out instead`, ...where };
+    if (shares === 0) return { line, message: `${m[1].toUpperCase()} has no shares: leave it out instead`, ...where };
     const ticker = m[1].toUpperCase();
     if (out.some((h) => h.ticker === ticker)) return { line, message: `${ticker} is listed twice`, ...where };
     out.push({ ticker, shares });
@@ -97,11 +101,11 @@ function readSetting(config: AccountConfig, key: Setting, value: string, raw: st
       return null;
     }
     case 'cash': {
-      if (/^-/.test(value)) return wrong("Cash can't be below 0: the account holds no borrowed money");
-      const cash = amount(value);
+      const cash = amount(value.replace(NEGATIVE, ''));
       if (Number.isNaN(cash)) return wrong(`"${value}" is not an amount of cash. Write it as 4,200 or 4200.50`);
-      config.cash = cash;
-      return null;
+      config.cash = (NEGATIVE.test(value) ? -cash : cash) + 0;
+      // parseAccount names this error `borrowed`: a strategy that can borrow lifts it once the strategies have run.
+      return config.cash < 0 ? wrong(BORROWED) : null;
     }
     case 'capital at start': {
       const capital = amount(value);
@@ -142,15 +146,27 @@ function readSetting(config: AccountConfig, key: Setting, value: string, raw: st
   }
 }
 
+export interface ParsedAccount {
+  config: AccountConfig;
+  entries: CompareEntry[];
+  errors: Diagnostic[];
+  /**
+   * The error in `errors` on a cash below 0: money borrowed, which only a listed strategy that can borrow (one that shorts
+   * or holds more than 100%) may use. Which can borrow is known once they have run (errorsBeforeRun, borrowedError).
+   */
+  borrowed: Diagnostic | null;
+}
+
 /**
  * Reads the lines of an `account` block: settings, and the strategies it follows as compare blocks list them, where 0%
  * lists a strategy without giving it any of the money. `config` and `entries` hold every line that was read, even when
  * `errors` is not empty.
  */
-export function parseAccount(source: string): { config: AccountConfig; entries: CompareEntry[]; errors: Diagnostic[] } {
+export function parseAccount(source: string): ParsedAccount {
   const config: AccountConfig = { name: null, holdings: [], cash: 0, wholeShares: true, skipUnder: 0, fills: null, fillsFrom: null, capitalAtStart: null, fillColumns: null };
   const entries: CompareEntry[] = [];
   const errors: Diagnostic[] = [];
+  let borrowed: Diagnostic | null = null;
   const seen = new Map<Setting, number>();
   source.split(/\r?\n/).forEach((raw, i) => {
     const text = raw.trim();
@@ -171,6 +187,7 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
       seen.set(key, line);
       const problem = readSetting(config, key, m[2].trim(), raw, line);
       if (problem) errors.push(problem);
+      if (problem && key === 'cash' && config.cash < 0) borrowed = problem;
       return;
     }
     if (!text.startsWith('[[') && !/\.md\b/i.test(text)) {
@@ -190,8 +207,15 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
   if (config.fills !== null && !seen.has('fills from')) {
     errors.push({ line: seen.get('fills')!, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' });
   }
-  return { config, entries, errors: errors.sort((a, b) => a.line - b.line) };
+  return { config, entries, errors: errors.sort((a, b) => a.line - b.line), borrowed };
 }
+
+/** The errors that stop a block before its strategies run: all but a cash below 0, which waits to see whether one of them borrows. */
+export const errorsBeforeRun = (p: ParsedAccount): Diagnostic[] => p.errors.filter((e) => e !== p.borrowed);
+
+/** A cash below 0 when no strategy listed can borrow, once they have run; null when there is none or one can. */
+export const borrowedError = (p: ParsedAccount, runs: { out: Pick<RunOutput, 'spec'> }[]): Diagnostic | null =>
+  p.borrowed && !runs.some((r) => r.out.spec.margin) ? p.borrowed : null;
 
 /** Each entry's share of the account: its weight, or an equal share of all of it when the block gives no weights. */
 export function allocations(entries: CompareEntry[]): number[] {
@@ -228,6 +252,8 @@ export interface AccountStrategy {
   sizing: Sizing['k'];
   /** Its costs and slippage on a trade, as a fraction of the trade's value. */
   cost: number;
+  /** It can borrow, to short or to hold more than 100%, so the account's cash may go below 0 as its own would. */
+  borrows?: boolean;
 }
 
 export function accountStrategy(label: string, alloc: number, out: Pick<RunOutput, 'spec' | 'backtest'>): AccountStrategy {
@@ -242,26 +268,28 @@ export function accountStrategy(label: string, alloc: number, out: Pick<RunOutpu
     rebalance: out.spec.rebalance,
     sizing: out.spec.sizing.k,
     cost: (out.spec.costBps + out.spec.slippageBps) / 1e4,
+    borrows: out.spec.margin !== undefined,
   };
 }
 
-export type OrderKind = 'open' | 'close' | 'resize';
+/** A flip takes the holding through 0 to the other side: it sells a long and sells short, or covers a short and buys. */
+export type OrderKind = 'open' | 'close' | 'resize' | 'flip';
 
 export interface AccountOrder {
   /** As the strategies spell it. */
   ticker: string;
   /** The last close, from the strategy whose prices end latest. */
   price: number;
-  /** Shares held now, and the shares the strategies' positions after their orders come to at the account's size. */
+  /** Shares held now, and the shares the strategies' positions after their orders come to at the account's size; below 0 for a short. */
   holding: number;
   target: number;
-  /** Shares to buy (above 0) or sell (below 0), after the band, whole shares and the cash; 0 for none. */
+  /** Shares to buy or cover (above 0) or sell or sell short (below 0), after the band, whole shares and the cash; 0 for none. */
   shares: number;
-  /** Opening or closing a position follows a signal, and is never skipped as small; resizing one is. */
+  /** Opening, closing or flipping a position follows a signal, and is never skipped as small; resizing one is. */
   kind: OrderKind;
   /** A resize smaller than `skip under` (or, in whole shares, one share or less) left out. */
   skipped: boolean;
-  /** Cut so the buys cost no more than the cash and what the sales bring. */
+  /** Cut so the buys cost no more than the cash and what the sales bring, after the covers. */
   cut: boolean;
   /** Each strategy's own orders in money at the account's size, in the order of the strategies. */
   parts: number[];
@@ -278,11 +306,14 @@ export interface AccountOrder {
 export interface AccountPlan {
   /** Cash and the holdings of tickers a listed strategy trades, at the last closes: the money the strategies manage. */
   managed: number;
-  /** Sales first, then purchases, then positions with nothing to do, each by ticker. */
+  /**
+   * Orders that take a holding towards 0 or through it first (sales, covers and flips), then those that add to one
+   * (purchases and short sales), then positions with nothing to do, each by ticker.
+   */
   orders: AccountOrder[];
   /** Holdings of tickers no listed strategy trades, left as they are. */
   unmanaged: Holding[];
-  /** Cash after the orders, at the last closes. */
+  /** Cash after the orders, at the last closes; below 0 for money borrowed. */
   cashAfter: number;
   saved: number;
   savedCost: number;
@@ -326,8 +357,8 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
   const held = new Map(config.holdings.map((h) => [h.ticker.toUpperCase(), h.shares]));
   const managed = config.cash + config.holdings.reduce((sum, h) => sum + (prices.has(h.ticker) ? h.shares * prices.get(h.ticker)!.price : 0), 0);
 
-  const rows = new Map<string, { target: number; parts: number[]; rates: number }>();
-  for (const [key] of prices) rows.set(key, { target: 0, parts: new Array<number>(n).fill(0), rates: 0 });
+  const rows = new Map<string, { target: number; size: number; parts: number[]; rates: number }>();
+  for (const [key] of prices) rows.set(key, { target: 0, size: 0, parts: new Array<number>(n).fill(0), rates: 0 });
   strategies.forEach((s, i) => {
     if (!(s.equity > 0)) return;
     for (const st of s.states) {
@@ -336,6 +367,7 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
       const share = (s.alloc * managed * st.lastClose) / s.equity;
       const after = sharesAfterOrders(st, s.equity);
       row.target += share * after;
+      row.size += share * Math.abs(after);
       row.parts[i] += share * (after - st.shares);
     }
   });
@@ -345,11 +377,12 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
   for (const [key, row] of rows) {
     const { ticker, price } = prices.get(key)!;
     const holding = held.get(key) ?? 0;
-    const target = row.target / price;
+    // A long and a short that cancel out leave floating-point dust, not a position.
+    const target = Math.abs(row.target) <= 1e-9 * row.size ? 0 : row.target / price;
     const own = row.parts.reduce((s, x) => s + x, 0);
     const gross = row.parts.reduce((s, x) => s + Math.abs(x), 0);
     if (holding === 0 && target === 0 && gross === 0) continue;
-    const kind: OrderKind = holding === 0 ? 'open' : target === 0 ? 'close' : 'resize';
+    const kind: OrderKind = holding === 0 ? 'open' : target === 0 ? 'close' : holding > 0 !== target > 0 ? 'flip' : 'resize';
     const change = target - holding;
     const skipped = kind === 'resize' && Math.abs(change) * price < config.skipUnder * managed;
     let shares = 0;
@@ -357,29 +390,42 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
       if (kind === 'close') shares = -holding;
       // A fraction is cut towards 0, so no order goes past its target and buys stay within the money the targets share.
       else if (!config.wholeShares) shares = fraction(change, Math.trunc);
-      // Rounding must never sell more than is held (10.6 shares with a target near 0.05 would round to a sale of 11), and adding 0 turns a -0 into 0.
-      else shares = (kind === 'open' ? Math.round(target) : Math.max(Math.round(change), -holding)) + 0;
+      // A flip closes the whole holding, a fraction too, and opens the other side in whole shares.
+      else if (kind === 'flip') shares = Math.round(target) - holding + 0;
+      else if (kind === 'open') shares = Math.round(target) + 0;
+      // Rounding must never go through 0, selling more than a long holds or covering more than a short owes (10.6 shares
+      // with a target near 0.05 would round to a sale of 11), and adding 0 turns a -0 into 0.
+      else shares = (holding > 0 ? Math.max(Math.round(change), -holding) : Math.min(Math.round(change), -holding)) + 0;
     }
-    if (kind === 'open' && target > 0 && shares === 0 && !skipped) notes.push(`${ticker}: the strategies' position comes to under half a share, so it is not bought.`);
+    if ((kind === 'open' || kind === 'flip') && target !== 0 && holding + shares === 0 && !skipped) {
+      notes.push(`${ticker}: the strategies' position comes to under half a share, so it is not ${target > 0 ? 'bought' : 'sold short'}.`);
+    }
     const rate = gross > 0 ? row.parts.reduce((s, x, i) => s + Math.abs(x) * strategies[i].cost, 0) / gross : 0;
     const saved = gross - Math.abs(own);
     orders.push({ ticker, price, holding, target, shares, kind, skipped, cut: false, parts: row.parts, drift: change * price - own, saved, savedCost: saved * rate });
   }
 
+  // A short sale brings cash as a sale does. A cover spends it as a purchase does, but is never cut: it pays back what is owed.
+  const covering = new Map(orders.map((o) => [o, o.shares > 0 && o.holding < 0 ? Math.min(o.shares, -o.holding) : 0]));
   const sales = orders.reduce((s, o) => s + (o.shares < 0 ? -o.shares * o.price : 0), 0);
-  const wanted = orders.reduce((s, o) => s + (o.shares > 0 ? o.shares * o.price : 0), 0);
-  const available = config.cash + sales;
+  const covers = orders.reduce((s, o) => s + covering.get(o)! * o.price, 0);
+  const wanted = orders.reduce((s, o) => s + (o.shares > 0 ? (o.shares - covering.get(o)!) * o.price : 0), 0);
+  // Where a strategy borrows, the account may too: its cash may end as far below 0 as the strategies' positions leave it.
+  const floor = strategies.some((s) => s.borrows) ? Math.min(0, managed - orders.reduce((s, o) => s + o.target * o.price, 0)) : 0;
+  const available = config.cash + sales - covers - floor;
   let bought = wanted;
   if (wanted > available) {
     const f = Math.max(0, available) / wanted;
     bought = 0;
-    const buys = orders.filter((o) => o.shares > 0);
+    const buys = orders.filter((o) => o.shares - covering.get(o)! > 0);
     const remainders = new Map<AccountOrder, number>();
     for (const o of buys) {
-      remainders.set(o, o.shares * f - Math.floor(o.shares * f));
-      o.shares = config.wholeShares ? Math.floor(o.shares * f) : fraction(o.shares * f, Math.floor);
+      const covered = covering.get(o)!;
+      const want = o.shares - covered;
+      remainders.set(o, want * f - Math.floor(want * f));
+      o.shares = covered + (config.wholeShares ? Math.floor(want * f) : fraction(want * f, Math.floor));
       o.cut = true;
-      bought += o.shares * o.price;
+      bought += (o.shares - covered) * o.price;
     }
     // Rounding each buy down can leave enough cash for a whole share or more: those go back, largest remainder first.
     if (config.wholeShares) {
@@ -390,28 +436,67 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
         }
       }
     }
-    notes.push(`The buys come to ${money(wanted)}, more than the cash and the sales bring (${money(available)}), so each is cut to fit.`);
+    const means = floor <= -0.5 ? "the cash, the sales and the strategies' borrowing allow" : 'the cash and the sales bring';
+    notes.push(`The buys come to ${money(wanted)}, more than ${means}${covers > 0 ? ' after the covers' : ''} (${minusMoney(available)}), so each is cut to fit.`);
   }
 
   for (const s of strategies) {
-    if (s.rebalance !== 'never' && s.states.some((st) => st.side === 'long')) {
+    if (s.rebalance !== 'never' && s.states.some((st) => st.side !== null)) {
       notes.push(`${s.label} rebalances ${s.rebalance}. A rebalance due at the next open shows here a bar late, once its backtest has made it.`);
     }
-    if (s.sizing !== 'fixed' && s.states.some((st) => st.pending === 'buy' || st.pending === 'add')) {
+    if (s.sizing !== 'fixed' && s.states.some((st) => st.pending === 'buy' || st.pending === 'short' || st.pending === 'add')) {
       notes.push(`${s.label} sizes positions by ${SIZING_WORDS[s.sizing]}, so the size of a new one here is an estimate from the last close.`);
     }
     if (s.closeFill) notes.push(`${s.label} fills at the close: what it holds here already includes what it traded at the last close.`);
   }
 
-  const rank = (o: AccountOrder) => (o.shares < 0 ? 0 : o.shares > 0 ? 1 : 2);
+  // Sales and covers come first, as the engine fills them, so their cash is there for the purchases and short sales.
+  const rank = (o: AccountOrder) => (o.shares === 0 ? 2 : o.holding !== 0 && o.shares > 0 !== o.holding > 0 ? 0 : 1);
   orders.sort((a, b) => rank(a) - rank(b) || a.ticker.localeCompare(b.ticker, 'en'));
   return {
     managed,
     orders,
     unmanaged: config.holdings.filter((h) => !prices.has(h.ticker)),
-    cashAfter: config.cash + sales - bought,
+    cashAfter: config.cash + sales - covers - bought,
     saved: orders.reduce((s, o) => s + o.saved, 0),
     savedCost: orders.reduce((s, o) => s + o.savedCost, 0),
     notes,
   };
+}
+
+/** An amount of money below 0 written with a minus in front: −$2,000 rather than $-2,000. */
+export const minusMoney = (x: number): string => (x <= -0.5 ? `−${money(-x)}` : money(x));
+
+export type OrderAction = 'buy' | 'sell' | 'short' | 'cover';
+
+/** One order as a broker takes it, in shares above 0. */
+export interface OrderStep {
+  action: OrderAction;
+  shares: number;
+}
+
+/** The broker's orders an account order comes to: one, or for a flip two, the one that closes the holding first. */
+export function orderSteps(o: Pick<AccountOrder, 'shares' | 'holding'>): OrderStep[] {
+  const after = o.holding + o.shares;
+  if (o.shares < 0) {
+    if (o.holding <= 0) return [{ action: 'short', shares: -o.shares }];
+    return after >= 0 ? [{ action: 'sell', shares: -o.shares }] : [{ action: 'sell', shares: o.holding }, { action: 'short', shares: -after }];
+  }
+  if (o.shares > 0) {
+    if (o.holding >= 0) return [{ action: 'buy', shares: o.shares }];
+    return after <= 0 ? [{ action: 'cover', shares: o.shares }] : [{ action: 'cover', shares: -o.holding }, { action: 'buy', shares: after }];
+  }
+  return [];
+}
+
+const STEP_WORDS: Record<OrderAction, string> = { buy: 'Buy', sell: 'Sell', short: 'Sell short', cover: 'Buy to cover' };
+
+/** The single step of an order in words, with "all" when it closes the whole holding as the strategies ask: "Sell all", "Buy to cover all". */
+export const stepWord = (o: Pick<AccountOrder, 'kind'>, step: OrderStep): string => `${STEP_WORDS[step.action]}${o.kind === 'close' || o.kind === 'flip' ? ' all' : ''}`;
+
+/** An order in words with its shares written by `count`: "Buy 12", "Sell short 5", "Flip: sell 50, then sell short 30"; empty for none. */
+export function orderText(o: Pick<AccountOrder, 'shares' | 'holding' | 'kind'>, count: (shares: number) => string): string {
+  const steps = orderSteps(o);
+  if (steps.length === 2) return `Flip: ${steps.map((s) => `${STEP_WORDS[s.action].toLowerCase()} ${count(s.shares)}`).join(', then ')}`;
+  return steps.map((s) => `${stepWord(o, s)} ${count(s.shares)}`).join('');
 }

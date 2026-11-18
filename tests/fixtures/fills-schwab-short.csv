@@ -1,0 +1,9 @@
+"Transactions  for account XXXX-1234 as of 06/12/2026 08:30:11 PM ET"
+"Date","Action","Symbol","Description","Quantity","Price","Fees & Comm","Amount",
+"06/10/2026","Buy to Cover","SPY","SPDR S&P 500 ETF","10","$91.00","","-$910.00",
+"06/05/2026","Margin Interest","","MARGIN INT 050126-053126","","","","-$3.12",
+"06/03/2026","Short Term Cap Gain","TLT","ISHARES 20+ YEAR TREASURY BOND ETF","","","","$4.10",
+"06/02/2026","Sell Short","SPY","SPDR S&P 500 ETF","10","$99.50","$0.02","$994.98",
+"06/02/2026","Sell","TLT","ISHARES 20+ YEAR TREASURY BOND ETF","20","$49.90","$0.01","$997.99",
+"06/01/2026","Buy to Open","SPY 06/19/2026 520.00 C","CALL SPDR S&P 500 ETF $520 EXP 06/19/26","1","$4.10","$0.65","-$410.65",
+"Transactions Total","","","","","","","$1,672.20",

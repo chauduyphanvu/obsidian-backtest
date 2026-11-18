@@ -1,4 +1,4 @@
-import { accountOrders, accountStrategy, parseAccount, runAccount, type AccountOrder } from './account.ts';
+import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderText, parseAccount, runAccount, type AccountOrder } from './account.ts';
 import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
@@ -440,10 +440,14 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
   const found = await host.find();
   return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
     const status: AccountStatus = { note: f.note, name: f.name, orders: [], asOf: null, error: null };
-    const { config, entries, errors } = parseAccount(f.source);
+    const parsed = parseAccount(f.source);
+    const { config, entries } = parsed;
+    const errors = errorsBeforeRun(parsed);
     if (errors.length) return { ...status, error: `Line ${errors[0].line}: ${errors[0].message}` };
     try {
       const runs = await runAccount(entries, host.strategies(f.note));
+      const borrowed = borrowedError(parsed, runs);
+      if (borrowed) return { ...status, error: `Line ${borrowed.line}: ${borrowed.message}` };
       const strategies = runs.map((r) => accountStrategy(r.label, r.alloc, r.out));
       const plan = accountOrders(config, strategies);
       return { ...status, orders: plan.orders.filter((o) => o.shares !== 0), asOf: Math.max(...strategies.map((s) => s.asOf)) };
@@ -453,10 +457,10 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
   });
 }
 
-/** An account's order in words: "Buy 12 shares", "Sell all 30 shares". */
-export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind'>): string {
-  const n = Math.abs(o.shares);
-  return `${o.shares > 0 ? 'Buy' : o.kind === 'close' ? 'Sell all' : 'Sell'} ${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`;
+/** An account's order in words: "Buy 12 shares", "Sell all 30 shares", "Sell short 5 shares", "Flip: sell 50 shares, then sell short 30 shares". */
+export function accountOrderText(o: Pick<AccountOrder, 'shares' | 'kind'> & { holding?: number }): string {
+  // Without the holding, a sale is of a long one.
+  return orderText({ ...o, holding: o.holding ?? Math.max(0, -o.shares) }, (n) => `${shareCount(n)} ${n === 1 ? 'share' : 'shares'}`);
 }
 
 /** Accounts by name, as the window and the note list them. */
