@@ -120,7 +120,7 @@ test('a definition that reads a position value cannot be read for an earlier bar
 test('a definition cannot stand where a period, a lag, a window or a setting wants a plain number', () => {
   const at = (rule: string, extra = '') => only(`universe: SPY\nn = (5)\nm = rsi(2)\n${extra}buy when ${rule}`);
   assert.equal(at('close > sma(close, n)')[3], '"n" is a definition, and sma() needs a plain number for its period. Declare it as a parameter instead, as in n = 20');
-  assert.match(at('close > sma(m)')[3], /^sma\(\) needs a period/);
+  assert.equal(at('close > sma(m)')[3], '"m" is a definition, so sma() reads it as its series and still needs a period, as in sma(m, 20). A period must be a number or a parameter, such as m = 20');
   assert.match(at('close[n] > 1')[3], /^"n" is a definition, and bars ago must be a whole number or a parameter/);
   assert.match(at('close > 1 for n bars')[3], /^"n" is a definition, and the number of bars must be a number or a parameter/);
   assert.match(at('count(close > 1, n) > 2')[3], /^"n" is a definition, and count\(\) needs a plain number for its period/);
@@ -291,4 +291,16 @@ test('the history a rule needs counts what a definition stands for', () => {
   assert.ok(lookbackBars(defined) >= 300);
   const swept = ok('universe: SPY\nfrom: 2015-01-01\nn = 100 in 50..500 step 50\nlong = sma(n)\nbuy when close > long');
   assert.ok(lookbackBars(swept) >= 500);
+});
+
+test('a definition alone in a function is its series, so a missing period says so rather than asking for one blindly', () => {
+  const [line, from, to, message] = only('universe: SPY\nlen = 20 + 5\nbuy when close > sma(len)');
+  assert.deepEqual([line, from, to], [3, 21, 24]);
+  assert.equal(message, '"len" is a definition, so sma() reads it as its series and still needs a period, as in sma(len, 20). A period must be a number or a parameter, such as len = 20');
+  // With a period it is a series like any other.
+  ok('universe: SPY\nspread = close - open\nbuy when sma(spread, 20) > 0');
+});
+
+test('a built-in name is refused in words that fit a definition as well as a parameter', () => {
+  assert.equal(only('universe: SPY\nsum = close > 1\nbuy when true')[3], '"sum" is a built-in name. Choose another name, such as my_sum');
 });

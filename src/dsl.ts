@@ -1160,6 +1160,11 @@ class ExprParser {
     const nums = def.params.map((dflt, i) => {
       const a = rest[i];
       if (!a) {
+        // A definition written alone in the brackets is read as the series, so `len = 20 + 5` in sma(len) leaves no period.
+        const lone = i === 0 && rest !== args ? this.defUse.get(args[0].e) : undefined;
+        if (dflt === null && lone !== undefined) {
+          throw new SpecError(args[0].at, `"${lone}" is a definition, so ${t.s}() reads it as its series and still needs a period, as in ${t.s}(${lone}, 20). A period must be a number or a parameter, such as ${lone} = 20`);
+        }
         if (dflt === null) throw new SpecError(this.spanFrom(start), `${t.s}() needs a period, as in ${t.s}(${def.lead === 'series' ? 'close of SPY, 20' : '20'})`);
         return dflt;
       }
@@ -1483,7 +1488,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const into: Open = open;
       if (!guard(() => lex(text, line, lead, into.toks)) && 'state' in into) (into as Definition).state = 'bad';
     } else if ((m = text.match(PARAM_LINE))) {
-      errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Give the parameter another name, such as my_${m[1].toLowerCase()}`));
+      errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Choose another name, such as my_${m[1].toLowerCase()}`));
     } else if ((m = text.match(SETTING_NAME))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `Unknown setting "${m[1]}". Settings: ${SETTINGS.join(', ')}`));
     } else {
