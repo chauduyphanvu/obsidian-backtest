@@ -1,0 +1,8 @@
+
+Run Date,Account,Account Number,Action,Symbol,Description,Type,Price ($),Quantity,Commission ($),Fees ($),Accrued Interest ($),Amount ($),Cash Balance ($),Settlement Date
+04/13/2026,Individual,"X00000000",YOU BOUGHT SPDR S&P 500 ETF TRUST (SPY) (Cash),SPY,SPDR S&P 500 ETF TRUST,Cash,512.4,12,,,,-6148.8,1851.2,04/14/2026
+04/13/2026,ROTH IRA,"X00000001",YOU SOLD ISHARES 20+ YEAR TREASURY BOND ETF (TLT) (Cash),TLT,ISHARES 20+ YEAR TREASURY BOND ETF,Cash,91.85,-30,,0.06,,2755.44,4606.64,04/14/2026
+04/09/2026,Individual,"X00000000",REINVESTMENT SPDR S&P 500 ETF TRUST (SPY) (Cash),SPY,SPDR S&P 500 ETF TRUST,Cash,505.95,0.037,,,,-18.72,8000,
+
+"The data and information in this spreadsheet is provided to you solely for your use and is not for distribution."
+"Date downloaded 04/14/2026 9:12 pm"
