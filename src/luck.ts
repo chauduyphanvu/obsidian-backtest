@@ -577,20 +577,24 @@ export async function walkForward(
   const tt = t.slice(start, end + 1);
   const cash = declared.backtest.run.cashReturn.slice(start, end + 1);
   const capital = spec.capital;
+  // A variant that was ruined has stopped trading: from then on it has nothing that could grow, so it is followed as
+  // unchanged, and a line that followed it into its ruin stays at 0.
+  const ratio = (r: RunResult, from: number, to: number) => (r.equity[from] > 0 ? r.equity[to] / r.equity[from] : 1);
   const stitch = (runFor: (k: number) => RunResult): WalkLine => {
     const equity = [capital];
     const exposure = [runFor(0).exposure[start]];
     windows.forEach((w, k) => {
       const r = runFor(k);
       for (let i = w.test[0]; i <= w.test[1]; i++) {
-        equity.push((equity[equity.length - 1] * r.equity[i]) / r.equity[i - 1]);
+        equity.push(equity[equity.length - 1] * ratio(r, i - 1, i));
         exposure.push(r.exposure[i]);
       }
     });
-    return { equity, stats: computeStats(tt, equity, capital, exposure, cash) };
+    const ruin = equity.findIndex((x) => x <= 0);
+    return { equity, stats: computeStats(tt, equity, capital, exposure, cash, ruin < 0 ? undefined : ruin) };
   };
   const walked = stitch((k) => runs.get(key(pickIndex(k)))!);
-  const growth = (r: RunResult, w: (typeof windows)[number]) => r.equity[w.test[1]] / r.equity[w.test[0] - 1] - 1;
+  const growth = (r: RunResult, w: (typeof windows)[number]) => ratio(r, w.test[0] - 1, w.test[1]) - 1;
 
   return {
     metric,

@@ -51,7 +51,7 @@ const DID = { buy: 'bought', sell: 'sold', add: 'added', short: 'sold short', co
 export function positionOrder(st: AssetState, fill?: Fill): string {
   if (st.pending) {
     const flip = (st.side === 'long' && st.pending === 'short') || (st.side === 'short' && st.pending === 'buy');
-    return `${flip ? `${DOES[st.side === 'long' ? 'sell' : 'cover']}, then ` : ''}${DOES[st.pending]} ${timingPhrase(pendingTiming(fill))}`;
+    return `${flip ? `${DOES[st.side === 'long' ? 'sell' : 'cover']}, then ` : ''}${DOES[st.pending]} ${timingPhrase(st.marginCall ? 'next open' : pendingTiming(fill))}`;
   }
   if (!st.filled) return '';
   const { side, closed } = st.filled;
@@ -228,7 +228,8 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
       orders.push({ ticker: st.name, action, when, weight: 0, value, lastClose: st.lastClose, since });
     // A flip closes the position held and opens the other side: two orders, the first entry of the new position second.
     const flip = (st.side === 'long' && st.pending === 'short') || (st.side === 'short' && st.pending === 'buy');
-    if (st.pending === 'sell' || st.pending === 'cover' || flip) closing(st.side === 'short' ? 'cover' : 'sell', pending, Math.abs(st.value), st.since);
+    // A margin call closes the position at the next open even when the strategy fills at the close.
+    if (st.pending === 'sell' || st.pending === 'cover' || flip) closing(st.side === 'short' ? 'cover' : 'sell', st.marginCall ? 'next open' : pending, Math.abs(st.value), st.since);
     if (st.pending === 'buy' || st.pending === 'short' || st.pending === 'add') {
       const action = st.pending === 'short' || (st.pending === 'add' && st.side === 'short') ? 'short' : 'buy';
       opening(action, pending, st.targetWeight, st.targetWeight * equity, flip ? 1 : made + 1);

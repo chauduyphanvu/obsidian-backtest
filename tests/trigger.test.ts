@@ -313,7 +313,7 @@ test('after a short\'s stop the short rule must stop holding: the close above wh
   assert.deepEqual([bt.run.trades[0].reason, bt.run.states[0].rearmingShort], ['stop loss', true]);
   const t = only(r);
   assert.equal(t.side, 'rearmShort');
-  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the short rule must stop holding before A is shorted again: it does if A closes above 10.09 (+0.9%).');
+  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit or a margin call, the short rule must stop holding before A is shorted again: it does if A closes above 10.09 (+0.9%).');
   verify(parsed(src), new Map([['A', A]]), 'short rearm', tally());
 });
 
