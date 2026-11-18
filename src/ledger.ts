@@ -231,6 +231,21 @@ export interface BlockLedger {
   watch(listener: (ledger: Ledger) => void): () => void;
 }
 
+/**
+ * Calls `draw` with the block's record now and after each change; returns what stops it. A read that finishes after a
+ * change was heard is not drawn, since it may predate that change: a try counted as the drawing began stays counted.
+ */
+export function follow(ledger: BlockLedger, draw: (ledger: Ledger) => void): () => void {
+  let heard = false;
+  void ledger.read().then((l) => {
+    if (!heard) draw(l);
+  });
+  return ledger.watch((l) => {
+    heard = true;
+    draw(l);
+  });
+}
+
 /** Every block's record, by the block's key (render.ts blockStateKey). */
 export class Ledgers {
   private store: LedgerStore;

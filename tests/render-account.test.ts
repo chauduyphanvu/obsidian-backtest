@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { accountOrders, type AccountStrategy } from '../src/account.ts';
 import type { AssetState, FillLog } from '../src/engine.ts';
 import { headerGuess, readFills, type FillsRead, type MatchRow, type Reconciliation } from '../src/fills.ts';
-import { asOfLine, costHeadline, costParts, dollars, fillsSetup, matchCells, matchNotes, orderRows, picksText, planLines, rawWanted, readLines, tickerCells } from '../src/render-account.ts';
+import { asOfLine, costHeadline, costParts, dollars, fillsSetup, matchCells, matchNotes, orderRows, picksText, planLines, rawWanted, readLines, readNone, tickerCells } from '../src/render-account.ts';
 import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
 import { bars } from './helpers.ts';
@@ -137,6 +137,20 @@ test('what was read from the file and what was left out, each kind counted', () 
   ]);
   const plain = { ...READ, format: null, fills: [], left: { dividends: 0, reinvestments: 0, transfers: 0, other: 0 }, untraded: [], unread: [] };
   assert.deepEqual(readLines(plain), ['Read 0 purchases and sales by the names of its columns.']);
+});
+
+test('a file of which no row could be read is not compared, and says so; a format starting with a vowel takes "an"', () => {
+  const none = { ...READ, fills: [], untraded: [], unread: [{ line: 2, why: 'the action "SLD" is not a purchase or a sale this reads' }] };
+  assert.equal(readNone(none), true);
+  assert.equal(readNone(READ), false);
+  // Rows of tickers no strategy trades were read, so the columns are right.
+  assert.equal(readNone({ ...none, untraded: [{ ticker: 'A', rows: 1 }] }), false);
+  assert.deepEqual(readLines({ ...none, format: null, left: { dividends: 0, reinvestments: 0, transfers: 0, other: 0 } }), [
+    'Read 0 purchases and sales by the names of its columns.',
+    '1 row could not be read: line 2: the action "SLD" is not a purchase or a sale this reads.',
+    'As no row could be read as a purchase or a sale, nothing is compared. Check which column holds each part of a trade.',
+  ]);
+  assert.equal(readLines({ ...READ, format: 'Interactive Brokers Flex query' })[0], 'Read 1 purchase or sale as an Interactive Brokers Flex query export.');
 });
 
 function row(o: Partial<MatchRow>): MatchRow {

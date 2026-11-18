@@ -77,8 +77,12 @@ export const watchable = (spec: Spec): boolean => spec.to === null;
 
 /** Closes tried across the range before the changes between them are narrowed down. */
 const GRID = 48;
-/** A change is narrowed down until the closes on either side of it are this close, as a fraction of the price. */
+/**
+ * A change is narrowed down until the closes on either side of it are this close, as a fraction of the price, and within
+ * a quarter of the last digit a price is shown with (format.ts price), so the level shown is the change to that digit.
+ */
 export const PRECISION = 1e-4;
+const shownStep = (x: number): number => (x < 1 ? 1e-6 : 0.01) / 4;
 /** The range searched is SPREAD standard deviations of the driver's last RETURNS log returns either side of its last close, within RANGE_MIN and RANGE_MAX. */
 const SPREAD = 5;
 const RETURNS = 60;
@@ -331,12 +335,13 @@ interface Stretch {
 
 /**
  * The outcome of `label` across the closes from `lo` to `hi`: GRID closes spaced evenly on a log scale, then each change
- * between two of them narrowed down by halving until the closes either side are within PRECISION of each other. With
+ * between two of them narrowed down by halving until the closes either side are within PRECISION of each other, and of
+ * the digit a price is shown to. With
  * `even`, for a series of values, they are spaced evenly and narrowed down to PRECISION of the range from `lo` to `hi`.
  */
 export function search(lo: number, hi: number, label: (x: number) => string, even = false): Stretch[] {
   const xs = Array.from({ length: GRID }, (_, k) => (even ? lo + (hi - lo) * (k / (GRID - 1)) : lo * (hi / lo) ** (k / (GRID - 1))));
-  const wide = even ? (p: number, q: number) => q - p > PRECISION * (hi - lo) : (p: number, q: number) => q / p - 1 > PRECISION;
+  const wide = even ? (p: number, q: number) => q - p > PRECISION * (hi - lo) : (p: number, q: number) => q - p > Math.min(PRECISION * p, shownStep(p));
   const ls = xs.map(label);
   const out: Stretch[] = [{ label: ls[0], from: null, to: null }];
   let tries = GRID;
@@ -581,7 +586,7 @@ export function rulePhrase(t: Trigger): string | null {
   const close = `${t.values ? 'next value' : 'close'}${t.driver === t.ticker ? '' : ` of ${t.driver}`}`;
   if (t.side === 'rearm') {
     const cond = condition(t, t.driver);
-    return `After the stop, the buy rule must stop holding before ${t.ticker} is bought again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
+    return `After a stop or target exit, the buy rule must stop holding before ${t.ticker} is bought again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
   }
   const cond = condition(t, who);
   return cond ? `${VERB[t.side]} ${cond}` : `The ${t.side} rule gives no order at any ${close} ${range}`;

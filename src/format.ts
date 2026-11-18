@@ -13,6 +13,12 @@ export const pct = (x: number, digits = 1) => (Number.isFinite(x) ? minus((x * 1
 export const signedPct = (x: number, digits = 1) => (x > 0 ? '+' : '') + pct(x, digits);
 export const isoDate = (t: number) => new Date(t).toISOString().slice(0, 10);
 
+/** The calendar day of a time on the reader's clock, so "today" means their today. */
+export function localDate(t: number): string {
+  const d = new Date(t);
+  return isoDate(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
 export function money(x: number): string {
   const a = Math.abs(x);
   const trim = (v: number, d: number) => String(Number(v.toFixed(d)));

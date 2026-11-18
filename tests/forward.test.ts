@@ -73,7 +73,7 @@ test('a new note holds the property, a forward block that parses cleanly, and an
   assert.equal(forward!.started, utc(2026, 11, 13));
   assert.equal(forward!.intraday, false);
   assert.equal(forward!.from, LINK);
-  assert.equal(forward!.check, checkOf(forward!.source));
+  assert.equal(forward!.check, checkOf(forward!.source, forward!.started));
   assert.equal(forwardChanged(forward!), false);
   assert.ok(forward!.source.startsWith(STRATEGY));
   assert.deepEqual(parseSpec(forward!.source).errors, []);
@@ -82,10 +82,10 @@ test('a new note holds the property, a forward block that parses cleanly, and an
 
 test('a block written by hand in the README style parses, with comments and blank lines in the header and Windows line ends', () => {
   const frozen = 'universe: SPY\nbuy when rsi(2) < 10\nsell when rsi(2) > 70';
-  const text = ['# Forward test from the Dip buyer note', '', 'started: 2026-11-13', 'from: [[Dip buyer]]', `check: ${checkOf(frozen)}`, '---', frozen].join('\n');
+  const text = ['# Forward test from the Dip buyer note', '', 'started: 2026-11-13', 'from: [[Dip buyer]]', `check: ${checkOf(frozen, utc(2026, 11, 13))}`, '---', frozen].join('\n');
   const a = parseForward(text);
   assert.deepEqual(a.errors, []);
-  assert.deepEqual(a.forward, { started: utc(2026, 11, 13), intraday: false, from: '[[Dip buyer]]', check: checkOf(frozen), source: frozen });
+  assert.deepEqual(a.forward, { started: utc(2026, 11, 13), intraday: false, from: '[[Dip buyer]]', check: checkOf(frozen, utc(2026, 11, 13)), source: frozen });
   assert.deepEqual(parseForward(text.replace(/\n/g, '\r\n')).forward!.source.replace(/\r/g, ''), frozen);
   assert.equal(forwardChanged(parseForward(text.replace(/\n/g, '\r\n')).forward!), false);
 });
@@ -229,14 +229,16 @@ test('a "from" date is fine, and the heading falls back when the strategy has no
 
 // --- Reading ----------------------------------------------------------------------------------------------------------
 
-test('the check follows the frozen text: an edit shows, trailing blank lines and line ends do not', () => {
+test('the check follows the start and the frozen text: an edit shows, trailing blank lines and line ends do not', () => {
   const { forward } = parseForward(body(started()));
   assert.equal(forwardChanged({ ...forward!, source: forward!.source.replace('sma(200)', 'sma(100)') }), true);
   assert.equal(forwardChanged({ ...forward!, source: `${forward!.source}\n\n\n` }), false);
   assert.equal(forwardChanged({ ...forward!, source: forward!.source.replace(/\n/g, '\r\n') }), false);
   assert.equal(forwardChanged({ ...forward!, source: ` ${forward!.source}` }), true);
   assert.equal(forwardChanged({ ...forward!, check: 'abc' }), true);
-  assert.equal(CHANGED, 'The rules were changed after the forward test began, so this is no longer a forward test.');
+  // Moving the start back would make bars already seen count as forward ones.
+  assert.equal(forwardChanged({ ...forward!, started: forward!.started - 30 * 86_400_000 }), true);
+  assert.equal(CHANGED, 'The rules or the start were changed after the forward test began, so this is no longer a forward test.');
 });
 
 test('every missing or malformed part of a block is a problem with its line', () => {
@@ -285,7 +287,7 @@ test('an unknown setting, a repeated one, a line that is no setting, and a missi
 
 test('a "---" inside the strategy belongs to it, and a block with problems has no forward', () => {
   const frozen = 'universe: SPY\n---\n# a rule';
-  const text = `started: 2026-11-13\nfrom: [[A]]\ncheck: ${checkOf(frozen)}\n---\n${frozen}`;
+  const text = `started: 2026-11-13\nfrom: [[A]]\ncheck: ${checkOf(frozen, utc(2026, 11, 13))}\n---\n${frozen}`;
   assert.equal(parseForward(text).forward!.source, frozen);
   assert.equal(parseForward('---\nuniverse: SPY').forward, null);
 });

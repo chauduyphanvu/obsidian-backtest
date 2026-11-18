@@ -192,8 +192,8 @@ export const CRISES: Crisis[] = [
   { name: 'Covid crash', market: 'stocks', peak: '2020-02-19', trough: '2020-03-23' },
   { name: '2022 bear market', market: 'stocks', peak: '2022-01-03', trough: '2022-10-12' },
   { name: '2025 sell-off', market: 'stocks', peak: '2025-02-19', trough: '2025-04-08' },
-  { name: 'Bitcoin 2018', market: 'bitcoin', peak: '2017-12-17', trough: '2018-12-15' },
-  { name: 'Bitcoin 2022', market: 'bitcoin', peak: '2021-11-10', trough: '2022-11-21' },
+  { name: 'Bitcoin 2018', market: 'bitcoin', peak: '2017-12-16', trough: '2018-12-15' },
+  { name: 'Bitcoin 2022', market: 'bitcoin', peak: '2021-11-08', trough: '2022-11-21' },
 ];
 
 /** The falls of the stock market for every strategy, and Bitcoin's for one that trades on Binance. */

@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest, type Backtest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { addTrial, addVersion, defaultsHash, emptyLedger, resetTrials, trialOf, versionHash, type Ledger } from '../src/ledger.ts';
+import { addTrial, addVersion, defaultsHash, emptyLedger, Ledgers, mergeLedgers, parseLedger, resetTrials, trialOf, versionHash, type Ledger } from '../src/ledger.ts';
 import { deflatedSharpe, excessReturns, normCdf, stepSharpe, stepsPerYear, type Pbo } from '../src/overfit.ts';
-import { triesNote, triesOf, triesWords, upperBound, type Tries } from '../src/render-luck.ts';
+import { renderTriesNote, triesNote, triesOf, triesWords, upperBound, type Tries } from '../src/render-luck.ts';
 import { pboWords } from '../src/render-sweep.ts';
 import { changeText, figuresText, localStamp, versionRows } from '../src/render-versions.ts';
+import { JsonStore } from '../src/store.ts';
 import { bars, DAY } from './helpers.ts';
 
 const T0 = Date.UTC(2026, 10, 17, 9, 30);
@@ -62,7 +63,7 @@ test('many tries raise the bar: SR0 and the chance come from the spread of their
 });
 
 test('the count starts at its reset, and the verdict follows the chance', () => {
-  const base: Tries = { n: 3, since: Date.UTC(2026, 0, 2), sharpe: 1.234, deflated: { sr0: 0.05, dsr: 0.97, bar: 0.8 }, why: null };
+  const base: Tries = { n: 3, since: new Date(2026, 0, 2, 12).getTime(), sharpe: 1.234, deflated: { sr0: 0.05, dsr: 0.97, bar: 0.8 }, why: null };
   assert.match(triesWords(base), /since 2026-01-02\. .*Sharpe ratio of about 0\.80; the run shown has 1\.23\. .* is about 97%\. That is strong evidence of an edge, as far as these tries can tell\.$/);
   assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.6, bar: 0.8 } }), /is about 60%\. That is not strong evidence: the result could be luck\.$/);
   assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.2, bar: 0.8 } }), /is about 20%\. The result is more likely luck than an edge\.$/);
@@ -143,4 +144,47 @@ test('a version\'s time is on the reader\'s clock, to the minute', () => {
   const two = (n: number) => String(n).padStart(2, '0');
   assert.equal(localStamp(T0), `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`);
   assert.match(localStamp(T0), /^\d{4}-\d\d-\d\d \d\d:\d\d$/);
+});
+
+test('the day the count began is the reader\'s day, late at night and early in the morning', () => {
+  const bt = shown();
+  const own = trialOf(bt.spec, bt)!;
+  for (const at of [new Date(2026, 10, 17, 23, 30).getTime(), new Date(2026, 10, 17, 0, 30).getTime()]) {
+    const t = triesOf(addTrial(emptyLedger(), own.hash, own.sharpe, own.perYear, at), bt);
+    assert.match(triesWords(t), /^Only the run shown has been counted since 2026-11-17,/);
+  }
+});
+
+test('a line drawn while the try it shows is still being counted ends with that try counted', async () => {
+  const bt = shown();
+  const own = trialOf(bt.spec, bt)!;
+  // A slider settling: its try starts to be counted, and its result is drawn a few moments later.
+  for (let ticks = 0; ticks < 6; ticks++) {
+    const files = new Map<string, string>();
+    const store = new JsonStore<Ledger>({
+      files: {
+        exists: async (p) => files.has(p) || p === 'ledger',
+        read: async (p) => files.get(p)!,
+        write: async (p, text) => void files.set(p, text),
+        mkdir: async () => undefined,
+        remove: async (p) => void files.delete(p),
+        list: async () => ({ files: [...files.keys()] }),
+      },
+      dir: 'ledger',
+      parse: parseLedger,
+      merge: mergeLedgers,
+      setTimer: () => 0,
+      clearTimer: () => undefined,
+    });
+    const block = new Ledgers(store, () => T0).forBlock('Note.md\u0000name:x');
+    await block.add([own, { ...own, hash: 'second' }]);
+    const adding = block.add([{ ...own, hash: 'third' }]);
+    for (let i = 0; i < ticks; i++) await Promise.resolve();
+    const el = { textContent: '' } as HTMLElement;
+    const stop = renderTriesNote(el, block, bt);
+    await adding;
+    await new Promise((r) => setTimeout(r, 0));
+    stop();
+    assert.match(el.textContent ?? '', /^3 tries of this block counted so far\./, `drawn ${ticks} ticks after the try`);
+  }
 });

@@ -172,9 +172,13 @@ const LEFT_WORDS: Record<LeftOut, [string, string]> = {
 const UNREAD_SHOWN = 3;
 const UNTRADED_SHOWN = 6;
 
+/** No row of the file read as a trade, though there were rows: most likely the wrong columns, so nothing is compared. */
+export const readNone = (read: FillsRead): boolean => read.fills.length === 0 && read.untraded.length === 0 && read.unread.length > 0;
+
 /** What was read from the broker's file and what was left out. */
 export function readLines(read: FillsRead): string[] {
-  const out = [`Read ${plural(read.fills.length, 'purchase or sale', 'purchases and sales')} ${read.format ? `as a ${read.format} export` : 'by the names of its columns'}.`];
+  const as = read.format ? `as ${/^[aeiou]/i.test(read.format) ? 'an' : 'a'} ${read.format} export` : 'by the names of its columns';
+  const out = [`Read ${plural(read.fills.length, 'purchase or sale', 'purchases and sales')} ${as}.`];
   const left = (Object.keys(LEFT_WORDS) as LeftOut[]).filter((k) => read.left[k] > 0).map((k) => plural(read.left[k], ...LEFT_WORDS[k]));
   if (left.length) out.push(`Left out, as they are not purchases or sales of shares: ${left.join(', ')}.`);
   if (read.untraded.length) {
@@ -186,6 +190,7 @@ export function readLines(read: FillsRead): string[] {
     const shown = read.unread.slice(0, UNREAD_SHOWN).map((u) => `line ${u.line}: ${u.why}`);
     out.push(`${plural(read.unread.length, 'row')} could not be read: ${shown.join('; ')}${read.unread.length > UNREAD_SHOWN ? '; …' : ''}.`);
   }
+  if (readNone(read)) out.push('As no row could be read as a purchase or a sale, nothing is compared. Check which column holds each part of a trade.');
   return out;
 }
 
@@ -413,6 +418,10 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   const rec = matchFills(setup.followed, read.fills, { from, capital: config.capitalAtStart, last: setup.last, days: tradingDays(setup, asTraded), raw });
 
   for (const line of readLines(read)) say(line);
+  if (readNone(read)) {
+    if (host.setting) columnForm(box, text, config.fillColumns ?? {}, (value) => host.setting!('fills columns', value));
+    return;
+  }
   say(costHeadline(rec, from), 'bt-acct-total');
   if (rec.rows.length === 0) return;
   const parts = h(box, 'dl', 'bt-acct-parts');

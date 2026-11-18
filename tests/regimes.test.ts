@@ -41,7 +41,12 @@ test('Bitcoin’s falls are listed only for a strategy that trades on Binance', 
   assert.equal(crisesFor([yahoo('SPY')]).length, 8);
   assert.equal(crisesFor([csv('prices')]).length, 8);
   assert.equal(crisesFor([yahoo('SPY'), binance('BTCUSDT')]).length, 10);
-  assert.deepEqual(crisesFor([binance('BTCUSDT')]).filter((c) => c.market === 'bitcoin').map((c) => c.peak), ['2017-12-17', '2021-11-10']);
+  // Binance BTCUSDT's highest daily closes: 19,102.66 on 2017-12-16 and 67,525.83 on 2021-11-08 (the intraday highs came a day
+  // and two days later); its lowest after them: 3,211.72 on 2018-12-15 and 15,781.29 on 2022-11-21.
+  assert.deepEqual(
+    crisesFor([binance('BTCUSDT')]).filter((c) => c.market === 'bitcoin').map((c) => [c.peak, c.trough]),
+    [['2017-12-16', '2018-12-15'], ['2021-11-08', '2022-11-21']],
+  );
 });
 
 test('every fall runs from an earlier day to a later one', () => {

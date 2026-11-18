@@ -36,8 +36,8 @@ export interface ForwardHost {
 /** What a `from:` link shows and where it leads: `[[Note#Name|Label]]` reads "Note#Name" and opens "Note". */
 export function linkParts(from: string): { label: string; target: string } {
   const inner = from.replace(/^\[\[|\]\]$/g, '');
-  const label = inner.split('|')[0];
-  return { label, target: label.split('#')[0] };
+  const link = inner.split('|')[0];
+  return { label: link.replace('#', ' > '), target: link.split('#')[0] };
 }
 
 /** The two sentences about how the forward test compares with earlier stretches of as many bars, or why it does not yet. */
@@ -93,7 +93,7 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
   if (forwardChanged(forward)) {
     h(root, 'div', 'bt-title', 'Forward test');
     h(root, 'div', 'bt-warning', CHANGED);
-    h(root, 'div', 'bt-note', 'Start a new forward test from the strategy, or put the rules back as they were.');
+    h(root, 'div', 'bt-note', 'Start a new forward test from the strategy, or put the rules and the start back as they were.');
     return () => {};
   }
 

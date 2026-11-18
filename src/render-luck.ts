@@ -4,9 +4,9 @@
 import type { Backtest } from './backtest.ts';
 import type { Param } from './dsl.ts';
 import { h, s } from './dom.ts';
-import { isoDate, minus, money, moneyTicks, niceStep, pct, plural, tidy, timeTicks } from './format.ts';
+import { isoDate, localDate, minus, money, moneyTicks, niceStep, pct, plural, tidy, timeTicks } from './format.ts';
 import type { JobOf, Kind, Results } from './jobs.ts';
-import { trialOf, trialSpread, type BlockLedger, type Ledger } from './ledger.ts';
+import { follow, trialOf, trialSpread, type BlockLedger, type Ledger } from './ledger.ts';
 import { monthOfBars, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { deflatedSharpe, excessReturns, stepSharpe, stepsPerYear, type Deflated } from './overfit.ts';
 import { formatParam } from './render-params.ts';
@@ -245,7 +245,7 @@ export function triesOf(ledger: Ledger, bt: Backtest): Tries {
 
 const chance = (p: number) => (p > 0.995 ? 'over 99%' : p < 0.005 ? 'under 1%' : `about ${pct(p, 0)}`);
 const ratio = (x: number) => minus(x.toFixed(2));
-const sinceText = (t: Tries) => (t.since === null ? '' : ` since ${isoDate(t.since)}`);
+const sinceText = (t: Tries) => (t.since === null ? '' : ` since ${localDate(t.since)}`);
 const counted = (t: Tries) =>
   t.n === 1 ? `1 try of this block has been counted${sinceText(t)}` : `${plural(t.n, 'try', 'tries')} of this block have been counted${sinceText(t)}`;
 
@@ -321,8 +321,7 @@ function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => v
       'tries made anywhere else are not counted: in another program, in an earlier copy of the block, or ideas dropped before they were run. Nor are the reshuffles and random entries of these checks, or the runs of the orders window and of compare and backtests blocks. The count belongs to the block: a new name line, or moving a block that has none, starts a new one.',
     );
   };
-  void ledger.read().then(draw);
-  const unwatch = ledger.watch(draw);
+  const unwatch = follow(ledger, draw);
   return () => {
     gone = true;
     unwatch();
@@ -335,8 +334,7 @@ export function renderTriesNote(el: HTMLElement, ledger: BlockLedger, bt: Backte
   const draw = (l: Ledger) => {
     if (!gone) el.textContent = triesNote(triesOf(l, bt)) ?? '';
   };
-  void ledger.read().then(draw);
-  const unwatch = ledger.watch(draw);
+  const unwatch = follow(ledger, draw);
   return () => {
     gone = true;
     unwatch();

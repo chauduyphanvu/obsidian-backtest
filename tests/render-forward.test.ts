@@ -23,7 +23,8 @@ function started(over: { started?: number; intraday?: boolean } = {}): string {
 }
 
 test('a from link shows its note and strategy, drops an alias, and opens the note', () => {
-  assert.deepEqual(linkParts('[[Trend following#Trend following]]'), { label: 'Trend following#Trend following', target: 'Trend following' });
+  // Written as Obsidian shows a link to a heading.
+  assert.deepEqual(linkParts('[[Trend following#Trend following]]'), { label: 'Trend following > Trend following', target: 'Trend following' });
   assert.deepEqual(linkParts('[[Research/Three sleeves|Sleeves]]'), { label: 'Research/Three sleeves', target: 'Research/Three sleeves' });
   assert.deepEqual(linkParts('[[Plain]]'), { label: 'Plain', target: 'Plain' });
 });
@@ -113,7 +114,7 @@ test('a note that changed, or that is not the plugin\'s, is left as it is and th
 
   const edited = store(note.replace('sma(4)', 'sma(5)'));
   const refused = await writeLog(edited.process, line, rows, utc(2026, 11, 18), 0);
-  assert.ok(!refused.ok && refused.message.startsWith('The rules were changed after the forward test began'));
+  assert.ok(!refused.ok && refused.message.startsWith('The rules or the start were changed after the forward test began'));
   assert.equal(edited.file.text, note.replace('sma(4)', 'sma(5)'));
 
   const foreign = store('# My note\n\n## Log\n');
@@ -250,12 +251,12 @@ test('a forward block runs its rules, shows its figures, and its button logs the
   assert.ok(root.has('Running the frozen rules'));
   await later();
   assert.equal(x.calls.run, 1);
-  for (const part of ['Since the start', 'Worst fall', 'Time invested', 'Started after the bar of 2020-02-19, from Swing note#Swing.', 'The last bar is 2020-03-10.', 'Prices are three days old.', 'The frozen rules', 'It has not been checked yet.']) {
+  for (const part of ['Since the start', 'Worst fall', 'Time invested', 'Started after the bar of 2020-02-19, from Swing note > Swing.', 'The last bar is 2020-03-10.', 'Prices are three days old.', 'The frozen rules', 'It has not been checked yet.']) {
     assert.ok(root.has(part), part);
   }
   assert.ok(root.has('Earlier periods are compared only when there are 3 times as many bars'), 'with 20 bars since and 50 before, the comparison waits');
 
-  root.find('a', 'Swing note#Swing')!.click();
+  root.find('a', 'Swing note > Swing')!.click();
   assert.deepEqual(x.calls.opened, ['Swing note']);
 
   const button = root.find('button', 'Add 2 new bars to the log')!;
@@ -288,7 +289,7 @@ test('rules edited after the start show the warning and nothing else, and run no
   const x = stage();
   const { root } = draw(x.source.replace('sma(4)', 'sma(5)'), x.host);
   await later();
-  assert.ok(root.has('The rules were changed after the forward test began, so this is no longer a forward test.'));
+  assert.ok(root.has('The rules or the start were changed after the forward test began, so this is no longer a forward test.'));
   assert.equal(x.calls.run, 0);
   assert.equal(root.find('button'), undefined);
 });

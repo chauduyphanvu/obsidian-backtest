@@ -128,6 +128,15 @@ test("another broker's file: columns found by their names, semicolons, dates day
   ]);
 });
 
+test("BOT and SLD, Interactive Brokers' words for a purchase and a sale, are read as them", () => {
+  const r = read('Date,Symbol,Action,Quantity,Price\n2026-04-13,SPY,BOT,10,500\n2026-04-14,SPY,SLD,4,505');
+  assert.deepEqual(brief(r), [
+    ['2026-04-13', 'SPY', 'buy', 10, 500, 0, 2],
+    ['2026-04-14', 'SPY', 'sell', 4, 505, 0, 3],
+  ]);
+  assert.deepEqual(r.unread, []);
+});
+
 test('without a side column a trade takes its side from the sign of its quantity', () => {
   const r = read('Date,Symbol,Quantity,Price\n2026-04-13,SPY,10,500\n2026-04-14,SPY,-4,505\n2026-04-15,SPY,0,505');
   assert.deepEqual(brief(r), [

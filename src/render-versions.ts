@@ -4,7 +4,7 @@
 import { h } from './dom.ts';
 import type { Defaults } from './dsl.ts';
 import { minus, pct, plural } from './format.ts';
-import { defaultsHash, lineDiff, MAX_VERSIONS, versionHash, type BlockLedger, type DiffLine, type Ledger, type Version, type VersionFigures } from './ledger.ts';
+import { defaultsHash, follow, lineDiff, MAX_VERSIONS, versionHash, type BlockLedger, type DiffLine, type Ledger, type Version, type VersionFigures } from './ledger.ts';
 
 export interface VersionsInput {
   ledger: BlockLedger;
@@ -122,8 +122,7 @@ function fill(body: HTMLElement, input: VersionsInput): () => void {
     const list = h(body, 'ol', 'bt-versions-list');
     for (const row of rows) versionItem(h(list, 'li', row.current ? 'bt-version bt-version-current' : 'bt-version'), row, input);
   };
-  void input.ledger.read().then(draw);
-  const unwatch = input.ledger.watch(draw);
+  const unwatch = follow(input.ledger, draw);
   return () => {
     gone = true;
     unwatch();

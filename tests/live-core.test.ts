@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { blockName } from '../src/blocks.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, waitFor, type Shown } from '../src/live-core.ts';
+import { Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, viewText, waitFor, type Shown } from '../src/live-core.ts';
 
 const BODY_A = ['name: Trend', 'universe: SPY', 'buy when close > sma(200)'];
 const BODY_B = ['universe: QQQ', 'buy when rsi(2) < 10'];
@@ -354,4 +354,11 @@ test('an answer is kept until it runs out or a price file changes, and a no stay
   memo.set('y', true, Infinity);
   memo.set('z', true, Infinity);
   assert.deepEqual([memo.get('x'), memo.get('y'), memo.get('z')], [undefined, true, true]);
+});
+
+test('the panel reads a note in reading mode from its file\'s text, which its editor there is not kept up to date with', () => {
+  const view = (mode: string) => ({ getMode: () => mode, data: 'costs: 7 bps', editor: { getValue: () => 'costs: 5 bps' } });
+  assert.equal(viewText(view('preview')), 'costs: 7 bps');
+  // While typing, the editor is ahead of the file.
+  assert.equal(viewText(view('source')), 'costs: 5 bps');
 });

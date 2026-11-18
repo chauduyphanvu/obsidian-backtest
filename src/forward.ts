@@ -5,7 +5,7 @@ import { maxDrawdown } from './backtest.ts';
 import { closesFence, extractBlocks, fenceOf, type Block } from './blocks.ts';
 import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic } from './dsl.ts';
 import { barAt, firstAtOrAfter, type RunResult } from './engine.ts';
-import { isoDate, plural, price, stamp, tidy } from './format.ts';
+import { isoDate, localDate, plural, price, stamp, tidy } from './format.ts';
 import { hash } from './result-cache.ts';
 import { NOTE_CHANGED } from './rewrite.ts';
 import type { Bars } from './types.ts';
@@ -13,7 +13,7 @@ import type { Bars } from './types.ts';
 /** The note property that tells the plugin it made the note, as `ORDERS_MARKER` does for the orders note. */
 export const FORWARD_MARKER = 'backtest_forward';
 
-export const CHANGED = 'The rules were changed after the forward test began, so this is no longer a forward test.';
+export const CHANGED = 'The rules or the start were changed after the forward test began, so this is no longer a forward test.';
 
 /** A forward test is compared with earlier periods only from this many bars on. */
 export const MIN_FORWARD_BARS = 5;
@@ -34,8 +34,11 @@ export function isForwardNote(note: string): boolean {
 /** The text a check is made of: the lines as a note holds them, whatever their endings and however many blank lines follow. */
 const textOf = (source: string): string => source.replace(/\r/g, '').trimEnd();
 
-/** What the `check:` line holds for a frozen text. It catches an edit by mistake; it is no protection against a deliberate one. */
-export const checkOf = (source: string): string => hash(textOf(source)).toString(36);
+/**
+ * What the `check:` line holds for a forward test that started at `started` with a frozen text: an earlier start would
+ * count bars already seen. It catches an edit by mistake; it is no protection against a deliberate one.
+ */
+export const checkOf = (source: string, started: number): string => hash(`${started}\n${textOf(source)}`).toString(36);
 
 const WHEN = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/;
 
@@ -48,12 +51,6 @@ function parseWhen(text: string): { t: number; intraday: boolean } | null {
   const back = new Date(t);
   const real = back.getUTCFullYear() === y && back.getUTCMonth() === mo - 1 && back.getUTCDate() === d && h < 24 && mi < 60;
   return real ? { t, intraday: m[4] !== undefined } : null;
-}
-
-/** The calendar day of a time on the reader's clock, so "today" means their today. */
-function localDate(t: number): string {
-  const d = new Date(t);
-  return isoDate(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -160,7 +157,8 @@ export function makeForward(input: ForwardStart): { ok: true; note: string } | R
   const frozen = pinDefaults(input.source, input.defaults);
   const started = stamp(input.started, input.intraday);
   const title = input.name.trim();
-  const block = ['started: ' + started, `from: ${input.link}`, `check: ${checkOf(frozen)}`, '---', frozen].join('\n');
+  // The start as it reads back from its line, which keeps whole minutes.
+  const block = ['started: ' + started, `from: ${input.link}`, `check: ${checkOf(frozen, parseWhen(started)!.t)}`, '---', frozen].join('\n');
   const note = [
     ['---', `${FORWARD_MARKER}: true`, '---'].join('\n'),
     `# Forward test${title ? ` of ${title}` : ''}`,
@@ -225,8 +223,8 @@ export function parseForward(body: string): { forward: ForwardBlock | null; erro
   return { forward: { started: when!.t, intraday: when!.intraday, from: from!.value, check: check!.value, source }, errors };
 }
 
-/** Whether the frozen text is no longer the one the check was made from. */
-export const forwardChanged = (f: Pick<ForwardBlock, 'check' | 'source'>): boolean => f.check !== checkOf(f.source);
+/** Whether the start or the frozen text is no longer the one the check was made from. */
+export const forwardChanged = (f: Pick<ForwardBlock, 'check' | 'source' | 'started'>): boolean => f.check !== checkOf(f.source, f.started);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Figures

@@ -85,8 +85,9 @@ const LEFT_OUT: readonly { why: LeftOut; words: RegExp }[] = [
   { why: 'other', words: /interest|\bfees?\b|\btax|adjustment|split|spin|merger|expired|assigned|exercise|to open|to close|short|cover|option|cancel/i },
   { why: 'transfers', words: /transfer|moneylink|journal|\bwire\b|deposit|withdraw|contribution|\btfr\b|\bach\b/i },
 ];
-const BUY_WORDS = /\b(?:buy|bought|purchased?)\b/i;
-const SELL_WORDS = /\b(?:sell|sold|sale)\b/i;
+// BOT and SLD are how Interactive Brokers writes them in its trade logs.
+const BUY_WORDS = /\b(?:buy|bought|purchased?|bot)\b/i;
+const SELL_WORDS = /\b(?:sell|sold|sale|sld)\b/i;
 
 /** A ticker as it is compared with the strategies': a broker writes BRK/B, BRK.B or BRK B for Yahoo's BRK-B. */
 const tickerKey = (s: string): string => s.trim().toUpperCase().replace(/[./\s]+/g, '-');

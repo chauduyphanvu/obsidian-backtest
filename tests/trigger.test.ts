@@ -126,6 +126,18 @@ test('a buy rule on the close: the close above which it buys, in words, exact', 
   assert.equal(tickerText(close, 'A').text, 'Buys if it closes above 9.50 (+5.6%), at that close.');
 });
 
+test('a level is found to the cent it is shown in, however high the price, and always on the side that gives the order', () => {
+  // sma(3) at the next bar is (740 + 745.30 + x) / 3, above x when x < 742.65: the sell level is 742.65 to the cent.
+  const A = bars([700, 720, 730, 740, 745.3]);
+  const t = only(report('universe: A\nbuy when true\nsell when close < sma(3)', { A }).report);
+  assert.equal(t.side, 'sell');
+  assert.ok(t.fires[0].hi! <= 742.65 && 742.65 - t.fires[0].hi! < 0.005, String(t.fires[0].hi));
+  // At Bitcoin's prices too.
+  const B = bars([60000, 62000, 64000, 66000, 67000]);
+  const b = only(report('universe: B\nbuy when true\nsell when close < sma(3)', { B }).report);
+  assert.ok(b.fires[0].hi! <= 66500 && 66500 - b.fires[0].hi! < 0.005, String(b.fires[0].hi));
+});
+
 test('a rule on another ticker is solved for that ticker\'s close, with the traded one held where it was', () => {
   const S = bars([10, 10, 10, 10, 9]);
   const T = bars([50, 51, 52, 53, 54]);
@@ -174,7 +186,7 @@ test('after a stop the buy rule must stop holding: the close below which it does
   const t = only(r);
   assert.equal(t.side, 'rearm');
   assert.ok(t.fires[0].lo === null && t.fires[0].hi! <= 9.9 && 9.9 / t.fires[0].hi! - 1 <= PRECISION);
-  assert.equal(tickerText(r, 'A').text, 'After the stop, the buy rule must stop holding before A is bought again: it does if A closes below 9.90 (−1.0%).');
+  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the buy rule must stop holding before A is bought again: it does if A closes below 9.90 (−1.0%).');
   verify(parsed('universe: A\nstop loss: 10%\nbuy when close > 9.9'), new Map([['A', A]]), 'rearm', tally());
 });
 

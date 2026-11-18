@@ -41,6 +41,14 @@ export function chooseBlock(lines: readonly string[], cursor: number | null, pre
   return { index, count: spans.length, first, last, text, name: blockName(text) };
 }
 
+/**
+ * The text of a note as its view holds it: in source mode the editor's, which is ahead of the file while typing; in
+ * reading mode the view's data, since the editor there is not updated when the file changes from outside it.
+ */
+export function viewText(view: { getMode(): string; data: string; editor: { getValue(): string } }): string {
+  return view.getMode() === 'source' ? view.editor.getValue() : view.data;
+}
+
 /** Where a block with this text is now: the one at `index` if it still has the text, else the nearest block that has it. */
 export function locateBlock(lines: readonly string[], text: string, index: number): BlockSpan | null {
   let best: BlockSpan | null = null;
