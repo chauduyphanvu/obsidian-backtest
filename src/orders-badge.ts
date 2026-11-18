@@ -1,7 +1,7 @@
 // The count of today's orders in the status bar, worked out quietly after start-up.
 
 import { HOUR } from './format.ts';
-import { actionWord, problemsOf, timingPhrase, todoRows, type StrategyStatus } from './orders.ts';
+import { actionWord, problemsOf, timingPhrase, todoRows, WATCH_HEADING, watchList, type StrategyStatus } from './orders.ts';
 
 export type BadgeState = { kind: 'checking' } | { kind: 'failed'; message: string } | { kind: 'ready'; statuses: StrategyStatus[] };
 
@@ -18,6 +18,8 @@ export interface BadgeView {
 
 /** Orders named in the tooltip before "and 3 more". */
 const LISTED = 5;
+/** Closes to watch named in the tooltip, the nearest first; they are not counted as orders. */
+const WATCHED = 3;
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 const strategies = (n: number) => `${n} ${plural(n, 'strategy', 'strategies')}`;
@@ -53,10 +55,12 @@ export function badgeView(state: BadgeState): BadgeView {
   const mark = list.some((s) => problemsOf(s).length > 0) ? 'warning' : 'none';
   const orders = rows.map(({ status, order }) => `${actionWord(order)} ${order.ticker} ${timingPhrase(order.when)}, ${status.strategy}`);
   const more = orders.length - LISTED;
+  const watched = watchList(list).slice(0, WATCHED);
+  const watch = watched.length ? [`${WATCH_HEADING}:`, ...watched.map(({ status, row }) => `${row.ticker} ${row.phrase[0].toLowerCase()}${row.phrase.slice(1)}, ${status.strategy}`)] : [];
   const lines =
     rows.length === 0
-      ? ['No strategy has an order.', ...problems, 'Click to see what each one holds.']
-      : [...orders.slice(0, LISTED), ...(more > 0 ? [`and ${more} more`] : []), ...problems, 'Click to open the orders window.'];
+      ? ['No strategy has an order.', ...watch, ...problems, 'Click to see what each one holds.']
+      : [...orders.slice(0, LISTED), ...(more > 0 ? [`and ${more} more`] : []), ...watch, ...problems, 'Click to open the orders window.'];
   return { text: ordersText(rows.length), tooltip: lines.join('\n'), mark, orders: rows.length };
 }
 

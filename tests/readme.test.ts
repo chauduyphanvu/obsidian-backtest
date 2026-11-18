@@ -9,6 +9,7 @@ import { CSV_ASK_BYTES, CSV_MAX_BYTES } from '../src/debug.ts';
 import { CALENDAR, INDICATORS, POSITION, SERIES, SETTINGS, YAHOO_INSIDE_DAYS, parseSpec } from '../src/dsl.ts';
 import { SMALL_TRADE } from '../src/engine.ts';
 import { resultProperties } from '../src/export.ts';
+import { forwardChanged, parseForward } from '../src/forward.ts';
 import { STARTERS } from '../src/gallery.ts';
 import { LIMITS, LimitError, anywayLabel, sizeRefusal } from '../src/limits.ts';
 import { notOurNoteMessage, ORDERS_MARKER } from '../src/orders.ts';
@@ -75,6 +76,17 @@ test('every compare block in the README parses without errors', () => {
   for (const b of found) {
     const { errors } = parseCompare(b.body);
     assert.deepEqual(errors, [], `the compare block on README line ${b.line} ("${first(b.body)}") has errors`);
+  }
+});
+
+test('every forward block in the README parses without errors, its check holds and its strategy runs', () => {
+  const found = blocks.filter((b) => b.lang === 'forward');
+  assert.ok(found.length >= 1, 'no forward block found');
+  for (const b of found) {
+    const { forward, errors } = parseForward(b.body);
+    assert.deepEqual(errors, [], `the forward block on README line ${b.line} ("${first(b.body)}") has errors`);
+    assert.equal(forwardChanged(forward!), false, `the check of the forward block on README line ${b.line} does not match its text`);
+    assert.deepEqual(parseSpec(forward!.source).errors, [], `the strategy in the forward block on README line ${b.line} has errors`);
   }
 });
 

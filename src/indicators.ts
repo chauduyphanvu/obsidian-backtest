@@ -479,20 +479,31 @@ export function monthKey(t: number): number {
 }
 
 /**
- * 1 on the last bar of each period: the next bar falls in another one. Past the final bar the next
- * bar is one step on (the smallest gap in the series), skipping weekends unless the series has
- * weekend bars, so the final bar of a month is known to end it on its own calendar.
+ * Where the bar after one starting at a given time would start, in a series whose bars start at `t`: one step on (the
+ * smallest gap in the series, a day when it has fewer than two bars), skipping weekends unless the series has weekend bars.
  */
-export function periodEnds(t: number[], key: (t: number) => number): number[] {
+export function barStepper(t: number[]): (x: number) => number {
   let step = Infinity;
   for (let i = 1; i < t.length; i++) step = Math.min(step, t[i] - t[i - 1]);
   if (!Number.isFinite(step)) step = DAY;
   const weekends = t.some(isWeekend);
-  return t.map((x, i) => {
-    let next = i + 1 < t.length ? t[i + 1] : x + step;
-    if (i + 1 === t.length) while (!weekends && isWeekend(next)) next += DAY;
-    return key(next) !== key(x) ? 1 : 0;
-  });
+  return (x) => {
+    let next = x + step;
+    while (!weekends && isWeekend(next)) next += DAY;
+    return next;
+  };
+}
+
+/** When the bar after the last of `t` would start (barStepper). */
+export const nextBarTime = (t: number[]): number => barStepper(t)(t[t.length - 1]);
+
+/**
+ * 1 on the last bar of each period: the next bar falls in another one. Past the final bar the next bar is the one
+ * nextBarTime expects, so the final bar of a month is known to end it on its own calendar.
+ */
+export function periodEnds(t: number[], key: (t: number) => number): number[] {
+  const after = t.length > 0 ? nextBarTime(t) : NaN;
+  return t.map((x, i) => (key(i + 1 < t.length ? t[i + 1] : after) !== key(x) ? 1 : 0));
 }
 
 /**

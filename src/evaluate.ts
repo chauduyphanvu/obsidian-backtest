@@ -50,7 +50,7 @@ export function apartKey(spec: Spec): string {
 }
 
 /** When each row of a series is known: a bar of prices when it ends, a row of dated values (a file's, FRED's) by ind.valueEnds. */
-const rowEnds = (b: Bars): number[] => (b.unpriced || b.values ? ind.valueEnds(b.t) : ind.barEnds(b.t));
+export const rowEnds = (b: Bars): number[] => (b.unpriced || b.values ? ind.valueEnds(b.t) : ind.barEnds(b.t));
 
 /** Functions given a series that still read the ticker's own prices: its closes, or its average true range. */
 const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];

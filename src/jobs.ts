@@ -6,6 +6,7 @@ import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { priceMemo } from './price-memo.ts';
 import { baseSpec, runSweep, sweepParams, sweepSize, type Parse, type SweepPoint, type SweepResult } from './sweep.ts';
+import { computeTriggers, type TriggerReport, type TriggerRun } from './trigger.ts';
 import type { Bars } from './types.ts';
 
 /** A block's text, the parser defaults and the values a job puts on top, so a worker parses it exactly as the note does. */
@@ -131,7 +132,8 @@ export type ToWorker =
   | { type: 'data'; id: number; data: Map<string, Bars> }
   | { type: 'drop'; id: number }
   | { type: 'job'; id: number; data: number; block: Block; job: Job }
-  | { type: 'run'; id: number; data: number; block: Block };
+  | { type: 'run'; id: number; data: number; block: Block }
+  | { type: 'triggers'; id: number; data: number; spec: Spec; run: TriggerRun };
 
 export interface Progress {
   type: 'progress';
@@ -149,7 +151,8 @@ export type FromWorker =
   | Progress
   | { type: 'done'; id: number; result: Results[Kind] }
   | { type: 'ran'; id: number; result: Ran }
-  | { type: 'error'; id: number; message: string };
+  | { type: 'error'; id: number; message: string }
+  | { type: 'triggered'; id: number; result: TriggerReport };
 
 /** At most one progress message this often, so a fast job does not flood the main thread. */
 const PROGRESS_MS = 50;
@@ -165,7 +168,8 @@ const failure = (id: number, e: unknown): FromWorker => ({ type: 'error', id, me
  * Handles the messages a worker receives. Prices arrive once per block (`data`) and stay until dropped; each job
  * names the prices it reads. Every job runs to the end in one go: the main thread stops one by ending the worker.
  * Progress goes out at most once every `every` milliseconds. A single run (`run`) is not kept: its result is sent and
- * forgotten, so a slider's many values do not pile up here.
+ * forgotten, so a slider's many values do not pile up here. The trigger prices of a run (`triggers`) come with the
+ * strategy and the run's end, so they too need only the prices.
  */
 export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: ToWorker) => Promise<void> {
   const sets = new Map<number, { data: Map<string, Bars>; benches: Map<string, Bench> }>();
@@ -176,6 +180,14 @@ export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: T
       let reply: FromWorker;
       try {
         reply = { type: 'ran', id: m.id, result: runBlock(m.block, sets.get(m.data)!.data) };
+      } catch (e) {
+        reply = failure(m.id, e);
+      }
+      post(reply);
+    } else if (m.type === 'triggers') {
+      let reply: FromWorker;
+      try {
+        reply = { type: 'triggered', id: m.id, result: computeTriggers(m.spec, sets.get(m.data)!.data, m.run) };
       } catch (e) {
         reply = failure(m.id, e);
       }

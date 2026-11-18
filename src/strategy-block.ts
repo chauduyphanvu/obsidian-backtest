@@ -5,6 +5,7 @@
 import type { Defaults } from './dsl.ts';
 import { equityCsv, snapshotMarkdown, tradesCsv } from './export.ts';
 import { isIntraday } from './format.ts';
+import { forwardLink, type ForwardStart } from './forward.ts';
 import { LimitError } from './limits.ts';
 import { renderActions } from './render-actions.ts';
 import { renderDebug } from './render-debug.ts';
@@ -52,6 +53,8 @@ export interface BlocksHost {
   saveFile(title: string, ext: string, text: string): Promise<void>;
   /** Writes the properties of the note at `notePath` a moment after the last of its blocks has rendered. */
   scheduleProperties(notePath: string): void;
+  /** Writes a forward test note for the strategy and opens it, or says why it could not. */
+  startForward(input: ForwardStart): Promise<void>;
 }
 
 /** The strategy blocks on screen. A block is known by the object its drawings are tied to (Obsidian's render child). */
@@ -149,6 +152,23 @@ export class StrategyBlocks {
               { label: 'Save trades as CSV', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
               { label: 'Save value history as CSV', run: () => this.host.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
               { label: 'Keep this result as a note', run: () => this.host.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
+              // Only a block in a note: the test links back to it, and the preview panel is not the strategy's home.
+              ...(opts.panel || !opts.notePath
+                ? []
+                : [
+                    {
+                      label: 'Start a forward test',
+                      run: () =>
+                        this.host.startForward({
+                          source: shownSource,
+                          defaults: drawing.defaults,
+                          started: bt.run.t[bt.run.t.length - 1],
+                          intraday,
+                          link: forwardLink(opts.notePath, shown.spec.name),
+                          name,
+                        }),
+                    },
+                  ]),
             ]),
         ];
       };
@@ -164,6 +184,7 @@ export class StrategyBlocks {
         compact: opts.compact ?? this.host.settings().resultView === 'compact',
         remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
         params: spec.params.length > 0 ? { ...sliders, apply: opts.apply } : undefined,
+        triggers: (shown) => this.host.results.triggers(shown, runs),
       });
       this.onScreen.set(child, { source, drawn: drawing.defaults, say: renderDefaultsChanged(el, () => redraw({ force: false })) });
       this.disposers.set(child, () => {

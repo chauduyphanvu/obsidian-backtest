@@ -117,6 +117,26 @@ export function computeTradeStats(trades: Trade[]): TradeStats {
   };
 }
 
+/**
+ * Statistics of the run's bars s to e - 1, with growth measured from the close of bar `base`, or
+ * from the series' first value when it starts later.
+ */
+function measure(run: RunResult, eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats {
+  while (base < e && Number.isNaN(eq[base])) base++;
+  const cut = (xs: number[]) => xs.slice(base, e);
+  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
+}
+
+/**
+ * The run's bars s to e - 1 measured on their own, for the strategy and the benchmark. Growth runs from the last close
+ * before the part, so parts that follow one another multiply to the whole run.
+ */
+export function spanStats(bt: { run: RunResult; benchmark: { equity: number[] } }, s: number, e: number): { stats: Stats; benchmarkStats: Stats } {
+  const { run } = bt;
+  const base = Math.max(0, s - 1);
+  return { stats: measure(run, run.equity, run.exposure, base, s, e), benchmarkStats: measure(run, bt.benchmark.equity, run.t.map(() => 1), base, s, e) };
+}
+
 /** A rule unknown for more bars than this at the start of the run gets a note. */
 const FEW_BARS = 5;
 
@@ -358,16 +378,6 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   const at = alignByEnd(bench.t, run.t);
   const benchEquity = run.t.map((t, i) => (at[i] >= 0 ? bench.equity[at[i]] : t >= bench.t[0] ? spec.capital : NaN));
   const benchExposure = run.t.map(() => 1);
-  /**
-   * Statistics of the run's bars s to e - 1, with growth measured from the close of bar `base`, or
-   * from the series' first value when it starts later.
-   */
-  const measure = (eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats => {
-    while (base < e && Number.isNaN(eq[base])) base++;
-    const cut = (xs: number[]) => xs.slice(base, e);
-    return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
-  };
-
   const intraday = isIntraday(run.t);
   const notes = [...warmupNotes(spec, data, signals, run, intraday), ...skippedNotes(run.skipped), ...columnNotes(spec, data)];
   if (run.smallTrades) {
@@ -388,13 +398,11 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     const cut = run.t.findIndex((t) => t >= split);
     const k = cut < 0 ? run.t.length : cut;
     const day = new Date(split).toISOString().slice(0, 10);
-    // Each part's growth runs from the last close before it, so the parts multiply to the whole run.
     const part = (label: string, s: number, e: number, mine: (t: Trade) => boolean): Segment => ({
       label,
       from: s < e ? run.t[s] : split,
       to: s < e ? run.t[e - 1] : split,
-      stats: measure(run.equity, run.exposure, Math.max(0, s - 1), s, e),
-      benchmarkStats: measure(benchEquity, benchExposure, Math.max(0, s - 1), s, e),
+      ...spanStats({ run, benchmark: { equity: benchEquity } }, s, e),
       tradeStats: computeTradeStats(run.trades.filter(mine)),
     });
     segments = [
@@ -407,14 +415,14 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     spec,
     data,
     run,
-    stats: measure(run.equity, run.exposure, 0, 0, run.t.length, spec.capital),
+    stats: measure(run, run.equity, run.exposure, 0, 0, run.t.length, spec.capital),
     tradeStats: computeTradeStats(run.trades),
     drawdown: drawdowns(run.equity),
     benchmark: {
       label: spec.benchmark ? `${spec.benchmark.name} buy & hold` : spec.rank ? 'Equal-weight buy & hold' : 'Buy & hold',
       equity: benchEquity,
       drawdown: drawdowns(benchEquity),
-      stats: measure(benchEquity, benchExposure, 0, 0, run.t.length, spec.capital),
+      stats: measure(run, benchEquity, benchExposure, 0, 0, run.t.length, spec.capital),
     },
     interest: run.interest,
     cashRateNote: cashRateNote(spec),

@@ -5,19 +5,24 @@ import { explainTrade, MARK, type Explanation } from './explain.ts';
 import { boughtText } from './export.ts';
 import { minus, money, pct, price, signedPct, stamp } from './format.ts';
 import { positionOrder } from './orders.ts';
+import { tickerText, type TriggerReport } from './trigger.ts';
 
 const MAX_TRADE_ROWS = 500;
 const COLUMNS = 9;
 /** For unique ids across every result on the page. */
 let explained = 0;
 
-export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boolean): void {
+/**
+ * The positions table. With `triggers`, a "Next close" column says at what close each ticker's rules would give an order;
+ * it fills in when they arrive, and says "–" when there are none.
+ */
+export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boolean, triggers: Promise<TriggerReport | null> | null = null): void {
   const table = h(h(root, 'div', 'bt-wide'), 'table', 'bt-table');
   const head = h(h(table, 'thead'), 'tr');
-  for (const [text, num] of [['Ticker', 0], ['Weight', 1], ['Now', 0], ['Trades', 1], ['Won', 1], ['Average trade', 1]] as const) {
-    h(head, 'th', num ? 'bt-num' : undefined, text);
-  }
+  const columns = [['Ticker', 0], ['Weight', 1], ['Now', 0], ...(triggers ? [['Next close', 0] as const] : []), ['Trades', 1], ['Won', 1], ['Average trade', 1]] as const;
+  for (const [text, num] of columns) h(head, 'th', num ? 'bt-num' : undefined, text);
   const body = h(table, 'tbody');
+  const cells = new Map<string, HTMLElement>();
   for (const st of bt.run.states) {
     const closed = bt.run.trades.filter((t) => t.asset === st.name && t.reason !== 'open');
     const row = h(body, 'tr');
@@ -28,10 +33,25 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     const now = st.long ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash';
     const order = positionOrder(st, bt.spec.fill);
     h(row, 'td', undefined, order ? `${now}, ${order}` : now);
+    if (triggers) {
+      const cell = h(row, 'td', 'bt-next-close bt-next-close-waiting', '…');
+      cell.setAttribute('aria-busy', 'true');
+      cells.set(st.name, cell);
+    }
     h(row, 'td', 'bt-num', String(closed.length));
     h(row, 'td', 'bt-num', closed.length ? pct(closed.filter((t) => t.ret > 0).length / closed.length, 0) : '–');
     h(row, 'td', 'bt-num', closed.length ? signedPct(closed.reduce((a, t) => a + t.ret, 0) / closed.length) : '–');
   }
+  const fill = (report: TriggerReport | null) => {
+    for (const [name, cell] of cells) {
+      const { text, note } = report ? tickerText(report, name) : { text: '–', note: null };
+      cell.replaceChildren(text);
+      if (note) h(cell, 'span', 'bt-next-close-note', note);
+      cell.classList.remove('bt-next-close-waiting');
+      cell.removeAttribute('aria-busy');
+    }
+  };
+  triggers?.then(fill, () => fill(null));
 }
 
 export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean): void {
