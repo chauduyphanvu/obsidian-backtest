@@ -94,9 +94,12 @@ export interface NewFiles {
   create(path: string, text: string): Promise<unknown>;
 }
 
+/** A title with the characters Obsidian cannot use in a file name replaced by spaces. */
+const fileName = (title: string): string => title.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+
 /** Writes text to a dated file in `folder`, "<title> <date>", then "<title> <date> (2)" and on, and says where it went. */
 export async function saveDatedFile(files: NewFiles, folder: string, title: string, ext: string, text: string, notice: (text: string) => void): Promise<void> {
-  const clean = title.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clean = fileName(title);
   try {
     if (!(await files.exists(folder))) await files.createFolder(folder);
     const stem = `${folder}/${clean} ${isoDate(Date.now())}`;
@@ -116,4 +119,10 @@ export async function createWithFreeName(files: Pick<NewFiles, 'exists' | 'creat
   for (let n = 2; await files.exists(free); n++) free = `${path.slice(0, dot)}-${n}${path.slice(dot)}`;
   await files.create(free, text);
   return free;
+}
+
+/** Creates the note "<title>.md" in `folder` (made when it is missing), or with "-2", "-3" and on after the title when that is taken. Returns where it went. */
+export async function createNote(files: NewFiles, folder: string, title: string, text: string): Promise<string> {
+  if (!(await files.exists(folder))) await files.createFolder(folder);
+  return createWithFreeName(files, `${folder}/${fileName(title)}.md`, text);
 }

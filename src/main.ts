@@ -5,7 +5,8 @@ import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import { withoutQueries } from './data.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
-import { HOUR } from './format.ts';
+import { HOUR, isoDate } from './format.ts';
+import { makeForward, writeLog, type ForwardStart } from './forward.ts';
 import { GalleryModal } from './gallery-modal.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
@@ -17,12 +18,13 @@ import { OrdersModal } from './orders-view.ts';
 import { PriceStore } from './price-store.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
+import { renderForward, type ForwardHost } from './render-forward.ts';
 import { blockStateKey } from './render.ts';
 import { Results } from './results.ts';
 import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
 import { StrategyBlocks, type StrategyOptions } from './strategy-block.ts';
 import { SymbolLookup } from './symbols.ts';
-import { createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
+import { createNote, createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
 import { shutdownWorkers } from './worker-client.ts';
 import { BacktestSettingTab } from './settings.ts';
 import { defaultsFrom, normalizeSettings, type Settings } from './settings-core.ts';
@@ -81,6 +83,7 @@ export default class BacktestBlocks extends Plugin {
       const file = this.app.vault.getAbstractFileByPath(notePath);
       if (file instanceof TFile) this.properties.scheduleProperties(file);
     },
+    startForward: (input) => this.startForward(input),
   });
   /** The scan of the vault for today's orders. */
   private orders: ScanHost = {
@@ -111,6 +114,11 @@ export default class BacktestBlocks extends Plugin {
       const child = new MarkdownRenderChild(el);
       ctx.addChild(child);
       child.register(renderDashboard(el, source, this.dashboardHost()));
+    });
+    this.registerMarkdownCodeBlockProcessor('forward', (source, el, ctx) => {
+      const child = new MarkdownRenderChild(el);
+      ctx.addChild(child);
+      child.register(renderForward(el, source, this.forwardHost(el, ctx)));
     });
     this.registerView(VIEW_TYPE_LIVE, (leaf) => new LiveView(leaf, this.liveHost()));
     this.registerEditorExtension(liveEditorExtension(pokeLiveViews));
@@ -271,6 +279,48 @@ export default class BacktestBlocks extends Plugin {
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       now: () => Date.now(),
     };
+  }
+
+  /** What a `forward` block needs: its note, the frozen rules run like any block's, and the one write it can make, to its log. */
+  private forwardHost(el: HTMLElement, ctx: MarkdownPostProcessorContext): ForwardHost {
+    const file = () => {
+      const found = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+      return found instanceof TFile ? found : null;
+    };
+    return {
+      note: async () => {
+        const f = file();
+        return f ? { text: await this.app.vault.read(f), line: ctx.getSectionInfo(el)?.lineStart } : null;
+      },
+      run: (source, force) => this.results.runSource(source, { force }),
+      append: async (rows, through) => {
+        const f = file();
+        if (!f) return { ok: false, message: 'This note can no longer be found, so nothing was written.' };
+        // The block's line is asked for again now: the note may have moved it since it was drawn.
+        const written = await writeLog((edit) => this.app.vault.process(f, edit), ctx.getSectionInfo(el)?.lineStart, rows, through, Date.now());
+        if (written.ok) new Notice(written.added > 0 ? `Added ${written.added} ${written.added === 1 ? 'bar' : 'bars'} to the log.` : 'The log is checked through the last bar.');
+        return written;
+      },
+      open: (target) => void this.app.workspace.openLinkText(target, ctx.sourcePath, false),
+    };
+  }
+
+  /** Writes a note for a forward test of the strategy to the "Forward" folder under the results folder, and opens it in a new tab. */
+  private async startForward(input: ForwardStart): Promise<void> {
+    const made = makeForward(input);
+    if (!made.ok) {
+      new Notice(made.message);
+      return;
+    }
+    const { vault } = this.app;
+    const files = { exists: (path: string) => vault.adapter.exists(path), createFolder: (path: string) => vault.createFolder(path), create: (path: string, text: string) => vault.create(path, text) };
+    try {
+      const path = await createNote(files, normalizePath(`${this.settings.snapshotFolder}/Forward`), `${input.name} forward test ${isoDate(input.started)}`, made.note);
+      new Notice(`Started a forward test in ${path}`);
+      void this.app.workspace.openLinkText(path, '', true);
+    } catch (e) {
+      new Notice(`Couldn't start the forward test: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   /** Writes text to a dated file in the results folder and says where it went. */

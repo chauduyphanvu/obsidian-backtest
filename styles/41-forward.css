@@ -1,0 +1,42 @@
+/* The forward test block: four tiles, then what they are compared with, the log and the frozen rules. */
+
+/* Four tiles in two columns, or in four once there is room, so none is left alone on a row. */
+.bt-fwd-tiles-box {
+  container-type: inline-size;
+  margin: 14px 0 8px;
+}
+.bt-fwd-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+@container (min-width: 480px) {
+  .bt-fwd-tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.bt-fwd-link {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.bt-fwd-log {
+  margin-top: 14px;
+}
+.bt-fwd-heading {
+  font-weight: var(--font-semibold);
+}
+.bt-fwd-log .bt-button {
+  margin-top: 2px;
+}
+
+/* One line for each bar where today's prices give other orders than the log; a long message wraps at any word. */
+.bt-fwd-revisions {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+.bt-fwd-revisions li {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
