@@ -1,5 +1,6 @@
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { DEFAULT_MODEL } from './llm.ts';
+import { DATA_SOURCES, type DataSource } from './types.ts';
 
 export interface Settings {
   /** Starting money for a run that does not set `capital`. */
@@ -11,9 +12,14 @@ export interface Settings {
   commission: string;
   /** A yearly rate or a yield ticker, such as "4%" or "^IRX". */
   cashRate: string;
-  dataSource: 'yahoo' | 'binance';
+  dataSource: DataSource;
   /** How long saved prices count as fresh. */
   cacheHours: number;
+  /** Names of the secrets in Obsidian's keychain that hold the Tiingo and FRED API keys; the keys themselves are never saved here. */
+  tiingoSecret: string;
+  fredSecret: string;
+  /** Load a US ticker from Tiingo when Yahoo fails and its saved copy is old or missing. */
+  tiingoFallback: boolean;
   /** Save each result's figures to the note's properties. */
   writeProperties: boolean;
   /** Vault path of the "Today's orders" note; empty for none. */
@@ -46,6 +52,9 @@ export const DEFAULT_SETTINGS: Settings = {
   cashRate: '0%',
   dataSource: 'yahoo',
   cacheHours: 6,
+  tiingoSecret: '',
+  fredSecret: '',
+  tiingoFallback: false,
   writeProperties: false,
   ordersNote: '',
   snapshotFolder: 'Backtests',
@@ -123,7 +132,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export function normalizeSettings(saved: unknown): Settings {
   const given = isObject(saved) ? saved : {};
   const d = DEFAULT_SETTINGS;
-  const text = (key: 'ordersNote' | 'llmBaseUrl' | 'llmModel' | 'llmSecret'): string => (typeof given[key] === 'string' ? given[key].trim() : d[key]);
+  const text = (key: 'ordersNote' | 'llmBaseUrl' | 'llmModel' | 'llmSecret' | 'tiingoSecret' | 'fredSecret'): string => (typeof given[key] === 'string' ? given[key].trim() : d[key]);
   const readable = (key: TextKey): string => (typeof given[key] === 'string' && validateSetting(key, given[key]) === null ? given[key].trim() : d[key]);
   const hours = given.cacheHours;
   const folder = typeof given.snapshotFolder === 'string' ? given.snapshotFolder.trim() : '';
@@ -133,8 +142,11 @@ export function normalizeSettings(saved: unknown): Settings {
     slippage: readable('slippage'),
     commission: readable('commission'),
     cashRate: readable('cashRate'),
-    dataSource: given.dataSource === 'yahoo' || given.dataSource === 'binance' ? given.dataSource : d.dataSource,
+    dataSource: (DATA_SOURCES as readonly unknown[]).includes(given.dataSource) ? (given.dataSource as DataSource) : d.dataSource,
     cacheHours: typeof hours === 'number' && Number.isFinite(hours) ? Math.min(CACHE_HOURS_MAX, Math.max(CACHE_HOURS_MIN, Math.round(hours))) : d.cacheHours,
+    tiingoSecret: text('tiingoSecret'),
+    fredSecret: text('fredSecret'),
+    tiingoFallback: typeof given.tiingoFallback === 'boolean' ? given.tiingoFallback : d.tiingoFallback,
     writeProperties: typeof given.writeProperties === 'boolean' ? given.writeProperties : d.writeProperties,
     ordersNote: text('ordersNote'),
     snapshotFolder: folder || d.snapshotFolder,
