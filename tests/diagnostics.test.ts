@@ -124,7 +124,7 @@ test('the adjusted-price warning only applies to Yahoo prices', () => {
 test('parameter problems point at the value, the name or the range', () => {
   const read = (lines: string[]) => checked(lines).filter((d) => !d.message.startsWith('Unknown name')).map((d) => at(lines, d));
   const rule = 'buy when close > sma(fast)';
-  assert.deepEqual(read(['universe: SPY', 'fast = abc', rule]), [[1, 7, 10, 'error', 'abc']]);
+  assert.deepEqual(read(['universe: SPY', 'fast = 50 in', rule]), [[1, 7, 12, 'error', '50 in']]);
   assert.deepEqual(read(['universe: SPY', 'fast = 50 in 100..20', rule]), [[1, 13, 20, 'error', '100..20']]);
   assert.deepEqual(read(['universe: SPY', 'fast = 5 in 20..100', rule]), [[1, 7, 8, 'error', '5']]);
   assert.deepEqual(read(['universe: SPY', 'fast = 50 in 20..100 step 0', rule]), [[1, 26, 27, 'error', '0']]);
@@ -141,11 +141,14 @@ test('a parameter used as the wrong kind of value is underlined where it is used
 });
 
 test('a bad parameter also leaves its uses unknown, each underlined once', () => {
-  const lines = ['universe: SPY', 'fast = abc', 'buy when close > sma(fast)'];
+  const lines = ['universe: SPY', 'fast = 50 in', 'buy when close > sma(fast)'];
   assert.deepEqual(checked(lines).map((d) => at(lines, d)), [
-    [1, 7, 10, 'error', 'abc'],
+    [1, 7, 12, 'error', '50 in'],
     [2, 21, 25, 'error', 'fast'],
   ]);
+  // A definition with a mistake in it is reported once, on its own line, and its uses say nothing more.
+  const defined = ['universe: SPY', 'fast = abc', 'buy when close > fast and fast < 1'];
+  assert.deepEqual(checked(defined).map((d) => at(defined, d)), [[1, 7, 10, 'error', 'abc']]);
 });
 
 test('results come in line order, then column order, errors before warnings', () => {

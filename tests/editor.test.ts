@@ -86,11 +86,11 @@ test('setting values', () => {
 });
 
 test('inside a rule: series, functions and words', () => {
-  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'column', 'crosses above', 'crosses below']);
-  assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev', 'stoch_k', 'stoch_d', 'supertrend', 'supertrend_up', 'slope']);
+  assert.deepEqual(labels([], 'buy when c'), ['close', 'cci', 'correl', 'count', 'cmf', 'column', 'crosses', 'crosses above', 'crosses below']);
+  assert.deepEqual(labels([], 'buy when close > s'), ['sma', 'stdev', 'stoch_k', 'stoch_d', 'supertrend', 'supertrend_up', 'slope', 'sum', 'streak', 'sqrt']);
   assert.equal(complete(BLOCK, [], 'buy when close > sm')!.items[0].insert, 'sma(');
   assert.deepEqual(labels([], 'buy when close > sma(h'), ['high', 'highest', 'hma']);
-  assert.deepEqual(labels(['buy when close > 1'], '   or rs'), ['rsi']);
+  assert.deepEqual(labels(['buy when close > 1'], '   or rs'), ['rsi', 'rsquared']);
   assert.deepEqual(labels([], 'buy '), ['when']);
   assert.deepEqual(labels([], 'sell when close crosses '), ['above', 'below']);
   // Nothing while typing a number, after a finished word, or outside a rule.
@@ -161,7 +161,7 @@ test('completions: position values in sell rules only, calendar values and param
   assert.deepEqual(labels(['sell when close > 1'], '  or en', V2), ['entry price', 'entries made']);
   assert.equal(labels(['buy when close > 1'], '  or en', V2), null);
   assert.deepEqual(labels([], 'buy when month_', V2), ['month_start', 'month_end']);
-  assert.deepEqual(labels([], 'buy when we', V2), ['weekday']);
+  assert.deepEqual(labels([], 'buy when we', V2), ['weekday', 'week_start', 'week_end']);
   const fast = complete(V2, [], 'buy when close > sma(fa')!.items;
   assert.deepEqual(fast.map((i) => [i.label, i.detail]), [['fast', 'parameter: 50 in 20..100 step 10']]);
   assert.deepEqual(labels([], 'hold: top 3 by ro', V2), ['roc']);

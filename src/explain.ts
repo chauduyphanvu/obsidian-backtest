@@ -3,7 +3,7 @@
 // same prices, so each value shown is the one the run used. Pure data; render-trades.ts draws it.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { findPos, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
+import { findPos, isBool, ownColumns, walk, wholeParts, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import { barAt, commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import { DAY, fixed, isIntraday, minus, pair, places, price, shareCount, stamp, ungroupedOrdinal, ungroupedPlural } from './format.ts';
@@ -93,7 +93,7 @@ const share = (x: number) => `${minus(Number((x * 100).toPrecision(10)).toLocale
 /** A return or a rate, always with two decimals: +6.00%. */
 const percent = (x: number) => `${x > 0 ? '+' : ''}${minus((x * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}%`;
 
-export const OPS: Record<Exclude<CmpOp, 'xup' | 'xdn'>, string> = { '>': '>', '<': '<', '>=': '≥', '<=': '≤', '==': '=', '!=': '≠' };
+export const OPS: Record<Exclude<CmpOp, 'xup' | 'xdn' | 'xany'>, string> = { '>': '>', '<': '<', '>=': '≥', '<=': '≤', '==': '=', '!=': '≠' };
 
 /** One trade's explanation, worked out on demand. */
 export function explainTrade(bt: Backtest, trade: Trade): Explanation {
@@ -301,6 +301,7 @@ class Explainer {
     let k = 0;
     walk(e, (x) => texts.set(x, written.parts[k++] ?? ''));
     const text = (x: Expr) => texts.get(x) || '';
+    const wholes = wholeParts(e, written);
     const at = (x: Expr, j: number) => (j < 0 ? NaN : findPos(x) ? this.ev.compile(x, asset)(j, pos) : this.ev.eval(x, asset)[j]);
     const percentText = (s: string) => s.trim().endsWith('%') || this.bt.spec.params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
     // A number written out, such as 30, 5% or -2, needs no value beside it.
@@ -312,7 +313,19 @@ class Explainer {
         const pct = percentText(text(x.a)) || percentText(text(x.b));
         const [a, b] = pair(at(x.a, i), at(x.b, i), pct, UNKNOWN_PLACES);
         let out: string;
-        if (x.op === 'xup' || x.op === 'xdn') {
+        const truth = (y: Expr) => {
+          const v = at(y, i);
+          return y.k === 'bool' ? text(y) : `${text(y)} ${Number.isNaN(v) ? 'is unknown' : v === 1 ? 'holds' : 'does not hold'}`;
+        };
+        if (x.op === 'xany') {
+          const [va, vb, pa, pb] = [at(x.a, i), at(x.b, i), at(x.a, i - 1), at(x.b, i - 1)];
+          const [fa, fb] = pair(pa, pb, pct, UNKNOWN_PLACES);
+          const now = Number.isNaN(va) || Number.isNaN(vb) ? 'is unknown against' : va > vb ? 'is above' : va < vb ? 'is below' : 'is equal to';
+          const then = Number.isNaN(pa) || Number.isNaN(pb) ? 'unknown' : pa > pb ? 'above' : pa < pb ? 'below' : 'equal to';
+          out = `${side(x.a, a)} ${now} ${side(x.b, b)}; the bar before it was ${fa}, ${then} ${fb}`;
+        } else if (isBool(x.a) && isBool(x.b)) {
+          out = `${truth(x.a)} ${OPS[x.op as keyof typeof OPS]} ${truth(x.b)}`;
+        } else if (x.op === 'xup' || x.op === 'xdn') {
           const up = x.op === 'xup';
           const [va, vb, pa, pb] = [at(x.a, i), at(x.b, i), at(x.a, i - 1), at(x.b, i - 1)];
           const [fa, fb] = pair(pa, pb, pct, UNKNOWN_PLACES);
@@ -320,7 +333,7 @@ class Explainer {
           const then = Number.isNaN(pa) || Number.isNaN(pb) ? 'unknown' : (up ? pa <= pb : pa >= pb) ? (up ? 'at or below' : 'at or above') : up ? 'above' : 'below';
           out = `${side(x.a, a)} ${now} ${side(x.b, b)}; the bar before it was ${fa}, ${then} ${fb}`;
         } else {
-          out = `${side(x.a, a)} ${OPS[x.op]} ${side(x.b, b)}`;
+          out = `${side(x.a, a)} ${OPS[x.op as keyof typeof OPS]} ${side(x.b, b)}`;
         }
         const reads = this.reads(x, asset, i);
         return reads ? `${out}; ${reads}` : out;
@@ -338,13 +351,14 @@ class Explainer {
       const result = outcome(at(x, i));
       if (x.k === 'logic') {
         const parts: Expr[] = [];
-        const flat = (y: Expr): void => {
-          if (y.k === 'logic' && y.op === x.op) {
+        // A definition's name, or a `between`, is one part, not opened into the chain it sits in.
+        const flat = (y: Expr, top = false): void => {
+          if (y.k === 'logic' && y.op === x.op && (top || !wholes.has(y))) {
             flat(y.a);
             flat(y.b);
           } else parts.push(y);
         };
-        flat(x);
+        flat(x, true);
         rows.push(row(label, x.op === 'and' ? 'all of these must hold' : 'one of these is enough', depth, result, true));
         for (const p of parts) visit(p, depth + 1, text(p));
       } else if (x.k === 'not') {
@@ -542,7 +556,12 @@ class Explainer {
       money += this.entries[k].money;
       shares += this.entries[k].shares;
     }
-    return { entryIdx: barAt(this.bars.t, first.t), entryPrice: made === 1 ? first.price : money / shares, lastPrice: this.entries[made - 1].price, entries: made };
+    return { entryIdx: barAt(this.bars.t, first.t), entryPrice: made === 1 ? first.price : money / shares, lastPrice: this.entries[made - 1].price, entries: made, ...this.sidePos };
+  }
+
+  /** What the rules read of the position's side and fill: that it is short, and that it filled at a close. */
+  private get sidePos(): Pick<PosState, 'short' | 'atClose'> {
+    return { ...(this.short ? { short: true as const } : {}), ...(this.atClose ? { atClose: true as const } : {}) };
   }
 
   /** After a close fill at `filled`: that it is the close the decision read at `read`, or which close it read instead. */
@@ -625,7 +644,7 @@ class Explainer {
   /** The position as its sell rule reads it: every entry made. */
   private position(): PosState {
     if (this.entries.length > 1) return this.positionBefore(this.entries.length);
-    return { entryIdx: barAt(this.bars.t, this.trade.entryT), entryPrice: this.trade.entryPrice };
+    return { entryIdx: barAt(this.bars.t, this.trade.entryT), entryPrice: this.trade.entryPrice, ...this.sidePos };
   }
 
   /**

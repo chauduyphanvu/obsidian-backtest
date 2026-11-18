@@ -1,5 +1,5 @@
 import { extractBlocks, type Block } from './blocks.ts';
-import { PARAM_LINE, RESERVED } from './dsl.ts';
+import { isParamValue, PARAM_LINE, RESERVED } from './dsl.ts';
 
 /** The declared value at the start of what follows "=": a number and its optional "%", the way dsl.ts reads the first part of a parameter's value. */
 const DECLARED = /^(-?(?:\d+(?:\.\d+)?|\.\d+))(\s*%)?/;
@@ -19,7 +19,8 @@ function rewriteLine(line: string, wanted: Map<string, number>): string {
   const code = comment ? line.slice(0, comment.index! + comment[1].length) : line;
   const text = code.trim();
   const m = text.match(PARAM_LINE);
-  if (!m || RESERVED.has(m[1].toLowerCase())) return line;
+  // A definition such as `half = 0.5*close` may start with a number, but has no value of its own to set.
+  if (!m || RESERVED.has(m[1].toLowerCase()) || !isParamValue(m[2])) return line;
   const value = wanted.get(m[1].toLowerCase());
   if (value === undefined || !Number.isFinite(value)) return line;
   const declared = m[2].match(DECLARED);

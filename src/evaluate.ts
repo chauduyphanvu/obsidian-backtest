@@ -1,4 +1,4 @@
-import { children, findPos, ruleExprs, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
+import { children, findPos, isCross, ruleExprs, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { priceMemo } from './price-memo.ts';
 import type { Bars } from './types.ts';
@@ -56,7 +56,7 @@ export const rowEnds = (b: Bars): number[] => (b.unpriced || b.values ? ind.valu
 const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];
 
 /** Functions that weigh bars by volume, and so mean nothing on prices that have none. */
-const NEEDS_VOLUME = ['mfi', 'obv', 'vwap'];
+const NEEDS_VOLUME = ['mfi', 'obv', 'vwap', 'cmf'];
 
 /**
  * The Evaluator a spec's rules are read with, by the run and by everything that explains or redoes it.
@@ -183,6 +183,10 @@ export interface PosState {
   /** Absent for a position bought in one entry, whose last entry is its only one. */
   lastPrice?: number;
   entries?: number;
+  /** Absent for a long position. */
+  short?: true;
+  /** Present with `fill: close`: the first entry filled at the close of its bar, so that bar's range came before the fill. */
+  atClose?: true;
 }
 
 /** A rule evaluated one bar at a time: 1, 0 or NaN at bar `i`, given the open position (null when flat). */
@@ -221,6 +225,8 @@ function compare(op: CmpOp, a: number, b: number, pa: number, pb: number): numbe
       return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : a > b && pa <= pb ? 1 : 0;
     case 'xdn':
       return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : a < b && pa >= pb ? 1 : 0;
+    case 'xany':
+      return Number.isNaN(pa) || Number.isNaN(pb) ? NaN : (a > b && pa <= pb) || (a < b && pa >= pb) ? 1 : 0;
   }
 }
 
@@ -228,6 +234,23 @@ function logic(op: 'and' | 'or', a: number, b: number): number {
   if (op === 'and') return a === 0 || b === 0 ? 0 : a === 1 && b === 1 ? 1 : NaN;
   return a === 1 || b === 1 ? 1 : a === 0 && b === 0 ? 0 : NaN;
 }
+
+/** `sqrt`, `log` or `exp` of one value; unknown where the result is not a number, as the root of a negative or the log of 0 or less, or is too large to hold. */
+function unary(fn: 'sqrt' | 'log' | 'exp', x: number): number {
+  switch (fn) {
+    case 'sqrt':
+      return x < 0 ? NaN : Math.sqrt(x);
+    case 'log':
+      return x > 0 ? Math.log(x) : NaN;
+    case 'exp': {
+      const y = Math.exp(x);
+      return y === Infinity ? NaN : y;
+    }
+  }
+}
+
+/** `if(condition, a, b)` at one bar: `a` where the condition holds, `b` where it does not, unknown where it is. */
+const choose = (condition: number, a: number, b: number): number => (Number.isNaN(condition) ? NaN : condition === 1 ? a : b);
 
 function calendar(name: CalName, t: number[]): number[] {
   const each = (fn: (d: Date) => number) => t.map((x) => fn(new Date(x)));
@@ -244,6 +267,24 @@ function calendar(name: CalName, t: number[]): number[] {
       return ind.periodStarts(t, ind.monthKey);
     case 'month_end':
       return ind.periodEnds(t, ind.monthKey);
+    case 'quarter':
+      return each((d) => Math.floor(d.getUTCMonth() / 3) + 1);
+    case 'week_start':
+      return ind.periodStarts(t, ind.weekKey);
+    case 'week_end':
+      return ind.periodEnds(t, ind.weekKey);
+    case 'quarter_start':
+      return ind.periodStarts(t, ind.quarterKey);
+    case 'quarter_end':
+      return ind.periodEnds(t, ind.quarterKey);
+    case 'year_start':
+      return ind.periodStarts(t, ind.yearKey);
+    case 'year_end':
+      return ind.periodEnds(t, ind.yearKey);
+    case 'trading_day':
+      return ind.tradingDay(t);
+    case 'trading_days_left':
+      return ind.tradingDaysLeft(t);
   }
 }
 
@@ -297,11 +338,22 @@ export class Evaluator {
         if (e.name === 'bars_held') return (i, p) => (p ? i - p.entryIdx : NaN);
         if (e.name === 'last_entry_price') return (_, p) => (p ? (p.lastPrice ?? p.entryPrice) : NaN);
         if (e.name === 'entries_made') return (_, p) => (p ? (p.entries ?? 1) : NaN);
+        if (e.name === 'position_return') {
+          const c = this.bars(asset).c;
+          return (i, p) => (p ? (p.short ? 1 - c[i] / p.entryPrice : c[i] / p.entryPrice - 1) : NaN);
+        }
+        if (e.name === 'highest_since_entry' || e.name === 'lowest_since_entry') return this.sinceEntry(asset, e.name === 'highest_since_entry');
         return (_, p) => (p ? p.entryPrice : NaN);
       case 'math': {
         const a = this.compile(e.args[0], asset);
         if (e.fn === 'abs') return (i, p) => Math.abs(a(i, p));
+        const fn = e.fn;
+        if (fn === 'sqrt' || fn === 'log' || fn === 'exp') return (i, p) => unary(fn, a(i, p));
         const b = this.compile(e.args[1], asset);
+        if (fn === 'if') {
+          const c = this.compile(e.args[2], asset);
+          return (i, p) => choose(a(i, p), b(i, p), c(i, p));
+        }
         return e.fn === 'min' ? (i, p) => Math.min(a(i, p), b(i, p)) : (i, p) => Math.max(a(i, p), b(i, p));
       }
       case 'bin': {
@@ -315,7 +367,7 @@ export class Evaluator {
       case 'cmp': {
         const [a, b, op] = [this.compile(e.a, asset), this.compile(e.b, asset), e.op];
         // A cross reads the previous bar with the same position, so "bars held" is one less there.
-        const crosses = op === 'xup' || op === 'xdn';
+        const crosses = isCross(op);
         return (i, p) => compare(op, a(i, p), b(i, p), crosses && i > 0 ? a(i - 1, p) : NaN, crosses && i > 0 ? b(i - 1, p) : NaN);
       }
       case 'logic': {
@@ -329,6 +381,32 @@ export class Evaluator {
     }
     // The parser keeps position values out of lags, "of" and indicator inputs.
     throw new Error(`Position values can't be used inside ${e.k}`);
+  }
+
+  /**
+   * The highest high (or lowest low) since the position's first entry, read at bar `i`: the entry's price before slippage, then
+   * each bar's range from the bar it filled at, whose range counts only when it filled at that bar's open. It is what the
+   * trailing stop's high-water mark holds. A position's bars are read one after another, so it keeps the running value.
+   */
+  private sinceEntry(asset: string, highest: boolean): BarRule {
+    const bars = this.bars(asset);
+    const range = highest ? bars.h : bars.l;
+    const pick = highest ? Math.max : Math.min;
+    // The value at each bar of the position, kept so a cross reading the bar before does not start over from the entry.
+    const kept = new Array<number>(range.length);
+    let [entry, atClose, first, upto, base] = [-1, false, 0, -1, NaN];
+    return (i, p) => {
+      if (!p || i < p.entryIdx) return NaN;
+      if (p.entryIdx !== entry || !!p.atClose !== atClose) {
+        [entry, atClose] = [p.entryIdx, !!p.atClose];
+        first = entry + (atClose ? 1 : 0);
+        upto = first - 1;
+        base = (atClose ? bars.c : bars.o)[entry];
+      }
+      for (let j = upto + 1; j <= i; j++) kept[j] = pick(j === first ? base : kept[j - 1], range[j]);
+      upto = Math.max(upto, i);
+      return i < first ? base : kept[i];
+    };
   }
 
   /** The index of `other`'s bar that `of` reads for `asset`'s bar `i`; -1 when none had ended. */
@@ -390,7 +468,13 @@ export class Evaluator {
       case 'math': {
         const a = this.eval(e.args[0], asset);
         if (e.fn === 'abs') return each((i) => Math.abs(a[i]));
+        const fn = e.fn;
+        if (fn === 'sqrt' || fn === 'log' || fn === 'exp') return each((i) => unary(fn, a[i]));
         const b = this.eval(e.args[1], asset);
+        if (fn === 'if') {
+          const c = this.eval(e.args[2], asset);
+          return each((i) => choose(a[i], b[i], c[i]));
+        }
         // Math.min and Math.max already give NaN when either side is NaN.
         return each((i) => (e.fn === 'min' ? Math.min(a[i], b[i]) : Math.max(a[i], b[i])));
       }
@@ -498,6 +582,8 @@ export class Evaluator {
         return ind.correl(this.readsEarly(e.src!, asset) ? ind.lag(bars.c, 1) : bars.c, src, a);
       case 'bars_since':
         return ind.barsSince(src);
+      case 'count':
+        return ind.count(src, a);
       case 'stoch_k':
         return ind.stochK(bars.h, bars.l, bars.c, a, b);
       case 'stoch_d':
@@ -529,6 +615,30 @@ export class Evaluator {
         return ind.supertrend(bars.h, bars.l, bars.c, a, b).line;
       case 'supertrend_up':
         return ind.supertrend(bars.h, bars.l, bars.c, a, b).up;
+      case 'sum':
+        return ind.sum(src, a);
+      case 'dema':
+        return ind.dema(src, a);
+      case 'tema':
+        return ind.tema(src, a);
+      case 'kama':
+        return ind.kama(src, a, b, c);
+      case 'aroon_up':
+        return ind.aroonUp(bars.h, a);
+      case 'aroon_down':
+        return ind.aroonDown(bars.l, a);
+      case 'psar':
+        return ind.psar(bars.h, bars.l, bars.c, a, b);
+      case 'cmf':
+        return ind.cmf(bars.h, bars.l, bars.c, bars.v, a);
+      case 'linreg':
+        return ind.linreg(src, a);
+      case 'rsquared':
+        return ind.rsquared(src, a);
+      case 'efficiency':
+        return ind.efficiency(src, a);
+      case 'streak':
+        return ind.streak(src);
     }
     throw new Error(`Unknown function ${e.fn}`);
   }

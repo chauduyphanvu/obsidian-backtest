@@ -1,7 +1,7 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
-import { MAX_PERIOD, paramValues, parseSpec, ruleExprs, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
+import { isCross, MAX_PERIOD, paramValues, parseSpec, ruleExprs, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
@@ -9,8 +9,13 @@ const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w
 const MIN_LOOKBACK = 250;
 /** Recursive averages (EMA, RSI, ATR) depend on where they started; this many periods makes that negligible. */
 const SETTLE = 5;
-/** How far back before the run `bars_since` looks for the last bar its condition held, on top of what the condition itself needs. */
-const BARS_SINCE_REACH = 250;
+/**
+ * How far back before the run a function that depends on every bar before it reads, on top of what its input needs: the last
+ * bar `bars_since`'s condition held, the start of a `streak`, and the trend `psar` began in.
+ */
+const REACH = 250;
+/** Before a run's first bar, the data must begin by this much for `trading_day` to be known there: a month, and a week more for the days the month before may lack. */
+const MONTH_REACH = 38 * DAY;
 /** Daily and longer bars skip weekends and holidays, so a run of trading bars spans more calendar time. */
 const NON_TRADING = 1.6;
 
@@ -19,10 +24,11 @@ type Widest = (value: number, param: string | null | undefined, max?: number) =>
 
 /**
  * Bars of history an expression reads before its current bar: nested windows add, and so do lags. With `fill: close`,
- * correl may take this ticker's closes a bar early (evaluate.ts), which needs one bar more.
+ * correl may take this ticker's closes a bar early (evaluate.ts), which needs one bar more. `month` is the bars of the
+ * run's interval that reach back far enough for `trading_day` to be known (see lookbackBars).
  */
-function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
-  const back = (x: Expr) => exprLookback(x, w, closeFill);
+function exprLookback(e: Expr, w: Widest, closeFill: boolean, month: number): number {
+  const back = (x: Expr) => exprLookback(x, w, closeFill, month);
   switch (e.k) {
     case 'num':
     case 'bool':
@@ -31,7 +37,8 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
     case 'pos':
       return 0;
     case 'cal':
-      return e.name === 'month_start' ? 1 : 0;
+      if (e.name === 'trading_day') return month;
+      return e.name.endsWith('_start') ? 1 : 0;
     case 'ind': {
       const src = e.src ? back(e.src) : 0;
       const [a, b, c] = e.args.map((v, k) => w(v, e.params?.[k], MAX_PERIOD));
@@ -71,7 +78,23 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
         case 'keltner_lower':
           return Math.max(src + SETTLE * a, 1 + SETTLE * c);
         case 'bars_since':
-          return src + BARS_SINCE_REACH;
+          return src + REACH;
+        case 'dema':
+          return src + 2 * SETTLE * a;
+        case 'tema':
+          return src + 3 * SETTLE * a;
+        // Its slowest smoothing, (2 / (slow + 1)) squared, has a time constant of ((slow + 1) / 2) squared bars: ten of
+        // them, as SETTLE periods of an ema are, capped where the longest ema's settling is.
+        case 'kama':
+          return src + a + 1 + Math.min(Math.ceil(2 * SETTLE * ((c + 1) / 2) ** 2), SETTLE * MAX_PERIOD);
+        case 'aroon_up':
+        case 'aroon_down':
+        case 'efficiency':
+          return src + a + 1;
+        case 'streak':
+          return src + REACH;
+        case 'psar':
+          return REACH;
         default:
           return src + a;
       }
@@ -82,7 +105,7 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean): number {
     case 'logic':
       return Math.max(back(e.a), back(e.b));
     case 'cmp':
-      return Math.max(back(e.a), back(e.b)) + (e.op === 'xup' || e.op === 'xdn' ? 1 : 0);
+      return Math.max(back(e.a), back(e.b)) + (isCross(e.op) ? 1 : 0);
     case 'neg':
     case 'not':
     case 'of':
@@ -107,7 +130,9 @@ export function lookbackBars(spec: Spec): number {
   let bars = MIN_LOOKBACK;
   const exprs = Object.values(spec.rules).flatMap(ruleExprs);
   if (spec.rank) exprs.push(spec.rank.by);
-  for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest, spec.fill === 'close'));
+  const step = Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)];
+  const month = Math.ceil(MONTH_REACH / (step * (step >= DAY ? NON_TRADING : 1)));
+  for (const e of exprs) bars = Math.max(bars, exprLookback(e, widest, spec.fill === 'close', month));
   for (const st of Object.values(spec.stops)) {
     for (const level of [st.stopLoss, st.trailingStop, st.takeProfit]) if (level?.k === 'atr') bars = Math.max(bars, 1 + SETTLE * widest(level.n, level.nParam, MAX_PERIOD));
   }

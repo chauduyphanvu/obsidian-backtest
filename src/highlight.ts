@@ -1,4 +1,4 @@
-import { CALENDAR, INDICATORS, PARAM_LINE, POSITION, RESERVED, SERIES, SETTINGS } from './dsl.ts';
+import { CALENDAR, INDICATORS, isParamValue, PARAM_LINE, POSITION, RESERVED, SERIES, SETTINGS } from './dsl.ts';
 
 export type TokenKind = 'key' | 'keyword' | 'function' | 'series' | 'number' | 'ticker' | 'value' | 'operator' | 'comment' | 'param';
 
@@ -8,14 +8,17 @@ export interface Token {
   kind: TokenKind;
 }
 
-/** What a line is, read the way the parser reads it. */
-export type LineKind = 'blank' | 'for' | 'rule' | 'setting' | 'param' | 'continuation' | 'other';
+/** What a line is, read the way the parser reads it. A `define` line is `name = expression`, as a `param` line is `name = number`. */
+export type LineKind = 'blank' | 'for' | 'rule' | 'setting' | 'param' | 'define' | 'continuation' | 'other';
+
+/** Whether the line after one of this kind can continue it: a rule or a definition goes on over several lines. */
+export const continues = (kind: LineKind): boolean => kind === 'rule' || kind === 'continuation' || kind === 'define';
 
 /** The words a rule starts with, before `when`. */
 export const RULE_HEADS = ['buy', 'sell', 'add', 'short', 'cover'];
-const KEYWORDS = ['buy', 'sell', 'short', 'cover', 'when', 'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of'];
+const KEYWORDS = ['buy', 'sell', 'short', 'cover', 'when', 'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'between', 'within', 'for'];
 const CONSTANTS = ['true', 'false', 'always', 'never'];
-const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs'];
+const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'sqrt', 'log', 'exp', 'if'];
 /** Words that read like series: calendar values and the one-word spellings of position values. */
 const VALUES: string[] = [...CALENDAR, ...Object.keys(POSITION)];
 /** The words that must follow the first word of a position value written in several words. */
@@ -24,6 +27,9 @@ const PAIRS = new Map<string, RegExp>([
   ['entry', /^\s+price\b/i],
   ['entries', /^\s+made\b/i],
   ['last', /^\s+entry\s+price\b/i],
+  ['highest', /^\s+since\s+entry\b/i],
+  ['lowest', /^\s+since\s+entry\b/i],
+  ['position', /^\s+return\b/i],
 ]);
 /** Settings whose values are tickers. */
 export const TICKER_SETTINGS = ['universe', 'symbol', 'benchmark', 'cash rate'];
@@ -53,10 +59,16 @@ export function settingKey(text: string): string | null {
   return key && SETTINGS.includes(key) ? key : null;
 }
 
+/** The name a `name = value` line gives and whether it is a parameter's (a number, maybe with a range) or a definition's; null for any other line. */
+function assignment(line: string): { name: string; param: boolean } | null {
+  const m = code(line).match(PARAM_LINE);
+  return m && !RESERVED.has(m[1].toLowerCase()) ? { name: m[1], param: isParamValue(m[2]) } : null;
+}
+
 /** The parameter a line declares, or null. */
 export function paramName(line: string): string | null {
-  const m = code(line).match(PARAM_LINE);
-  return m && !RESERVED.has(m[1].toLowerCase()) ? m[1] : null;
+  const a = assignment(line);
+  return a?.param ? a.name : null;
 }
 
 /** The parameters a block declares, with the text after "=". */
@@ -67,6 +79,24 @@ export function declaredParams(lines: string[]): { name: string; value: string }
   });
 }
 
+/** The definitions a block makes, with the expression after "=" as one line, a continuation's lines joined by a space. */
+export function declaredDefinitions(lines: string[]): { name: string; value: string }[] {
+  const out: { name: string; value: string }[] = [];
+  let open = false;
+  for (const line of lines) {
+    const a = assignment(line);
+    if (a && !a.param) {
+      out.push({ name: a.name, value: code(line).match(PARAM_LINE)![2] });
+      open = true;
+    } else if (open && lineKind(line, true) === 'continuation') {
+      out[out.length - 1].value += ` ${code(line)}`;
+    } else {
+      open = false;
+    }
+  }
+  return out;
+}
+
 /** `inRule` is whether the previous line was part of a rule, so this one can continue it. */
 export function lineKind(line: string, inRule: boolean): LineKind {
   const text = code(line);
@@ -74,8 +104,15 @@ export function lineKind(line: string, inRule: boolean): LineKind {
   if (/^for\s+.+:$/i.test(text)) return 'for';
   if (/^(buy|sell|add|short|cover)\s+when\b/i.test(text)) return 'rule';
   if (settingKey(text)) return 'setting';
-  if (paramName(text)) return 'param';
+  const a = assignment(text);
+  if (a) return a.param ? 'param' : 'define';
   return inRule ? 'continuation' : 'other';
+}
+
+/** Whether the tokens so far end in `for 3` or `within n`: the word that follows is the unit of a window. */
+function windowCount(out: Token[], line: string): boolean {
+  const [before, last] = [out[out.length - 2], out[out.length - 1]];
+  return !!before && before.kind === 'keyword' && ['for', 'within'].includes(line.slice(before.from, before.to).toLowerCase()) && (last.kind === 'number' || last.kind === 'param');
 }
 
 function expression(line: string, from: number, to: number, params: Set<string>, out: Token[]): void {
@@ -100,11 +137,14 @@ function expression(line: string, from: number, to: number, params: Set<string>,
       } else if (pair) {
         out.push({ from: start, to: end + pair[0].length, kind: 'series' });
         re.lastIndex = end + pair[0].length;
+      } else if ((word === 'bars' || word === 'bar') && windowCount(out, line)) {
+        out.push({ from: start, to: end, kind: 'keyword' });
       } else if (KEYWORDS.includes(word)) out.push({ from: start, to: end, kind: 'keyword' });
+      // A block's own name wins over a word the language took up later (dsl.ts LATER_WORDS); no name can be an older one.
+      else if (params.has(word)) out.push({ from: start, to: end, kind: 'param' });
       else if (CONSTANTS.includes(word)) out.push({ from: start, to: end, kind: 'value' });
       else if (FUNCTIONS.includes(word)) out.push({ from: start, to: end, kind: 'function' });
       else if ((SERIES as string[]).includes(word) || VALUES.includes(word)) out.push({ from: start, to: end, kind: 'series' });
-      else if (params.has(word)) out.push({ from: start, to: end, kind: 'param' });
       if (word === 'of') {
         const sym = line.slice(end, to).match(/^\s*([A-Za-z0-9^:/._=-]+)/);
         if (sym) {
@@ -145,12 +185,21 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
     const m = line.match(/^(\s*)(for)(\s+)(.+?)\s*:/i)!;
     out.push({ from: m[1].length, to: m[1].length + 3, kind: 'keyword' });
     const at = m[1].length + 3 + m[3].length;
-    out.push({ from: at, to: at + m[4].length, kind: m[4].toLowerCase() === 'all' ? 'keyword' : 'ticker' });
+    // One or more tickers, separated by commas.
+    for (const piece of m[4].matchAll(/[^,\s][^,]*/g)) {
+      const name = piece[0].trimEnd();
+      out.push({ from: at + piece.index!, to: at + piece.index! + name.length, kind: name.toLowerCase() === 'all' ? 'keyword' : 'ticker' });
+    }
   } else if (kind === 'rule' || kind === 'continuation') {
     // "add" is not a reserved word, so it is coloured only as the head of a rule.
     const head = kind === 'rule' ? line.match(/^(\s*)add\b/i) : null;
     if (head) out.push({ from: head[1].length, to: head[0].length, kind: 'keyword' });
     expression(line, head ? head[0].length : 0, end, names, out);
+  } else if (kind === 'define') {
+    const lead = line.length - line.trimStart().length;
+    const name = line.slice(lead).match(/^[A-Za-z_][A-Za-z0-9_]*/)![0];
+    out.push({ from: lead, to: lead + name.length, kind: 'key' });
+    expression(line, line.indexOf('=', lead + name.length) + 1, end, names, out);
   } else if (kind === 'param') {
     const lead = line.length - line.trimStart().length;
     const name = paramName(line)!;
@@ -195,14 +244,14 @@ export function lineKinds(lines: string[]): LineKind[] {
   let inRule = false;
   return lines.map((line) => {
     const kind = lineKind(line, inRule);
-    inRule = kind === 'rule' || kind === 'continuation';
+    inRule = continues(kind);
     return kind;
   });
 }
 
 /** Tokens for each line of a whole block. */
 export function tokenizeBlock(lines: string[]): Token[][] {
-  const params = declaredParams(lines).map((p) => p.name);
+  const params = [...declaredParams(lines), ...declaredDefinitions(lines)].map((p) => p.name);
   const kinds = lineKinds(lines);
   return lines.map((line, i) => tokenize(line, kinds[i], params));
 }

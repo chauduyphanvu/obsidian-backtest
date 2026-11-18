@@ -84,7 +84,9 @@ test('declaration errors point at the part that is wrong', () => {
   assert.deepEqual([step.from, step.to], [20, 21]);
   errorOf('x = 5 in 1..1000\nuniverse: SPY\nbuy when true', /This range has 1000 values. The most is 200/);
   errorOf('x = 5% in 1%..300% step 1%\nuniverse: SPY\nbuy when true', /This range has 300 values/);
-  errorOf('x = fast\nuniverse: SPY\nbuy when true', /Write a parameter as x = 50/);
+  errorOf('x = 5 in\nuniverse: SPY\nbuy when true', /Write a parameter as x = 50/);
+  // Any other value that is not a number is a definition, here of a name that does not exist.
+  errorOf('x = fast\nuniverse: SPY\nbuy when true', /Unknown name "fast"/);
   const reserved = errorOf('close = 5\nuniverse: SPY\nbuy when true', /"close" is a built-in name/);
   assert.deepEqual([reserved.from, reserved.to], [0, 5]);
   errorOf('universe: SPY\nfast = 2.5\nbuy when close > sma(fast)', /sma\(\): 2.5 is not a valid period/);

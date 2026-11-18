@@ -55,7 +55,8 @@ test('a comment is kept, with the spacing before it', () => {
   assert.equal(setParamValues('fast = 50 // fast = 50', { fast: 80 }), 'fast = 80 // fast = 50');
   assert.equal(setParamValues('fast = 50 in 20..100 # note', { fast: 80 }), 'fast = 80 in 20..100 # note');
   assert.equal(setParamValues('# fast = 50', { fast: 80 }), '# fast = 50');
-  assert.equal(setParamValues('fast = 50#x', { fast: 80 }), 'fast = 80#x');
+  // A # stuck to the number starts no comment, so the parser reads no parameter there and nothing is written.
+  assert.equal(setParamValues('fast = 50#x', { fast: 80 }), 'fast = 50#x');
 });
 
 test('tabs are kept', () => {
@@ -92,7 +93,8 @@ test('a value that is already there leaves the text exactly as it was', () => {
 
 test('lines that are not parameters are never changed', () => {
   const text = ['name: fast = 5', 'universe: SPY', 'buy when close > sma(fast) and x == 3', 'x = 3 == 4', 'for SPY:', 'stop loss: 8%'].join('\n');
-  assert.equal(setParamValues(text, { fast: 9, x: 9, name: 1, stop: 0.5 }), text.replace('x = 3 == 4', 'x = 9 == 4'));
+  // `x = 3 == 4` is a definition of a condition, so it has no value to write either.
+  assert.equal(setParamValues(text, { fast: 9, x: 9, name: 1, stop: 0.5 }), text);
 });
 
 test('words the language already uses are not parameters', () => {
