@@ -9,6 +9,8 @@ export interface StoreFiles {
   write(path: string, text: string): Promise<void>;
   mkdir(path: string): Promise<void>;
   remove(path: string): Promise<void>;
+  /** The files in a folder, by their paths. */
+  list(path: string): Promise<{ files: string[] }>;
 }
 
 export interface StoreOptions<T> {
@@ -127,6 +129,28 @@ export class JsonStore<T> {
     if (moving === null) return;
     await this.update(to, (current) => (current === null ? moving : this.o.merge(current, moving)));
     await this.delete(from);
+  }
+
+  /**
+   * Moves every record whose key starts with `from` to the key that starts with `to` instead, as `rename` does for one.
+   * A file is named by a hash of its key, so each file is read for the key it holds.
+   */
+  async renamePrefix(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    const keys = new Set([...this.entries].filter(([k, e]) => e.value !== null && k.startsWith(from)).map(([k]) => k));
+    const dir = this.o.normalize(this.o.dir);
+    if (await this.o.files.exists(dir)) {
+      for (const path of (await this.o.files.list(dir)).files) {
+        if (!path.endsWith('.json')) continue;
+        try {
+          const key = (JSON.parse(await this.o.files.read(path)) as { key?: unknown }).key;
+          if (typeof key === 'string' && key.startsWith(from)) keys.add(key);
+        } catch {
+          // Not a record: left alone.
+        }
+      }
+    }
+    for (const key of keys) await this.rename(key, to + key.slice(from.length));
   }
 
   /** Writes every record changed since it was last written. */

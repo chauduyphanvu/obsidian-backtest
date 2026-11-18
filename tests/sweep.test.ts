@@ -90,6 +90,10 @@ function result(params: SweepParam[], cagrs: (number | null)[]): SweepResult {
     after: null,
     trades: 1,
     error: cagrs[k] === null ? 'broken' : null,
+    trial: null,
+    perYear: null,
+    steps: 0,
+    blocks: null,
   }));
   return { params, points, tried: points.length, total: points.length, stopped: false };
 }

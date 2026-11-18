@@ -1224,6 +1224,7 @@ Layout of `src/`:
 - `jobs.ts`, `worker.ts`, `worker-client.ts`, `limits.ts`: backtests, sweeps and luck checks as jobs, the two background workers that run them (one for single backtests, one for sweeps and luck checks), the plugin's side of them, which starts the workers, sends them prices and stops them, and the limits on how large one backtest may be and how long it may run.
 - `overfit.ts`: the maths of the overfitting checks: the normal distribution, the deflated Sharpe ratio, and the probability of backtest overfitting by combinatorially symmetric cross-validation.
 - `ledger.ts`: each block's record of the variants it ran and the versions of its text, how two copies of a record merge, and the lines that changed between two versions.
+- `render-versions.ts`: the Versions section: each version of a block's text that was run, with its figures, the lines that changed from the one before, and putting an older one back.
 - `llm.ts`, `llm-modal.ts`: drafting.
 - `forward.ts`: forward tests: the note made from a strategy with the plugin defaults pinned in its text, reading its `forward` block and checking that the rules were not edited, the figures since the start against earlier stretches of the same length, and the log of orders with its appending and its comparison with today's prices.
 - `gallery.ts`, `gallery-modal.ts`, `csv-import.ts`, `csv-modal.ts`: the starter strategies and the CSV helper, each with its logic and its window.
