@@ -401,11 +401,16 @@ function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult
 
 const andList = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 
-/** What a random-timing try keeps from the strategy; names the commission and the entries only when it has them. */
-export function randomTimingWorks(spec: Pick<Backtest['spec'], 'commission' | 'entries'>): string {
-  const same = andList(['weights', 'costs', ...(spec.commission ? ['commission'] : []), 'slippage', ...(spec.entries ? ['entries'] : []), 'cash rate']);
+/**
+ * What a random-timing try keeps from the strategy; names the commission, the entries and the margin terms only when it
+ * has them, and each trade's side when it made `shorts`.
+ */
+export function randomTimingWorks(spec: Pick<Backtest['spec'], 'commission' | 'entries' | 'margin'>, shorts = false): string {
+  const borrows = spec.margin ? [...(shorts ? ['borrow fee'] : []), 'margin rate'] : [];
+  const same = andList(['weights', 'costs', ...(spec.commission ? ['commission'] : []), 'slippage', ...(spec.entries ? ['entries'] : []), 'cash rate', ...borrows]);
   const later = spec.entries ? ' A position built in entries keeps how many it made and puts the later ones the same number of bars after its first.' : '';
-  return `each try keeps how many trades each ticker made and how long each was held, with the same ${same}, and places those holdings at random dates.${later} Stops are off: the holding lengths already include their exits.`;
+  const kept = shorts ? 'how many trades each ticker made, whether each was long or short, and how long each was held' : 'how many trades each ticker made and how long each was held';
+  return `each try keeps ${kept}, with the same ${same}, and places those holdings at random dates.${later} Stops are off: the holding lengths already include their exits.`;
 }
 
 /** What a random-picks try keeps from the strategy. */
@@ -414,23 +419,18 @@ export function randomPicksWorks(spec: Pick<Backtest['spec'], 'commission' | 'en
   return `each try runs the same ${same}, but ranks the tickers the rules allow at random instead of by the score. A random pick is kept for a while, so the tries trade about as often as the strategy (${trades} on average, against ${against}).`;
 }
 
-function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntriesResult | string, asked: number): void {
-  const picks = bt.spec.rank !== null;
-  const sec = check(el, picks ? 'Random picks' : 'Random entries');
-  if (typeof r === 'string') {
-    h(sec, 'p', 'bt-luck-verdict', r);
-    return;
-  }
+/**
+ * What the random entries showed, or why they did not run. `shorts`: the strategy held short positions, which count as
+ * time in its tickers as long ones do.
+ */
+export function randomVerdict(r: RandomEntriesResult, picks: boolean, shorts: boolean, asked: number): string {
   const who = picks ? 'Random picks' : 'Random timing';
   const skip: Record<NonNullable<RandomEntriesResult['skip']>, string> = {
     'no-trades': 'The strategy made no trades, so there is nothing to compare.',
-    'always-invested': 'The strategy holds its tickers the whole time, so there is no timing to vary.',
+    'always-invested': `The strategy holds its tickers${shorts ? ', long or short,' : ''} the whole time, so there is no timing to vary.`,
     'holds-everything': 'The ranking holds every ticker in the universe, so there is no pick to vary.',
   };
-  if (r.skip) {
-    h(sec, 'p', 'bt-luck-verdict', skip[r.skip]);
-    return;
-  }
+  if (r.skip) return skip[r.skip];
   const share = r.atLeast.cagr / r.runs;
   const shareRatio = r.atLeast.ratio / r.runs;
   const lines = [
@@ -441,9 +441,23 @@ function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntries
         ? 'That is not rare enough to rule out luck.'
         : `${who} often did as well, so this result does not show that the ${picks ? 'ranking' : 'timing of the rules'} adds anything.`,
   ];
-  if (!picks && r.invested >= 0.9) lines.push(`The strategy is invested ${pct(r.invested, 0)} of the time, so random timing is close to holding throughout, and this check can tell little either way.`);
+  if (!picks && r.invested >= 0.9) {
+    lines.push(`The strategy is ${shorts ? 'in its tickers, long or short,' : 'invested'} ${pct(r.invested, 0)} of the time, so random timing is close to holding throughout, and this check can tell little either way.`);
+  }
   if (r.stopped) lines.push(`Stopped after ${r.runs} of ${asked} tries.`);
-  h(sec, 'p', 'bt-luck-verdict', lines.join(' '));
+  return lines.join(' ');
+}
+
+function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntriesResult | string, asked: number): void {
+  const picks = bt.spec.rank !== null;
+  const sec = check(el, picks ? 'Random picks' : 'Random entries');
+  if (typeof r === 'string') {
+    h(sec, 'p', 'bt-luck-verdict', r);
+    return;
+  }
+  const shorts = bt.run.trades.some((t) => t.side === 'short');
+  h(sec, 'p', 'bt-luck-verdict', randomVerdict(r, picks, shorts, asked));
+  if (r.skip) return;
   legend(sec, [
     ['bt-luck-swatch-sim', picks ? 'Random picks' : 'Random timing'],
     ['bt-swatch-strategy', 'Strategy'],
@@ -466,8 +480,8 @@ function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntries
   } else {
     how(
       sec,
-      randomTimingWorks(bt.spec),
-      'it tests when the rules buy and sell, not which tickers they hold, and beating random timing in the past does not mean the rules will keep doing it.',
+      randomTimingWorks(bt.spec, shorts),
+      `it tests when the rules ${shorts ? 'go in and out' : 'buy and sell'}, not which tickers they hold, and beating random timing in the past does not mean the rules will keep doing it.`,
     );
   }
 }

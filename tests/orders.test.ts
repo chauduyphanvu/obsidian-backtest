@@ -709,3 +709,124 @@ test('the Markdown lists the closes to watch after the orders, nearest first', (
   assert.ok(!ordersMarkdown([status('a.md', 'A', [], { asOf: SAMPLE_ASOF, watch: [] })], SAMPLE_NOW).includes('Watch at the next close'));
   assert.deepEqual(watchList(list).map((w) => w.row.ticker), ['C', 'G', 'A']);
 });
+
+// --- short positions ---------------------------------------------------------------------------------------------
+
+test('a short waiting is a short sale at its target weight, and a cover a whole position at what the shares owed are worth', () => {
+  const short = statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nshort when close < 9', { A: bars([10, 10, 10, 8]) }), NOW);
+  assert.deepEqual(short.orders, [{ ticker: 'A', action: 'short', when: 'next open', weight: 1, value: 1000, lastClose: 8, since: null }]);
+  assert.deepEqual([actionWord(short.orders[0]), orderSize(short.orders[0])], ['Sell short', '100% of the strategy, about $1,000']);
+  // Shorted at day 1's open (10): 100 shares owed, worth 1,200 at the last close of 12, when the cover rule holds.
+  const cover = statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nshort when true\ncover when close > 11', { A: bars([10, 10, 10, 12]) }), NOW);
+  assert.deepEqual(cover.orders, [{ ticker: 'A', action: 'cover', when: 'next open', weight: 0, value: 1200, lastClose: 12, since: day(1) }]);
+  assert.deepEqual([actionWord(cover.orders[0]), orderSize(cover.orders[0]), cover.holdings], ['Buy to cover', 'Whole position, about $1,200', []]);
+});
+
+test('a flip is two orders, the exit first: a sell and a short sale, or a cover and a buy, at the next open or made at the last close', () => {
+  const trend = 'universe: A\ncapital: 1000\nbuy when close > sma(2)\nshort when close < sma(2)';
+  const words = (s: StrategyStatus) => s.orders.map((o) => [actionWord(o), o.ticker, o.since === null ? null : (o.since - T0) / DAY, Math.round(o.value)]);
+  const up = [10, 10, 11, 12, 10];
+  const down = [10, 10, 9, 8, 10];
+  assert.deepEqual(words(statusFrom('n.md', 'S', run(trend, { A: bars(up) }), NOW)), [['Sell', 'A', 3, 909], ['Sell short', 'A', null, 909]]);
+  assert.deepEqual(words(statusFrom('n.md', 'S', run(trend, { A: bars(down) }), NOW)), [['Buy to cover', 'A', 3, 1111], ['Buy', 'A', null, 889]]);
+  // With fill: close the flip was made at the last close: the position closed was opened at day 2's close.
+  const close = trend.replace('capital: 1000', 'capital: 1000\nfill: close');
+  const flippedShort = statusFrom('n.md', 'S', run(close, { A: bars(up) }), NOW);
+  assert.deepEqual(words(flippedShort), [['Sold', 'A', 2, 909], ['Sold short', 'A', null, 909]]);
+  assert.deepEqual([flippedShort.orders[1].weight, flippedShort.holdings], [1, []]);
+  assert.deepEqual(words(statusFrom('n.md', 'S', run(close, { A: bars(down) }), NOW)), [['Bought to cover', 'A', 2, 1111], ['Bought', 'A', null, 889]]);
+  // A cover made at the last close on its own.
+  const covered = statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nfill: close\nshort when close < 9\ncover when close > 9.5', { A: bars([10, 10, 8, 10]) }), NOW);
+  assert.deepEqual(words(covered), [['Bought to cover', 'A', 2, 1250]]);
+});
+
+test('a later entry of a short is an Add, waiting or made at the last close', () => {
+  const src = (fill: string) => `universe: A\ncapital: 1000\n${fill}entries: 2\nshort when true\nadd when close > last entry price * 1.05`;
+  const open = statusFrom('n.md', 'S', run(src(''), { A: bars([10, 10, 10, 11]) }), NOW);
+  assert.deepEqual(open.orders.map((o) => [o.action, actionWord(o), o.step]), [['short', 'Add', { k: 2, n: 2 }]]);
+  const close = statusFrom('n.md', 'S', run(src('fill: close\n'), { A: bars([10, 10, 10, 11]) }), NOW);
+  assert.deepEqual(close.orders.map((o) => [o.action, actionWord(o), o.step]), [['short', 'Added', { k: 2, n: 2 }]]);
+});
+
+test('a short kept is a holding, at what the shares owed are worth, marked short', () => {
+  // Shorted at day 1's open (10): 100 shares owed, worth 800 at the last close, with equity about 1,200.
+  const s = statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nshort when true', { A: bars([10, 10, 9, 8]) }), NOW);
+  assert.deepEqual(s.orders, []);
+  assert.equal(s.holdings.length, 1);
+  const [h] = s.holdings;
+  assert.deepEqual([h.ticker, h.short, h.since, h.lastClose], ['A', true, day(1), 8]);
+  assert.ok(Math.abs(h.weight - 800 / s.equity) < 1e-12 && Math.abs(h.gain! - 0.2) < 1e-3, JSON.stringify(h));
+  assert.ok(!('short' in statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nbuy when true', { A: bars([10, 10, 12, 15]) }), NOW).holdings[0]));
+});
+
+test('every action in words, to do and done, and a position\'s order in the positions table, a flip as both its orders', () => {
+  const o = (action: OrderRow['action'], when: OrderRow['when']) => ({ action, when });
+  assert.deepEqual([actionWord(o('short', 'next open')), actionWord(o('cover', 'next close')), actionWord(o('short', 'last close')), actionWord(o('cover', 'last close'))], ['Sell short', 'Buy to cover', 'Sold short', 'Bought to cover']);
+  assert.deepEqual([actionWord({ ...o('short', 'next open'), step: { k: 2, n: 3 } }), actionWord({ ...o('short', 'last close'), step: { k: 1, n: 3 } })], ['Add', 'Sold short']);
+  const st = (x: Partial<AssetState>): AssetState => ({ name: 'A', weight: 1, side: null, since: null, pending: null, shares: 0, lastClose: 1, value: 0, targetWeight: 1, ...x });
+  assert.equal(positionOrder(st({ pending: 'short' }), undefined), 'sells short at the next open');
+  assert.equal(positionOrder(st({ side: 'short', pending: 'cover' }), 'close'), 'buys to cover at the next close');
+  assert.equal(positionOrder(st({ side: 'short', pending: 'add' }), undefined), 'adds at the next open');
+  assert.equal(positionOrder(st({ side: 'long', pending: 'short' }), undefined), 'sells, then sells short at the next open');
+  assert.equal(positionOrder(st({ side: 'short', pending: 'buy' }), undefined), 'buys to cover, then buys at the next open');
+  assert.equal(positionOrder(st({ side: 'short', filled: { side: 'short', shares: 1, price: 1 } }), 'close'), 'sold short at the last close');
+  assert.equal(positionOrder(st({ filled: { side: 'cover', shares: 1, price: 1 } }), 'close'), 'bought to cover at the last close');
+  assert.equal(positionOrder(st({ side: 'short', filled: { side: 'short', shares: 1, price: 1, closed: 2 } }), 'close'), 'sold, then sold short at the last close');
+  assert.equal(positionOrder(st({ side: 'long', filled: { side: 'buy', shares: 1, price: 1, closed: 2 } }), 'close'), 'bought to cover, then bought at the last close');
+});
+
+test('sells and covers come first, then buys and short sales, so the cash and the room to borrow are there', () => {
+  const list = [
+    status('a.md', 'Buys', [['buy', 'X']]),
+    status('b.md', 'Shorts', [['short', 'Q'], ['buy', 'Z'], ['cover', 'A'], ['sell', 'Y'], ['short', 'B'], ['cover', 'M']]),
+    status('c.md', 'Short only', [['short', 'D']]),
+  ];
+  const sorted = sortStatuses(list);
+  assert.deepEqual(sorted.map((s) => s.strategy), ['Shorts', 'Buys', 'Short only']);
+  assert.deepEqual(sorted[0].orders.map((o) => [o.action, o.ticker]), [['sell', 'Y'], ['cover', 'A'], ['cover', 'M'], ['buy', 'Z'], ['short', 'B'], ['short', 'Q']]);
+  assert.deepEqual(todoRows([status('a.md', 'A', [['short', 'X'], ['buy', 'B']]), status('b.md', 'B', [['cover', 'Y']]), status('c.md', 'C', [['sell', 'Z']])]).map((r) => [r.order.action, r.order.ticker]), [
+    ['sell', 'Z'],
+    ['cover', 'Y'],
+    ['buy', 'B'],
+    ['short', 'X'],
+  ]);
+  assert.equal(orderSize({ ticker: 'A', action: 'cover', when: 'next open', weight: 0, value: 10_500, lastClose: 1, since: null }), 'Whole position, about $10.5k');
+});
+
+test('the Markdown words short sales, covers, short holdings and the closes to watch for them', () => {
+  const flipped: StrategyStatus = status('Strategies/Flip.md', 'Flip', [], {
+    asOf: SAMPLE_ASOF,
+    orders: [
+      { ticker: 'SPY', action: 'short', when: 'next open', weight: 0.5, value: 5000, lastClose: 600, since: null },
+      { ticker: 'SPY', action: 'sell', when: 'next open', weight: 0, value: 5000, lastClose: 600, since: Date.UTC(2026, 3, 9) },
+      { ticker: 'QQQ', action: 'cover', when: 'next open', weight: 0, value: 2500, lastClose: 500, since: Date.UTC(2026, 3, 9) },
+    ],
+    watch: watchRows(reportOf([trigger('QQQ', 'short', [{ lo: null, hi: 99.499 }]), trigger('TLT', 'cover', [{ lo: 100.501, hi: null }])])),
+  });
+  const quiet = status('Strategies/Pair.md', 'Pair', [], {
+    asOf: SAMPLE_ASOF,
+    holdings: [
+      { ticker: 'SPY', weight: 0.5, since: Date.UTC(2026, 0, 5), lastClose: 600, gain: 0.123 },
+      { ticker: 'QQQ', weight: 0.331, since: Date.UTC(2026, 3, 9), lastClose: 500, gain: 0.02, short: true },
+    ],
+  });
+  const text = ordersMarkdown([flipped, quiet], SAMPLE_NOW);
+  assert.ok(
+    text.includes(
+      [
+        '| [[Strategies/Flip\\|Flip]] | Sell | SPY | Whole position, about $5,000 | 600.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Flip\\|Flip]] | Buy to cover | QQQ | Whole position, about $2,500 | 500.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Flip\\|Flip]] | Sell short | SPY | 50% of the strategy, about $5,000 | 600.00 | Close of 2026-11-16 |',
+      ].join('\n'),
+    ),
+    text,
+  );
+  assert.ok(text.includes('| [[Strategies/Flip\\|Flip]] | QQQ | Shorts if it closes below 99.50 (−0.5%), at the following open | 100.00 | Close of 2026-11-16 |'), text);
+  assert.ok(text.includes('| [[Strategies/Flip\\|Flip]] | TLT | Covers if it closes above 100.50 (+0.5%), at the following open | 100.00 | Close of 2026-11-16 |'), text);
+  assert.ok(text.includes('- [[Strategies/Pair|Pair]]: Holding SPY 50% (+12.3%), short QQQ 33.1% (+2.0%)'), text);
+});
+
+test('the closes to watch leave out a short rule re-arming, as they do the buy rule\'s', () => {
+  const rows = watchRows(reportOf([trigger('A', 'rearmShort', [{ lo: 100.5, hi: null }]), trigger('B', 'short', [{ lo: null, hi: 100.5 }])]));
+  assert.deepEqual(rows.map((r) => [r.ticker, r.side, r.phrase, r.now]), [['B', 'short', 'Shorts unless it closes above 100.50 (+0.5%)', true]]);
+});

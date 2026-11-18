@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { bucketStats, CRISES, regimePlan, STOCK_REGIMES, type CrisisResult } from '../src/regimes.ts';
-import { crisisRow, growthCell, recoveryText, regimeRows } from '../src/render-regimes.ts';
-import { DAY } from './helpers.ts';
+import { runBacktest } from '../src/backtest.ts';
+import { parseSpec } from '../src/dsl.ts';
+import { pct } from '../src/format.ts';
+import { bucketStats, CRISES, crisisResults, regimePlan, STOCK_REGIMES, type CrisisResult, type RunSeries } from '../src/regimes.ts';
+import { crisisRow, growthCell, investedCell, recoveryText, regimeRows } from '../src/render-regimes.ts';
+import { bars, DAY, near } from './helpers.ts';
 
 const t = (n: number) => Date.UTC(2024, 0, 1) + n * DAY;
 
@@ -54,6 +57,37 @@ test('the row of a fall has its name and days, then the strategy’s and the ben
   assert.equal(row.dates, '2020-02-19 to 2020-03-23');
   assert.deepEqual(row.cells, [['−10.9%', null], ['−20.0%', null], ['−10.9%', null], ['30%', null], ['Not by the end', null]]);
   assert.equal(crisisRow({ ...result, benchmark: NaN, strategy: 0.05 }, false).cells.slice(0, 2).map((c) => c[0]).join(' '), '+5.0% –');
+});
+
+/** A run's series as the strategy block hands them to the section. */
+function seriesOf(src: string, closes: number[]): RunSeries {
+  const { spec, errors } = parseSpec(src);
+  assert.deepEqual(errors, []);
+  const bt = runBacktest(spec!, new Map([['A', bars(closes)]]));
+  return { t: bt.run.t, equity: bt.run.equity, exposure: bt.run.exposure, ...(bt.run.netExposure ? { netExposure: bt.run.netExposure } : {}), benchmark: bt.benchmark.equity };
+}
+
+test('Invested is gross, longs and shorts together, with the net beside it for a block that can borrow; a long-only block shows no net', () => {
+  // From 2020-01-01 through the Covid crash, a gentle swing.
+  const closes = Array.from({ length: 120 }, (_, i) => 100 + 5 * Math.sin(i / 5));
+  const mean = (xs: number[]) => xs.slice(1).reduce((a, x) => a + x, 0) / (xs.length - 1);
+  const short = seriesOf('universe: A\nshort when true', closes);
+  const [state] = bucketStats(short, short.t.map(() => 0), 2);
+  assert.ok(near(state.exposure, mean(short.exposure), 1e-12) && near(state.netExposure!, -state.exposure, 1e-12) && state.exposure > 0.9, JSON.stringify(state));
+  assert.deepEqual(regimeRows([state], ['Always'])[0].cells[3], [pct(state.exposure, 0), `net ${pct(-state.exposure, 0)}`]);
+  const [fall] = crisisResults(short, CRISES.filter((c) => c.name === 'Covid crash'));
+  assert.ok(near(fall.netExposure!, -fall.exposure, 1e-12));
+  assert.deepEqual(crisisRow(fall, false).cells[3], [pct(fall.exposure, 0), `net ${pct(-fall.exposure, 0)}`]);
+  // 150% long: gross and net are the same, above 100%.
+  const levered = seriesOf('universe: A 150%\nbuy when true', closes);
+  const [up] = bucketStats(levered, levered.t.map(() => 0), 2);
+  assert.ok(up.exposure > 1.4 && near(up.netExposure!, up.exposure, 1e-12), JSON.stringify(up));
+  assert.equal(investedCell(up)[1], `net ${pct(up.exposure, 0)}`);
+  // Long only within 100%: no net, and the cell is as it always was.
+  const plain = seriesOf('universe: A\nbuy when true', closes);
+  const [only] = bucketStats(plain, plain.t.map(() => 0), 2);
+  assert.ok(!('netExposure' in only) && !('netExposure' in crisisResults(plain, CRISES)[0]));
+  assert.deepEqual(regimeRows([only], ['Always'])[0].cells[3], [pct(only.exposure, 0), null]);
 });
 
 test('the README gives the buttons, the falls, the rules and the words of the section as the code has them', () => {

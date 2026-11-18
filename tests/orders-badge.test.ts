@@ -42,6 +42,13 @@ test('the tooltip lists the orders in words, sells first', () => {
   assert.equal(v.orders, 3);
 });
 
+test('short sales and covers are counted as orders and named in the tooltip, covers with the sells', () => {
+  const v = ready([status('Flip', [['short', 'SPY'], ['sell', 'SPY'], ['cover', 'QQQ']]), status('Trend', [['buy', 'TLT']])]);
+  assert.deepEqual([v.text, v.orders], ['4 orders today', 4]);
+  assert.deepEqual(v.tooltip.split('\n'), ['Sell SPY at the next open, Flip', 'Buy to cover QQQ at the next open, Flip', 'Buy TLT at the next open, Trend', 'Sell short SPY at the next open, Flip', 'Click to open the orders window.']);
+  assert.equal(ready([status('Done', [['short', 'SPY', 'last close'], ['cover', 'QQQ', 'last close']])]).tooltip.split('\n').slice(0, 2).join('; '), 'Bought to cover QQQ at the last close, Done; Sold short SPY at the last close, Done');
+});
+
 test('the tooltip says Add for a later entry and Buy for the first', () => {
   const base = status('Adding', [['buy', 'QQQ'], ['buy', 'SPY'], ['buy', 'GLD', 'last close'], ['buy', 'TLT', 'last close']]);
   const orders = base.orders.map((o, i) => ({ ...o, step: { k: [1, 2, 2, 1][i], n: 3 } }));

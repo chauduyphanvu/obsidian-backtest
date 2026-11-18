@@ -240,6 +240,93 @@ test('an order already waiting, a CSV file and a ticker only a ranking buys get 
   assert.match(tickerText(never, never.triggers.find((t) => t.blocked === 'ranking')!.ticker).text, /next at the next close\.$/);
 });
 
+// ---------------------------------------------------------------- short positions
+
+test('a short rule: the close below which it shorts, the shown cent next to those that give the order, at the open or at that close', () => {
+  const text = (rules: string, closes: number[]) => tickerText(report(`universe: A\n${rules}`, { A: bars(closes) }).report, 'A').text;
+  const falling = [740, 738, 736, 734, 732];
+  // 730.22 and below give the order, 730.23 does not.
+  assert.equal(text('short when close < 730.2249', falling), 'Shorts if it closes below 730.23 (−0.2%), at the following open.');
+  assert.equal(text('fill: close\nshort when close < 730.2249', falling), 'Shorts if it closes below 730.23 (−0.2%), at that close.');
+  // The cover rule vetoes a short at the same close, as the sell rule vetoes a buy.
+  const vetoed = only(report('universe: A\nshort when close < 731\ncover when close < 729', { A: bars(falling) }).report);
+  assert.equal(vetoed.fires.length, 1);
+  assert.ok(vetoed.fires[0].lo! >= 729 && vetoed.fires[0].lo! / 729 - 1 <= PRECISION && vetoed.fires[0].hi! < 731, JSON.stringify(vetoed.fires));
+  assert.equal(rulePhrase(vetoed), 'Shorts if it closes between 728.99 (−0.4%) and 731.00 (−0.1%)');
+});
+
+test('a held short: the close above which it covers, and a cover rule that holds at an unchanged close says the last cent that still gives it', () => {
+  const { report: r } = report('universe: A\nshort when true\ncover when close > 735.551', { A: bars([730, 730, 731, 732, 733]) });
+  const t = only(r);
+  assert.deepEqual([t.side, t.short, t.fires.length, t.fires[0].hi], ['cover', true, 1, null]);
+  assert.equal(tickerText(r, 'A').text, 'Covers if it closes above 735.55 (+0.3%), at the following open.');
+  // Shorted at day 1's open (10), so the 5% stop is at 10.50, above. close > sma(3) at the next bar is x > 9.25: it covers at an unchanged close.
+  const { bt, report: held, data } = report('universe: A\nstop loss: 5%\nshort when true\ncover when close > sma(3)', { A: bars([10, 10, 10, 9, 9.5]) });
+  const c = only(held);
+  assert.deepEqual([c.levels, c.range.hi], [{ stop: 10.5, target: null }, 10.5 * (1 - 1e-9)]);
+  assert.equal(tickerText(held, 'A').text, 'Covers unless it closes below 9.26 (−2.5%), at the following open. The stop at 10.50 (+10.5%) covers during the bar if the price reaches it.');
+  // Just above the stop the bar reaches it on its way to the close and covers there; just below, the cover rule does.
+  const st = bt.run.states[0];
+  const above = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 10.5 * (1 + 1e-6))).run;
+  assert.deepEqual([above.trades.at(-1)!.reason, above.trades.at(-1)!.exitPrice, above.states[0].pending], ['stop loss', 10.5, null]);
+  const below = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 10.5 * (1 - 1e-6))).run;
+  assert.deepEqual([below.states[0].side, below.states[0].pending], ['short', 'cover']);
+});
+
+test('a flip: held long, the close that sells also shorts; held short, the one that covers also buys, at the following open or at that close', () => {
+  const trend = 'buy when close > sma(3)\nshort when close < sma(3)';
+  const long = report(`universe: A\n${trend}`, { A: bars([10, 10, 11, 12, 13]) }).report;
+  assert.deepEqual(long.triggers.map((t) => t.side), ['sell', 'short']);
+  assert.equal(tickerText(long, 'A').text, 'Sells if it closes below 12.50 (−3.8%), at the following open. Shorts if it closes below 12.50 (−3.8%), at the following open.');
+  const short = report(`universe: A\nfill: close\n${trend}`, { A: bars([13, 13, 12, 11, 10]) }).report;
+  assert.deepEqual(short.triggers.map((t) => t.side), ['cover', 'buy']);
+  assert.equal(tickerText(short, 'A').text, 'Covers if it closes above 10.50 (+5.0%), at that close. Buys if it closes above 10.50 (+5.0%), at that close.');
+  verify(parsed(`universe: A\n${trend}`), new Map([['A', bars([10, 10, 11, 12, 13])]]), 'flip to short', tally());
+  verify(parsed(`universe: A\nfill: close\n${trend}`), new Map([['A', bars([13, 13, 12, 11, 10])]]), 'flip to long', tally());
+  // With no sell rule a long is sold only by the short rule's signal: when that gives no order, the short rule says so for both.
+  const quiet = report('universe: A\nbuy when close > sma(3)\nshort when close < 5', { A: bars([10, 10, 11, 12, 13]) }).report;
+  assert.deepEqual(quiet.triggers.map((t) => t.side), ['short']);
+  assert.match(tickerText(quiet, 'A').text, /^The short rule gives no order at any close from /);
+});
+
+test('a short\'s stop below the last close covers at the next open, its stop and target are told the other way up, and with no cover rule it says what can cover it', () => {
+  // The last bar fell to 8 before closing at 10, so the 3% trailing stop of the short is at 8.24 for the next bar.
+  const { report: r } = report('universe: A\ntrailing stop: 3%\nshort when true\ncover when close > 50', { A: bars([10, 10, 10, 10], { lows: [10, 10, 10, 8] }) });
+  assert.deepEqual(only(r).fires, []);
+  assert.equal(tickerText(r, 'A').text, 'The stop at 8.24 (−17.6%) is below the last close, so it covers at the next open unless the price opens below it.');
+  const none = report('universe: A\ntrailing stop: 10%\nshort when true', { A: bars([10, 10, 9, 8]) }).report;
+  assert.equal(tickerText(none, 'A').text, 'No cover rule. The stop at 8.80 (+10.0%) covers during the bar if the price reaches it.');
+  assert.equal(levelsSentence({ levels: { stop: 105, target: 90 }, ownLast: 100, short: true }), 'The stop at 105.00 (+5.0%) and the target at 90.00 (−10.0%) cover during the bar if the price reaches them.');
+  assert.equal(levelsSentence({ levels: { stop: null, target: 101 }, ownLast: 100, short: true }), 'The target at 101.00 (+1.0%) is above the last close, so it covers at the next open unless the price opens above it.');
+  assert.equal(levelsSentence({ levels: { stop: 99, target: null }, ownLast: 100, short: true }), 'The stop at 99.00 (−1.0%) is below the last close, so it covers at the next open unless the price opens below it.');
+  // A short's target above the last close acts at the open, so no close is searched and no rule is told.
+  const t: Trigger = { ...only(r), last: 100, ownLast: 100, levels: { stop: 110, target: 101 }, fires: [{ lo: 102, hi: null }] };
+  assert.equal(rulePhrase(t), null);
+  assert.equal(rulePhrase({ ...t, levels: { stop: 110, target: 95 } }), 'Covers if it closes above 101.99 (+2.0%)');
+});
+
+test('after a short\'s stop the short rule must stop holding: the close above which it does', () => {
+  // Shorted at day 1's open (10), stopped at 11 on day 3, whose close of 10 still holds the short rule.
+  const A = bars([10, 10, 10, 10], { highs: [10, 10, 10, 11.2] });
+  const src = 'universe: A\nstop loss: 10%\nshort when close < 10.1';
+  const { bt, report: r } = report(src, { A });
+  assert.deepEqual([bt.run.trades[0].reason, bt.run.states[0].rearmingShort], ['stop loss', true]);
+  const t = only(r);
+  assert.equal(t.side, 'rearmShort');
+  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the short rule must stop holding before A is shorted again: it does if A closes above 10.09 (+0.9%).');
+  verify(parsed(src), new Map([['A', A]]), 'short rearm', tally());
+});
+
+test('a short that has to wait for its sizing or stop input, or for its own rule, is said so instead of a price', () => {
+  const A = bars(Array.from({ length: 10 }, (_, i) => 10 + i));
+  const said = (rules: string) => tickerText(report(`universe: A\n${rules}`, { A }).report, 'A').text;
+  assert.equal(said('stop loss: 2 atr(20)\nshort when close < 3'), "Can't short at the next close: the 20-bar ATR for the stop loss is still unknown there.");
+  assert.equal(said('stop loss: 2 atr(20)\nbuy when close > 30\nshort when close < 3'), "Can't buy or short at the next close: the 20-bar ATR for the stop loss is still unknown there.");
+  assert.equal(said('short when close < sma(50)'), "Can't short at the next close: the short rule is still unknown there.");
+  // The buy rule is known and the short rule is not: the buy's price, then why there is none for the short.
+  assert.match(said('buy when close > 30\nshort when close < sma(50)'), /^The buy rule gives no order at any close from .*\. Can't short at the next close: the short rule is still unknown there\.$/);
+});
+
 test('a held ticker with no sell rule says what can sell it', () => {
   const { report: r } = report('universe: A\ntrailing stop: 10%\nbuy when true', { A: bars([10, 10, 11, 12]) });
   assert.equal(tickerText(r, 'A').text, 'No sell rule. The stop at 10.80 (−10.0%) sells during the bar if the price reaches it.');

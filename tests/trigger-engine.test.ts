@@ -182,3 +182,71 @@ test('rules solved for a FRED series: its next value is tried on an even scale a
   }
   assert.ok(seen.buy >= 60 && seen.sell >= 40, JSON.stringify(seen));
 });
+
+/** A random strategy that goes short: short only, or long and short with flips between them, from parts the trigger prices treat differently. */
+function randomShortStrategy(seed: number): string {
+  const rng = makeRng(seed);
+  const pick = <T,>(xs: T[]): T => xs[rng.int(xs.length)];
+  const n = () => 5 + rng.int(30);
+  const shorts = [
+    () => `close < sma(${n()})`,
+    () => `close < ema(${n()})`,
+    () => `rsi(${2 + rng.int(12)}) > ${50 + rng.int(40)}`,
+    () => `close < lowest(${n()})[1]`,
+    () => `close crosses below sma(${n()})`,
+    () => `zscore(${n()}) > 0.5`,
+    () => `close of B < sma(${n()}) of B`,
+    () => `close < open`,
+    () => `close / close[5] < 0.99`,
+  ];
+  const covers = [
+    () => `close > sma(${n()})`,
+    () => `rsi(${2 + rng.int(12)}) < ${20 + rng.int(40)}`,
+    () => `close > entry price * 1.03 or bars held >= ${3 + rng.int(20)}`,
+    () => `close crosses above ema(${n()})`,
+    () => `close > highest(${n()})[1]`,
+    () => `close of B > sma(${n()}) of B`,
+  ];
+  const buys = [() => `close > sma(${n()})`, () => `rsi(${2 + rng.int(12)}) < ${20 + rng.int(40)}`, () => `close > highest(${n()})[1]`, () => `close crosses above sma(${n()})`, () => `close of B > close[1] of B`];
+  const sells = [() => `close < sma(${n()})`, () => `close < entry price * 0.97 or bars held >= ${3 + rng.int(20)}`, () => `rsi(${2 + rng.int(12)}) > ${50 + rng.int(40)}`];
+  // Some hold 150% of the equity on whichever side they are, borrowing the rest.
+  const lines = [`universe: A${rng.next() < 0.25 ? ' 150%' : ''}`, 'capital: 10000'];
+  if (rng.next() < 0.5) lines.push('fill: close');
+  if (rng.next() < 0.3) lines.push(`stop loss: ${3 + rng.int(6)}%`);
+  if (rng.next() < 0.25) lines.push(`trailing stop: ${3 + rng.int(6)}%`);
+  if (rng.next() < 0.25) lines.push(`take profit: ${4 + rng.int(8)}%`);
+  const entries = rng.next() < 0.25;
+  if (entries) lines.push('entries: 3');
+  // A trend that flips on one average; otherwise each side's rules drawn on their own, or short rules only.
+  const kind = rng.next();
+  if (kind < 0.3) {
+    const k = n();
+    lines.push(`buy when close > sma(${k})`, `short when close < sma(${k})`);
+  } else {
+    if (kind < 0.75) lines.push(`buy when ${pick(buys)()}`);
+    if (kind < 0.75 && rng.next() < 0.6) lines.push(`sell when ${pick(sells)()}`);
+    lines.push(`short when ${pick(shorts)()}`);
+  }
+  if (rng.next() < 0.7) lines.push(`cover when ${pick(covers)()}`);
+  if (entries) lines.push(`add when close < last entry price * ${(1 - rng.int(4) / 100).toFixed(2)}`);
+  return lines.join('\n');
+}
+
+test('strategies that go short: each price for a short, a cover and a flip makes the order inside it and not outside, with both fills', () => {
+  const seen = tally();
+  const A = walkBars(700, 31);
+  const B = walkBars(700, 32);
+  const fills = { close: 0, open: 0 };
+  for (let seed = 1; seed <= 160; seed++) {
+    const src = randomShortStrategy(seed);
+    const spec = parsed(src);
+    fills[spec.fill === 'close' ? 'close' : 'open']++;
+    const rng = makeRng(seed * 37);
+    for (let k = 0; k < 6; k++) {
+      const cut = 420 + rng.int(280);
+      verify(spec, new Map([['A', head(A, cut)], ['B', head(B, cut)]]), `seed ${seed}, ${cut} bars:\n${src}\n`, seen);
+    }
+  }
+  assert.ok(fills.close >= 50 && fills.open >= 50, JSON.stringify(fills));
+  assert.ok(seen.short >= 250 && seen.cover >= 150 && seen.buy >= 120 && seen.sell >= 150 && seen.flip >= 200 && seen.add >= 40 && seen.rearmShort >= 4, JSON.stringify(seen));
+});
