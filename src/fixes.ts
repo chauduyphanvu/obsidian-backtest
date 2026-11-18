@@ -1,6 +1,6 @@
 import { FUNCTIONS, tickers } from './complete.ts';
 import { CALENDAR, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
-import { declaredParams, NUMERIC_SETTINGS, settingKey, tokenizeBlock } from './highlight.ts';
+import { declaredParams, NUMERIC_SETTINGS, RULE_HEADS, settingKey, tokenizeBlock } from './highlight.ts';
 import { SOURCE_PREFIX } from './types.ts';
 
 /** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
@@ -179,8 +179,6 @@ const NAMES = [...SERIES, ...CALENDAR, ...Object.keys(POSITION), 'true', 'false'
 /** Words that can follow a finished value in a condition. */
 const CONNECTIVES = ['and', 'or', 'crosses', 'above', 'below', 'is'];
 
-const HEADS = ['buy', 'sell', 'add'];
-
 /** A rule's start written wrong, such as `sel whn`, on a line that begins with it. */
 function ruleHead(lineNo: number, line: string): Edit | null {
   const m = line.match(/^(\s*)([A-Za-z]+)(\s+)([A-Za-z]+)(?!\w)/);
@@ -188,7 +186,7 @@ function ruleHead(lineNo: number, line: string): Edit | null {
   const a = m[2].toLowerCase();
   const b = m[4].toLowerCase();
   // The word after it makes a rule head likely, so a two-letter start such as `ad` is within reach of `add`.
-  const first = HEADS.includes(a) ? a : closest(a, HEADS, Math.max(1, allowance(a.length)));
+  const first = RULE_HEADS.includes(a) ? a : closest(a, RULE_HEADS, Math.max(1, allowance(a.length)));
   const second = b === 'when' ? b : closest(b, ['when']);
   if (!first || !second || (a === first && b === second)) return null;
   return { line: lineNo, from: m[1].length, to: m[1].length + m[2].length + m[3].length + m[4].length, insert: `${first} ${second}` };

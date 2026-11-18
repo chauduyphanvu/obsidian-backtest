@@ -24,16 +24,16 @@ const entry = (id: string, insert = id, detail = shortOf(id)): Completion => ({ 
 const VALUE_HINTS: Record<string, Completion[]> = {
   ...Object.fromEntries(Object.entries(FIXED_VALUES).map(([key, values]) => [key, values.map((v) => entry(v, v, shortOf(valueId(key, v))))])),
   'stop loss': [
-    { label: '10%', insert: '10%', detail: 'below the entry price' },
-    { label: '2 atr(14)', insert: '2 atr(14)', detail: 'two average true ranges below the entry price' },
+    { label: '10%', insert: '10%', detail: 'below the entry price, above it for a short' },
+    { label: '2 atr(14)', insert: '2 atr(14)', detail: 'two average true ranges below the entry price, above it for a short' },
   ],
   'trailing stop': [
-    { label: '15%', insert: '15%', detail: 'below the highest high since entry' },
-    { label: '3 atr(14)', insert: '3 atr(14)', detail: 'three average true ranges below the highest high' },
+    { label: '15%', insert: '15%', detail: 'below the highest high since entry, above the lowest low for a short' },
+    { label: '3 atr(14)', insert: '3 atr(14)', detail: 'three average true ranges below the highest high, above the lowest low for a short' },
   ],
   'take profit': [
-    { label: '20%', insert: '20%', detail: 'above the entry price' },
-    { label: '4 atr(14)', insert: '4 atr(14)', detail: 'four average true ranges above the entry price' },
+    { label: '20%', insert: '20%', detail: 'above the entry price, below it for a short' },
+    { label: '4 atr(14)', insert: '4 atr(14)', detail: 'four average true ranges above the entry price, below it for a short' },
   ],
   slippage: [{ label: '5 bps', insert: '5 bps', detail: 'each fill 0.05% worse than the price' }],
   'cash rate': [
@@ -41,10 +41,12 @@ const VALUE_HINTS: Record<string, Completion[]> = {
     { label: '^IRX', insert: '^IRX', detail: '13-week Treasury bill yield, from Yahoo' },
     { label: 'fred:DGS3MO', insert: 'fred:DGS3MO', detail: '3-month Treasury bill yield, from FRED' },
   ],
+  'borrow fee': [{ label: '0.5%', insert: '0.5%', detail: 'a year on the value of each short' }],
+  'margin rate': [{ label: '6%', insert: '6%', detail: 'a year on money borrowed' }],
   'test from': [{ label: '2019-01-01', insert: '2019-01-01', detail: 'results before and from this day are shown apart' }],
   hold: [{ label: 'top 3 by roc(126)', insert: 'top 3 by roc(126)', detail: 'the 3 tickers with the highest score' }],
   weighting: [{ label: 'inverse volatility(60)', insert: 'inverse volatility(60)', detail: 'weights by 1 / volatility of the last 60 returns' }],
-  'risk per trade': [{ label: '1% at 2 atr(14)', insert: '1% at 2 atr(14)', detail: 'lose 1% of equity if the price falls 2 average true ranges' }],
+  'risk per trade': [{ label: '1% at 2 atr(14)', insert: '1% at 2 atr(14)', detail: 'lose 1% of equity if the price moves 2 average true ranges against the position' }],
   commission: [
     { label: '1', insert: '1', detail: 'a fixed 1 for each order' },
     { label: '0.005 per share, min 1', insert: '0.005 per share, min 1', detail: '0.005 a share, at least 1 an order' },
@@ -64,6 +66,8 @@ export const FUNCTIONS = [...Object.keys(INDICATORS), 'min', 'max', 'abs', 'colu
 const functionDetail = (f: string) => `${docFor(f)!.signature} \u00b7 ${shortOf(f)}`;
 
 const POSITION_WORDS: Completion[] = Object.values(POSITION).map((p) => entry(p));
+/** The rules that read the position held: its exit rules and the add rule. */
+const POSITION_RULE = /^\s*(sell|cover|add)\b/i;
 /** The prefixes of the sources that need a key, as `fred:` before `T10Y2Y`, offered where a ticker is being typed. */
 const PREFIXES: Completion[] = [entry('tiingo:'), entry('fred:')];
 const CALENDAR_WORDS: Completion[] = CALENDAR.map((c) => entry(c));
@@ -164,12 +168,12 @@ export function complete(block: string[], above: string[], before: string, colum
   // Read the lines above the way the parser does: whether a rule is open, which side it is, and
   // which "for" section the cursor sits in.
   let inRule = false;
-  let sellOrAdd = false;
+  let positions = false;
   let section: string | null = null;
   for (const line of above) {
     const kind = lineKind(line, inRule);
     inRule = kind === 'rule' || kind === 'continuation';
-    if (kind === 'rule') sellOrAdd = /^\s*(sell|add)/i.test(line);
+    if (kind === 'rule') positions = POSITION_RULE.test(line);
     if (kind === 'for') {
       const name = line.match(/^\s*for\s+(.+?)\s*:/i)![1];
       section = name.toLowerCase() === 'all' ? null : name;
@@ -209,13 +213,15 @@ export function complete(block: string[], above: string[], before: string, colum
       entry('buy when', 'buy when '),
       entry('sell when', 'sell when '),
       entry('add when', 'add when '),
+      entry('short when', 'short when '),
+      entry('cover when', 'cover when '),
       ...(inRule ? WORDS.slice(0, 2).map((w) => ({ ...w, detail: `continue the rule: ${w.detail}` })) : []),
       ...settings.map((s) => entry(s, `${s}: `, section === null ? shortOf(s) : `${shortOf(s)}, for ${section} only`)),
       entry('for', 'for '),
     ];
     return match(starts);
   }
-  if (/^\s*(buy|sell|add)\s+$/i.test(head)) return match([{ label: 'when', insert: 'when ', detail: '' }], true);
+  if (/^\s*(buy|sell|add|short|cover)\s+$/i.test(head)) return match([{ label: 'when', insert: 'when ', detail: '' }], true);
   if (/^\s*for\s+$/i.test(head)) return match([...names(':', 'rules for this ticker only'), entry('all', 'all:', shortOf('for all'))], true);
 
   const key = settingKey(head);
@@ -233,7 +239,7 @@ export function complete(block: string[], above: string[], before: string, colum
 
   const kind = lineKind(before, inRule);
   if (kind !== 'rule' && kind !== 'continuation') return null;
-  return expression(kind === 'rule' ? /^\s*(sell|add)/i.test(before) : sellOrAdd);
+  return expression(kind === 'rule' ? POSITION_RULE.test(before) : positions);
 }
 
 /** Where the cursor is when a ticker is being written on a `universe`, `symbol`, `benchmark` or `cash rate` line. */

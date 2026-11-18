@@ -1,5 +1,5 @@
 import { BINANCE_INTERVALS, CALENDAR, INDICATORS, NUM, POSITION, REBALANCE, SERIES } from './dsl.ts';
-import { commentStart, declaredParams, lineKinds, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
+import { commentStart, declaredParams, lineKinds, RULE_HEADS, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
 import { DATA_SOURCES, SOURCE_PREFIX } from './types.ts';
 
 export type DocKind = 'setting' | 'value' | 'function' | 'series' | 'calendar' | 'position' | 'word' | 'unit' | 'parameter';
@@ -44,7 +44,7 @@ setting(
   'universe',
   'universe: SPY 60%, TLT 40%',
   'tickers and weights: SPY 60%, TLT 40%',
-  'The tickers to trade, each with an optional weight: give every ticker one, or none. Weights add up to at most 100%, and what is left stays in cash.',
+  'The tickers to trade, each with an optional weight: give every ticker one, or none. Weights add up to at most 200%: what is left under 100% stays in cash, and above 100% the strategy borrows.',
   'universe: SPY 60%, TLT 40%',
 );
 setting('symbol', 'symbol: SPY', 'one ticker (same as universe)', 'Another way to write universe.', 'symbol: SPY');
@@ -76,10 +76,16 @@ setting(
   'slippage',
   'slippage: 5 bps',
   'how much worse each fill is than the price, as 5 bps',
-  'How much worse each fill is than the price: a buy fills higher and a sell lower. It is written like costs.',
+  'How much worse each fill is than the price: a buy or a cover fills higher, and a sell or a short sale lower. It is written like costs.',
   'slippage: 5 bps',
 );
-setting('size', 'size: 80%', 'share of equity to use when tickers have no weights', 'The share of equity to use when the tickers have no weights, up to 100%. You cannot give weights and size together.', 'size: 80%');
+setting(
+  'size',
+  'size: 80%',
+  'share of equity to use when tickers have no weights',
+  'The share of equity to use when the tickers have no weights, up to 200%, borrowing above 100%. You cannot give weights and size together.',
+  'size: 80%',
+);
 setting(
   'rebalance',
   'rebalance: never | weekly | monthly | quarterly | yearly',
@@ -97,22 +103,22 @@ setting(
 setting(
   'stop loss',
   'stop loss: 10% | 2 atr(14)',
-  'sell this far below the entry price, as 10% or 2 atr(14)',
-  'Sells when the price falls this far below the entry price, as a percentage or as a number of average true ranges. A percentage must be above 0% and at most 99%.',
+  'sell this far below the entry price (above it for a short), as 10% or 2 atr(14)',
+  'Sells when the price falls this far below the entry price, or buys a short back when it rises this far above it, as a percentage or as a number of average true ranges. A percentage must be above 0% and at most 99%.',
   'stop loss: 10%',
 );
 setting(
   'trailing stop',
   'trailing stop: 15% | 3 atr(14)',
-  'sell this far below the highest price since entry',
-  'Sells when the price falls this far below the highest price since entry. A percentage must be above 0% and at most 99%.',
+  'sell this far below the highest price since entry (above the lowest for a short)',
+  'Sells when the price falls this far below the highest price since entry, or buys a short back when it rises this far above the lowest. A percentage must be above 0% and at most 99%.',
   'trailing stop: 15%',
 );
 setting(
   'take profit',
   'take profit: 20% | 4 atr(14)',
-  'sell this far above the entry price',
-  'Sells when the price rises this far above the entry price. A percentage must be above 0% and at most 1000%.',
+  'sell this far above the entry price (below it for a short)',
+  'Sells when the price rises this far above the entry price, or buys a short back when it falls this far below it. A percentage must be above 0% and at most 1000%, and a short can never reach one of 100% or more.',
   'take profit: 20%',
 );
 setting(
@@ -125,15 +131,15 @@ setting(
 setting(
   'borrow fee',
   'borrow fee: 0.5%',
-  'yearly fee on the value of short positions',
-  'A yearly fee on the value of each short position, paid for every day it is held. Without it, 0.5% a year.',
+  'yearly fee on the value of short positions, 0.5% unless set',
+  'A yearly fee on the value of each short position at the close, paid for every day it is held and counted in the trade’s return. Without it the plugin’s Borrow fee for shorts setting is used, 0.5% at first, and it must be between 0% and 100%.',
   'borrow fee: 1%',
 );
 setting(
   'margin rate',
   'margin rate: 6%',
-  'yearly interest on money borrowed',
-  'Yearly interest on the money a strategy owes when it holds more than its equity. Without it, 6% a year.',
+  'yearly interest on money borrowed, 6% unless set',
+  'Yearly interest on money borrowed, paid between two bars when cash less the value of the shorts is below 0, as it is when the strategy holds more than its equity. Without it the plugin’s Interest on borrowed money setting is used, 6% at first, and it must be between 0% and 50%.',
   'margin rate: 7%',
 );
 setting(
@@ -160,8 +166,8 @@ setting(
 setting(
   'risk per trade',
   'risk per trade: 1% at 2 atr(14)',
-  'size each buy by what it risks: 1% at 2 atr(14)',
-  'Sizes each buy so that a fall of that many average true ranges loses that share of equity, up to the ticker’s weight. It cannot be used with weighting, or with a rebalance other than never.',
+  'size each buy or short sale by what it risks: 1% at 2 atr(14)',
+  'Sizes each buy so that a fall of that many average true ranges loses that share of equity, and each short sale so that a rise does, up to the ticker’s weight. It cannot be used with weighting, or with a rebalance other than never.',
   'risk per trade: 1% at 2 atr(14)',
 );
 setting(
@@ -459,21 +465,21 @@ calendar('year', 'year', 'the year, as 2024', 'The year, such as 2024.', 'buy wh
 calendar('month_start', 'month_start', 'first bar of a month', 'A condition: the first bar of a month.', 'buy when month_start');
 calendar('month_end', 'month_end', 'last bar of a month', 'A condition: the last bar of a month.', 'buy when month_end');
 
-const BELONGS = 'Only sell and add rules can read it, and not inside a function, with [n] or with of.';
+const BELONGS = 'Only sell, cover and add rules can read it, and not inside a function, with [n] or with of.';
 add(
   'position',
   POSITION.bars_held,
   'bars held',
-  'completed bars since the buy filled, 0 on that bar',
-  `The number of completed bars since the buy filled, or with several entries the first; it is 0 on the bar of the fill. ${BELONGS}`,
+  'completed bars since the entry filled, 0 on that bar',
+  `The number of completed bars since the buy filled (for a short, the short sale), or with several entries the first; it is 0 on the bar of the fill. ${BELONGS}`,
   'sell when bars held >= 20',
 );
 add(
   'position',
   POSITION.entry_price,
   'entry price',
-  'the price the position was bought at',
-  `The price the position was bought at, slippage included, or with several entries their average price. ${BELONGS}`,
+  'the price the position was bought or sold short at',
+  `The price the position was bought at, slippage included, or for a short the price it was sold at; with several entries, their average price. ${BELONGS}`,
   'sell when close < entry price * 0.9',
 );
 add(
@@ -489,36 +495,50 @@ add(
   POSITION.entries_made,
   'entries made',
   'how many entries the position has',
-  `How many entries the open position has made: 1 after the buy, then one more for each add. ${BELONGS}`,
+  `How many entries the open position has made: 1 after the buy or short sale, then one more for each add. ${BELONGS}`,
   'sell when entries made == 1 and bars held >= 10',
 );
 
 word(
   'buy when',
   'buy when condition',
-  'condition that opens a position',
-  'Opens a position in a ticker you do not hold when the condition is true at a close. It fills at that ticker’s next open, unless the fill setting says close.',
+  'condition that opens a long position',
+  'Opens a long position in a ticker you do not hold when the condition is true at a close. It fills at that ticker’s next open, unless the fill setting says close.',
   'buy when close > sma(200)',
 );
 word(
   'sell when',
   'sell when condition',
-  'condition that closes it',
-  'Closes the position when the condition is true at a close. Without a sell rule a position is held until a stop closes it or the run ends.',
+  'condition that closes a long position',
+  'Closes a long position when the condition is true at a close. Without a sell rule a position is held until a stop or a short rule closes it, or the run ends.',
   'sell when close < sma(200)',
 );
 word(
   'add when',
   'add when condition',
   'condition that adds the next entry',
-  'Adds the next entry to a position held when the condition is true at a close, until the entries setting’s count is made. It needs an entries line, and it is skipped at a close where the sell rule holds.',
+  'Adds the next entry to the position held, long or short, when the condition is true at a close, until the entries setting’s count is made. It needs an entries line, and it is skipped at a close where the sell rule, or for a short the cover rule, holds.',
   'entries: 3\nadd when close > last entry price * 1.03',
+);
+word(
+  'short when',
+  'short when condition',
+  'condition that opens a short position',
+  'Sells short a ticker you do not hold when the condition is true at a close, so the position gains as the price falls; it fills as a buy would. A ticker held long is closed by it, and turns short at the same fill when the buy rule does not hold there too.',
+  'short when close < sma(200)',
+);
+word(
+  'cover when',
+  'cover when condition',
+  'condition that closes a short position',
+  'Buys a short position back when the condition is true at a close; it needs a short rule. Without a cover rule a short is held until a stop or the buy rule closes it, or the run ends.',
+  'short when close < sma(200)\ncover when close > sma(200)',
 );
 word(
   'for',
   'for TICKER:',
   'rules and stops for one ticker: for TLT:',
-  'Starts rules for one ticker, which must be in the universe. A buy, sell or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for that ticker only.',
+  'Starts rules for one ticker, which must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for that ticker only.',
   'for TLT:',
 );
 word('for all', 'for all:', 'back to the rules every ticker shares', 'Goes back to the rules every ticker shares. What you write after it applies to every ticker that has no rule of its own.', 'for all:');
@@ -595,7 +615,13 @@ word(
   'Inside hold: how many tickers to hold, and the score that ranks them, written like a value in a rule. The universe must have at least that many tickers.',
   'hold: top 3 by roc(126)',
 );
-word('at', 'risk per trade: 1% at 2 atr(14)', 'share of equity risked at a stop distance', 'Inside risk per trade: it joins the share of equity at risk to the distance, in average true ranges, that the price is assumed to fall.', 'risk per trade: 1% at 2 atr(14)');
+word(
+  'at',
+  'risk per trade: 1% at 2 atr(14)',
+  'share of equity risked at a stop distance',
+  'Inside risk per trade: it joins the share of equity at risk to the distance, in average true ranges, that the price is assumed to move against the position.',
+  'risk per trade: 1% at 2 atr(14)',
+);
 word('true', 'true', 'always holds', 'A condition that always holds. always means the same.', 'buy when true');
 word('false', 'false', 'never holds', 'A condition that never holds. never means the same.', 'sell when false');
 add('unit', '%', '5%', 'a percentage: 5% counts as 0.05', 'A percentage. It counts as the number 0.05 wherever a number is expected, so roc(20) > 5% means roc(20) > 0.05.', 'buy when roc(20) > 5%');
@@ -771,9 +797,11 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
     case 'buy':
     case 'sell':
     case 'add':
+    case 'short':
+    case 'cover':
       return next && nextWord === 'when' ? target(t.from, next.to, `${here} when`) : null;
     case 'when':
-      return prev && (prevWord === 'buy' || prevWord === 'sell' || prevWord === 'add') ? target(prev.from, t.to, `${prevWord} when`) : null;
+      return prev && RULE_HEADS.includes(prevWord) ? target(prev.from, t.to, `${prevWord} when`) : null;
     case 'for':
       return kind === 'for' && next && text(next).toLowerCase() === 'all' ? target(t.from, next.to, 'for all') : target(t.from, t.to, 'for');
     case 'all':

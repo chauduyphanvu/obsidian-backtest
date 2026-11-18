@@ -14,7 +14,7 @@ test('every setting, function, series, calendar value, position value and fixed 
   SERIES.forEach(need);
   CALENDAR.forEach(need);
   Object.values(POSITION).forEach(need);
-  ['buy when', 'sell when', 'for', 'for all', 'and', 'or', 'not', 'crosses above', 'crosses below', 'above', 'below', 'of', '[n]', 'in … step', 'top … by', '%', 'bps'].forEach(need);
+  ['buy when', 'sell when', 'add when', 'short when', 'cover when', 'for', 'for all', 'and', 'or', 'not', 'crosses above', 'crosses below', 'above', 'below', 'of', '[n]', 'in … step', 'top … by', '%', 'bps'].forEach(need);
   for (const [key, values] of Object.entries(FIXED_VALUES)) values.forEach((v) => need(valueId(key, v)));
   assert.deepEqual(missing, []);
 });
@@ -124,6 +124,9 @@ test('texts say what the README says, in its words, where it states a rule', () 
     ['data=yahoo', 'SPY, BRK-B, BTC-USD'],
     ['data=binance', 'BTCUSDT'],
     ['data', 'comes from Yahoo whatever data says'],
+    ['borrow fee', 'between 0% and 100%'],
+    ['margin rate', 'between 0% and 50%'],
+    ['entry price', 'or for a short the price it was sold at'],
   ];
   const lower = (x: string) => x.toLowerCase();
   const missing = same.filter(([id, phrase]) => !lower(docFor(id)!.text).includes(lower(phrase)) || !lower(readme).includes(lower(phrase)));
@@ -209,6 +212,22 @@ test('help for rule words: heads, two-word comparisons, "is above", "of", not', 
   assert.deepEqual(at(10, where(10, 'not')), { id: 'not', text: 'not' });
   assert.deepEqual(at(11, where(11, 'of')), { id: 'of', text: 'of' });
   assert.equal(at(11, where(11, '^VIX')), null);
+});
+
+test('help for the heads of short and cover rules, and for the position values a cover rule reads', () => {
+  const lines = ['universe: SPY', 'borrow fee: 1%', 'margin rate: 7%', 'short when close < sma(200)', 'cover when bars held >= 5'];
+  const tip = (row: number, col: number) => {
+    const t = helpAt(lines, row, col);
+    return t ? { id: t.doc.id, text: lines[row].slice(t.from, t.to) } : null;
+  };
+  assert.deepEqual(tip(1, 3), { id: 'borrow fee', text: 'borrow fee' });
+  assert.deepEqual(tip(2, 8), { id: 'margin rate', text: 'margin rate' });
+  assert.deepEqual(tip(3, 1), { id: 'short when', text: 'short when' });
+  assert.deepEqual(tip(3, 7), { id: 'short when', text: 'short when' });
+  assert.deepEqual(tip(4, 0), { id: 'cover when', text: 'cover when' });
+  assert.deepEqual(tip(4, 8), { id: 'cover when', text: 'cover when' });
+  assert.deepEqual(tip(4, 12), { id: 'bars held', text: 'bars held' });
+  for (const id of ['short when', 'cover when', 'borrow fee', 'margin rate']) assert.ok(docFor(id)!.text.length > 80, id);
 });
 
 test('help for for lines, the lag, a parameter line and hold', () => {

@@ -11,6 +11,8 @@ test('the defaults are the documented ones', () => {
     slippage: '0 bps',
     commission: '0',
     cashRate: '0%',
+    borrowFee: '0.5%',
+    marginRate: '6%',
     dataSource: 'yahoo',
     cacheHours: 6,
     tiingoSecret: '',
@@ -27,7 +29,7 @@ test('the defaults are the documented ones', () => {
     llmModel: '',
     llmSecret: '',
   });
-  for (const key of ['costs', 'slippage', 'commission', 'cashRate'] as const) assert.equal(validateSetting(key, DEFAULT_SETTINGS[key]), null);
+  for (const key of ['costs', 'slippage', 'commission', 'cashRate', 'borrowFee', 'marginRate'] as const) assert.equal(validateSetting(key, DEFAULT_SETTINGS[key]), null);
 });
 
 test('normalizeSettings: nothing saved gives the defaults, as a new object', () => {
@@ -169,6 +171,58 @@ test('the parser uses what the settings imply', () => {
   // Whatever was saved, the defaults never make a strategy fail to read.
   const messy = defaultsFrom(normalizeSettings({ costs: 'x', slippage: 'y', cashRate: 'z z', capital: -1, dataSource: 'q' }));
   assert.deepEqual(parseSpec('universe: SPY\nbuy when close > sma(20)', { defaults: messy }).errors, []);
+});
+
+test('validateSetting for the borrow fee and the interest on borrowed money: a yearly percentage, as their lines take', () => {
+  for (const text of ['0%', '0.5%', '1%', ' 2.25 % ', '.5%', '50%']) {
+    assert.equal(validateSetting('borrowFee', text), null, text);
+    assert.equal(validateSetting('marginRate', text), null, text);
+  }
+  assert.equal(validateSetting('borrowFee', '100%'), null);
+  assert.match(validateSetting('borrowFee', '101%')!, /The borrow fee must be between 0% and 100% a year/);
+  assert.match(validateSetting('marginRate', '51%')!, /The margin rate must be between 0% and 50% a year/);
+  assert.match(validateSetting('borrowFee', '0.5')!, /Write the borrow fee as a yearly percentage, such as 0\.5%/);
+  assert.match(validateSetting('marginRate', '-1%')!, /Write the margin rate as a yearly percentage, such as 6%/);
+  assert.match(validateSetting('marginRate', '^IRX')!, /Write the margin rate as a yearly percentage/);
+  assert.equal(validateSetting('borrowFee', ''), 'Enter a value, such as 0.5%.');
+  assert.equal(validateSetting('marginRate', '6% # broker'), 'Leave out comments here.');
+});
+
+test('normalizeSettings: the rates of borrowing are kept when the language reads them, trimmed, and otherwise fall back', () => {
+  assert.deepEqual(normalizeSettings({ borrowFee: ' 1% ', marginRate: '7.5%' }), { ...DEFAULT_SETTINGS, borrowFee: '1%', marginRate: '7.5%' });
+  const bad = normalizeSettings({ borrowFee: '1', marginRate: '80%' });
+  assert.equal(bad.borrowFee, '0.5%');
+  assert.equal(bad.marginRate, '6%');
+  assert.deepEqual(normalizeSettings({ borrowFee: 1, marginRate: null }), DEFAULT_SETTINGS);
+});
+
+test('defaultsFrom: the rates of borrowing as fractions, only when they are not the parser\'s own', () => {
+  assert.deepEqual(defaultsFrom({ ...DEFAULT_SETTINGS, borrowFee: '1%', marginRate: '7.5%' }), {
+    capital: 10000,
+    costBps: 0,
+    slippageBps: 0,
+    cashRate: '0%',
+    dataSource: 'yahoo',
+    borrowFee: 0.01,
+    marginRate: 0.075,
+  });
+  assert.deepEqual(defaultsFrom({ ...DEFAULT_SETTINGS, borrowFee: '0%' }).borrowFee, 0);
+  // Written another way, the parser's own rates are still left out, and text that cannot be read counts as them.
+  for (const [borrowFee, marginRate] of [['0.50%', '6.0%'], ['x', '99%']]) {
+    const out = defaultsFrom({ ...DEFAULT_SETTINGS, borrowFee, marginRate });
+    assert.ok(!('borrowFee' in out) && !('marginRate' in out), `${borrowFee} ${marginRate}`);
+  }
+});
+
+test('the parser uses the rates of borrowing the settings imply, and a block\'s own lines win', () => {
+  const defaults = defaultsFrom(normalizeSettings({ borrowFee: '1%', marginRate: '7%' }));
+  const read = (source: string) => parseSpec(source, { defaults }).spec!.margin;
+  assert.deepEqual(read('universe: SPY\nshort when close < sma(200)'), { cap: 1, borrowFee: 0.01, rate: 0.07, maintenance: 0.25 });
+  assert.deepEqual(read('universe: SPY 150%\nbuy when true\nborrow fee: 2%\nmargin rate: 4.5%'), { cap: 1.5, borrowFee: 0.02, rate: 0.045, maintenance: 0.25 });
+  // A block that never borrows carries no margin terms, whatever the settings say.
+  assert.equal(read('universe: SPY\nbuy when true'), undefined);
+  // Without the settings, the parser's own rates.
+  assert.deepEqual(parseSpec('universe: SPY\nshort when true', { defaults: defaultsFrom(DEFAULT_SETTINGS) }).spec!.margin, { cap: 1, borrowFee: 0.005, rate: 0.06, maintenance: 0.25 });
 });
 
 test('provider text: Anthropic may leave the address and model empty, and needs a key', () => {
