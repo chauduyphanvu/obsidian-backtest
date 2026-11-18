@@ -93,6 +93,7 @@ function result(opts: { states?: AssetState[]; trades?: Trade[]; segments?: Segm
       interest: 0,
       cashReturn: [0, 0, 0],
       skipped: [],
+      fills: { t: [], asset: [], kind: [], sharesAfter: [], price: [] },
     },
     stats: stats(),
     tradeStats: tradeStats(),

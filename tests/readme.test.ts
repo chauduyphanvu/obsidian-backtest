@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { parseAccount } from '../src/account.ts';
 import { runBacktest } from '../src/backtest.ts';
 import { parseCompare } from '../src/compare.ts';
 import { parseDashboard } from '../src/dashboard.ts';
@@ -79,6 +80,15 @@ test('every compare block in the README parses without errors', () => {
   for (const b of found) {
     const { errors } = parseCompare(b.body);
     assert.deepEqual(errors, [], `the compare block on README line ${b.line} ("${first(b.body)}") has errors`);
+  }
+});
+
+test('every account block in the README parses without errors', () => {
+  const found = blocks.filter((b) => b.lang === 'account');
+  assert.ok(found.length >= 1, 'no account block found');
+  for (const b of found) {
+    const { errors } = parseAccount(b.body);
+    assert.deepEqual(errors, [], `the account block on README line ${b.line} ("${first(b.body)}") has errors`);
   }
 });
 

@@ -177,7 +177,7 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
       errors.push({ line, message: NOT_A_LINE });
       return;
     }
-    const r = parseLine(raw, line, true);
+    const r = parseLine(raw, line);
     if ('message' in r) errors.push(r);
     else entries.push(r);
   });
@@ -187,6 +187,9 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
   if (entries.length === 0 && errors.length === 0) errors.push({ line: 1, message: 'Add the strategies the account follows, such as [[Trend following]] 60%' });
   errors.push(...weightProblems(entries));
   if (!seen.has('cash') && !seen.has('holdings')) errors.push({ line: 1, message: "Write the account's cash, its holdings or both, such as cash: 10,000" });
+  if (config.fills !== null && !seen.has('fills from')) {
+    errors.push({ line: seen.get('fills')!, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' });
+  }
   return { config, entries, errors: errors.sort((a, b) => a.line - b.line) };
 }
 
@@ -347,8 +350,7 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
     if (holding === 0 && target === 0 && gross === 0) continue;
     const kind: OrderKind = holding === 0 ? 'open' : target === 0 ? 'close' : 'resize';
     const change = target - holding;
-    const skipped =
-      kind === 'resize' && config.skipUnder > 0 && (Math.abs(change) * price < config.skipUnder * managed || (config.wholeShares && Math.abs(change) <= 1));
+    const skipped = kind === 'resize' && Math.abs(change) * price < config.skipUnder * managed;
     let shares = 0;
     if (!skipped) {
       if (kind === 'close') shares = -holding;
@@ -370,11 +372,22 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
   if (wanted > available) {
     const f = Math.max(0, available) / wanted;
     bought = 0;
-    for (const o of orders) {
-      if (o.shares <= 0) continue;
+    const buys = orders.filter((o) => o.shares > 0);
+    const remainders = new Map<AccountOrder, number>();
+    for (const o of buys) {
+      remainders.set(o, o.shares * f - Math.floor(o.shares * f));
       o.shares = config.wholeShares ? Math.floor(o.shares * f) : fraction(o.shares * f, Math.floor);
       o.cut = true;
       bought += o.shares * o.price;
+    }
+    // Rounding each buy down can leave enough cash for a whole share or more: those go back, largest remainder first.
+    if (config.wholeShares) {
+      for (const o of [...buys].sort((a, b) => remainders.get(b)! - remainders.get(a)!)) {
+        if (remainders.get(o)! > 0 && bought + o.price <= available) {
+          o.shares += 1;
+          bought += o.price;
+        }
+      }
     }
     notes.push(`The buys come to ${money(wanted)}, more than the cash and the sales bring (${money(available)}), so each is cut to fit.`);
   }

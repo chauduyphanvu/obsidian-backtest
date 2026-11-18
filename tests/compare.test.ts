@@ -65,14 +65,22 @@ test('link errors: no closing brackets, no note, nothing after #', () => {
 });
 
 test('weight errors point at the weight', () => {
-  const zero = parseCompare('[[A]] 0%\n[[B]] 50%');
-  assert.deepEqual(zero.errors, [{ line: 1, message: 'A weight must be above 0%', from: 6, to: 8 }]);
   const negative = parseCompare('[[A]] 50%\n[[B]] -5%');
-  assert.deepEqual(negative.errors, [{ line: 2, message: 'A weight must be above 0%', from: 6, to: 9 }]);
+  assert.deepEqual(negative.errors, [{ line: 2, message: "A weight can't be below 0%", from: 6, to: 9 }]);
   const word = parseCompare('[[A]] half\n[[B]]');
   assert.deepEqual(word.errors, [{ line: 1, message: 'After the note, only a weight such as 40% can follow', from: 6, to: 10 }]);
   // The same weight problem on a bare path.
-  assert.deepEqual(parseCompare('A.md 0%\n[[B]] 50%').errors, [{ line: 1, message: 'A weight must be above 0%', from: 5, to: 7 }]);
+  assert.deepEqual(parseCompare('A.md -1%\n[[B]] 50%').errors, [{ line: 1, message: "A weight can't be below 0%", from: 5, to: 8 }]);
+});
+
+test('0% lists a strategy without putting it in the combination, and it counts towards the two a comparison needs', () => {
+  const { entries, errors } = parseCompare('[[A]] 0%\n[[B]] 50%');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(entries.map((e) => e.weight), [0, 0.5]);
+  assert.deepEqual(parseCompare('A.md 0%\n[[B]] 100%').entries[0].weight, 0);
+  assert.ok(Object.is(parseCompare('[[A]] -0%\n[[B]] 50%').entries[0].weight, 0));
+  // Every strategy at 0% leaves nothing to combine.
+  assert.deepEqual(parseCompare('[[A]] 0%\n[[B]] 0%').errors, [{ line: 2, message: 'Give at least one strategy a weight above 0%' }]);
 });
 
 test('a block needs 2 to 8 strategies', () => {

@@ -277,6 +277,20 @@ export interface RunResult {
   smallTrades?: number;
   /** With `magnify`: for each asset that had smaller bars, in the universe's order, what was looked inside. */
   inside?: InsideReport[];
+  /** Every fill, rebalancing trims and top-ups included, in the order made: what an account following the run is set against. */
+  fills: FillLog;
+}
+
+/**
+ * A run's fills, one entry per fill in the order made, as columns: when, which asset, what kind of fill, the asset's shares
+ * after it and the price it filled at before slippage, in the run's own (adjusted) prices.
+ */
+export interface FillLog {
+  t: number[];
+  asset: string[];
+  kind: FillSeen['kind'][];
+  sharesAfter: number[];
+  price: number[];
 }
 
 /** What `magnify` did for one asset. */
@@ -664,8 +678,17 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const equity: number[] = [];
   const exposure: number[] = [];
   const cashReturn: number[] = [];
+  const fills: FillLog = { t: [], asset: [], kind: [], sharesAfter: [], price: [] };
+  const logFill = (fill: FillSeen) => {
+    fills.t.push(fill.t);
+    fills.asset.push(fill.asset);
+    fills.kind.push(fill.kind);
+    fills.sharesAfter.push(fill.shares);
+    fills.price.push(fill.price);
+    p.onFill?.(fill);
+  };
 
-  const commissionOf = (value: number, shares: number): number => commissionFee(charge!, value, shares);
+  const commissionOf =(value: number, shares: number): number => commissionFee(charge!, value, shares);
   /**
    * The most a buy filled at `fill` can spend, with its costs and commission paid on top from the cash there is. Value
    * plus costs plus commission rises with the value, so the answer is the larger of the values at which the capped and
@@ -733,7 +756,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     const held = a.shares;
     if (reason !== 'open') {
       sell(a, a.shares, price);
-      p.onFill?.({ t, asset: a.name, kind: reason === 'signal' ? 'sell' : 'stop', price, shares: a.shares, cash, equity: NaN, weight: NaN });
+      logFill({ t, asset: a.name, kind: reason === 'signal' ? 'sell' : 'stop', price, shares: a.shares, cash, equity: NaN, weight: NaN });
     }
     a.owed = null;
     const why = a.why!;
@@ -939,7 +962,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
             sell(a, -delta / price, price);
             a.trims++;
             held = target;
-            p.onFill?.({ t, asset: a.name, kind: 'trim', price, shares: a.shares, cash, equity: NaN, weight: NaN });
+            logFill({ t, asset: a.name, kind: 'trim', price, shares: a.shares, cash, equity: NaN, weight: NaN });
           }
         } else {
           buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0 });
@@ -985,7 +1008,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const fill = priceOf(a) * (1 + slip);
       const short = charge !== null && affordable(fill) < notional;
       const spent = buy(a, notional, priceOf(a), !entry);
-      if (spent > 0) p.onFill?.({ t, asset: a.name, kind, price: priceOf(a), shares: a.shares, cash, equity: equityNow, weight: weights.get(a)! });
+      if (spent > 0) logFill({ t, asset: a.name, kind, price: priceOf(a), shares: a.shares, cash, equity: equityNow, weight: weights.get(a)! });
       if (small && (kind === 'add' || kind === 'rebalance')) smallTrades++;
       if (kind === 'rebalance' || kind === 'owed') {
         // The debt is for the period the rebalance opens: this one at an open, the next one at a close. A top-up left
@@ -1209,6 +1232,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     interest,
     cashReturn,
     skipped,
+    fills,
     ...(charge ? { commission, smallTrades } : {}),
     ...(p.magnify
       ? { inside: assets.flatMap((a) => (a.inside ? [{ asset: a.name, from: a.inside.first < 0 ? null : a.bars.t[a.inside.first], looked: a.inside.looked, whole: a.inside.whole }] : [])) }

@@ -259,6 +259,7 @@ test('fills are classed against the netted trades of the strategies', () => {
   const r = matchFills([A, B], FILLS, OPTS);
   assert.deepEqual(summary(r.rows), [
     ['06-02', 'SPY', 'on time'],
+    ['06-02', 'TLT', 'on time'],
     ['06-02', 'TLT', 'partial'],
     ['06-03', 'QQQ', 'late'],
     ['06-08', 'GLD', 'skipped'],
@@ -279,9 +280,16 @@ test("the strategies' trades are sized by allocation times capital at start over
   assert.deepEqual(at('SPY', 2), { day: june(2), side: 'buy', quantity: 20, value: 2000, price: 100, strategies: [0, 1] });
   // SPY on June 10: A sells 12 and B buys 8 at the account's size, which nets to a sale of 4.
   assert.deepEqual(at('SPY', 10), { day: june(10), side: 'sell', quantity: 4, value: 400, price: 100, strategies: [0, 1] });
-  // A's TLT bought before June 1 is the position its sale on June 2 closes.
-  assert.deepEqual(at('TLT', 2), { day: june(2), side: 'sell', quantity: 36, value: 1800, price: 50, strategies: [0] });
-  assert.ok(near(at('QQQ', 3).quantity!, 3.2) && near(at('QQQ', 3).value!, 640));
+  // A's TLT bought before June 1 is the position its sale on June 2 closes: 36 shares, of which you sold 20.
+  const tlt = r.rows.filter((x) => x.ticker === 'TLT').map((x) => x.model);
+  assert.deepEqual(tlt, [
+    { day: june(2), side: 'sell', quantity: 20, value: 1000, price: 50, strategies: [0] },
+    { day: june(2), side: 'sell', quantity: 16, value: 800, price: 50, strategies: [0] },
+  ]);
+  // B's 2 QQQ are 3.2 shares; you bought 3 of them late, and the 0.2 left is within what counts as the whole trade.
+  assert.ok(near(at('QQQ', 3).quantity!, 3) && near(at('QQQ', 3).value!, 600));
+  const unfollowed = matchFills([A, B], [], OPTS).rows.find((x) => x.ticker === 'QQQ')!.model!;
+  assert.ok(near(unfollowed.quantity!, 3.2) && near(unfollowed.value!, 640));
 });
 
 test('slippage, fees, late fills and skipped trades, and a total that is exactly their sum', () => {
@@ -292,7 +300,9 @@ test('slippage, fees, late fills and skipped trades, and a total that is exactly
   assert.deepEqual(spy.yours, { day: june(2), side: 'buy', quantity: 20, price: 100.5, fees: 1, lines: [3, 4] });
   assert.ok(near(spy.slippage, 10) && near(spy.bps!, 50));
   // TLT sold 0.10 below the strategies' 50 is worse for you: 2 on 20 shares, 20 bps.
-  assert.ok(near(row('TLT', 'partial').slippage, 2) && near(row('TLT', 'partial').bps!, 20));
+  assert.ok(near(row('TLT', 'on time').slippage, 2) && near(row('TLT', 'on time').bps!, 20));
+  // The 16 of the strategies' 36 you did not sell rose from 50 to 52: a loss of 32 avoided.
+  assert.ok(near(row('TLT', 'partial').skipped, -32) && row('TLT', 'partial').yours === null);
   // QQQ bought two trading days late at 202 against 200: 6 on 3 shares, counted as late, not slippage.
   const qqq = row('QQQ', 'late');
   assert.equal(qqq.barsLate, 2);
@@ -305,8 +315,8 @@ test('slippage, fees, late fills and skipped trades, and a total that is exactly
   assert.equal(row('DIA', 'waiting').skipped, 0);
   assert.equal(row('XLE', 'off-plan').fees, 0.5);
 
-  assert.ok(near(r.parts.slippage, 14) && near(r.parts.fees, 1.8) && near(r.parts.late, 6) && near(r.parts.skipped, 208));
-  assert.ok(near(r.total, 229.8));
+  assert.ok(near(r.parts.slippage, 14) && near(r.parts.fees, 1.8) && near(r.parts.late, 6) && near(r.parts.skipped, 176));
+  assert.ok(near(r.total, 197.8));
   // Exactly, in the order the figures are added up: rows into tickers, tickers into parts, parts into the total.
   assert.equal(r.total, r.parts.slippage + r.parts.fees + r.parts.late + r.parts.skipped);
   for (const part of ['slippage', 'fees', 'late', 'skipped'] as const) {
@@ -383,10 +393,23 @@ test("a same-day fill is taken by that day's trade before an earlier trade can t
     [june(2), 'SPY', 10, 100],
     [june(4), 'SPY', 20, 100],
   ]);
+  // 20 on June 4: 10 for that day's trade, and the 10 left over for June 2's, late.
   const r = matchFills([S], [fill(june(4), 'SPY', 'buy', 20, 100, 0, 2)], { ...OPTS, capital: 10_000 });
   assert.deepEqual(summary(r.rows), [
+    ['06-02', 'SPY', 'late'],
+    ['06-04', 'SPY', 'on time'],
+  ]);
+  // 10 on June 4 go to that day's trade, and June 2's is skipped.
+  const ten = matchFills([S], [fill(june(4), 'SPY', 'buy', 10, 100, 0, 2)], { ...OPTS, capital: 10_000 });
+  assert.deepEqual(summary(ten.rows), [
     ['06-02', 'SPY', 'skipped'],
-    ['06-04', 'SPY', 'oversized'],
+    ['06-04', 'SPY', 'on time'],
+  ]);
+  // 30 on June 4: the 10 more than both trades make the day oversized.
+  const thirty = matchFills([S], [fill(june(4), 'SPY', 'buy', 35, 100, 0, 2)], { ...OPTS, capital: 10_000 });
+  assert.deepEqual(thirty.rows.map((x) => [x.class, x.model!.quantity, x.yours!.quantity]), [
+    ['late', 10, 10],
+    ['oversized', 10, 25],
   ]);
 });
 
@@ -424,16 +447,20 @@ test("against unadjusted prices: the strategies' price is converted, and a fill 
   assert.ok(near(skipped.parts.skipped, 100));
 });
 
-test("a day's fills on both sides are netted, and a day bought and sold back to nothing matches no trade", () => {
+test("a day's purchases and sales are added up apart and matched each on its own side", () => {
   const S = strategy('S', 1, 10_000, [[june(2), 'SPY', 10, 100]]);
   const opts = { ...OPTS, capital: 10_000 };
-  const net = matchFills([S], [fill(june(2), 'SPY', 'buy', 14, 101, 0.1, 2), fill(june(2), 'SPY', 'sell', 4, 103, 0.1, 3)], opts);
-  // 14 bought and 4 sold: 10 bought, at the price of the purchases.
-  assert.equal(net.rows[0].class, 'on time');
-  assert.deepEqual(net.rows[0].yours, { day: june(2), side: 'buy', quantity: 10, price: 101, fees: 0.2, lines: [2, 3] });
-  const flat = matchFills([S], [fill(june(2), 'SPY', 'buy', 4, 101, 0, 2), fill(june(2), 'SPY', 'sell', 4, 103, 0, 3)], opts);
-  assert.deepEqual(summary(flat.rows), [
-    ['06-02', 'SPY', 'skipped'],
+  // 12 bought in two fills and 4 sold: the purchases are the trade, a little over its size, and the sale is off plan.
+  const both = matchFills([S], [fill(june(2), 'SPY', 'buy', 6, 101, 0.1, 2), fill(june(2), 'SPY', 'buy', 6, 102, 0.1, 3), fill(june(2), 'SPY', 'sell', 4, 103, 0.1, 4)], opts);
+  assert.deepEqual(both.rows.map((x) => [x.class, x.yours]), [
+    ['on time', { day: june(2), side: 'buy', quantity: 12, price: 101.5, fees: 0.2, lines: [2, 3] }],
+    ['off-plan', { day: june(2), side: 'sell', quantity: 4, price: 103, fees: 0.1, lines: [4] }],
+  ]);
+  // Bought 4 and sold them back: 4 of the 10 were bought, so the rest is partial, and the sale is off plan.
+  const back = matchFills([S], [fill(june(2), 'SPY', 'buy', 4, 101, 0, 2), fill(june(2), 'SPY', 'sell', 4, 103, 0, 3)], opts);
+  assert.deepEqual(summary(back.rows), [
+    ['06-02', 'SPY', 'on time'],
+    ['06-02', 'SPY', 'partial'],
     ['06-02', 'SPY', 'off-plan'],
   ]);
 });
@@ -449,4 +476,99 @@ test('without fills or trades the figures are all 0', () => {
   assert.deepEqual(r.parts, { slippage: 0, fees: 0, late: 0, skipped: 0 });
   assert.equal(r.total, 0);
   assert.deepEqual(r.suggested, []);
+});
+
+// --- Found by review ----------------------------------------------------------------------------------------------
+
+const ONE = (rows: [number, string, number, number][]): Followed => strategy('S', 1, 10_000, rows);
+const SIZED = { ...OPTS, capital: 10_000, last: { ...OPTS.last, SPY: 120 } };
+const costs = (r: ReturnType<typeof matchFills>) => r.rows.map((x) => [x.class, x.model?.quantity ?? null, x.yours?.quantity ?? null, x.slippage, x.late, x.skipped]);
+
+test('one day of your fills covers two trades of the strategies: what is left after the same day fills the earlier one late', () => {
+  // The strategy buys 10 on June 2 at 100 and 10 more on June 3 at 101; you buy all 20 on June 3 at 101.
+  const r = matchFills([ONE([[june(2), 'SPY', 10, 100], [june(3), 'SPY', 20, 101]])], [fill(june(3), 'SPY', 'buy', 20, 101, 0, 2)], SIZED);
+  assert.deepEqual(costs(r), [
+    ['late', 10, 10, 0, 10, 0],
+    ['on time', 10, 10, 0, 0, 0],
+  ]);
+  assert.equal(r.rows[0].barsLate, 1);
+  assert.equal(r.total, 10);
+});
+
+test('one trade of the strategies covered by two days of your fills: the second day is a late fill of the rest', () => {
+  // The strategy buys 20 on June 2 at 100; you buy 10 that day at 100 and 10 the next at 105.
+  const r = matchFills([ONE([[june(2), 'SPY', 20, 100]])], [fill(june(2), 'SPY', 'buy', 10, 100, 0, 2), fill(june(3), 'SPY', 'buy', 10, 105, 0, 3)], SIZED);
+  assert.deepEqual(costs(r), [
+    ['on time', 10, 10, 0, 0, 0],
+    ['late', 10, 10, 0, 50, 0],
+  ]);
+  assert.equal(r.total, 50);
+});
+
+test('a position opened and stopped out the same day is a purchase and a sale, each matched on its own side', () => {
+  const S: Followed = { ...ONE([]), log: { t: [june(2), june(2)], asset: ['SPY', 'SPY'], kind: ['entry', 'stop'], sharesAfter: [10, 0], price: [100, 95] } };
+  const r = matchFills([S], [fill(june(2), 'SPY', 'buy', 10, 100, 0, 2), fill(june(2), 'SPY', 'sell', 10, 95, 0, 3)], SIZED);
+  assert.deepEqual(r.rows.map((x) => [x.class, x.model!.side, x.model!.quantity, x.yours!.quantity]), [
+    ['on time', 'buy', 10, 10],
+    ['on time', 'sell', 10, 10],
+  ]);
+  assert.equal(r.total, 0);
+  // Not followed at all, the two trades cancel: bought at 100 and sold at 95 is a loss of 50 avoided.
+  const none = matchFills([S], [], SIZED);
+  assert.deepEqual(none.rows.map((x) => [x.class, x.model!.side, x.skipped]), [
+    ['skipped', 'buy', 200],
+    ['skipped', 'sell', -250],
+  ]);
+  assert.equal(none.total, -50);
+});
+
+test('a trade made under 70% has the rest as a partial row, costed as a trade not made, and a small shortfall is not', () => {
+  // The strategy buys 20 on June 2 at 100, and SPY ends at 120.
+  const S = ONE([[june(2), 'SPY', 20, 100]]);
+  const half = matchFills([S], [fill(june(2), 'SPY', 'buy', 10, 100, 0, 2)], SIZED);
+  assert.deepEqual(costs(half), [
+    ['on time', 10, 10, 0, 0, 0],
+    ['partial', 10, null, 0, 0, 200],
+  ]);
+  const most = matchFills([S], [fill(june(2), 'SPY', 'buy', 15, 100, 0, 2)], SIZED);
+  assert.deepEqual(costs(most), [['on time', 15, 15, 0, 0, 0]]);
+});
+
+test('dates with the name of the month are read in their own year, and one without a year is not read', () => {
+  const at = (cell: string) => {
+    const r = read(`Date,Action,Symbol,Quantity,Price\n${cell},Buy,SPY,10,512.4\n`);
+    return [r.fills.map((f) => new Date(f.date).toISOString().slice(0, 10)), r.unread.map((u) => u.why)];
+  };
+  assert.deepEqual(at('"Apr 13, 2026"'), [['2026-04-13'], []]);
+  assert.deepEqual(at('"April 13, 2026"'), [['2026-04-13'], []]);
+  assert.deepEqual(at('13 Apr 2026'), [['2026-04-13'], []]);
+  assert.deepEqual(at('"Dec 31, 2025, 4:00 PM"'), [['2025-12-31'], []]);
+  assert.deepEqual(at('Apr 13'), [[], ['"Apr 13" is not a date']]);
+  // Numeric dates still take what follows a comma as the time.
+  assert.deepEqual(at('"2026-04-13, 09:30:02"'), [['2026-04-13'], []]);
+  assert.deepEqual(at('04/13/26'), [['2026-04-13'], []]);
+});
+
+test('an Interactive Brokers file with orders and their executions reads each order once', () => {
+  const r = read(fixture('fills-ibkr-flex-executions.csv'));
+  assert.deepEqual(brief(r), [
+    ['2026-04-13', 'SPY', 'buy', 12, 512.4, 1, 5],
+    ['2026-04-13', 'TLT', 'sell', 30, 91.85, 1.02, 8],
+  ]);
+  assert.deepEqual(r.unread, []);
+  // Executions alone are each a fill; a closed lot never is.
+  const executions = fixture('fills-ibkr-flex-executions.csv')
+    .split('\n')
+    .filter((l) => !l.endsWith('"ORDER"'))
+    .join('\n');
+  assert.deepEqual(brief(read(executions)).map((f) => [f[1], f[3]]), [['SPY', 7], ['SPY', 5], ['TLT', 30]]);
+  // The same in an activity statement, by its DataDiscriminator.
+  const statement = [
+    'Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Comm/Fee',
+    'Trades,Data,Order,Stocks,USD,SPY,"2026-04-13, 09:30:02",12,512.4,-1',
+    'Trades,Data,Execution,Stocks,USD,SPY,"2026-04-13, 09:30:02",7,512.38,-0.6',
+    'Trades,Data,Execution,Stocks,USD,SPY,"2026-04-13, 09:30:03",5,512.43,-0.4',
+    'Trades,Data,ClosedLot,Stocks,USD,SPY,2026-01-05,3,500,',
+  ].join('\n');
+  assert.deepEqual(brief(read(statement)).map((f) => [f[1], f[3]]), [['SPY', 12]]);
 });

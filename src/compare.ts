@@ -1,6 +1,7 @@
 // Comparing and combining strategies: the `compare` block's syntax, putting equity curves on one timeline,
 // a rebalanced portfolio of them, and how alike they move. Pure; the caller hands in how to read notes and run strategies.
 
+import { computeStats, type Stats } from './backtest.ts';
 import { extractBlocks } from './blocks.ts';
 import type { Diagnostic } from './dsl.ts';
 import { isoDate } from './format.ts';
@@ -36,21 +37,18 @@ function span(raw: string, token: string): { from: number; to: number } {
   return { from, to: from + token.length };
 }
 
-/** A weight such as `40%` as a fraction, or the problem with it. */
-function weightOf(raw: string, line: number, token: string, zero: boolean): number | Diagnostic {
+/** A weight such as `40%` as a fraction, or the problem with it. 0% lists a strategy without giving it any of the money. */
+function weightOf(raw: string, line: number, token: string): number | Diagnostic {
   const m = token.match(WEIGHT);
   if (!m) return { line, message: 'After the note, only a weight such as 40% can follow', ...span(raw, token) };
-  const w = Number(m[1]) / 100;
-  if (zero && w === 0) return 0;
-  if (!(w > 0)) return { line, message: zero ? "A weight can't be below 0%" : 'A weight must be above 0%', ...span(raw, token) };
+  // Adding 0 turns the -0 of "-0%" into 0.
+  const w = Number(m[1]) / 100 + 0;
+  if (!(w >= 0)) return { line, message: "A weight can't be below 0%", ...span(raw, token) };
   return w;
 }
 
-/**
- * Reads one line naming a strategy: a wikilink or a vault path ending in .md, then optionally a weight. With `zero`, a
- * weight of 0% is read too: the strategy is listed and gets none of the money.
- */
-export function parseLine(raw: string, line: number, zero = false): CompareEntry | Diagnostic {
+/** Reads one line naming a strategy: a wikilink or a vault path ending in .md, then optionally a weight. */
+export function parseLine(raw: string, line: number): CompareEntry | Diagnostic {
   const text = raw.trim();
   let target: string;
   let label: string | null = null;
@@ -65,7 +63,7 @@ export function parseLine(raw: string, line: number, zero = false): CompareEntry
     target = pipe < 0 ? inner : inner.slice(0, pipe);
     if (pipe >= 0) label = inner.slice(pipe + 1).trim() || null;
     if (rest) {
-      const w = weightOf(raw, line, rest, zero);
+      const w = weightOf(raw, line, rest);
       if (typeof w !== 'number') return w;
       weight = w;
     }
@@ -73,7 +71,7 @@ export function parseLine(raw: string, line: number, zero = false): CompareEntry
     const m = text.match(WEIGHT_AT_END);
     const path = m ? text.slice(0, m.index).trimEnd() : text;
     if (m) {
-      const w = weightOf(raw, line, m[1], zero);
+      const w = weightOf(raw, line, m[1]);
       if (typeof w !== 'number') return w;
       weight = w;
     }
@@ -104,7 +102,7 @@ export function duplicateEntries(entries: CompareEntry[]): Diagnostic[] {
   return errors;
 }
 
-/** What is wrong with the weights of a list of strategies: some given and some not, or more than 100% in all. */
+/** What is wrong with the weights of a list of strategies: some given and some not, every one 0%, or more than 100% in all. */
 export function weightProblems(entries: CompareEntry[]): Diagnostic[] {
   const weighted = entries.filter((e) => e.weight !== null);
   if (weighted.length > 0 && weighted.length < entries.length) {
@@ -112,6 +110,7 @@ export function weightProblems(entries: CompareEntry[]): Diagnostic[] {
     return [{ line: odd.line, message: 'Give every strategy a weight, or none of them' }];
   }
   const sum = weighted.reduce((s, e) => s + e.weight!, 0);
+  if (weighted.length > 0 && sum === 0) return [{ line: entries[entries.length - 1].line, message: 'Give at least one strategy a weight above 0%' }];
   if (sum > 1 + EPS) {
     return [{ line: entries[entries.length - 1].line, message: `The weights add up to ${Number((sum * 100).toFixed(2))}%, and they can't add up to more than 100%` }];
   }
@@ -313,6 +312,11 @@ export function rebalanced(aligned: Pick<Aligned, 't' | 'series'>, weightsAt: (i
     out.push(total);
   }
   return out;
+}
+
+/** The figures of one line of a comparison. The Sharpe ratio counts only what the line earned above cash, as it does in the strategy's own block. */
+export function lineStats(t: number[], values: number[], cashReturn: number[]): Stats {
+  return computeStats(t, values, values[0], t.map(() => 1), cashReturn);
 }
 
 /** Correlation of per-step returns between every pair; 1 on the diagonal; NaN when a series never moves. */

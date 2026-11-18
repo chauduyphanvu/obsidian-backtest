@@ -44,9 +44,9 @@ export function setParamValues(source: string, values: Record<string, number>): 
 
 const normal = (text: string) => text.replace(/\r/g, '').trimEnd();
 
-/** The strategy block whose opening fence is on `line` (0-based) of the note, when its text is still `source`. */
-export function findBlock(note: string, line: number, source: string): { block: Block; index: number } | null {
-  const blocks = extractBlocks(note);
+/** The block of `lang` whose opening fence is on `line` (0-based) of the note, when its text is still `source`. */
+export function findBlock(note: string, line: number, source: string, lang = 'strategy'): { block: Block; index: number } | null {
+  const blocks = extractBlocks(note, lang);
   const index = blocks.findIndex((b) => b.line === line);
   return index >= 0 && normal(blocks[index].source) === normal(source) ? { block: blocks[index], index } : null;
 }
@@ -101,7 +101,7 @@ export const NOTE_CHANGED = 'The note has changed since this result was drawn, s
  * (Obsidian's `vault.process`). Rejects with a message fit to show when nothing was written: the block has no known place,
  * or `change` found it no longer there with the text it was drawn from.
  */
-async function writeInNote(process: (edit: (note: string) => string) => Promise<unknown>, line: number | undefined, change: (note: string, line: number) => string | null): Promise<void> {
+export async function writeInNote(process: (edit: (note: string) => string) => Promise<unknown>, line: number | undefined, change: (note: string, line: number) => string | null): Promise<void> {
   if (line === undefined) throw new Error(NOTE_CHANGED);
   let written = false;
   await process((note) => {
@@ -125,4 +125,67 @@ export function writeValuesInNote(
 /** Replaces the whole text of the block that opens on `line` of a note (see replaceBlockInNote). */
 export function writeBlockInNote(process: (edit: (note: string) => string) => Promise<unknown>, line: number | undefined, source: string, text: string): Promise<void> {
   return writeInNote(process, line, (note, at) => replaceBlockInNote(note, at, source, text));
+}
+
+/**
+ * The note with lines of the block of `lang` that opens on `line` changed: `edits` maps a 0-based line of the block's text
+ * to its new text, and `insert` puts a new line after the one given (-1 for before the first). Each line keeps what comes
+ * before the block's text on it, a quote or callout's `>` markers, and its line ending; a new line takes those of the line
+ * it follows, or of the first. Null when that is no longer a block with the text `source`.
+ */
+function editBlockLines(note: string, line: number, source: string, lang: string, edits: Map<number, string>, insert?: { after: number; text: string }): string | null {
+  const found = findBlock(note, line, source, lang);
+  if (!found) return null;
+  const was = found.block.source.split('\n');
+  const lines = note.split('\n');
+  const around = (i: number): { before: string; cr: string } | null => {
+    const raw = lines[line + 1 + i];
+    const cr = raw.endsWith('\r') ? '\r' : '';
+    const body = cr ? raw.slice(0, -1) : raw;
+    return body.endsWith(was[i]) ? { before: body.slice(0, body.length - was[i].length), cr } : null;
+  };
+  for (const [i, text] of edits) {
+    const at = around(i);
+    if (!at) return null;
+    lines[line + 1 + i] = at.before + text + at.cr;
+  }
+  if (insert) {
+    const at = around(Math.max(insert.after, 0));
+    if (!at) return null;
+    lines.splice(line + 2 + insert.after, 0, at.before + insert.text + at.cr);
+  }
+  return lines.join('\n');
+}
+
+/** A weight at the end of a line naming a strategy, as compare.ts reads one. */
+const WEIGHT_AT_END = /(?<=\s)[+-]?\d+(?:\.\d+)?(\s*%)\s*$/;
+
+/** A line naming a strategy with its weight set to `percent`, written after the note, or put in place of the one it had. */
+export function withWeight(text: string, percent: number): string {
+  const trimmed = text.trimEnd();
+  return WEIGHT_AT_END.test(trimmed) ? trimmed.replace(WEIGHT_AT_END, (_, gap: string) => `${plainNumber(percent)}${gap}`) : `${trimmed} ${plainNumber(percent)}%`;
+}
+
+/**
+ * The note with weights written on the lines of a `compare` or `account` block that name its strategies: `weights` gives
+ * each line (1-based, as CompareEntry.line counts) its whole percentage. Null when the block changed since it was drawn.
+ */
+export function setWeightsInNote(note: string, line: number, source: string, lang: string, weights: { line: number; percent: number }[]): string | null {
+  const was = source.replace(/\r/g, '').split('\n');
+  return editBlockLines(note, line, source, lang, new Map(weights.map((w) => [w.line - 1, withWeight(was[w.line - 1] ?? '', w.percent)])));
+}
+
+const SETTING_AT = /^(\s*)([A-Za-z][A-Za-z ]*?)\s*:/;
+
+/**
+ * The note with a setting of the block written as `key: value`: in place of the line that sets it, or else after the last
+ * line that sets something, or else first. Null when the block changed since it was drawn.
+ */
+export function setSettingInNote(note: string, line: number, source: string, lang: string, key: string, value: string): string | null {
+  const was = source.replace(/\r/g, '').split('\n');
+  const name = (text: string) => text.match(SETTING_AT)?.[2].toLowerCase().replace(/\s+/g, ' ') ?? null;
+  const at = was.findIndex((text) => name(text) === key.toLowerCase());
+  if (at >= 0) return editBlockLines(note, line, source, lang, new Map([[at, `${was[at].match(SETTING_AT)![1]}${key}: ${value}`]]));
+  const last = was.reduce((found, text, i) => (name(text) !== null && !text.trimStart().startsWith('[[') ? i : found), -1);
+  return editBlockLines(note, line, source, lang, new Map(), { after: last, text: `${key}: ${value}` });
 }

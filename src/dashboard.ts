@@ -339,16 +339,19 @@ export interface VaultNotes<N> {
   pause(): Promise<void>;
 }
 
-/** Every strategy block in the notes. Notes that cannot hold one are not read, and the reading pauses now and then so a large vault does not freeze the window. */
-export async function findStrategies<N extends { path: string; basename: string }>(notes: readonly N[], vault: VaultNotes<N>): Promise<FoundStrategy[]> {
+/**
+ * Every strategy block in the notes, or every block of `lang`. Notes that cannot hold one are not read, and the reading
+ * pauses now and then so a large vault does not freeze the window.
+ */
+export async function findStrategies<N extends { path: string; basename: string }>(notes: readonly N[], vault: VaultNotes<N>, lang = 'strategy'): Promise<FoundStrategy[]> {
   const found: FoundStrategy[] = [];
   let read = 0;
   for (const note of notes) {
     if (!mayHoldStrategy(vault.sections(note))) continue;
     if (++read % NOTES_PER_PAUSE === 0) await vault.pause();
     const text = await vault.read(note);
-    if (!text.includes('strategy')) continue;
-    extractBlocks(text).forEach((b, i, all) => found.push({ note: note.path, name: b.name ?? (all.length > 1 ? `${note.basename} ${i + 1}` : note.basename), source: b.source }));
+    if (!text.includes(lang)) continue;
+    extractBlocks(text, lang).forEach((b, i, all) => found.push({ note: note.path, name: b.name ?? (all.length > 1 ? `${note.basename} ${i + 1}` : note.basename), source: b.source }));
   }
   return found;
 }
