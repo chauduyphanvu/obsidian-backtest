@@ -162,7 +162,8 @@ test('each trade in the table: how it went, both sides, your price against their
   assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null, value: null }), yours: yours({ day: T + 2 * DAY }), barsLate: 2, late: 5, fees: 1 }))[2], 'Late by 2 bars');
   assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null }), yours: yours(), barsLate: 1 }))[3], 'Buy at 100.00');
   const skipped = matchCells(row({ class: 'skipped', model: model({ side: 'sell' }), move: -0.031, skipped: -31 }));
-  assert.deepEqual(skipped.slice(2), ['Not made, down 3.1% for it since', 'Sell 10 at 100.00', '–', '', '−$31.00']);
+  assert.deepEqual(skipped.slice(2), ['Not made, would have lost 3.1%', 'Sell 10 at 100.00', '–', '', '−$31.00']);
+  assert.equal(matchCells(row({ class: 'partial', model: model({ quantity: 4 }), move: 0.05, skipped: 20 }))[2], 'Partial: the rest not made, would have made 5.0%');
   assert.deepEqual(matchCells(row({ class: 'waiting', model: model() })).slice(-1), ['']);
   assert.deepEqual(matchCells(row({ class: 'off-plan', yours: yours({ day: T + DAY }), fees: 1 })), ['2026-11-14', 'SPY', 'Off plan', '–', 'Buy 10 at 100.50', '', '$1.00']);
   assert.equal(matchCells(row({ model: model(), yours: yours({ price: 400 }), outside: true }))[5], 'outside the day');

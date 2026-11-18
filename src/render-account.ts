@@ -209,15 +209,18 @@ const CLASS_WORDS: Record<MatchRow['class'], string> = {
   'off-plan': 'Off plan',
 };
 
-/** The cells of one trade: day, ticker, how it went, the strategies' trade, yours, your price against theirs, and its cost. */
+/**
+ * The cells of one row: day, ticker, how it went, the strategies' trade (the part of it this row covers), yours, your price
+ * against theirs, and its cost.
+ */
 export function matchCells(r: MatchRow): string[] {
   const side = (s: 'buy' | 'sell') => (s === 'buy' ? 'Buy' : 'Sell');
   const known = (x: number) => (Number.isFinite(x) ? price(x) : 'unknown');
   const model = r.model ? `${side(r.model.side)}${r.model.quantity === null ? '' : ` ${shareCount(Number(r.model.quantity.toFixed(4)))}`} at ${known(r.model.price)}` : '–';
   const yours = r.yours ? `${side(r.yours.side)} ${shareCount(r.yours.quantity)} at ${price(r.yours.price)}` : '–';
-  let how = CLASS_WORDS[r.class];
+  let how = r.class === 'partial' ? 'Partial: the rest not made' : CLASS_WORDS[r.class];
   if (r.barsLate !== null) how += ` by ${plural(r.barsLate, 'bar')}`;
-  if (r.class === 'skipped' && r.move !== null && Number.isFinite(r.move)) how += `, ${r.move >= 0 ? 'up' : 'down'} ${(Math.abs(r.move) * 100).toFixed(1)}% for it since`;
+  if ((r.class === 'skipped' || r.class === 'partial') && r.move !== null && Number.isFinite(r.move)) how += `, would have ${r.move >= 0 ? 'made' : 'lost'} ${(Math.abs(r.move) * 100).toFixed(1)}%`;
   const vs = r.bps !== null ? `${r.bps > 0 ? '+' : ''}${minus(r.bps.toFixed(1))} bps` : r.outside ? 'outside the day' : '';
   const cost = r.class === 'waiting' ? '' : dollars(r.slippage + r.late + r.skipped + r.fees);
   return [isoDate((r.model ?? r.yours)!.day), r.ticker, how, model, yours, vs, cost];

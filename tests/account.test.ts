@@ -273,12 +273,16 @@ test('the band skips small resizes only: never an opening or a closing order', (
   assert.ok(near(by(fractions, 'IWM').shares, 0.3, 1e-12));
 });
 
-test('with whole shares and a band, a resize of one share or less is skipped even when it is worth more than the band', () => {
+test('with whole shares and a band, a resize of one share or less is skipped only when it is worth less than the band', () => {
   // One share of BRK.A-like 5,000 is 5% of 100,000; the strategy wants 2.8 shares where the account holds 2.
   const S = strat('S', 1, 100_000, [state('XYZ', { shares: 2.8, lastClose: 5000 })]);
   const holdings = [{ ticker: 'XYZ', shares: 2 }];
+  // 0.8 of a share is 4,000, above the band of 1,000: it rounds to one share.
   const whole = accountOrders(account({ cash: 90_000, holdings, skipUnder: 0.01 }), [S]);
-  assert.deepEqual([whole.orders[0].skipped, whole.orders[0].shares], [true, 0]);
+  assert.deepEqual([whole.orders[0].skipped, whole.orders[0].shares], [false, 1]);
+  // 0.1 of a share is 500, under the band: skipped.
+  const small = accountOrders(account({ cash: 90_000, holdings, skipUnder: 0.01 }), [strat('S', 1, 100_000, [state('XYZ', { shares: 2.1, lastClose: 5000 })])]);
+  assert.deepEqual([small.orders[0].skipped, small.orders[0].shares], [true, 0]);
   // Unbanded, 0.8 of a share rounds to one.
   assert.equal(accountOrders(account({ cash: 90_000, holdings }), [S]).orders[0].shares, 1);
   // In fractions the band alone decides: 0.8 of a share is 4,000, above 1%.
@@ -414,4 +418,32 @@ test('with fill: close the state already holds what the last close bought', () =
   // So an account in cash buys what the strategy bought.
   const plan = accountOrders(account({ cash: 1000, wholeShares: false }), [s]);
   assert.ok(near(plan.orders[0].shares, (st.shares * 1000) / s.equity, 1e-8));
+});
+
+test('a resize of one share or less is made when it is worth more than the band', () => {
+  // Two strategies hold 2 BKNG at 5,000 between them, half each; B sells, so the account's target is 1 share.
+  const st = (o: Partial<AssetState>) => state('BKNG', { shares: 2, lastClose: 5000, ...o });
+  const plan = accountOrders(account({ holdings: [{ ticker: 'BKNG', shares: 2 }], skipUnder: 0.01 }), [strat('A', 0.5, 10_000, [st({})]), strat('B', 0.5, 10_000, [st({ pending: 'sell' })])]);
+  // The sale of 1 share is 5,000, far above the band of 100.
+  assert.deepEqual([plan.orders[0].kind, plan.orders[0].skipped, plan.orders[0].shares], ['resize', false, -1]);
+});
+
+test('buys cut to the cash get whole shares back, largest remainder first, while the cash allows', () => {
+  // Two buys of one share at 600 each with 1,000 of cash: both cut to 0 would leave 1,000 unused.
+  const S = strat('S', 1, 10_000, [state('AAA', { pending: 'buy', targetWeight: 0.5, lastClose: 600 }), state('BBB', { pending: 'buy', targetWeight: 0.5, lastClose: 600 })]);
+  const plan = accountOrders(account({ cash: 1000 }), [S]);
+  assert.deepEqual(plan.orders.map((o) => [o.ticker, o.shares, o.cut]), [
+    ['AAA', 1, true],
+    ['BBB', 0, true],
+  ]);
+  assert.equal(plan.cashAfter, 400);
+  // 640 of cash: CCC's 1.92 shares at 100 round to 2 and DDD's 0.64 at 500 to 1, 700 in all. Cut by 640/700 they are
+  // 1.83 and 0.91, so 1 and 0, which leaves 540: DDD's larger remainder comes back first, and then CCC's share no longer fits.
+  const T = strat('T', 1, 10_000, [state('CCC', { pending: 'buy', targetWeight: 0.3, lastClose: 100 }), state('DDD', { pending: 'buy', targetWeight: 0.5, lastClose: 500 })]);
+  const two = accountOrders(account({ cash: 640 }), [T]);
+  assert.deepEqual(two.orders.map((o) => [o.ticker, o.shares]), [
+    ['CCC', 1],
+    ['DDD', 1],
+  ]);
+  assert.equal(two.cashAfter, 40);
 });
