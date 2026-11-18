@@ -329,7 +329,7 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
 
 /**
  * The probability of backtest overfitting in words: how often the variant with the best Sharpe ratio on half of the
- * history ranked in the bottom half on the other half.
+ * history ranked in the bottom half on the other half, one exactly in the middle counting as half.
  */
 export function pboWords(p: Pbo): string {
   const left = p.leftOut ? ` ${plural(p.leftOut, 'variant')} that ran over a different number of bars ${p.leftOut === 1 ? 'is' : 'are'} left out.` : '';
@@ -343,7 +343,7 @@ export function pboWords(p: Pbo): string {
         ? 'Picking the best here often did not hold up on the half it had not seen.'
         : 'Picking the best here did no better on the half it had not seen than picking at random.';
   return (
-    `The history was cut into ${p.groups} parts and split into two halves in all ${p.splits.toLocaleString('en-US')} ways. In ${pct(share, 0)} of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other. ${reading} ` +
+    `The history was cut into ${p.groups} parts and split into two halves in all ${p.splits.toLocaleString('en-US')} ways. In ${pct(share, 0)} of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other, one exactly in the middle counting as half. ${reading} ` +
     `This is the probability of backtest overfitting (Bailey, Borwein, López de Prado and Zhu). It swings widely from one sweep to the next, since every split reuses the same history, so take it as a rough sign, not a measure.${left}`
   );
 }

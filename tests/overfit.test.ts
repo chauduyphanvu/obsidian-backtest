@@ -234,13 +234,13 @@ test('CSCV worked by hand: 4 groups, 3 variants', () => {
   const C = variant([pair(0.01), pair(0.01), pair(0.01), pair(0.01)]);
   const { pbo: p, logits } = cscv([A, B, C], [2, 2, 2, 2]);
   // Training on {0,1} picks A, last of 3 on {2,3}: ω = 1/4. Training on {2,3} picks C, second on {0,1}: ω = 2/4, λ = 0,
-  // which counts as overfit. The other four pick C, first on the other half: ω = 3/4.
+  // which counts as half. The other four pick C, first on the other half: ω = 3/4.
   const ln3 = Math.log(3);
   assert.deepEqual(
     [...logits].sort((a, b) => a - b).map((x) => Math.round(x * 1e12) / 1e12),
     [-ln3, 0, ln3, ln3, ln3, ln3].map((x) => Math.round(x * 1e12) / 1e12),
   );
-  assert.equal(p, 2 / 6);
+  assert.equal(p, 1.5 / 6);
 });
 
 test('CSCV ties: the first in grid order wins training, and a tie on the test half takes the middle rank', () => {
@@ -280,6 +280,34 @@ test('PBO of variants with no edge is near one half', () => {
   }
   const mean = found.reduce((s, x) => s + x, 0) / found.length;
   assert.ok(mean > 0.4 && mean < 0.65, JSON.stringify(found));
+});
+
+test('with few variants and no edge, CSCV still averages one half: a winner ranked exactly in the middle counts as half', () => {
+  // With an odd number of variants a winner can rank exactly in the middle, λ = 0, which is as often as not.
+  for (const count of [3, 5, 6, 7]) {
+    const rng = makeRng(count);
+    const draw = normals(rng);
+    let sum = 0;
+    const sweeps = 600;
+    for (let k = 0; k < sweeps; k++) {
+      const variants = Array.from({ length: count }, () => {
+        const s: number[] = [];
+        const q: number[] = [];
+        for (let g = 0; g < 10; g++) {
+          let [a, b] = [0, 0];
+          for (let i = 0; i < 20; i++) {
+            const r = 0.01 * draw();
+            [a, b] = [a + r, b + r * r];
+          }
+          s.push(a);
+          q.push(b);
+        }
+        return { s, q };
+      });
+      sum += cscv(variants, new Array(10).fill(20)).pbo;
+    }
+    assert.ok(Math.abs(sum / sweeps - 0.5) < 0.04, `${count} variants: ${sum / sweeps}`);
+  }
 });
 
 test('PBO of a sweep with one variant that has a real edge is near 0', () => {

@@ -263,7 +263,10 @@ function sharpeOfSums(s: number, q: number, n: number): number {
 }
 
 export interface Cscv {
-  /** The share of splits in which the best variant on the training half ranked at or below the median on the other half. */
+  /**
+   * The share of splits in which the best variant on the training half ranked below the median on the other half, one
+   * that ranked exactly at it (λ = 0) counting as half, so that with no edge it averages one half for any N.
+   */
   pbo: number;
   /** λ = ln(ω / (1 − ω)) of each split, ω being the training winner's mid-rank on the other half over N + 1. */
   logits: number[];
@@ -320,7 +323,7 @@ export function cscv(variants: readonly StepBlocks[], n: readonly number[]): Csc
     judge(inMask, outMask);
     judge(outMask, inMask);
   }
-  return { pbo: logits.filter((l) => l <= 0).length / logits.length, logits };
+  return { pbo: logits.reduce((sum, l) => sum + (l < 0 ? 1 : l === 0 ? 0.5 : 0), 0) / logits.length, logits };
 }
 
 function popCount(x: number): number {
