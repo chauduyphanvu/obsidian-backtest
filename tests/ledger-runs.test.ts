@@ -165,6 +165,31 @@ test('renaming a note moves its blocks\' records, and a block drawn before the r
   assert.equal(Object.keys(store.records.get(blockStateKey('Archive/b.md', 'Trend', 0))!.trials).length, 3);
 });
 
+test('a new note at a renamed note\'s old path starts its own record, and a block drawn before the rename still follows it', async () => {
+  const store = memory();
+  const ledgers = new Ledgers(store, () => 1);
+  const old = ledgers.forBlock(blockStateKey('Untitled.md', null, 0));
+  await old.add([run('trend1')], { text: 'universe: SPY', defaults: {}, figures });
+  await ledgers.rename(blockKeyPrefix('Untitled.md', false), blockKeyPrefix('Trend.md', false));
+  // Another note made as Untitled.md in the same session.
+  const fresh = ledgers.forBlock(blockStateKey('Untitled.md', null, 0));
+  const heard: string[][] = [];
+  old.watch((l) => heard.push(['old', ...Object.keys(l.trials)]));
+  fresh.watch((l) => heard.push(['fresh', ...Object.keys(l.trials)]));
+  assert.deepEqual(await fresh.read(), emptyLedger());
+  await fresh.add([run('dip1')]);
+  await old.add([run('trend2')]);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Untitled.md', null, 0))!.trials), ['dip1']);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Trend.md', null, 0))!.trials), ['trend1', 'trend2']);
+  assert.deepEqual(heard, [['fresh', 'dip1'], ['old', 'trend1', 'trend2']]);
+  // Renamed in turn, the new note takes its record along, and the first block keeps to its own.
+  await ledgers.rename(blockKeyPrefix('Untitled.md', false), blockKeyPrefix('Dip.md', false));
+  await fresh.add([run('dip2')]);
+  await old.add([run('trend3')]);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Dip.md', null, 0))!.trials), ['dip1', 'dip2']);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Trend.md', null, 0))!.trials), ['trend1', 'trend2', 'trend3']);
+});
+
 test('the key of a block starts with its note\'s prefix and its folders\', and no other note\'s', () => {
   const key = blockStateKey('Trading/Ideas/a.md', 'Trend', 2);
   assert.ok(key.startsWith(blockKeyPrefix('Trading/Ideas/a.md', false)));
