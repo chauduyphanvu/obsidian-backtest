@@ -403,6 +403,11 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
     if (save) columnForm(box, text, config.fillColumns ?? {}, (value) => save('fills columns', value));
     return;
   }
+  if (readNone(read)) {
+    for (const line of readLines(read)) say(line);
+    if (host.setting) columnForm(box, text, config.fillColumns ?? {}, (value) => host.setting!('fills columns', value));
+    return;
+  }
   const wanted = read.fills.some((f) => f.date >= from) ? rawWanted(setup, read.fills, from) : [];
   let raw: RawPrices | undefined;
   let asTraded = new Map<string, Bars>();
@@ -418,10 +423,6 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   const rec = matchFills(setup.followed, read.fills, { from, capital: config.capitalAtStart, last: setup.last, days: tradingDays(setup, asTraded), raw });
 
   for (const line of readLines(read)) say(line);
-  if (readNone(read)) {
-    if (host.setting) columnForm(box, text, config.fillColumns ?? {}, (value) => host.setting!('fills columns', value));
-    return;
-  }
   say(costHeadline(rec, from), 'bt-acct-total');
   if (rec.rows.length === 0) return;
   const parts = h(box, 'dl', 'bt-acct-parts');

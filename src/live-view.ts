@@ -136,7 +136,11 @@ export class LiveView extends ItemView {
     this.registerEvent(workspace.on('file-open', () => this.poke()));
     this.registerEvent(workspace.on('layout-change', () => this.poke()));
     // A note in reading mode changes without its editor: by a button of a result, a sync, or another pane.
-    this.registerEvent(this.app.vault.on('modify', () => this.poke()));
+    this.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        if (file.path === this.followed?.file?.path) this.poke();
+      }),
+    );
     workspace.onLayoutReady(() => this.poke());
     void this.refresh();
   }

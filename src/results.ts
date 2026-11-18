@@ -104,13 +104,14 @@ export class Results {
   /**
    * The trigger prices of a result (trigger.ts), worked out once and kept with it; null for a result with no next close to
    * watch (watchable). `runs` are those of whoever shows the result, whose worker already holds its prices; without them
-   * the request gets runs of its own. A kept request that was stopped is asked again with `runs`.
+   * the request gets runs of its own. A kept request that was stopped is asked again with `runs`; one that ran out of time,
+   * or was too large to work out here, stays kept, as asking again would end the same way.
    */
   triggers(out: RunOutput, runs?: BlockRuns, background = false): Promise<TriggerReport | null> | null {
     if (!watchable(out.spec)) return null;
     const kept = this.reports.get(out.backtest);
-    if (kept) return kept.then((r) => r ?? this.request(out, runs, background));
-    return this.request(out, runs, background);
+    if (!kept) return this.request(out, runs, background);
+    return kept.then((r) => (r === null && this.reports.get(out.backtest) !== kept ? this.triggers(out, runs, background) : r));
   }
 
   private request(out: RunOutput, runs: BlockRuns | undefined, background: boolean): Promise<TriggerReport | null> {
@@ -124,7 +125,8 @@ export class Results {
     const forget = () => {
       if (this.reports.get(out.backtest) === asked) this.reports.delete(out.backtest);
     };
-    asked.then((r) => r ?? forget(), forget);
+    // Runs of its own are closed only once it settles, so only the caller's can have stopped it.
+    asked.then((r) => (r === null && runs?.isClosed() ? forget() : undefined), forget);
     return asked;
   }
 

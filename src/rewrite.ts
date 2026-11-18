@@ -158,7 +158,7 @@ function editBlockLines(note: string, line: number, source: string, lang: string
 }
 
 /** A weight at the end of a line naming a strategy, as compare.ts reads one. */
-const WEIGHT_AT_END = /(?<=\s)[+-]?\d+(?:\.\d+)?(\s*%)\s*$/;
+const WEIGHT_AT_END = /(?<=\s|\]\])[+-]?\d+(?:\.\d+)?(\s*%)\s*$/;
 
 /** A line naming a strategy with its weight set to `percent`, written after the note, or put in place of the one it had. */
 export function withWeight(text: string, percent: number): string {

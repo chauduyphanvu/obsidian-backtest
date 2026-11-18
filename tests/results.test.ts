@@ -4,7 +4,7 @@ import type { DataDeps } from '../src/data.ts';
 import type { Defaults } from '../src/dsl.ts';
 import { serve, type ToWorker } from '../src/jobs.ts';
 import { Results } from '../src/results.ts';
-import { createJobClient, type MakeWorker } from '../src/worker-client.ts';
+import { createJobClient, type BlockRuns, type MakeWorker } from '../src/worker-client.ts';
 import { DAY } from './helpers.ts';
 
 const SRC = 'universe: csv:a.csv\nbuy when close > sma(20)\nsell when close < sma(20)';
@@ -151,6 +151,13 @@ test('a result\'s trigger prices are worked out once and kept with it; asked for
   runs.close();
   assert.equal(await stopped, null);
   assert.ok((await results.triggers(fresh)) !== null);
+  // One that came back empty without being stopped, out of time or too large, is kept: asking again would end the same way.
+  let asked = 0;
+  const slow: BlockRuns = { run: async () => null, triggers: async () => (asked++, null), close: () => {}, isClosed: () => false };
+  const other = await results.runSource(SRC, { force: true });
+  assert.equal(await results.triggers(other, slow), null);
+  assert.equal(await results.triggers(other), null);
+  assert.equal(asked, 1);
   // A strategy that ends at a "to" date has no next close to watch.
   assert.equal(results.triggers(await results.runSource(`${SRC}\nto: 2020-06-01`)), null);
   client.shutdown();

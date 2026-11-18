@@ -105,6 +105,8 @@ export interface BlockRuns {
    */
   triggers(req: TriggersRequest): Promise<TriggerReport | null>;
   close(): void;
+  /** Whether close() was called, so a null from them may mean they were stopped rather than out of time. */
+  isClosed(): boolean;
 }
 
 export interface JobClient {
@@ -592,6 +594,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
         pump(short);
         return promise;
       },
+      isClosed: () => closed,
       close() {
         if (closed) return;
         closed = true;

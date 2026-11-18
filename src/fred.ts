@@ -1,7 +1,7 @@
 // FRED's economic series as rows a rule can read. Each value is dated the day it was first published, from ALFRED's
 // first-release view, so a rule never reads a value before anyone could have known it.
 
-import { DAY } from './format.ts';
+import { DAY, median } from './format.ts';
 import { emptyBars, type Bars } from './types.ts';
 
 /** A series' first day of publication with more observations than this is a backfill: history put in at once. */
@@ -36,12 +36,6 @@ function addMonths(t: number, months: number): number {
   const d = new Date(t);
   d.setUTCMonth(d.getUTCMonth() + months);
   return d.getTime();
-}
-
-function median(xs: number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 /**

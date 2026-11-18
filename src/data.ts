@@ -1,5 +1,5 @@
 import { intervalMs, YAHOO_INSIDE_DAYS } from './dsl.ts';
-import { DAY } from './format.ts';
+import { DAY, isoDate } from './format.ts';
 import { parseFred, type FredSeries } from './fred.ts';
 import { columnName, emptyBars, MAX_COLUMNS, sliceBars, type AssetRef, type Bars, type Column, type KeyedService, type Source, type UnreadColumn } from './types.ts';
 
@@ -666,12 +666,13 @@ async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
       if (got.length === 0 || days.length >= Number(page.count)) break;
     }
     if (days.length === 0) throw new Error(`FRED gives no day ${ref.name} was published on, so its values can't be dated`);
-    const observations = rows(await ask('observations', `&realtime_start=${days[0]}&realtime_end=${days[0]}`));
+    const asked = [`&realtime_start=${days[0]}&realtime_end=${days[0]}`];
     for (let i = 0; i < days.length; i += FRED_DAYS_AT_ONCE) {
       const end = i + FRED_DAYS_AT_ONCE < days.length ? days[i + FRED_DAYS_AT_ONCE - 1] : '9999-12-31';
-      observations.push(...rows(await ask('observations', `&output_type=4&realtime_start=${days[i]}&realtime_end=${end}`)));
+      asked.push(`&output_type=4&realtime_start=${days[i]}&realtime_end=${end}`);
     }
-    return parseFred(JSON.stringify({ observations }), ref.name);
+    const answers = await Promise.all(asked.map((query) => ask('observations', query)));
+    return parseFred(JSON.stringify({ observations: answers.flatMap(rows) }), ref.name);
   });
 }
 
@@ -742,21 +743,20 @@ async function refresh(ref: AssetRef, interval: string, since: number, deps: Dat
       try {
         const t = await loadBars({ ...ref, source: 'tiingo' }, interval, since, deps, o.force, { freshForMs: o.freshForMs, fallback: false });
         if (!t.stale) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}); using Tiingo's prices instead.` };
-        if (!cached) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}) or Tiingo; using Tiingo's prices saved on ${isoDay(t.fetched)}.` };
+        if (!cached) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}) or Tiingo; using Tiingo's prices saved on ${isoDate(t.fetched)}.` };
         tiingo = 'it has only an older saved copy';
       } catch (f) {
         tiingo = message(f).replace(`Couldn't load ${ref.name} from tiingo: `, '');
       }
     }
     if (cached) {
-      return loaded(ref.source, cached.bars, cached.fetched, `Couldn't refresh ${ref.name} (${why}); using prices saved on ${isoDay(cached.fetched)}.`, true, cached.note ?? null);
+      return loaded(ref.source, cached.bars, cached.fetched, `Couldn't refresh ${ref.name} (${why}); using prices saved on ${isoDate(cached.fetched)}.`, true, cached.note ?? null);
     }
     if (e instanceof MissingKey) throw new Error(e.message);
     throw new Error(`Couldn't load ${ref.name} from ${ref.source}: ${why}${tiingo ? `. Tiingo could not stand in: ${tiingo}` : ''}`);
   }
 }
 
-const isoDay = (t: number): string => new Date(t).toISOString().slice(0, 10);
 
 const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
 

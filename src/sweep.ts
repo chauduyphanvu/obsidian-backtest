@@ -2,7 +2,7 @@
 
 import { runBacktest, type Backtest, type Stats } from './backtest.ts';
 import { paramValues, parseSpec, type ParseResult, type Spec } from './dsl.ts';
-import { tidy } from './format.ts';
+import { median, tidy } from './format.ts';
 import { trialHash, type TrialRun } from './ledger.ts';
 import { pbo, stepBlocks, stepsPerYear, type Pbo, type StepBlocks } from './overfit.ts';
 import { priceMemo } from './price-memo.ts';
@@ -198,10 +198,6 @@ export function quantile(sorted: number[], q: number): number {
   const pos = (sorted.length - 1) * q;
   const lo = Math.floor(pos);
   return pos === lo ? sorted[lo] : sorted[lo] + (sorted[lo + 1] - sorted[lo]) * (pos - lo);
-}
-
-function median(xs: number[]): number {
-  return quantile([...xs].sort((a, b) => a - b), 0.5);
 }
 
 /**

@@ -5,7 +5,7 @@ import { maxDrawdown } from './backtest.ts';
 import { closesFence, extractBlocks, fenceOf, type Block } from './blocks.ts';
 import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic } from './dsl.ts';
 import { barAt, firstAtOrAfter, type RunResult } from './engine.ts';
-import { isoDate, localDate, plural, price, stamp, tidy } from './format.ts';
+import { isoDate, localDate, median, plural, price, stamp, tidy } from './format.ts';
 import { hash } from './result-cache.ts';
 import { NOTE_CHANGED } from './rewrite.ts';
 import type { Bars } from './types.ts';
@@ -294,12 +294,6 @@ export function worstFalls(values: number[], steps: number): number[] {
   const out: number[] = [];
   for (let a = 0; a + w <= n; a++) out.push(a % w === 0 ? suf[a].worst : join(suf[a], pre[a + w - 1]));
   return out;
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /** The share of `values` that are below `x`, with each equal one counting half. */

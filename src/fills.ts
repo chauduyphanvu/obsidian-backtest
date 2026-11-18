@@ -2,8 +2,8 @@
 // caller reads the file and hands in each strategy's run.
 
 import { detectCsvSeparator, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
-import type { FillLog } from './engine.ts';
-import { DAY, isIntraday } from './format.ts';
+import { barAt, type FillLog } from './engine.ts';
+import { DAY, isIntraday, median } from './format.ts';
 import type { Bars } from './types.ts';
 
 export type Side = 'buy' | 'sell';
@@ -463,17 +463,6 @@ export interface RawPrices {
 }
 
 /** The index of the last of the ascending `t` at or before `at`; -1 for none. */
-function atOrBefore(t: number[], at: number): number {
-  let lo = 0;
-  let hi = t.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (t[mid] <= at) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo - 1;
-}
-
 /** The shortest step between bars: a day for daily bars, a week for weekly ones; Infinity for a single bar, whose step is not known. */
 const steps = new WeakMap<Bars, number>();
 function stepOf(bars: Bars): number {
@@ -499,10 +488,10 @@ export function rawPrices(own: Map<string, Bars>, raw: Map<string, Bars>, adjust
       if (!adjusted.has(ticker)) return 1;
       const r = raw.get(ticker);
       if (!bars || !r || isIntraday(bars.t)) return NaN;
-      const i = atOrBefore(bars.t, day);
+      const i = barAt(bars.t, day);
       if (i < 0) return NaN;
       // A bar covers the days up to the next one, and the last one as many as a step of the bars.
-      const j = atOrBefore(r.t, (bars.t[i + 1] ?? bars.t[i] + stepOf(bars)) - 1);
+      const j = barAt(r.t, (bars.t[i + 1] ?? bars.t[i] + stepOf(bars)) - 1);
       return j >= 0 && r.t[j] >= bars.t[i] ? r.c[j] / bars.c[i] : NaN;
     },
     range(ticker, day) {
@@ -510,7 +499,7 @@ export function rawPrices(own: Map<string, Bars>, raw: Map<string, Bars>, adjust
       if (!bars) return null;
       let low = Infinity;
       let high = -Infinity;
-      for (let i = atOrBefore(bars.t, day + DAY - 1); i >= 0 && bars.t[i] >= day; i--) {
+      for (let i = barAt(bars.t, day + DAY - 1); i >= 0 && bars.t[i] >= day; i--) {
         low = Math.min(low, bars.l[i]);
         high = Math.max(high, bars.h[i]);
       }
@@ -722,7 +711,7 @@ function yourTrades(fills: Fill[], from: number): { ticker: string; trade: YourT
 
 /** The number of trading days of a ticker after `a` up to and including `b`. */
 function daysBetween(days: number[], a: number, b: number): number {
-  return atOrBefore(days, b) - atOrBefore(days, a);
+  return barAt(days, b) - barAt(days, a);
 }
 
 /** Monday to Friday from `from` to `to`, as UTC midnights. */
@@ -731,12 +720,6 @@ function weekdays(from: number, to: number): number[] {
   for (let t = Math.floor(from / DAY) * DAY; t <= to; t += DAY) if (![0, 6].includes(new Date(t).getUTCDay())) out.push(t);
   return out;
 }
-
-const median = (xs: number[]): number => {
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
 
 /**
  * Sets your fills against the strategies' trades, ticker by ticker and side by side, share for share in time order. Each

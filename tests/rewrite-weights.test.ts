@@ -12,6 +12,10 @@ test('a weight is put in place of the one a line has, or after the note when it 
   // A number in the label is not a weight.
   assert.equal(withWeight('[[A|Top 10%]]', 30), '[[A|Top 10%]] 30%');
   assert.equal(withWeight('[[A]] 40%', 0), '[[A]] 0%');
+  // A weight written right after the link, as a compare or account block reads it, is replaced too, and the line still reads.
+  assert.equal(withWeight('[[Trend]]40%', 35), '[[Trend]]35%');
+  const read = parseCompare(['[[Trend]]40%', '[[Dip]] 60%'].map((l, i) => (i === 0 ? withWeight(l, 35) : withWeight(l, 65))).join('\n'));
+  assert.deepEqual([read.errors, read.entries.map((e) => e.weight)], [[], [0.35, 0.65]]);
 });
 
 const fence = '```';

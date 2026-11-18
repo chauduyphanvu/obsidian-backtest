@@ -2,7 +2,7 @@ import { accountOrders, accountStrategy, parseAccount, runAccount, type AccountO
 import type { CompareHost } from './compare.ts';
 import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
-import { DAY, isoDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
+import { DAY, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
 
@@ -144,10 +144,6 @@ const byAction = (a: OrderRow, b: OrderRow) => rank(a) - rank(b) || compare(a.ti
 function localDay(t: number): number {
   const d = new Date(t);
   return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY;
-}
-
-function localDate(t: number): string {
-  return isoDate(localDay(t) * DAY);
 }
 
 /** A trigger is worth watching within this share of the last close, and always for a strategy with `fill: close`. */
