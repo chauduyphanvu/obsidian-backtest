@@ -1,4 +1,4 @@
-/* More statistics: comparison table, yearly returns chart, monthly returns table. */
+/* The Years and Months tabs, and the pieces of them other sections share. */
 
 .bt-root {
   --bt-stats-gain: #2a78d6;
@@ -9,9 +9,6 @@
   --bt-stats-loss: #e66767;
 }
 
-.bt-stats-body {
-  margin-top: 4px;
-}
 .bt-stats-heading {
   margin: 18px 0 6px;
   font-weight: var(--font-semibold);
@@ -20,71 +17,149 @@
   color: var(--text-muted);
   white-space: nowrap;
 }
-.bt-stats-th {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-.bt-swatch.bt-stats-swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-}
-
-.bt-stats-bar-strategy {
-  fill: var(--bt-strategy);
-}
-.bt-stats-bar-benchmark {
-  fill: var(--bt-benchmark);
-}
 .bt-stats-partial {
-  opacity: 0.55;
+  opacity: 0.5;
 }
 .bt-stats-hl {
   fill: var(--background-modifier-hover);
   pointer-events: none;
 }
-.bt-stats-tip .bt-tip-row {
-  grid-template-columns: 14px auto auto;
+
+/* Years: the strategy's return less its benchmark's. */
+.bt-gap-ahead {
+  fill: var(--bt-strategy);
+}
+.bt-gap-behind {
+  fill: var(--bt-benchmark);
+}
+.bt-gap-level {
+  fill: var(--text-muted);
+}
+.bt-gap-none {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1.25;
 }
 
-.bt-root .bt-stats-scroll {
-  max-height: none;
+/* Months: a calendar grid, one cell a month, tinted by its return. */
+.bt-months-box {
   overflow-x: auto;
-  overflow-y: hidden;
 }
-.bt-root table.bt-stats-months {
-  min-width: 620px;
-  margin-top: 0;
+.bt-root table.bt-months-grid {
+  width: 100%;
+  min-width: 240px;
+  margin: 0;
   border-collapse: separate;
-  border-spacing: 2px;
+  border-spacing: 3px;
+  table-layout: fixed;
 }
-.bt-root .bt-stats-months th,
-.bt-root .bt-stats-months td {
-  padding: 3px 4px;
-  white-space: nowrap;
-  border-bottom: none;
+.bt-root .bt-months-grid th,
+.bt-root .bt-months-grid td {
+  padding: 0;
+  border: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
-.bt-root .bt-stats-months th:first-child {
-  position: sticky;
-  left: 0;
-  background: var(--background-primary);
-  padding-left: 0;
-}
-.bt-root .bt-stats-months td {
-  border-radius: var(--radius-s);
-}
-.bt-root .bt-stats-months .bt-stats-up {
-  background: color-mix(in srgb, var(--bt-stats-gain) var(--bt-stats-tint), transparent);
-}
-.bt-root .bt-stats-months .bt-stats-down {
-  background: color-mix(in srgb, var(--bt-stats-loss) var(--bt-stats-tint), transparent);
-}
-.bt-root .bt-stats-months .bt-stats-year {
-  font-weight: var(--font-semibold);
-}
-.bt-root .bt-stats-months .bt-stats-partial-year {
+.bt-root .bt-months-grid th {
   color: var(--text-muted);
   font-weight: var(--font-normal);
+  text-align: center;
+}
+.bt-root .bt-months-grid thead th:first-child,
+.bt-root .bt-months-grid th[scope='row'] {
+  width: 3.2em;
+  text-align: left;
+}
+.bt-root .bt-months-grid thead th:last-child {
+  width: 4.6em;
+  text-align: right;
+}
+.bt-root .bt-months-grid td.bt-month {
+  height: 16px;
+  border-radius: 3px;
+}
+.bt-root .bt-months-grid td.bt-month:not(.bt-month-none):hover {
+  box-shadow: inset 0 0 0 2px var(--text-normal);
+}
+.bt-root .bt-months-grid .bt-stats-year {
+  text-align: right;
+  font-weight: var(--font-semibold);
+}
+.bt-root .bt-months-grid .bt-stats-partial-year {
+  color: var(--text-muted);
+  font-weight: var(--font-normal);
+}
+/* Obsidian shades every second column of a table in a note; the grid's cells keep their own colour. */
+.bt-root .bt-months-grid tbody tr > td {
+  background: transparent;
+}
+.bt-root .bt-months-grid tbody tr > td.bt-stats-up,
+.bt-root .bt-months-swatch.bt-stats-up {
+  background: color-mix(in srgb, var(--bt-stats-gain) var(--bt-stats-tint), transparent);
+}
+.bt-root .bt-months-grid tbody tr > td.bt-stats-down,
+.bt-root .bt-months-swatch.bt-stats-down {
+  background: color-mix(in srgb, var(--bt-stats-loss) var(--bt-stats-tint), transparent);
+}
+.bt-root .bt-months-grid tbody tr > td.bt-month-flat,
+.bt-root .bt-months-swatch.bt-month-flat {
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border-hover);
+}
+.bt-m-short {
+  display: none;
+}
+@container bt-result (max-width: 560px) {
+  .bt-m-long {
+    display: none;
+  }
+  .bt-m-short {
+    display: inline;
+  }
+}
+/* As narrow as the preview panel: the year and its return take less room, so the months fit without scrolling. */
+@container bt-result (max-width: 360px) {
+  .bt-root table.bt-months-grid {
+    border-spacing: 2px;
+  }
+  .bt-root .bt-months-grid th,
+  .bt-root .bt-months-grid td {
+    font-size: 10px;
+  }
+  .bt-root .bt-months-grid thead th:first-child,
+  .bt-root .bt-months-grid th[scope='row'] {
+    width: 2.9em;
+  }
+  .bt-root .bt-months-grid thead th:last-child {
+    width: 4.1em;
+  }
+}
+.bt-months-scale {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.bt-months-swatch {
+  width: 16px;
+  height: 10px;
+  border-radius: 2px;
+}
+.bt-months-scale span:first-child {
+  margin-right: 2px;
+}
+.bt-months-scale span:last-child {
+  margin-left: 2px;
+}
+
+/* Text for screen readers and for copying, not shown. */
+.bt-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

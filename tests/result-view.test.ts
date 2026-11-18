@@ -1,0 +1,342 @@
+// The result drawn into a stand-in for the page: the block's settings folded away, the sections as tabs, the chart's
+// read-out, its spans, shading and falls, the folded line, the near-order chip and the scale of the next close.
+import { El, WIDTH } from './page.ts';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { runBacktest } from '../src/backtest.ts';
+import { timeTicks } from '../src/format.ts';
+import { parseSpec } from '../src/dsl.ts';
+import { ruler, watchText } from '../src/render-now.ts';
+import { renderRegimes } from '../src/render-regimes.ts';
+import { renderResult, type ResultView } from '../src/render.ts';
+import type { AssetRef } from '../src/types.ts';
+import type { RunOutput } from '../src/runner.ts';
+import { tickerText, type Trigger, type TriggerReport } from '../src/trigger.ts';
+import { bars, DAY } from './helpers.ts';
+
+const START = Date.UTC(2019, 0, 1);
+/** Three years of daily closes that climb, fall through March 2020 and climb again. */
+const CLOSES = Array.from({ length: 1100 }, (_, i) => {
+  const t = START + i * DAY;
+  const covid = t >= Date.UTC(2020, 1, 19) && t <= Date.UTC(2020, 2, 23) ? (t - Date.UTC(2020, 1, 19)) / DAY : t > Date.UTC(2020, 2, 23) ? 33 : 0;
+  return 100 * (1 + i * 0.0006) * (1 - covid * 0.009) + 3 * Math.sin(i / 9);
+});
+const TREND = 'name: Trend\nuniverse: A\ncosts: 5 bps\n\nbuy when close > sma(20)\nsell when close < sma(20)';
+
+function run(src: string, closes = CLOSES): RunOutput {
+  const { spec, errors } = parseSpec(src);
+  assert.deepEqual(errors, []);
+  const data = new Map([['A', bars(closes, { start: START })]]);
+  return { spec: spec!, backtest: runBacktest(spec!, data), data, warnings: [], prices: [] };
+}
+
+function draw(out: RunOutput, more: Partial<ResultView> = {}): El {
+  const root = new El('div');
+  renderResult(root as unknown as HTMLElement, { source: '', out, notes: [], onRefresh: () => {}, ...more });
+  return root;
+}
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const texts = (els: El[]) => els.map((e) => e.textContent);
+
+test('the block’s settings are folded away behind a button, its rules and a ticker’s own settings stay in view', () => {
+  const source = 'name: Trend\nuniverse: A\ncosts: 5 bps\n\nn = 20 in 10..40\nbuy when close > sma(n)\nsell when close < sma(n)\n\nfor A:\n  stop loss: 5%';
+  const root = draw(run(TREND), { source });
+  const lines = root.byClass('bt-src-line');
+  const folded = lines.filter((l) => l.classes().includes('bt-src-setting')).map((l) => l.textContent);
+  assert.deepEqual(folded, ['name: Trend', 'universe: A', 'costs: 5 bps', '']);
+  assert.ok(lines.some((l) => l.textContent === '  stop loss: 5%' && !l.classes().includes('bt-src-setting')));
+  const box = root.byClass('bt-src')[0];
+  const toggle = root.byClass('bt-src-toggle')[0];
+  assert.equal(toggle.textContent, 'Show the whole block');
+  toggle.dispatch('click');
+  assert.ok(box.classes().includes('bt-src-all'));
+  assert.equal(toggle.attrs['aria-expanded'], 'true');
+  // A block of rules alone has nothing to fold, and a block of settings alone, such as a ranking, shows them all.
+  assert.equal(draw(run(TREND), { source: 'buy when close > sma(20)' }).byClass('bt-src-toggle').length, 0);
+  const settingsOnly = draw(run(TREND), { source: 'universe: A, B, C\nhold: top 1 by roc(20)\nrebalance: monthly' });
+  assert.equal(settingsOnly.byClass('bt-src-toggle').length, 0);
+  assert.deepEqual(settingsOnly.byClass('bt-src-setting'), []);
+});
+
+test('the sections are tabs, opened one at a time, each large one with a line of what is in it', () => {
+  const root = draw(run(TREND));
+  const tabs = root.byClass('bt-tab');
+  assert.deepEqual(texts(tabs.map((t) => t.byClass('bt-tab-name')[0])), ['Trades', 'Years', 'Months']);
+  const previews = texts(tabs.map((t) => t.byClass('bt-tab-preview')[0]));
+  assert.match(previews[0], /^\d+ closed · \d+% won$/);
+  assert.match(previews[1], /^ahead in \d of [23]$/);
+  assert.match(previews[2], /^up in \d+%$/);
+  const sections = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details');
+  tabs[1].dispatch('click');
+  assert.deepEqual(sections.map((d) => d.open), [false, true, false]);
+  tabs[2].dispatch('click');
+  assert.deepEqual(sections.map((d) => d.open), [false, false, true]);
+  assert.deepEqual(tabs.map((t) => t.attrs['aria-selected']), ['false', 'false', 'true']);
+  // A second click closes it.
+  tabs[2].dispatch('click');
+  assert.deepEqual(sections.map((d) => d.open), [false, false, false]);
+  // Opened from elsewhere, such as by the preview panel: the others close.
+  sections[0].open = true;
+  sections[1].open = true;
+  sections[1].dispatch('toggle');
+  assert.deepEqual(sections.map((d) => d.open), [false, true, false]);
+  assert.deepEqual(tabs.map((t) => t.attrs['aria-selected']), ['false', 'true', 'false']);
+});
+
+test('the tab open when a slider is let go stays open on the new run', async () => {
+  const src = 'name: Trend\nuniverse: A\n\nn = 20 in 10..40 step 10\nbuy when close > sma(n)\nsell when close < sma(n)';
+  const first = run(src);
+  const params = { rerun: (values: Record<string, number>) => Promise.resolve(run(src.replace('n = 20', `n = ${values.n}`))) };
+  const root = draw(first, { source: src, params });
+  const tab = (name: string) => root.byClass('bt-tab').find((b) => b.byClass('bt-tab-name')[0].textContent === name)!;
+  tab('Years').dispatch('click');
+  const slider = root.byClass('bt-param-slider')[0] as El & { valueAsNumber: number };
+  slider.valueAsNumber = 30;
+  slider.dispatch('change');
+  await settle();
+  assert.match(root.byClass('bt-sub')[0].textContent, /n 30/);
+  const open = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details' && c.open);
+  assert.deepEqual(open.map((d) => d.attrs['data-bt-tab']), ['Years']);
+  // The page tells a section it was opened a moment later; the tab follows.
+  open[0].dispatch('toggle');
+  assert.equal(tab('Years').attrs['aria-selected'], 'true');
+  assert.deepEqual(root.byClass('bt-tab').filter((b) => b.attrs['aria-selected'] === 'true').length, 1);
+});
+
+test('the Years tab gives the years ahead, level and behind and draws the gap each year; Months a cell for each month', () => {
+  const root = draw(run(TREND));
+  const [trades, years, months] = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details');
+  years.dispatch('toggle');
+  assert.match(years.byClass('bt-tab-lead')[0].textContent, /^Ahead of buy and hold in \d of [23] whole years, level in \d, behind in \d\./);
+  assert.ok(years.all().some((e) => e.tag === 'svg'));
+  months.dispatch('toggle');
+  // 1,100 days from the first of January 2019: January 2019 to January 2022, 37 months.
+  assert.equal(months.byClass('bt-sr').length, 37);
+  // A head row, then 2019 to 2022.
+  assert.equal(months.all().filter((e) => e.tag === 'tr').length, 5);
+  trades.dispatch('toggle');
+  assert.match(trades.byClass('bt-tab-lead')[0].textContent, /^\d+ of \d+ closed trades won\./);
+  assert.ok(trades.byClass('bt-payoff')[0].all().some((e) => e.attrs.class === 'bt-payoff-gain'));
+});
+
+test('the chart reads out the last bar, then the bar under the pointer, with the fall it lies in and what was held', () => {
+  const out = run(TREND);
+  const root = draw(out);
+  const read = (cls: string) => root.byClass(cls)[0].textContent;
+  const t = out.backtest.run.t;
+  assert.equal(read('bt-read-date'), `${new Date(t.at(-1)!).toISOString().slice(0, 10)} · last bar`);
+  const chart = root.byClass('bt-chart')[0];
+  // The Covid crash is shaded and named.
+  const labels = chart.all().filter((e) => e.attrs.class === 'bt-axis bt-fall-label').map((e) => e.textContent);
+  assert.ok(labels.includes('Covid crash'), labels.join(', '));
+  assert.ok(chart.all().filter((e) => e.attrs.class === 'bt-fall-band').length >= 1);
+  const hit = chart.all().find((e) => e.tag === 'rect' && e.attrs.fill === 'transparent')!;
+  const at = (time: number) => Number(hit.attrs.x) + ((time - t[0]) / (t.at(-1)! - t[0])) * Number(hit.attrs.width);
+  hit.dispatch('pointermove', { clientX: at(Date.UTC(2020, 2, 1)) });
+  assert.equal(read('bt-read-date'), '2020-03-01');
+  assert.equal(read('bt-read-fall'), 'Covid crash');
+  assert.match(read('bt-read-state'), /^(100% invested|In cash)$/);
+  hit.dispatch('pointermove', { clientX: at(Date.UTC(2019, 6, 1)) });
+  assert.equal(root.byClass('bt-read-fall')[0].hidden, true);
+  hit.dispatch('pointerleave');
+  assert.match(read('bt-read-date'), / · last bar$/);
+  // Which line is ahead is shaded, and the key says which shade is which.
+  assert.ok(chart.all().some((e) => e.attrs.class === 'bt-ahead' || e.attrs.class === 'bt-behind'));
+  assert.ok(texts(root.byClass('bt-chart-key')).includes('Market falls'));
+});
+
+test('a run of three years can show its last year alone; the span stays when another run is drawn', () => {
+  const root = draw(run(TREND));
+  const buttons = () => root.byClass('bt-range-button');
+  assert.deepEqual(texts(buttons()), ['All', '1Y']);
+  assert.equal(buttons()[0].attrs['aria-pressed'], 'true');
+  buttons()[1].dispatch('click');
+  assert.deepEqual(buttons().map((b) => b.attrs['aria-pressed']), ['false', 'true']);
+  // The axis now starts a year before the last bar.
+  const years = root.byClass('bt-chart')[0].all().filter((e) => e.attrs['text-anchor'] === 'middle').map((e) => e.textContent);
+  assert.ok(years.every((y) => !y.startsWith('2019')), years.join(' '));
+  // A run under a year and a half offers no shorter span.
+  assert.equal(draw(run(TREND, CLOSES.slice(0, 400))).byClass('bt-range')[0].hidden, true);
+});
+
+test('the strip of time held is hatched where the run was short, and the key says so', () => {
+  const root = draw(run('universe: A\ncapital: 10000\nborrow fee: 0%\nshort when true'));
+  const chart = root.byClass('bt-chart')[0];
+  const short = chart.all().find((e) => e.attrs.class === 'bt-strip-short')!;
+  assert.match(short.attrs.fill, /^url\(#bt-hatch-\d+\)$/);
+  assert.ok(texts(root.byClass('bt-chart-key')).includes('Held short'));
+});
+
+test('folded, the line has the growth, the figures and what is held; the chip says how near the next order is', async () => {
+  const out = run(TREND);
+  const near: Trigger = { ticker: 'A', side: 'sell', driver: 'A', last: 100, range: { lo: 95, hi: 105 }, fires: [{ lo: null, hi: 99.7 }], ownLast: 100, exact: true, assumptions: [] };
+  const report: TriggerReport = { next: 0, intraday: false, closeFill: false, decision: null, triggers: [near] };
+  const root = draw(out, { compact: true, triggers: () => Promise.resolve(report) });
+  assert.ok(root.children[0] instanceof El && (root.children[0] as El).classes().includes('bt-folded'));
+  const facts = root.byClass('bt-fold-facts')[0];
+  assert.equal(facts.byClass('bt-spark').length, 1);
+  assert.deepEqual(texts(facts.byClass('bt-fold-fact')).map((f) => f.replace(/[−+\d.]+%/g, 'X')), ['X a year', 'worst drawdown X']);
+  assert.match(root.byClass('bt-chip-held')[0].textContent, /^(Long A since \d{4}-\d\d-\d\d|In cash)$/);
+  const chip = root.byClass('bt-chip-watch')[0];
+  assert.equal(chip.hidden, true);
+  await settle();
+  assert.equal(chip.hidden, false);
+  assert.equal(chip.textContent, '0.30% from a sell');
+  // Opened, the next close is said in the trigger's own words, with its scale.
+  root.byClass('bt-fold')[0].dispatch('click');
+  await settle();
+  assert.equal(root.byClass('bt-now-say')[0].textContent, tickerText(report, 'A').text);
+  assert.equal(root.byClass('bt-ruler').length, 1);
+});
+
+const SPY: Trigger = { ticker: 'SPY', side: 'sell', driver: 'SPY', last: 732.44, range: { lo: 700, hi: 765 }, fires: [{ lo: null, hi: 730.0221579985773 }], ownLast: 732.44, exact: true, assumptions: [] };
+const report = (...triggers: Trigger[]): TriggerReport => ({ next: 0, intraday: false, closeFill: false, decision: null, triggers });
+
+test('the chip names the nearest order within 2% of the last close, or one given at an unchanged close', () => {
+  assert.equal(watchText(report(SPY), 1), '0.33% from a sell');
+  assert.equal(watchText(report(SPY), 3), 'SPY 0.33% from a sell');
+  assert.equal(watchText(report({ ...SPY, side: 'buy', fires: [{ lo: 740, hi: null }] }), 1), '1.0% from a buy');
+  assert.equal(watchText(report({ ...SPY, side: 'buy', fires: [{ lo: 760, hi: null }] }), 1), null);
+  assert.equal(watchText(report({ ...SPY, fires: [{ lo: null, hi: 740 }] }), 1), 'Sells at an unchanged close');
+  assert.equal(watchText(report({ ...SPY, fires: [{ lo: null, hi: 650 }] }), 1), null);
+});
+
+test('the scale of the next close: the closes that sell shaded, the edge named as the sentence names it, the last close', () => {
+  const box = new El('div');
+  ruler(box as unknown as HTMLElement, SPY);
+  const zone = box.byClass('bt-ruler-zone')[0];
+  assert.equal(zone.style.left, '0.00%');
+  assert.equal(zone.style.width, `${(((730.0221579985773 - 700) / 65) * 100).toFixed(2)}%`);
+  const price = box.byClass('bt-ruler-price')[0];
+  assert.equal(price.textContent, '730.03');
+  assert.ok(price.classes().includes('bt-ruler-after'));
+  assert.ok(tickerText(report(SPY), 'SPY').text.includes('below 730.03'));
+  assert.equal(box.byClass('bt-ruler-zone-label')[0].textContent, 'sells here');
+  assert.equal(box.byClass('bt-ruler-last')[0].textContent, 'last close 732.44');
+  assert.equal(box.byClass('bt-ruler-dot')[0].style.left, `${(((732.44 - 700) / 65) * 100).toFixed(2)}%`);
+  // A flip's two orders at the same closes share one scale.
+  const flip = new El('div');
+  ruler(flip as unknown as HTMLElement, SPY, [{ ...SPY, side: 'short' }]);
+  assert.equal(flip.byClass('bt-ruler-zone-label')[0].textContent, 'sells and shorts here');
+  // A rule that gives no order anywhere in the closes searched, or waits on an order, gets no scale.
+  const none = new El('div');
+  ruler(none as unknown as HTMLElement, { ...SPY, fires: [] });
+  ruler(none as unknown as HTMLElement, { ...SPY, blocked: 'pending' });
+  assert.equal(none.children.length, 0);
+  assert.equal(WIDTH, 600);
+});
+
+test('a run of 200,000 bars folds to its line, and its 50,000 trades draw on the Trades tab', () => {
+  const n = 200_000;
+  // A random walk, so trading every turn neither compounds to infinity nor to nothing.
+  let seed = 7;
+  const step = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 0.004;
+  let price = 100;
+  const closes = Array.from({ length: n }, () => (price *= 1 + step()));
+  const src = 'name: Busy\nuniverse: A\n\nbuy when close > close[1]\nsell when close < close[1]';
+  const { spec } = parseSpec(src);
+  const data = new Map([['A', bars(closes, { start: START, step: DAY / 24 })]]);
+  const out: RunOutput = { spec: spec!, backtest: runBacktest(spec!, data), data, warnings: [], prices: [] };
+  assert.ok(out.backtest.run.trades.length > 40_000, `${out.backtest.run.trades.length} trades`);
+  const root = draw(out, { compact: true });
+  assert.equal(root.byClass('bt-spark').length, 1);
+  root.byClass('bt-fold')[0].dispatch('click');
+  const trades = root.byClass('bt-sections')[0].children.find((c): c is El => typeof c !== 'string' && c.attrs['data-bt-tab'] === 'Trades')!;
+  trades.dispatch('toggle');
+  assert.ok(trades.byClass('bt-payoff')[0].all().some((e) => e.attrs.class === 'bt-payoff-gain'));
+});
+
+test('a trade clicked in the payoff chart that the list leaves out says so', () => {
+  let seed = 11;
+  let price = 100;
+  const closes = Array.from({ length: 4000 }, () => (price *= 1 + ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 0.02));
+  const out = run('name: Busy\nuniverse: A\n\nbuy when close > close[1]\nsell when close < close[1]', closes);
+  const all = out.backtest.run.trades;
+  assert.ok(all.length > 500, `${all.length} trades`);
+  const root = draw(out);
+  const trades = root.byClass('bt-sections')[0].children.find((c): c is El => typeof c !== 'string' && c.attrs['data-bt-tab'] === 'Trades')!;
+  trades.dispatch('toggle');
+  const sorted = all.filter((t) => t.reason !== 'open').sort((a, b) => a.ret - b.ret);
+  const listed = new Set(all.slice(-500));
+  const i = sorted.findIndex((t) => !listed.has(t));
+  const hit = trades.byClass('bt-payoff')[0].all().find((e) => e.tag === 'rect' && e.attrs.fill === 'transparent')!;
+  const step = (WIDTH - 8) / sorted.length;
+  hit.dispatch('click', { clientX: 4 + (i + 0.5) * step });
+  assert.match(trades.byClass('bt-tab-read')[0].textContent, /not in the list, which shows the latest 500 trades\.$/);
+  // A trade of one bar says so in the singular.
+  const one = sorted.findIndex((t) => t.bars === 1);
+  hit.dispatch('pointermove', { clientX: 4 + (one + 0.5) * step });
+  assert.match(trades.byClass('bt-tab-read')[0].textContent, / · 1 bar · /);
+  assert.equal(trades.all().filter((e) => e.classes().includes('bt-row-flash')).length, 0);
+});
+
+test('a fall the strategy beat by less than the Years tab calls level is not counted as beaten', () => {
+  const t = Array.from({ length: 1100 }, (_, i) => START + i * DAY);
+  const bench = CLOSES.map((c) => c * 100);
+  // Ahead by 0.03 points over each fall: interest on a sliver of cash, say.
+  const equity = bench.map((v, i) => v * (1 + 0.0003 * (i / 1100)));
+  const regimes = (strategy: number[]) => {
+    const box = new El('div');
+    renderRegimes(box as unknown as HTMLElement, {
+      run: { t, equity: strategy, exposure: t.map(() => 1), benchmark: bench },
+      benchmarkLabel: 'Buy & hold',
+      intraday: false,
+      universe: [{ name: 'SPY', source: 'yahoo' }] as AssetRef[],
+      saved: () => Promise.resolve(null),
+      load: () => new Promise(() => {}),
+    });
+    const d = box.children[0] as El;
+    d.dispatch('toggle');
+    return { preview: d.attrs['data-bt-preview'], lead: d.byClass('bt-tab-lead')[0]?.textContent };
+  };
+  assert.deepEqual(regimes(equity), { preview: 'better in 0 of 1 fall', lead: 'Did better than buy and hold in 0 of the 1 market fall it covered.' });
+  // Ahead by half a point, it is.
+  const ahead = regimes(bench.map((v, i) => v * (1 + 0.005 * Math.min(1, Math.max(0, (t[i] - Date.UTC(2020, 1, 19)) / (Date.UTC(2020, 2, 23) - Date.UTC(2020, 1, 19)))))));
+  assert.equal(ahead.preview, 'better in 1 of 1 fall');
+});
+
+test('“More figures” keeps the keyboard on it when it opens and closes the rest', () => {
+  const root = draw(run(TREND));
+  const button = () => root.byClass('bt-link-button').find((b) => /figures$/.test(b.textContent))!;
+  const page = globalThis.document as unknown as { activeElement: unknown };
+  button().focus();
+  button().dispatch('click');
+  assert.equal(button().textContent, 'Fewer figures');
+  assert.equal(page.activeElement, button());
+  button().dispatch('click');
+  assert.equal(page.activeElement, button());
+});
+
+test('a run with a `to` date says what it held at its end, not what the next close would do', () => {
+  const root = draw(run(TREND.replace('costs: 5 bps', 'costs: 5 bps\nto: 2021-06-30')));
+  assert.equal(root.byClass('bt-now-title')[0].textContent, 'At the end of the run');
+  assert.equal(draw(run(TREND)).byClass('bt-now-title')[0].textContent, 'At the next close');
+});
+
+test('five years in a narrow chart still name more than one year, and a wide chart is as before', () => {
+  const [a, b] = [Date.UTC(2021, 10, 17), Date.UTC(2026, 10, 17)];
+  assert.deepEqual(timeTicks(a, b, 230).map((x) => x.label), ['2022', '2024', '2026']);
+  assert.deepEqual(timeTicks(Date.UTC(2005, 0, 3), b, 600).map((x) => x.label), ['2010', '2015', '2020', '2025']);
+});
+
+test('each tab names the section it opens, and the arrow keys move along a row of tabs', () => {
+  const root = draw(run(TREND));
+  const tabs = root.byClass('bt-tab');
+  const sections = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details');
+  sections.forEach((d, i) => {
+    assert.equal(d.attrs.role, 'tabpanel');
+    assert.equal(d.attrs['aria-labelledby'], tabs[i].id);
+    assert.equal(tabs[i].attrs['aria-controls'], d.id);
+  });
+  const page = globalThis.document as unknown as { activeElement: unknown };
+  const main = tabs.filter((t) => !t.classes().includes('bt-tab-small'));
+  main[0].focus();
+  main[0].dispatch('keydown', { key: 'ArrowRight', preventDefault() {} });
+  assert.equal(page.activeElement, main[1]);
+  main[1].dispatch('keydown', { key: 'ArrowLeft', preventDefault() {} });
+  assert.equal(page.activeElement, main[0]);
+  main[0].dispatch('keydown', { key: 'ArrowLeft', preventDefault() {} });
+  assert.equal(page.activeElement, main.at(-1));
+  main.at(-1)!.dispatch('keydown', { key: 'Home', preventDefault() {} });
+  assert.equal(page.activeElement, main[0]);
+});

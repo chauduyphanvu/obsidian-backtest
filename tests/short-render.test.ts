@@ -1,4 +1,4 @@
-// A short, flipping or leveraged result drawn into a stand-in for the page: the tiles, the notes, the chart's tooltip, the
+// A short, flipping or leveraged result drawn into a stand-in for the page: the figures, the notes, the chart's read-out, the
 // positions and trades tables, the price chart and the bar-by-bar table.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -12,140 +12,7 @@ import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY, T0 } from './helpers.ts';
 
-// --- The page, as far as these views use it ----------------------------------------------------------------------
-
-const WIDTH = 600;
-
-class El {
-  tag: string;
-  className = '';
-  hidden = false;
-  disabled = false;
-  type = '';
-  title = '';
-  id = '';
-  value = '';
-  min = '';
-  max = '';
-  checked = false;
-  colSpan = 1;
-  scope = '';
-  tabIndex = 0;
-  scrollTop = 0;
-  clientWidth = WIDTH;
-  offsetWidth = 120;
-  offsetHeight = 20;
-  attrs: Record<string, string> = {};
-  listeners: Record<string, ((e: unknown) => void)[]> = {};
-  children: (El | string)[] = [];
-  parent: El | null = null;
-  style = { left: '', right: '', top: '', props: {} as Record<string, string>, setProperty(k: string, v: string) { this.props[k] = v; } };
-  classList = {
-    add: (c: string) => this.setClass(c, true),
-    remove: (c: string) => this.setClass(c, false),
-    toggle: (c: string, on?: boolean) => this.setClass(c, on ?? !this.classes().includes(c)),
-    contains: (c: string) => this.classes().includes(c),
-  };
-  constructor(tag: string) {
-    this.tag = tag;
-  }
-  classes(): string[] {
-    return this.className.split(' ').filter(Boolean);
-  }
-  private setClass(c: string, on: boolean): void {
-    const rest = this.classes().filter((x) => x !== c);
-    this.className = (on ? [...rest, c] : rest).join(' ');
-  }
-  get textContent(): string {
-    return this.children.map((c) => (typeof c === 'string' ? c : c.textContent)).join('');
-  }
-  set textContent(text: string) {
-    this.children = [text];
-  }
-  appendChild(child: El): El {
-    child.parent = this;
-    this.children.push(child);
-    return child;
-  }
-  append(...nodes: (El | string)[]): void {
-    for (const n of nodes) {
-      if (typeof n !== 'string') n.parent = this;
-      this.children.push(n);
-    }
-  }
-  prepend(node: El): void {
-    node.parent = this;
-    this.children.unshift(node);
-  }
-  replaceChildren(...nodes: (El | string)[]): void {
-    this.children = [];
-    this.append(...nodes);
-  }
-  remove(): void {
-    if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
-    this.parent = null;
-  }
-  after(node: El): void {
-    const list = this.parent!.children;
-    list.splice(list.indexOf(this) + 1, 0, node);
-    node.parent = this.parent;
-  }
-  get previousElementSibling(): El | null {
-    const els = (this.parent?.children ?? []).filter((c): c is El => typeof c !== 'string');
-    return els[els.indexOf(this) - 1] ?? null;
-  }
-  get tHead(): El | undefined {
-    return this.children.find((c): c is El => typeof c !== 'string' && c.tag === 'thead');
-  }
-  setAttribute(name: string, value: string): void {
-    this.attrs[name] = value;
-  }
-  getAttribute(name: string): string | null {
-    return this.attrs[name] ?? null;
-  }
-  removeAttribute(name: string): void {
-    delete this.attrs[name];
-  }
-  addEventListener(type: string, listener: (e: unknown) => void, opts?: { once?: boolean }): void {
-    const list = (this.listeners[type] ??= []);
-    const wrapped = opts?.once ? (e: unknown) => { this.listeners[type] = list.filter((l) => l !== wrapped); listener(e); } : listener;
-    list.push(wrapped);
-  }
-  dispatch(type: string, e: unknown = {}): void {
-    for (const listener of [...(this.listeners[type] ?? [])]) listener(e);
-  }
-  getBoundingClientRect() {
-    return { left: 0, top: 0, right: WIDTH, bottom: 300, width: WIDTH, height: 300 };
-  }
-  all(): El[] {
-    return [this, ...this.children.flatMap((c) => (typeof c === 'string' ? [] : c.all()))];
-  }
-  querySelector(selector: string): El | null {
-    const match = (e: El) => (selector.startsWith('.') ? e.classes().includes(selector.slice(1)) : e.tag === selector);
-    return this.all().slice(1).find(match) ?? null;
-  }
-  /** Every element under this one with the class. */
-  byClass(cls: string): El[] {
-    return this.all().filter((e) => e.classes().includes(cls));
-  }
-  has(text: string): boolean {
-    return this.textContent.includes(text);
-  }
-}
-
-// Each test file runs in a process of its own, so the page stays a stand-in for the whole run of this file.
-(globalThis as { document?: unknown }).document = { createElement: (tag: string) => new El(tag), createElementNS: (_ns: string, tag: string) => new El(tag) };
-(globalThis as { window?: unknown }).window = { requestAnimationFrame: (f: (t: number) => void) => (f(0), 0), cancelAnimationFrame: () => {} };
-(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-  private seen: (entries: { contentRect: { width: number } }[]) => void;
-  constructor(seen: (entries: { contentRect: { width: number } }[]) => void) {
-    this.seen = seen;
-  }
-  observe(): void {
-    this.seen([{ contentRect: { width: WIDTH } }]);
-  }
-  disconnect(): void {}
-};
+import { El } from './page.ts';
 
 // --- Results ------------------------------------------------------------------------------------------------------
 
@@ -166,14 +33,18 @@ function draw(out: RunOutput, source = ''): El {
   renderResult(root as unknown as HTMLElement, { source, out, notes: [], onRefresh: () => {} });
   return root;
 }
-/** The tiles as label, value and line under it. */
-const tiles = (root: El) => root.byClass('bt-tile').map((t) => t.children.map((c) => (typeof c === 'string' ? c : c.textContent)));
-/** Moves the pointer over the result's chart to the bar at `share` of the way across, and gives the tooltip's last line. */
+/** The figures under the verdict as label, the strategy's value, the note under it and the benchmark's value. */
+const figures = (root: El) =>
+  root
+    .byClass('bt-vs-row')
+    .filter((r) => !r.classes().includes('bt-vs-head'))
+    .map((r) => [r.byClass('bt-vs-label')[0].textContent, r.byClass('bt-vs-s')[0].byClass('bt-vs-value')[0].textContent, r.byClass('bt-vs-s')[0].byClass('bt-vs-note')[0]?.textContent ?? '', r.byClass('bt-vs-b')[0]?.textContent ?? '']);
+/** Moves the pointer over the result's chart to the bar at `share` of the way across, and gives what the read-out says it held. */
 function hover(root: El, share: number): string {
   const chart = root.byClass('bt-chart')[0];
   const hit = chart.all().find((e) => e.tag === 'rect' && e.attrs.fill === 'transparent')!;
-  hit.dispatch('pointermove', { clientX: 52 + share * (WIDTH - 60) });
-  return chart.byClass('bt-tip-foot')[0].textContent;
+  hit.dispatch('pointermove', { clientX: Number(hit.attrs.x) + share * Number(hit.attrs.width) });
+  return root.byClass('bt-read-state')[0].textContent;
 }
 
 /** Long A at 100% and short B at 50%: 150% gross and 50% net from the second bar, with no fees to move them. */
@@ -182,18 +53,19 @@ const LONG_SHORT = 'universe: A 100%, B 50%\ncapital: 10000\nborrow fee: 0%\nmar
 test('a block that can borrow shows its exposure, gross and net, where a long-only block shows its time invested', () => {
   const out = run(LONG_SHORT, { A: flat(5), B: flat(5) });
   const root = draw(out);
-  const exposure = tiles(root).find((t) => t[0] === 'Exposure');
-  // Four of five bars at 150% gross and 50% net.
-  assert.deepEqual(exposure, ['Exposure', '120%', 'gross, net 40%']);
-  assert.ok(!tiles(root).some((t) => t[0] === 'Time invested'));
+  const exposure = figures(root).find((t) => t[0] === 'Exposure, gross');
+  // Four of five bars at 150% gross and 50% net, against the benchmark's 100%.
+  assert.deepEqual(exposure, ['Exposure, gross', '120%', 'net 40%', '100%']);
+  assert.ok(!figures(root).some((t) => t[0] === 'Time invested'));
   assert.equal(hover(root, 1), 'Exposure 150% gross, net 50%');
   assert.equal(hover(root, 0), 'Exposure 0% gross, net 0%');
   // A short alone has a net exposure below 0.
   const short = draw(run('universe: A\ncapital: 10000\nborrow fee: 0%\nshort when true', { A: flat(5) }));
   assert.equal(hover(short, 1), 'Exposure 100% gross, net −100%');
   const long = draw(run('universe: A\nbuy when true', { A: bars([10, 10, 11, 12, 13]) }));
-  const invested = tiles(long).find((t) => t[0] === 'Time invested')!;
-  assert.match(invested[2], /volatility a year$/);
+  // Four of five bars invested, against the benchmark's 100%.
+  assert.deepEqual(figures(long).find((t) => t[0] === 'Time invested'), ['Time invested', '80%', '', '100%']);
+  assert.ok(figures(long).some((t) => t[0] === 'Volatility'));
   assert.equal(hover(long, 1), '100% invested');
 });
 
