@@ -5,6 +5,7 @@
 import type { Defaults } from './dsl.ts';
 import { equityCsv, snapshotMarkdown, tradesCsv } from './export.ts';
 import { isIntraday } from './format.ts';
+import { forwardLink, type ForwardStart } from './forward.ts';
 import { trialOf, versionFigures, type Ledgers } from './ledger.ts';
 import { LimitError } from './limits.ts';
 import { renderActions } from './render-actions.ts';
@@ -58,6 +59,8 @@ export interface BlocksHost {
   scheduleProperties(notePath: string): void;
   /** Each block's record of tries and versions, by its `blockKey`. */
   ledgers?: Ledgers;
+  /** Writes a forward test note for the strategy and opens it, or says why it could not. */
+  startForward(input: ForwardStart): Promise<void>;
 }
 
 /** The strategy blocks on screen. A block is known by the object its drawings are tied to (Obsidian's render child). */
@@ -159,6 +162,23 @@ export class StrategyBlocks {
               { label: 'Save trades as CSV', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
               { label: 'Save value history as CSV', run: () => this.host.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
               { label: 'Keep this result as a note', run: () => this.host.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
+              // Only a block in a note: the test links back to it, and the preview panel is not the strategy's home.
+              ...(opts.panel || !opts.notePath
+                ? []
+                : [
+                    {
+                      label: 'Start a forward test',
+                      run: () =>
+                        this.host.startForward({
+                          source: shownSource,
+                          defaults: drawing.defaults,
+                          started: bt.run.t[bt.run.t.length - 1],
+                          intraday,
+                          link: forwardLink(opts.notePath, shown.spec.name),
+                          name,
+                        }),
+                    },
+                  ]),
             ]),
         ];
       };

@@ -10,6 +10,7 @@ import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts
 import { renderDeepStats } from './render-stats.ts';
 import { renderPositions, renderTrades } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
+import type { Source } from './types.ts';
 
 /** The strategy as written: the block replaces its own text, so the result has to show it. */
 function source(el: HTMLElement, text: string): void {
@@ -210,7 +211,7 @@ export function compactFacts(out: RunOutput): CompactFacts {
 function notesOf(view: ResultView, out: RunOutput): string[] {
   const { spec, warnings, backtest: bt } = out;
   const first = bt.run.t[0];
-  const notes = [...warnings, ...bt.notes, ...view.notes.map((n) => `Line ${n.line}: ${n.message}`)];
+  const notes = [...warnings, ...(out.notes ?? []), ...bt.notes, ...view.notes.map((n) => `Line ${n.line}: ${n.message}`)];
   if (spec.from !== null && first - spec.from > 7 * DAY) {
     notes.push(`The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
   }
@@ -274,6 +275,8 @@ function fillLegend(legend: HTMLElement, bt: Backtest): void {
   key('bt-swatch-benchmark', bt.benchmark.label, bt.benchmark.equity[bt.benchmark.equity.length - 1]);
 }
 
+const PRICES_FROM: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'your CSV files', tiingo: 'Tiingo', fred: 'FRED' };
+
 /** The parts of a result that are heavy to draw or rarely needed. Returns what to run when they are drawn again or go away. */
 function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() => void)[] {
   const { spec, backtest: bt, prices } = out;
@@ -288,7 +291,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[]): (() =
   const traded = prices.filter((p) => spec.universe.some((a) => a.name === p.name));
   if (traded.length) {
     const through = Math.min(...traded.map((p) => p.through));
-    const sources = [...new Set(traded.map((p) => ({ yahoo: 'Yahoo', binance: 'Binance', stooq: 'Stooq', csv: 'your CSV files' })[p.source]))].join(' and ');
+    const sources = [...new Set(traded.map((p) => PRICES_FROM[p.source]))].join(' and ');
     h(root, 'div', 'bt-note', `Prices through ${stamp(through, intraday)}, from ${sources}.`);
   }
 

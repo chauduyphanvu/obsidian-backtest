@@ -77,7 +77,7 @@ test('setting values', () => {
   assert.deepEqual(labels([], 'rebalance: '), ['never', 'weekly', 'monthly', 'quarterly', 'yearly']);
   assert.deepEqual(labels([], 'rebalance: m'), ['monthly']);
   assert.equal(labels([], 'rebalance: monthly'), null);
-  assert.deepEqual(labels([], 'data: '), ['yahoo', 'binance']);
+  assert.deepEqual(labels([], 'data: '), ['yahoo', 'binance', 'tiingo']);
   assert.deepEqual(labels([], 'interval: 1'), ['1m', '15m', '1h', '12h', '1d', '1w']);
   assert.equal(labels([], 'name: s'), null);
   assert.equal(labels([], 'universe: S'), null);
@@ -185,7 +185,7 @@ test('completions: hints for the new settings, and only stops inside a for secti
   assert.deepEqual(labels([], 'hold: '), ['top 3 by roc(126)']);
   assert.deepEqual(labels([], 'weighting: '), ['inverse volatility(60)']);
   assert.deepEqual(labels([], 'risk per trade: '), ['1% at 2 atr(14)']);
-  assert.deepEqual(labels([], 'cash rate: '), ['4%', '^IRX']);
+  assert.deepEqual(labels([], 'cash rate: '), ['4%', '^IRX', 'fred:DGS3MO']);
   assert.deepEqual(labels([], 'slippage: '), ['5 bps']);
   assert.deepEqual(labels([], 'test from: '), ['2019-01-01']);
   assert.deepEqual(labels([], 'stop loss: ', V2), ['10%', '2 atr(14)', 'stop']);
