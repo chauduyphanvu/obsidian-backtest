@@ -1,7 +1,7 @@
 // The `account` block: an account's holdings and cash, the strategies it follows with their shares of it, and the
 // orders that bring it to what those strategies hold together. Pure; the caller runs the strategies.
 
-import { MAX_ENTRIES, duplicateEntries, parseLine, weightProblems, type CompareEntry } from './compare.ts';
+import { MAX_ENTRIES, duplicateEntries, parseLine, runEntry, weightProblems, type CompareEntry, type CompareHost, type EntryRun } from './compare.ts';
 import type { Diagnostic, Rebalance, Sizing } from './dsl.ts';
 import type { AssetState } from './engine.ts';
 import { parseFillColumns, type FillColumns } from './fills.ts';
@@ -193,6 +193,20 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
 /** Each entry's share of the account: its weight, or an equal share of all of it when the block gives no weights. */
 export function allocations(entries: CompareEntry[]): number[] {
   return entries.map((e) => e.weight ?? 1 / entries.length);
+}
+
+/** A strategy the account follows, run: its entry, the name it goes by, its share of the account and the run's output. */
+export interface FollowedRun extends EntryRun {
+  entry: CompareEntry;
+  alloc: number;
+}
+
+/** Runs each entry's strategy, one after another, as a compare block does. Rejects as `runEntry` does, at the first entry that fails. */
+export async function runAccount<F extends { basename: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<FollowedRun[]> {
+  const shares = allocations(entries);
+  const out: FollowedRun[] = [];
+  for (const [i, entry] of entries.entries()) out.push({ entry, alloc: shares[i], ...(await runEntry(entry, host)) });
+  return out;
 }
 
 // --- Orders --------------------------------------------------------------------------------------------------------

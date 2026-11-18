@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { accountOrders, accountStrategy, allocations, parseAccount, sharesAfterOrders, type AccountConfig, type AccountStrategy } from '../src/account.ts';
+import { accountOrders, accountStrategy, allocations, parseAccount, runAccount, sharesAfterOrders, type AccountConfig, type AccountStrategy } from '../src/account.ts';
 import { runBacktest } from '../src/backtest.ts';
+import type { CompareHost } from '../src/compare.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { AssetState } from '../src/engine.ts';
 import { bars, near } from './helpers.ts';
@@ -354,6 +355,27 @@ test('a ticker with no price is not managed, and nothing is ordered for it', () 
 });
 
 // --- From a run ----------------------------------------------------------------------------------------------------
+
+test("an account's strategies are found and run as a compare block's are, each with its share", async () => {
+  const fence = '```';
+  const notes: Record<string, string> = { Trend: `${fence}strategy\nname: First\nuniverse: A\nbuy when true\n${fence}`, Dips: `${fence}strategy\nuniverse: A\nbuy when close < 12\n${fence}` };
+  const data = new Map([['A', bars([10, 11, 12, 11, 13])]]);
+  const host: CompareHost<{ basename: string; text: string }> = {
+    note: (link) => (link in notes ? { basename: link, text: notes[link] } : null),
+    read: async (f) => f.text,
+    run: async (source) => {
+      const spec = parseSpec(source).spec!;
+      return { spec, backtest: runBacktest(spec, data), data, warnings: [], prices: [] };
+    },
+  };
+  const runs = await runAccount(parseAccount('cash: 1\n[[Trend]]\n[[Dips|Buying dips]]').entries, host);
+  assert.deepEqual(runs.map((r) => [r.label, r.alloc, r.entry.line]), [
+    ['First', 0.5, 2],
+    ['Buying dips', 0.5, 3],
+  ]);
+  assert.equal(runs[0].out.backtest.run.t.length, 5);
+  await assert.rejects(runAccount(parseAccount('cash: 1\n[[Trend]] 50%\n[[Nowhere]] 0%').entries, host), { message: 'Line 3: there is no note called "Nowhere".' });
+});
 
 test("a run's last states, equity and costs, read into what the account needs", () => {
   const data = new Map([['A', bars([90, 95, 99, 101])]]);
