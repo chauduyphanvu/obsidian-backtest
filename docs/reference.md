@@ -203,12 +203,13 @@ From loosest to tightest, the order is:
 
 1. `or`
 2. `and`
-3. `not`
-4. comparisons (`>`, `<`, `>=`, `<=`, `==`, `!=`, `above`, `below`, `crosses above`, `crosses below`, `crosses`, `between`), each with the windows (`for n bars`, `within n bars`) that follow it. They do not chain: write `a < b and b < c`, not `a < b < c`. A window applies to the comparison before it, so `a and b for 3 bars` reads as `a and (b for 3 bars)`; use brackets to apply it to more, as in `(a and b) for 3 bars`.
-5. `+` and `-`
-6. `*` and `/`
-7. a leading `-`
-8. `[n]` and `of`, then function calls and brackets
+3. the windows `for n bars` and `within n bars`, on the comparison before them and a `not` in front of it. So `a and b for 3 bars` reads as `a and (b for 3 bars)`, and `not up for 3 bars` as `(not up) for 3 bars`, out of the trend on each of the 3 bars. Use brackets to apply a window to more, as in `(a and b) for 3 bars`, or to keep it inside a `not`, as in `not (up for 3 bars)`.
+4. `not`
+5. comparisons (`>`, `<`, `>=`, `<=`, `==`, `!=`, `above`, `below`, `crosses above`, `crosses below`, `crosses`, `between`). They do not chain: write `a < b and b < c`, not `a < b < c`.
+6. `+` and `-`
+7. `*` and `/`
+8. a leading `-`
+9. `[n]` and `of`, then function calls and brackets
 
 So `not close > 1 + 2 * 3 or close < 0 and volume > 5` reads as `(not (close > 1 + (2 * 3))) or ((close < 0) and (volume > 5))`. `rsi(2) between 10 and 30 and close > sma(200)` reads as `(rsi(2) between 10 and 30) and (close > sma(200))`, and `not rsi(2) between 10 and 30` as `not (rsi(2) between 10 and 30)`. In the rule values table and in "Explain this trade", a `between` is one part that opens into its two comparisons, and a window is one part that shows the count it rests on.
 
@@ -231,7 +232,7 @@ sell when count(close < close[1], 5) >= 4
 
 - They are built on `count(condition, n)`, which says how many of the last n bars the condition held, this one included: `x for n bars` is `count(x, n) == n`, and `x within n bars` is `count(x, n) >= 1`. You can write `count` yourself, as in `count(close > close[1], 10) >= 7`.
 - A window is unknown until n bars have been read, and while any of its bars is unknown (rule 33). So `x within 3 bars` is unknown on a bar where an earlier bar of the window is unknown, even if the condition held on another.
-- A window applies to a condition, so `close for 3 bars` is an error. It binds at the level of a comparison: `a and b for 3 bars` reads as `a and (b for 3 bars)`.
+- A window applies to a condition, so `close for 3 bars` is an error. It binds at the level of a comparison, with a `not` in front of it: `a and b for 3 bars` reads as `a and (b for 3 bars)`, and `not up for 3 bars` as `(not up) for 3 bars`.
 - A position value cannot be read over a window, since it belongs to the open position at the bar being read: `bars held > 3 for 2 bars` and `count(bars held > 3, 2)` are errors. Read it outside the window, as in `sell when bars held > 5 and close < sma(20) for 3 bars`.
 - The history a rule needs grows by n for a window (rule 4); with a parameter, by the largest value of its range.
 

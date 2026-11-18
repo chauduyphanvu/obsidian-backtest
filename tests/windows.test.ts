@@ -223,10 +223,14 @@ test('a window is read from its own bars, so a condition about a bar before this
   assert.deepEqual(values('count(close > close[1], 4) >= 3', closes), [N, N, N, N, 1, 1]);
 });
 
-test('a window binds at the comparison; brackets apply it to more', () => {
+test('a window binds at the comparison and a not before it; brackets apply it to more', () => {
   assert.deepEqual(exprOf('close > 1 and rsi(2) < 5 for 3 bars'), exprOf('close > 1 and count(rsi(2) < 5, 3) == 3'));
   assert.deepEqual(exprOf('(close > 1 and rsi(2) < 5) for 3 bars'), exprOf('count(close > 1 and rsi(2) < 5, 3) == 3'));
-  assert.deepEqual(exprOf('not close > 1 within 3 bars'), exprOf('not count(close > 1, 3) >= 1'));
+  // `not up for 3 bars` reads as out of the trend on each of 3 bars, not as the trend failing on any one of them.
+  assert.deepEqual(exprOf('not close > 1 for 3 bars'), exprOf('count(not close > 1, 3) == 3'));
+  assert.deepEqual(exprOf('not close > 1 within 3 bars'), exprOf('count(not close > 1, 3) >= 1'));
+  assert.deepEqual(exprOf('not (close > 1 within 3 bars)'), exprOf('not count(close > 1, 3) >= 1'));
+  assert.deepEqual(exprOf('close > 2 and not close > 1 for 3 bars'), exprOf('close > 2 and count(not close > 1, 3) == 3'));
   assert.deepEqual(exprOf('close > 1 for 3 bars or rsi(2) < 5 within 2 bars'), exprOf('count(close > 1, 3) == 3 or count(rsi(2) < 5, 2) >= 1'));
   // A window over a window: the streak of 3 happened within the last 5 bars.
   assert.deepEqual(exprOf('close > 1 for 3 bars within 5 bars'), exprOf('count(count(close > 1, 3) == 3, 5) >= 1'));

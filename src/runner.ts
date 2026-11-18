@@ -1,7 +1,7 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, type DataDeps, type Loaded } from './data.ts';
 import { insideKey } from './engine.ts';
-import { MAX_PERIOD, paramValues, parseSpec, ruleExprs, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
+import { isCross, MAX_PERIOD, paramValues, parseSpec, ruleExprs, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { emptyBars, type AssetRef, type Bars } from './types.ts';
 
@@ -99,7 +99,7 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean, month: number): nu
     case 'logic':
       return Math.max(back(e.a), back(e.b));
     case 'cmp':
-      return Math.max(back(e.a), back(e.b)) + (e.op === 'xup' || e.op === 'xdn' || e.op === 'xany' ? 1 : 0);
+      return Math.max(back(e.a), back(e.b)) + (isCross(e.op) ? 1 : 0);
     case 'neg':
     case 'not':
     case 'of':

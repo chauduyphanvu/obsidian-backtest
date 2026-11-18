@@ -327,20 +327,7 @@ export function barsSince(cond: number[]): number[] {
 
 /** How many of the last `n` bars the condition held, this one included. Unknown until `n` bars have been read and while any of them is unknown. */
 export function count(cond: number[], n: number): number[] {
-  const out = filled(cond.length);
-  // Running totals over the window: the bars where it held, and the bars where it was unknown.
-  let held = 0;
-  let unknown = 0;
-  for (let i = 0; i < cond.length; i++) {
-    if (Number.isNaN(cond[i])) unknown++;
-    else if (cond[i] === 1) held++;
-    if (i >= n) {
-      if (Number.isNaN(cond[i - n])) unknown--;
-      else if (cond[i - n] === 1) held--;
-    }
-    if (i >= n - 1 && unknown === 0) out[i] = held;
-  }
-  return out;
+  return windowSum(cond, n);
 }
 
 /** Stochastic %K: where the close sits in the range of the last `n` bars, 0 to 100, averaged over `smooth` bars. */

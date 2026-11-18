@@ -19,13 +19,12 @@ function rewriteLine(line: string, wanted: Map<string, number>): string {
   const code = comment ? line.slice(0, comment.index! + comment[1].length) : line;
   const text = code.trim();
   const m = text.match(PARAM_LINE);
-  if (!m || RESERVED.has(m[1].toLowerCase())) return line;
+  // A definition such as `half = 0.5*close` may start with a number, but has no value of its own to set.
+  if (!m || RESERVED.has(m[1].toLowerCase()) || !isParamValue(m[2])) return line;
   const value = wanted.get(m[1].toLowerCase());
   if (value === undefined || !Number.isFinite(value)) return line;
   const declared = m[2].match(DECLARED);
   if (!declared) return line;
-  // A definition such as `half = 0.5 * close` may start with a number, but has no value of its own to set.
-  if (!isParamValue(m[2]) && /^\s+\S/.test(m[2].slice(declared[0].length))) return line;
   // One "%" anywhere in the value makes the whole parameter a percentage, whichever number carries it.
   const percent = m[2].includes('%');
   if (same(Number(declared[1]) / (percent ? 100 : 1), value)) return line;

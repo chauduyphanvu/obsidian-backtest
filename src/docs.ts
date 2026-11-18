@@ -638,7 +638,7 @@ word(
   'for … bars',
   'condition for n bars',
   'held on each of the last n bars',
-  'True when the condition held on each of the last n bars, this one included, and unknown until all n are known. It applies to the comparison before it, so a and b for 3 bars means a and (b for 3 bars): use brackets for more.',
+  'True when the condition held on each of the last n bars, this one included, and unknown until all n are known. It applies to the comparison before it and a not in front of it, so a and b for 3 bars means a and (b for 3 bars), and not up for 3 bars means (not up) for 3 bars: use brackets for more.',
   'buy when close > sma(200) for 3 bars',
 );
 word(
@@ -703,7 +703,7 @@ word(
   'not',
   'not a',
   'the condition does not hold',
-  'True when the condition after it is not true. It binds tighter than and but looser than a comparison, so not close > 1 reads as not (close > 1).',
+  'True when the condition after it is not true. It binds tighter than and but looser than a comparison, so not close > 1 reads as not (close > 1), and a window after it covers it: not up for 3 bars is (not up) for 3 bars.',
   'buy when not close < sma(200)',
 );
 word(

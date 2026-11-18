@@ -146,6 +146,24 @@ test('the running value is right whatever order the bars are asked in, and for a
   assert.equal(rule(1, { entryIdx: 1, entryPrice: 10.5, atClose: true }), 10.5);
 });
 
+test('a cross on the high since entry reads the bar before without starting over, so a long hold costs time in proportion to it', () => {
+  const n = 200_000;
+  const closes = Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 50) * 5);
+  const ev = new Evaluator(new Map([['A', bars(closes)]]));
+  const rule = ev.compile(sellRule('close crosses below highest since entry - 3'), 'A');
+  const p: PosState = { entryIdx: 0, entryPrice: 100 };
+  // Starting over at each bar would read about n * n / 2 = 2e10 highs here.
+  const t0 = performance.now();
+  let fired = 0;
+  for (let i = 0; i < n; i++) if (rule(i, p) === 1) fired++;
+  assert.ok(performance.now() - t0 < 2000, `${(performance.now() - t0).toFixed(0)} ms`);
+  assert.ok(fired > 0);
+  // And the values are the ones read in order from the entry.
+  const fresh = new Evaluator(new Map([['A', bars(closes)]])).compile(value('highest since entry'), 'A');
+  const kept = ev.compile(value('highest since entry'), 'A');
+  for (const i of [n - 1, 5, 4, 70_000, 69_999]) assert.equal(kept(i, p), fresh(i, p), `bar ${i}`);
+});
+
 // ---------------------------------------------------------------- in a run
 
 const run = (src: string, data: Bars) => runBacktest(parse(src), new Map([['A', data]]));

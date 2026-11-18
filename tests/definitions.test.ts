@@ -160,6 +160,8 @@ test('definitions made of definitions cannot grow a rule without bound', () => {
   lines.push('buy when a20');
   const { errors } = parse(lines.join('\n'));
   assert.ok(errors.length >= 1 && errors.every((e) => /too big once its definitions are filled in|too deeply/.test(e.message)), JSON.stringify(errors));
+  // Met while each definition is checked on its own, so it names the definition and does not speak of a rule.
+  assert.ok(errors.some((e) => /^This grows too big once its definitions are filled in, at "a\d+"/.test(e.message)), JSON.stringify(errors));
   // A reasonable chain is fine.
   assert.deepEqual(errorsOf('universe: SPY\na = close > 1\nb = a and a\nc = b and b\nbuy when c'), []);
 });
@@ -264,6 +266,28 @@ test('the rule table has a column for a definition by its name, opening into its
   assert.ok(rows.some((r) => r.buy === 'yes'));
 });
 
+test('a definition or a between in brackets is still kept whole in the rule table', () => {
+  const run = (rule: string) => runBacktest(ok(`universe: A\nup = close > sma(20) and rsi(5) > 40\nbuy when ${rule}`), new Map<string, Bars>([['A', bars(wave(160))]]));
+  const layout = (rule: string) => debugColumns(run(rule), 'A').filter((c) => c.group === 'buy').map((c) => [c.depth, c.text]);
+  // In brackets or not, each is one column with its own parts one level below it.
+  assert.deepEqual(layout('(up) and volume > 0'), [
+    [1, '(up)'],
+    [2, 'close > sma(20)'],
+    [2, 'rsi(5) > 40'],
+    [1, 'volume > 0'],
+    [0, '(up) and volume > 0'],
+  ]);
+  assert.deepEqual(layout('((rsi(2) between 10 and 30)) and up'), [
+    [1, '((rsi(2) between 10 and 30))'],
+    [2, 'rsi(2) >= 10'],
+    [2, 'rsi(2) <= 30'],
+    [1, 'up'],
+    [2, 'close > sma(20)'],
+    [2, 'rsi(5) > 40'],
+    [0, '((rsi(2) between 10 and 30)) and up'],
+  ]);
+});
+
 test('explaining a trade shows the definition by its name, with its parts below, and lists the parameters inside it', () => {
   const A = bars([10, 12, 12, 15, 9, 9, 9], { opens: [10, 10, 12, 12, 15, 9, 9] });
   const spec = ok('universe: A\ncapital: 1000\nlimit = 10 in 5..15\nbig = close > limit and volume > 0\nbuy when big\nsell when not big');
@@ -303,4 +327,12 @@ test('a definition alone in a function is its series, so a missing period says s
 
 test('a built-in name is refused in words that fit a definition as well as a parameter', () => {
   assert.equal(only('universe: SPY\nsum = close > 1\nbuy when true')[3], '"sum" is a built-in name. Choose another name, such as my_sum');
+});
+
+test('a problem met once for each rule that reads a definition, or at each empty place of a for list, is reported once', () => {
+  const { errors } = parseSpec('universe: SPY\nx = column(score) of fred:T10Y2Y > 0\nbuy when x\nsell when not x');
+  assert.equal(errors.length, 1, JSON.stringify(errors));
+  assert.equal(errors[0].line, 2);
+  const list = parseSpec('universe: SPY, QQQ\nfor SPY,,QQQ,:\n  buy when true').errors;
+  assert.deepEqual(list.map((e) => e.message), ['Name a ticker between the commas, as in for SPY, QQQ:']);
 });

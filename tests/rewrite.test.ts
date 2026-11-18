@@ -55,7 +55,8 @@ test('a comment is kept, with the spacing before it', () => {
   assert.equal(setParamValues('fast = 50 // fast = 50', { fast: 80 }), 'fast = 80 // fast = 50');
   assert.equal(setParamValues('fast = 50 in 20..100 # note', { fast: 80 }), 'fast = 80 in 20..100 # note');
   assert.equal(setParamValues('# fast = 50', { fast: 80 }), '# fast = 50');
-  assert.equal(setParamValues('fast = 50#x', { fast: 80 }), 'fast = 80#x');
+  // A # stuck to the number starts no comment, so the parser reads no parameter there and nothing is written.
+  assert.equal(setParamValues('fast = 50#x', { fast: 80 }), 'fast = 50#x');
 });
 
 test('tabs are kept', () => {

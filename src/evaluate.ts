@@ -1,4 +1,4 @@
-import { children, findPos, ruleExprs, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
+import { children, findPos, isCross, ruleExprs, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
 import { priceMemo } from './price-memo.ts';
 import type { Bars } from './types.ts';
@@ -367,7 +367,7 @@ export class Evaluator {
       case 'cmp': {
         const [a, b, op] = [this.compile(e.a, asset), this.compile(e.b, asset), e.op];
         // A cross reads the previous bar with the same position, so "bars held" is one less there.
-        const crosses = op === 'xup' || op === 'xdn' || op === 'xany';
+        const crosses = isCross(op);
         return (i, p) => compare(op, a(i, p), b(i, p), crosses && i > 0 ? a(i - 1, p) : NaN, crosses && i > 0 ? b(i - 1, p) : NaN);
       }
       case 'logic': {
@@ -391,20 +391,21 @@ export class Evaluator {
   private sinceEntry(asset: string, highest: boolean): BarRule {
     const bars = this.bars(asset);
     const range = highest ? bars.h : bars.l;
-    let entry = -1;
-    let atClose = false;
-    let upto = -1;
-    let value = NaN;
+    const pick = highest ? Math.max : Math.min;
+    // The value at each bar of the position, kept so a cross reading the bar before does not start over from the entry.
+    const kept = new Array<number>(range.length);
+    let [entry, atClose, first, upto, base] = [-1, false, 0, -1, NaN];
     return (i, p) => {
       if (!p || i < p.entryIdx) return NaN;
-      const first = p.entryIdx + (p.atClose ? 1 : 0);
-      if (p.entryIdx !== entry || !!p.atClose !== atClose || i < upto) {
-        [entry, atClose, upto] = [p.entryIdx, !!p.atClose, first - 1];
-        value = (p.atClose ? bars.c : bars.o)[p.entryIdx];
+      if (p.entryIdx !== entry || !!p.atClose !== atClose) {
+        [entry, atClose] = [p.entryIdx, !!p.atClose];
+        first = entry + (atClose ? 1 : 0);
+        upto = first - 1;
+        base = (atClose ? bars.c : bars.o)[entry];
       }
-      for (let j = upto + 1; j <= i; j++) value = highest ? Math.max(value, range[j]) : Math.min(value, range[j]);
+      for (let j = upto + 1; j <= i; j++) kept[j] = pick(j === first ? base : kept[j - 1], range[j]);
       upto = Math.max(upto, i);
-      return value;
+      return i < first ? base : kept[i];
     };
   }
 

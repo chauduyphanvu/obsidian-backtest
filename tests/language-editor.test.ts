@@ -172,6 +172,8 @@ test('a misspelt definition, and the word after "crosses", get a fix', () => {
 test('a definition line is left alone when parameter values are written back, even if it starts with a number', () => {
   const text = ['universe: SPY', 'fast = 50 in 20..100 step 10', 'half = 0.5 * close', 'buy when close > half and rsi(2) < fast'].join('\n');
   assert.equal(setParamValues(text, { fast: 70, half: 2 }), ['universe: SPY', 'fast = 70 in 20..100 step 10', 'half = 0.5 * close', 'buy when close > half and rsi(2) < fast'].join('\n'));
+  // Written without spaces, it is a definition all the same, as the parser reads it.
+  assert.equal(setParamValues('universe: SPY\nthird = 0.3*close\nbuy when close > third', { third: 4 }), 'universe: SPY\nthird = 0.3*close\nbuy when close > third');
   // Nothing in the Parameters bar is a definition: the spec lists parameters only.
   assert.deepEqual(parseSpec(text).spec!.params.map((p) => p.name), ['fast']);
 });

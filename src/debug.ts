@@ -4,7 +4,7 @@
 // bar where the run made no trade is explained by reading the rules at that bar, never by simulating again.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { children, findPos, isOneThing, walk, type Expr, type Written } from './dsl.ts';
+import { children, findPos, isCross, isOneThing, walk, type Expr, type Written } from './dsl.ts';
 import { barAt, missingInputAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
@@ -234,7 +234,7 @@ function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: 
   const make = (x: Expr, depth: number, whole: boolean, n: number): PlanCol => {
     const label = whole ? w.text : text(x) || `part ${n}`;
     const cmp = x.k === 'cmp' ? x : null;
-    const cross = cmp !== null && (cmp.op === 'xup' || cmp.op === 'xdn' || cmp.op === 'xany');
+    const cross = cmp !== null && isCross(cmp.op);
     const kind: DebugColumn['kind'] = cmp ? (cross ? 'cross' : 'test') : x.k === 'logic' || x.k === 'not' ? 'join' : 'flag';
     const op = cmp ? (cmp.op === 'xup' ? 'crosses above' : cmp.op === 'xdn' ? 'crosses below' : cmp.op === 'xany' ? 'crosses' : OPS[cmp.op]) : '';
     return {
@@ -942,7 +942,7 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
     if (x.k === 'math') return x.fn === 'sqrt' ? 'the square root of a negative number' : x.fn === 'log' ? 'the log of 0 or less' : x.fn === 'exp' ? 'too large a number' : '';
     if (x.k === 'ind') return whyIndicator(cx, x, a, j);
     if (x.k === 'bin' && x.op === '/') return 'divides by 0';
-    if (x.k === 'cmp' && (x.op === 'xup' || x.op === 'xdn' || x.op === 'xany')) return 'the bar before is unknown';
+    if (x.k === 'cmp' && isCross(x.op)) return 'the bar before is unknown';
     return '';
   };
   return visit(e, asset, i);

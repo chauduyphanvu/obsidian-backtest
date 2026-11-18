@@ -3,6 +3,8 @@ import { columnName, DATA_SOURCES, plainSource, SOURCE_PREFIX, type Asset, type 
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
 export type CmpOp = '>' | '<' | '>=' | '<=' | '==' | '!=' | 'xup' | 'xdn' | 'xany';
+/** Whether a comparison is a cross, which reads the bar before as well. */
+export const isCross = (op: CmpOp): boolean => op === 'xup' || op === 'xdn' || op === 'xany';
 /** Values read from the bar's UTC date. */
 export type CalName =
   | 'month' | 'day' | 'weekday' | 'year' | 'month_start' | 'month_end'
@@ -464,9 +466,22 @@ const COLUMN_USAGE = 'column needs the name of a column in brackets, as in colum
  * `text` gives the text of a part, from `Written.parts`.
  */
 export function isOneThing(e: Expr, text: (x: Expr) => string): boolean {
-  const own = text(e);
+  const own = unbracketed(text(e));
   if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(own)) return true;
   return e.k === 'logic' && e.op === 'and' && e.a.k === 'cmp' && e.a.op === '>=' && e.b.k === 'cmp' && e.b.op === '<=' && own.startsWith(`${text(e.a.a)} between `);
+}
+
+/** `text` without the brackets that enclose all of it, as a part written `(uptrend)` has them: `((a))` is `a`, `(a) and (b)` stays. */
+function unbracketed(text: string): string {
+  for (;;) {
+    if (!text.startsWith('(') || !text.endsWith(')')) return text;
+    let depth = 0;
+    for (let k = 0; k < text.length - 1; k++) {
+      depth += text[k] === '(' ? 1 : text[k] === ')' ? -1 : 0;
+      if (depth === 0) return text;
+    }
+    text = text.slice(1, -1).trim();
+  }
 }
 
 /** The first position value the expression reads, or null when it reads none. */
@@ -765,14 +780,18 @@ class ExprParser {
     return a;
   }
 
-  private not(): Expr {
+  /** A comparison, maybe after `not`, then any window: `not up for 3 bars` is (not up) for 3 bars, as it reads. */
+  private not(windowed = true): Expr {
+    const start = this.i;
+    let e: Expr;
     if (this.isId('not')) {
-      const start = this.i;
       const t = this.next();
-      const a = this.deeper(() => this.not());
-      return this.mark(this.node({ k: 'not', a: this.needBool(a, t, 'not') }, t, a), start);
+      const a = this.deeper(() => this.not(false));
+      e = this.mark(this.node({ k: 'not', a: this.needBool(a, t, 'not') }, t, a), start);
+    } else {
+      e = this.cmp();
     }
-    return this.cmp();
+    return windowed ? this.windows(e, start) : e;
   }
 
   private cmpOp(): CmpOp | null {
@@ -812,10 +831,10 @@ class ExprParser {
   private cmp(): Expr {
     const start = this.i;
     const a = this.sum();
-    if (this.isId('between')) return this.windows(this.between(a, start), start);
+    if (this.isId('between')) return this.between(a, start);
     const t = this.peek();
     const op = this.cmpOp();
-    if (!op) return this.windows(a, start);
+    if (!op) return a;
     const b = this.sum();
     // Two conditions can be compared for equality, as in uptrend of SPY == false: they are 1 and 0 where they are known.
     const conditions = (op === '==' || op === '!=') && isBool(a) && isBool(b);
@@ -827,7 +846,7 @@ class ExprParser {
     const pb = barePrice(b);
     const price = pa !== undefined && isFixed(b) ? pa : pb !== undefined && isFixed(a) ? pb : undefined;
     if (price !== undefined) this.ctx.priceVsNumber(this.spanFrom(start), price);
-    return this.windows(e, start);
+    return e;
   }
 
   /** `a between lo and hi`: a >= lo and a <= hi, with a read twice. */
@@ -852,7 +871,8 @@ class ExprParser {
   }
 
   /**
-   * `cond for n bars` and `cond within n bars`, read on the comparison, so `a and b for 3 bars` is `a and (b for 3 bars)`:
+   * `cond for n bars` and `cond within n bars`, read on the comparison and any `not` before it, so `a and b for 3 bars` is
+   * `a and (b for 3 bars)` and `not a for 3 bars` is `(not a) for 3 bars`:
    * count(cond, n) is n, or at least 1.
    */
   private windows(cond: Expr, start: number): Expr {
@@ -1058,7 +1078,8 @@ class ExprParser {
   private definition(t: Tok, d: Definition): Expr {
     if (!this.ctx.checkDef(d, t)) throw new Quiet();
     if ((this.grown.tokens += d.toks.length) > MAX_GROWN) {
-      throw new SpecError(at(t), 'This rule grows too big once its definitions are filled in. Use fewer definitions inside definitions, or write them shorter');
+      // Met while checking a definition on its own as well as in a rule, so it names the definition rather than a rule.
+      throw new SpecError(at(t), `This grows too big once its definitions are filled in, at "${d.name}". Use fewer definitions inside definitions, or write them shorter`);
     }
     const sub = new ExprParser(d.toks, this.ctx, this);
     let root: Expr;
@@ -2038,7 +2059,10 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       if (!d.used) warnings.push(diag(d.nameAt, `"${d.name}" is defined but no rule or score reads it. Use it, as in buy when ${d.name}${d.bool ? '' : ' > 0'}, or remove the line`));
     }
   }
-  errors.sort((a, b) => a.line - b.line);
-  warnings.sort((a, b) => a.line - b.line);
-  return { spec: errors.length ? null : spec, errors, warnings };
+  // A problem inside a definition, or with an empty place in a `for` list, can be met once for each rule that reads it.
+  const once = (list: Diagnostic[]) => list.filter((d, k) => list.findIndex((x) => x.line === d.line && x.from === d.from && x.to === d.to && x.message === d.message) === k);
+  const [errs, warns] = [once(errors), once(warnings)];
+  errs.sort((a, b) => a.line - b.line);
+  warns.sort((a, b) => a.line - b.line);
+  return { spec: errs.length ? null : spec, errors: errs, warnings: warns };
 }
