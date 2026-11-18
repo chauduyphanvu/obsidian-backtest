@@ -90,8 +90,8 @@ test('Invested is gross, longs and shorts together, with the net beside it for a
   assert.deepEqual(regimeRows([only], ['Always'])[0].cells[3], [pct(only.exposure, 0), null]);
 });
 
-test('the README gives the buttons, the falls, the rules and the words of the section as the code has them', () => {
-  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+test('the reference gives the buttons, the falls, the rules and the words of the section as the code has them', () => {
+  const readme = readFileSync(new URL('../docs/reference.md', import.meta.url), 'utf8');
   for (const universe of [[{ name: 'SPY', source: 'yahoo' as const, id: 'SPY' }], [{ name: 'BTCUSDT', source: 'binance' as const, id: 'BTCUSDT' }]]) {
     const plan = regimePlan(universe);
     assert.ok(readme.includes(`"Load ${plan.refs.map((r) => r.name).join(', ')} from ${plan.source}"`), plan.source);

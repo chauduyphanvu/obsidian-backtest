@@ -19,7 +19,7 @@ const TIINGO_KEY = '0123456789abcdef0123456789abcdef01234567';
 const KEYS: Record<KeyedService, string> = { fred: FRED_KEY, tiingo: TIINGO_KEY };
 const NOW = Date.UTC(2025, 2, 12, 12);
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
-const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+const readme = readFileSync(new URL('../docs/reference.md', import.meta.url), 'utf8');
 
 /**
  * A stand-in for FRED holding one series, from [date, first published, value] rows, answering as FRED did on 2026-11-17:
@@ -423,9 +423,9 @@ test('the drafting guide names the new prefixes, and what it says about them par
   assert.ok(!/fred:\w+ \d+%/.test(SYSTEM_PROMPT));
 });
 
-// ------------------------------------------------------------------------------------------------ the README
+// ------------------------------------------------------------------------------------------------ the reference
 
-test('the README quotes the Tiingo and FRED messages as the plugin words them', async () => {
+test('the reference quotes the Tiingo and FRED messages as the plugin words them', async () => {
   const messages: string[] = [];
   const fail = async (ref: AssetRef, answer: () => Promise<string>, over: Partial<DataDeps> = {}) => {
     const { d } = recording(answer, over);

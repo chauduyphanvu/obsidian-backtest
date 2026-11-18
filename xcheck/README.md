@@ -141,7 +141,7 @@ run held at the same time as an explained one (`knock`).
 ## Indicator differences
 
 Every indicator expression matches on every bar of every ticker, with the same first bar, except where this table says so.
-Where a definition has no single standard, both engines keep the one written in `README.md` and in the docs; the choices
+Where a definition has no single standard, both engines keep the one written in `docs/reference.md` and in the docs; the choices
 are below.
 
 | | Ours | Rearview | How the check handles it |

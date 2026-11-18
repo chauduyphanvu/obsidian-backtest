@@ -25,7 +25,7 @@ import { bars } from './helpers.ts';
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const json = (path: string) => JSON.parse(read(path)) as Record<string, string>;
 
-const readme = read('README.md');
+const readme = read('docs/reference.md');
 
 /** The fenced code blocks of a Markdown file with the first word after the fence as their language. */
 function fences(markdown: string): { lang: string; body: string; line: number }[] {
@@ -37,7 +37,7 @@ function fences(markdown: string): { lang: string; body: string; line: number }[
     const body: string[] = [];
     let j = i + 1;
     while (j < lines.length && !new RegExp(`^ {0,3}\\${open[1][0]}{${open[1].length},}\\s*$`).test(lines[j])) body.push(lines[j++]);
-    assert.ok(j < lines.length, `the fence on README line ${i + 1} is never closed`);
+    assert.ok(j < lines.length, `the fence on reference line ${i + 1} is never closed`);
     out.push({ lang: open[2].toLowerCase(), body: body.join('\n'), line: i + 1 });
     i = j;
   }
@@ -50,7 +50,7 @@ const first = (body: string) => body.split('\n').find((l) => l.trim()) ?? '';
 /** The text of a `## ` section, without its heading line, up to the next `## `. */
 function section(title: string): string {
   const start = readme.indexOf(`\n## ${title}\n`);
-  assert.ok(start >= 0, `no section "${title}" in the README`);
+  assert.ok(start >= 0, `no section "${title}" in the reference`);
   const body = start + title.length + 5;
   const end = readme.indexOf('\n## ', body);
   return readme.slice(body, end < 0 ? undefined : end);
@@ -65,54 +65,54 @@ function firstCells(text: string): string[] {
     .map((l) => l.split(' | ')[0].slice(2).trim());
 }
 
-test('every strategy block in the README parses without errors', () => {
+test('every strategy block in the reference parses without errors', () => {
   const found = blocks.filter((b) => b.lang === 'strategy');
   assert.ok(found.length >= 10, `only ${found.length} strategy blocks found`);
   for (const b of found) {
     const { errors } = parseSpec(b.body);
-    assert.deepEqual(errors, [], `the strategy block on README line ${b.line} ("${first(b.body)}") has errors`);
+    assert.deepEqual(errors, [], `the strategy block on reference line ${b.line} ("${first(b.body)}") has errors`);
   }
 });
 
-test('every compare block in the README parses without errors', () => {
+test('every compare block in the reference parses without errors', () => {
   const found = blocks.filter((b) => b.lang === 'compare');
   assert.ok(found.length >= 1, 'no compare block found');
   for (const b of found) {
     const { errors } = parseCompare(b.body);
-    assert.deepEqual(errors, [], `the compare block on README line ${b.line} ("${first(b.body)}") has errors`);
+    assert.deepEqual(errors, [], `the compare block on reference line ${b.line} ("${first(b.body)}") has errors`);
   }
 });
 
-test('every account block in the README parses without errors', () => {
+test('every account block in the reference parses without errors', () => {
   const found = blocks.filter((b) => b.lang === 'account');
   assert.ok(found.length >= 1, 'no account block found');
   for (const b of found) {
     const { errors } = parseAccount(b.body);
-    assert.deepEqual(errors, [], `the account block on README line ${b.line} ("${first(b.body)}") has errors`);
+    assert.deepEqual(errors, [], `the account block on reference line ${b.line} ("${first(b.body)}") has errors`);
   }
 });
 
-test('every forward block in the README parses without errors, its check holds and its strategy runs', () => {
+test('every forward block in the reference parses without errors, its check holds and its strategy runs', () => {
   const found = blocks.filter((b) => b.lang === 'forward');
   assert.ok(found.length >= 1, 'no forward block found');
   for (const b of found) {
     const { forward, errors } = parseForward(b.body);
-    assert.deepEqual(errors, [], `the forward block on README line ${b.line} ("${first(b.body)}") has errors`);
-    assert.equal(forwardChanged(forward!), false, `the check of the forward block on README line ${b.line} does not match its text`);
-    assert.deepEqual(parseSpec(forward!.source).errors, [], `the strategy in the forward block on README line ${b.line} has errors`);
+    assert.deepEqual(errors, [], `the forward block on reference line ${b.line} ("${first(b.body)}") has errors`);
+    assert.equal(forwardChanged(forward!), false, `the check of the forward block on reference line ${b.line} does not match its text`);
+    assert.deepEqual(parseSpec(forward!.source).errors, [], `the strategy in the forward block on reference line ${b.line} has errors`);
   }
 });
 
-test('every backtests block in the README parses without errors', () => {
+test('every backtests block in the reference parses without errors', () => {
   const found = blocks.filter((b) => b.lang === 'backtests');
   assert.ok(found.length >= 1, 'no backtests block found');
   for (const b of found) {
     const { errors } = parseDashboard(b.body);
-    assert.deepEqual(errors, [], `the backtests block on README line ${b.line} ("${first(b.body)}") has errors`);
+    assert.deepEqual(errors, [], `the backtests block on reference line ${b.line} ("${first(b.body)}") has errors`);
   }
 });
 
-test('the README mentions every setting, function, series, calendar value and position value', () => {
+test('the reference mentions every setting, function, series, calendar value and position value', () => {
   const missing: string[] = [];
   for (const name of [...SETTINGS, ...Object.keys(INDICATORS), ...SERIES, ...CALENDAR]) {
     if (!readme.includes(`\`${name}\``)) missing.push(name);
@@ -120,22 +120,22 @@ test('the README mentions every setting, function, series, calendar value and po
   for (const [name, words] of Object.entries(POSITION)) {
     if (!readme.includes(words) && !readme.includes(name)) missing.push(name);
   }
-  assert.deepEqual(missing, [], 'names the README does not mention in backticks');
+  assert.deepEqual(missing, [], 'names the reference does not mention in backticks');
 });
 
-test('the README has a row in its tables for every setting of the language and every function', () => {
+test('the reference has a row in its tables for every setting of the language and every function', () => {
   const rows = new Set([...readme.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]));
   assert.deepEqual([...SETTINGS, ...Object.keys(INDICATORS)].filter((n) => !rows.has(n)), [], 'settings or functions with no table row');
 });
 
-test('the README mentions every command the plugin registers', () => {
+test('the reference mentions every command the plugin registers', () => {
   const main = read('src/main.ts');
   const names = [...main.matchAll(/addCommand\(\{[^]*?\bname:\s*(["'`])((?:(?!\1).)*)\1/g)].map((m) => m[2]);
   assert.equal(names.length, main.match(/addCommand\(/g)!.length, 'a command name was not found');
   assert.deepEqual(names.filter((n) => !readme.includes(n)), []);
 });
 
-test('the README names every property a result writes', () => {
+test('the reference names every property a result writes', () => {
   const spec = parseSpec('universe: A\nbuy when true').spec!;
   const data = new Map([['A', bars([10, 11, 12, 11, 13, 14])]]);
   const keys = Object.keys(resultProperties(runBacktest(spec, data), Date.UTC(2026, 0, 1)));
@@ -143,13 +143,13 @@ test('the README names every property a result writes', () => {
   assert.deepEqual(keys.filter((k) => !readme.includes(`\`${k}\``)), []);
 });
 
-test('the README says what the orders note carries, what refuses a save, and who owns the bt_ properties', () => {
+test('the reference says what the orders note carries, what refuses a save, and who owns the bt_ properties', () => {
   assert.ok(readme.includes(`\`${ORDERS_MARKER}: true\``));
   assert.ok(readme.includes(notOurNoteMessage('<path>')));
   assert.match(readme, /The plugin owns every property that starts with `bt_`/);
 });
 
-test('the README quotes the messages about writing values, sliders and luck checks as the plugin words them', () => {
+test('the reference quotes the messages about writing values, sliders and luck checks as the plugin words them', () => {
   assert.ok(readme.includes(`"${WRITTEN}"`));
   assert.ok(readme.includes(`"Couldn't write the values to the block. ${NOTE_CHANGED}"`));
   assert.ok(read('src/render-params.ts').includes("`Couldn't write the values to the block. ${sentence(e)}`"));
@@ -161,7 +161,7 @@ test('the README quotes the messages about writing values, sliders and luck chec
   assert.ok(read('src/render-luck.ts').includes("'Values shown'") && read('src/render-luck.ts').includes("'Values in the note'"));
 });
 
-test('the README keeps its engine rules numbered one after another, and every "rule N" points at one', () => {
+test('the reference keeps its engine rules numbered one after another, and every "rule N" points at one', () => {
   const start = readme.indexOf('## How the simulation works');
   const section = readme.slice(start, readme.indexOf('\n## ', start + 1));
   const numbers = [...section.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
@@ -169,9 +169,9 @@ test('the README keeps its engine rules numbered one after another, and every "r
   for (const m of readme.matchAll(/\brules? (\d+)\b/g)) assert.ok(Number(m[1]) <= numbers.length, `"${m[0]}" points past the last rule`);
 });
 
-test('the README lists the source files by name', () => {
+test('the reference lists the source files by name', () => {
   const start = readme.indexOf('Layout of `src/`');
-  assert.ok(start >= 0, 'no source layout in the README');
+  assert.ok(start >= 0, 'no source layout in the reference');
   const layout = readme.slice(start, readme.indexOf('\n## ', start));
   for (const file of ['sweep.ts', 'luck.ts', 'rng.ts', 'render-sweep.ts', 'render-luck.ts', 'render-compare.ts']) assert.ok(layout.includes(`\`${file}\``), file);
   const files = readdirSync(new URL('../src/', import.meta.url)).filter((f) => f.endsWith('.ts'));
@@ -179,7 +179,7 @@ test('the README lists the source files by name', () => {
   assert.deepEqual(files.filter((f) => !layout.includes(`\`${f}\``)), [], 'files in src/ that the layout does not name');
 });
 
-test('the README layout names no source file that is not there', () => {
+test('the reference layout names no source file that is not there', () => {
   const start = readme.indexOf('Layout of `src/`');
   const layout = readme.slice(start, readme.indexOf('\n## ', start));
   const files = new Set(readdirSync(new URL('../src/', import.meta.url)));
@@ -194,37 +194,37 @@ function tabSettings(): string[] {
   return [...named, ...tab.matchAll(/this\.field\(\s*'([^']+)'/g)].map((m) => m[1]);
 }
 
-test('the README names every setting the settings tab shows', () => {
+test('the reference names every setting the settings tab shows', () => {
   const names = tabSettings();
   assert.ok(names.length >= 15, `only ${names.length} settings found`);
-  assert.deepEqual(names.filter((n) => !readme.includes(n)), [], 'settings the README does not name');
+  assert.deepEqual(names.filter((n) => !readme.includes(n)), [], 'settings the reference does not name');
 });
 
 test('the settings table lists exactly the settings the settings tab shows', () => {
   const names = tabSettings();
   assert.ok(names.includes('Commission per order'), 'the commission setting is not in the settings tab');
   const rows = firstCells(section('Settings'));
-  assert.deepEqual(names.filter((n) => !rows.includes(n)), [], 'settings with no row in the README table');
-  assert.deepEqual(rows.filter((n) => !names.includes(n)), [], 'rows in the README table for settings the tab does not show');
+  assert.deepEqual(names.filter((n) => !rows.includes(n)), [], 'settings with no row in the reference table');
+  assert.deepEqual(rows.filter((n) => !names.includes(n)), [], 'rows in the reference table for settings the tab does not show');
 });
 
-test('the README says how many starter strategies there are and lists each one', () => {
+test('the reference says how many starter strategies there are and lists each one', () => {
   const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
   const said = readme.match(/It lists (\w+) strategies and an "Empty block"/);
-  assert.ok(said, 'the README does not say how many starter strategies the window lists');
-  assert.equal(words.indexOf(said[1]), STARTERS.length, `the README says ${said[1]}; src/gallery.ts has ${STARTERS.length}`);
+  assert.ok(said, 'the reference does not say how many starter strategies the window lists');
+  assert.equal(words.indexOf(said[1]), STARTERS.length, `the reference says ${said[1]}; src/gallery.ts has ${STARTERS.length}`);
   const rows = firstCells(readme.slice(readme.indexOf('### Starter strategies'), readme.indexOf('\n## ', readme.indexOf('### Starter strategies'))));
   assert.deepEqual(rows, STARTERS.map((s) => s.title), 'the starter table lists the starters in the order of src/gallery.ts');
 });
 
-test('the README says what the parser says for the example with the three mistakes', () => {
+test('the reference says what the parser says for the example with the three mistakes', () => {
   const [source, said] = blocks.filter((b) => b.lang === 'text');
   assert.ok(source && said, 'the two text blocks of "When something is wrong" are missing');
   const messages = parseSpec(source.body).errors.map((e) => `Line ${e.line}: ${e.message}`);
   assert.deepEqual(said.body.split('\n'), messages);
 });
 
-test('the README quotes the limit messages, buttons and numbers as the plugin words them', () => {
+test('the reference quotes the limit messages, buttons and numbers as the plugin words them', () => {
   const refusal = sizeRefusal({ bars: 2_100_000, tickers: 40, ruleWork: 0, windowWork: 0 }, 'worker');
   assert.ok(refusal !== null && refusal.startsWith('This run has 2.1 million bars across 40 tickers; the limit is 1 million.'));
   assert.ok(readme.includes('"This run has 2.1 million bars across 40 tickers; the limit is 1 million."'));
@@ -243,22 +243,22 @@ test('the README quotes the limit messages, buttons and numbers as the plugin wo
     `${LIMITS.here.bars} bars ${LIMITS.here.ruleWork / 1e6} million rule values and ${LIMITS.here.windowWork / 1e6} million prices`,
     `takes more than ${LIMITS.dragMs} ms`,
     `the latest ${LIMITS.keptResults} and no more than about ${LIMITS.keptBytes / 1e6} MB`,
-  ]) assert.ok(plain(readme).includes(need), `the README does not say "${need}"`);
+  ]) assert.ok(plain(readme).includes(need), `the reference does not say "${need}"`);
   assert.ok(readme.includes(`up to ${LIMITS.anywayMs / 60_000} minutes`) && readme.includes(`goes ${LIMITS.stepMs / 60_000} minutes without finishing`));
 });
 
-test('the README names the controls of the bar-by-bar table as the plugin words them', () => {
+test('the reference names the controls of the bar-by-bar table as the plugin words them', () => {
   const debug = read('src/render-debug.ts');
   const labels = ['Rule values, bar by bar', '← Earlier', 'Later →', 'Go to date', '← Previous trade', 'Next trade →', 'Only bars where something happened or nearly happened', 'Save as CSV', 'Save every bar', 'Position', 'What happened'];
   for (const label of labels) assert.ok(debug.includes(`'${label}'`) && readme.includes(`"${label}"`), label);
   assert.ok(readme.includes(`over about ${CSV_ASK_BYTES / 1e6} MB`) && readme.includes(`over about ${CSV_MAX_BYTES / 1e6} MB`));
   assert.ok(debug.includes('` bars ${shown.from + 1} to ${shown.to}`') && readme.includes('`<name> rule values <ticker> bars 121 to 180 <date>`'));
   const columns = readme.match(/\*\*The columns\.\*\*[^\n]*/)![0];
-  assert.ok(columns.indexOf('"What happened" and "Position"') > columns.indexOf('the close'), 'the README gives the columns in the order of the table');
+  assert.ok(columns.indexOf('"What happened" and "Position"') > columns.indexOf('the close'), 'the reference gives the columns in the order of the table');
   assert.match(debug, /'Close'\)[^]*?'What happened'\)[^]*?'Position'\)/, 'the table draws Close, What happened, then Position');
 });
 
-test('the README quotes the line about changed default settings and the CSV helper\'s words as the plugin has them', () => {
+test('the reference quotes the line about changed default settings and the CSV helper\'s words as the plugin has them', () => {
   const quoted: [string, string][] = [
     ['src/render.ts', 'The default settings were changed after this result was worked out. It still has the old ones.'],
     ['src/csv-modal.ts', 'Are some of these columns prices? Choose them yourself'],
@@ -268,7 +268,7 @@ test('the README quotes the line about changed default settings and the CSV help
   assert.ok(read('src/render.ts').includes("'Run again'") && readme.includes('with a "Run again" button'));
 });
 
-test('the README gives the numbers of magnify, commission and the cross-check as the code has them', () => {
+test('the reference gives the numbers of magnify, commission and the cross-check as the code has them', () => {
   assert.ok(readme.includes(`for the last ${YAHOO_INSIDE_DAYS['2m']} days (${YAHOO_INSIDE_DAYS['1h']} for 1h)`));
   assert.ok(readme.includes(`at most ${INSIDE_BARS.toLocaleString('en-US')} for a ticker`));
   assert.ok(readme.includes(`its commission would be ${SMALL_TRADE * 100}% of its value or more`));
@@ -278,11 +278,11 @@ test('the README gives the numbers of magnify, commission and the cross-check as
   assert.ok(readme.includes(`The cross-check runs ${cases} cases and ${expressions} indicator expressions`));
 });
 
-test('the README holds no path from anyone\'s own machine', () => {
+test('the reference holds no path from anyone\'s own machine', () => {
   assert.doesNotMatch(readme, /\/Users\/|\/home\/[a-z]|[A-Z]:\\Users/);
 });
 
-test('the README has no images and no promises of later features', () => {
+test('the reference has no images and no promises of later features', () => {
   assert.ok(!/!\[[^\]]*\]\(/.test(readme) && !/<img\b/i.test(readme), 'an image is linked');
   assert.ok(!/coming soon|\bTODO\b/i.test(readme));
 });
@@ -306,7 +306,7 @@ test('the licence is MIT, 2026, held by the manifest author, and the description
   assert.ok(d.length < 250 && d.endsWith('.') && !/obsidian|plugin/i.test(d), d);
 });
 
-test('the README words the tries, the overfitting check and the versions as the plugin does, with its numbers', () => {
+test('the reference words the tries, the overfitting check and the versions as the plugin does, with its numbers', () => {
   const luck = read('src/render-luck.ts');
   const sweep = read('src/render-sweep.ts');
   const versions = read('src/render-versions.ts');
@@ -327,4 +327,36 @@ test('the README words the tries, the overfitting check and the versions as the 
   assert.ok(readme.includes(`summed over ${STRETCHES} equal stretches`));
   assert.ok(readme.includes(`needs at least ${PBO_MIN_VARIANTS} of them and ${PBO_MIN_STEPS_PER_GROUP} bars in each part`));
   assert.ok(readme.includes(`The first version and the latest ${MAX_VERSIONS} are kept.`));
+});
+
+// ------------------------------------------------------------------------------------------------ the short README
+
+const short = read('README.md');
+
+test('every block in the README parses without errors', () => {
+  const found = fences(short);
+  const parse = { strategy: (b: string) => parseSpec(b).errors, compare: (b: string) => parseCompare(b).errors, account: (b: string) => parseAccount(b).errors, backtests: (b: string) => parseDashboard(b).errors };
+  for (const lang of Object.keys(parse) as (keyof typeof parse)[]) {
+    const ofLang = found.filter((b) => b.lang === lang);
+    assert.ok(ofLang.length >= 1, `no ${lang} block in the README`);
+    for (const b of ofLang) assert.deepEqual(parse[lang](b.body), [], `the ${lang} block on README line ${b.line} ("${first(b.body)}") has errors`);
+  }
+});
+
+test('the README names every command and every host the plugin contacts, and points to the reference', () => {
+  const main = read('src/main.ts');
+  const names = [...main.matchAll(/addCommand\(\{[^]*?\bname:\s*(["'`])((?:(?!\1).)*)\1/g)].map((m) => m[2]);
+  assert.deepEqual(names.filter((n) => !short.includes(n)), [], 'commands the README does not name');
+  // The hosts the reference's "Network requests" lists, which a plugin has to disclose where users read about it.
+  const network = readme.slice(readme.indexOf('### Network requests'), readme.indexOf('\n## ', readme.indexOf('### Network requests')));
+  const hosts = [...new Set([...network.matchAll(/`((?:[a-z0-9-]+\.)+[a-z]{2,})`/g)].map((m) => m[1]))];
+  assert.ok(hosts.length >= 5, `only ${hosts.length} hosts found in the reference`);
+  assert.deepEqual(hosts.filter((h) => !short.includes(`\`${h}\``)), [], 'hosts the README does not name');
+  assert.ok(short.includes('](https://github.com/chauduyphanvu/obsidian-backtest/blob/main/docs/reference.md'), 'no link to the reference');
+});
+
+test('the README holds no path from anyone\'s own machine, no images and no promises of later features', () => {
+  assert.doesNotMatch(short, /\/Users\/|\/home\/[a-z]|[A-Z]:\\Users/);
+  assert.ok(!/!\[[^\]]*\]\(/.test(short) && !/<img\b/i.test(short), 'an image is linked');
+  assert.ok(!/coming soon|\bTODO\b/i.test(short));
 });

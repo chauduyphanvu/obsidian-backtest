@@ -1,5 +1,5 @@
 // Columns of a CSV file everywhere the language is listed or a file is looked at: help, completion, colours, the drafting
-// prompt, the README, and the "Use a CSV file in a strategy" helper.
+// prompt, the reference, and the "Use a CSV file in a strategy" helper.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -13,7 +13,7 @@ import { SYSTEM_PROMPT } from '../src/llm.ts';
 import { blockTickers } from '../src/symbols.ts';
 import { MAX_COLUMNS } from '../src/types.ts';
 
-const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+const readme = readFileSync(new URL('../docs/reference.md', import.meta.url), 'utf8');
 
 // ------------------------------------------------------------------------------------------------ help, colours, completion
 
@@ -112,14 +112,14 @@ test('the drafting prompt says how a column is read, and an example in it parses
   assert.deepEqual(parseSpec('universe: SPY\nbuy when column(score) of csv:Data/signals.csv > 0.7\nsell when sma(column(score) of signals, 10) < 0').errors, []);
 });
 
-test('the README has the subsection, its names and its dating rule, and the sample error lists column', () => {
+test('the reference has the subsection, its names and its dating rule, and the sample error lists column', () => {
   assert.match(readme, /^### Signals from a CSV file$/m);
   for (const part of ['`column(score) of signals`', '`column("News Sentiment")`', 'news_sentiment', 'A row dated Tuesday is known at Tuesday\'s close', 'the order it gives fills at Wednesday\'s open', 'the classic way to cheat by accident', 'At most 50 columns', 'This file has no prices. A strategy can read its columns but cannot trade it.']) {
     assert.ok(readme.includes(part), part);
   }
   assert.ok(readme.includes('abs, column. Dates:'));
   assert.ok(readme.includes(`"${'This file has no prices. A strategy can read its columns but cannot trade it.'}"`));
-  // The README's account of the dating is the helper window's.
+  // The reference's account of the dating is the helper window's.
   assert.ok(SIGNAL_DATING.includes("A row counts as known at the end of the day it is dated."));
 });
 

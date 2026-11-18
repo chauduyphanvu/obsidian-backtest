@@ -93,9 +93,9 @@ test('every function signature carries the defaults from INDICATORS', () => {
   assert.equal(docFor('sma')!.signature, 'sma(n)');
 });
 
-const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8').replaceAll('`', '');
+const readme = readFileSync(new URL('../docs/reference.md', import.meta.url), 'utf8').replaceAll('`', '');
 
-test('texts say what the README says, in its words, where it states a rule', () => {
+test('texts say what the reference says, in its words, where it states a rule', () => {
   const same: [string, string][] = [
     ['roc', 'as a fraction'],
     ['%', 'counts as the number 0.05 wherever a number is expected'],

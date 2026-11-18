@@ -98,7 +98,7 @@ test('a misspelt function', () => {
   assert.equal(fixedBlock([HEAD, 'buy when rsii(14) < 30'])[1], 'buy when rsi(14) < 30');
   assert.equal(fixedBlock([HEAD, 'buy when macd() > 0 and macd_signl() < 1'])[1], 'buy when macd() > 0 and macd_signal() < 1');
   assert.equal(fixedBlock([HEAD, 'buy when close > bb_uper(20, 2)'])[1], 'buy when close > bb_upper(20, 2)');
-  // Uppercase is fine in the language, and the fix is written in lowercase like the README.
+  // Uppercase is fine in the language, and the fix is written in lowercase like the reference.
   assert.equal(fixedBlock([HEAD, 'buy when close > SMAA(200)'])[1], 'buy when close > sma(200)');
 });
 
