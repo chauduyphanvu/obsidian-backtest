@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { withoutQueries, type DataDeps } from '../data.ts';
+import type { KeyedService } from '../types.ts';
 import { PriceStore } from '../price-store.ts';
 
 /** Where prices are saved between runs: $XDG_CACHE_HOME/backtest-blocks, or ~/.cache/backtest-blocks. */
@@ -17,6 +18,7 @@ export const vaultPath = (path: string): string =>
  */
 export function nodeDeps(o: { vault: string; cacheDir: string; env: NodeJS.ProcessEnv; fetch?: typeof fetch }): DataDeps {
   const get = o.fetch ?? fetch;
+  const keyVariable = (service: KeyedService) => (service === 'fred' ? 'FRED_API_KEY' : 'TIINGO_API_KEY');
   const vault = resolve(o.vault);
   // The price store gives the cache folder whole, and a vault file as the vault names it, from the vault's root.
   const at = (path: string): string => {
@@ -58,8 +60,8 @@ export function nodeDeps(o: { vault: string; cacheDir: string; env: NodeJS.Proce
       if (res.status >= 400 && !text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
       return text;
     },
-    secret: (service) => (service === 'fred' ? o.env.FRED_API_KEY : o.env.TIINGO_API_KEY) || null,
+    secret: (service) => o.env[keyVariable(service)] || null,
     tiingoFallback: () => false,
   });
-  return store.deps();
+  return { ...store.deps(), keyVariable };
 }

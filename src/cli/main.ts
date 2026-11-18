@@ -64,11 +64,17 @@ interface FoundBlock {
   start: number;
 }
 
-/** The strategy blocks of a note, or the whole text as one block when it has no strategy fence. */
-export function blocksIn(text: string): FoundBlock[] {
+/** A Markdown note's name: its blocks must be fenced, since its prose is not a block. */
+const isNote = (file: string) => /\.md$/i.test(file);
+
+/** What to say of a text with no strategy block in it. */
+export const noBlock = (file: string) => `no strategy block: a block opens with \`\`\`strategy${isNote(file) ? '' : ', or give its lines with no fence'}`;
+
+/** The strategy blocks of a note, or the whole text as one block when it is not a note and has no fence at all. */
+export function blocksIn(text: string, note = false): FoundBlock[] {
   const blocks = extractBlocks(text);
   if (blocks.length > 0) return blocks.map((b) => ({ name: b.name, source: b.source, start: b.line + 1 }));
-  return /^\s*(`{3,}|~{3,})/m.test(text) ? [] : [{ name: null, source: text.replace(/\n+$/, ''), start: 0 }];
+  return note || /^\s*(`{3,}|~{3,})/m.test(text) ? [] : [{ name: null, source: text.replace(/\n+$/, ''), start: 0 }];
 }
 
 export interface Problem {
@@ -96,7 +102,7 @@ function problemsOf(file: string, text: string, b: FoundBlock): Problem[] {
 
 /** Every problem in the strategy blocks of a note, or of a bare block, with lines counted in the note. */
 export function checkSource(text: string, file: string): { blocks: number; problems: Problem[] } {
-  const found = blocksIn(text);
+  const found = blocksIn(text, isNote(file));
   return { blocks: found.length, problems: found.flatMap((b) => problemsOf(file, text, b)) };
 }
 
@@ -131,7 +137,7 @@ async function check(files: string[], json: boolean, io: Io): Promise<number> {
     const found = checkSource(text, file);
     // A note with no block to check is a mistake too: the fence may be misspelt.
     if (found.blocks === 0) {
-      io.err(`${file}: no strategy block`);
+      io.err(`${file}: ${noBlock(file)}`);
       empty++;
     }
     blocks += found.blocks;
@@ -161,7 +167,7 @@ function vaultAbove(from: string): string | null {
 
 /** The block of a note to run: the one named or numbered, or the only one; else what to say. */
 export function pickBlock(text: string, file: string, block: string | undefined, how = '--block'): { block: FoundBlock } | { error: string } {
-  const found = blocksIn(text);
+  const found = blocksIn(text, isNote(file));
   let b: FoundBlock | undefined;
   if (block !== undefined) b = /^\d+$/.test(block) ? found[Number(block) - 1] : found.find((x) => x.name?.toLowerCase() === block.toLowerCase());
   else if (found.length === 1) b = found[0];
@@ -169,7 +175,7 @@ export function pickBlock(text: string, file: string, block: string | undefined,
   const list = found.map((x, i) => `${i + 1}${x.name ? `: ${x.name}` : ''}`).join(', ');
   return {
     error:
-      found.length === 0 ? `${file}: no strategy block` : block === undefined ? `${file} has ${found.length} blocks (${list}). Choose one with ${how}` : `${file} has no block "${block}". Its blocks: ${list}`,
+      found.length === 0 ? `${file}: ${noBlock(file)}` : block === undefined ? `${file} has ${found.length} blocks (${list}). Choose one with ${how}` : `${file} has no block "${block}". Its blocks: ${list}`,
   };
 }
 

@@ -1,4 +1,4 @@
-import { isIntraday, isoDate, pct, stamp } from '../format.ts';
+import { isIntraday, isoDate, minus, pct, stamp } from '../format.ts';
 import { positionText } from '../export.ts';
 import type { RunOutput } from '../runner.ts';
 import { verdict } from '../verdict.ts';
@@ -31,7 +31,7 @@ export function runSummary(out: RunOutput, lastTrades = 10) {
   };
 }
 
-const ratio = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '–');
+const ratio = (x: number) => (Number.isFinite(x) ? minus(x.toFixed(2)) : '–');
 
 /** The run as text for a terminal or a model: the verdict, the figures side by side, the trades and what it holds now. */
 export function runText(out: RunOutput): string {

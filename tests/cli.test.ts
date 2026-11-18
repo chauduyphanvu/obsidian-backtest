@@ -1,7 +1,7 @@
 // The command line: check, run, explain, words and guide, as a model or a person would use them outside Obsidian.
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,14 +13,14 @@ import { makeRng } from '../src/rng.ts';
 const dir = mkdtempSync(join(tmpdir(), 'backtest-blocks-cli-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Seven hundred daily bars of a random walk, as a CSV file in a vault. */
-function prices(): string {
+/** Seven hundred daily bars of a random walk, as a CSV file in a vault; a lower `up` makes it fall. */
+function prices(up = 0.48): string {
   const rng = makeRng(7);
   let c = 100;
   const t0 = Date.UTC(2020, 0, 1);
   const rows = Array.from({ length: 700 }, (_, i) => {
     const o = c;
-    c *= 1 + (rng.next() - 0.48) * 0.03;
+    c *= 1 + (rng.next() - up) * 0.03;
     return `${new Date(t0 + i * 86_400_000).toISOString().slice(0, 10)},${o},${Math.max(o, c)},${Math.min(o, c)},${c}`;
   });
   return ['date,open,high,low,close', ...rows].join('\n');
@@ -30,12 +30,13 @@ const vault = join(dir, 'vault');
 mkdirSync(join(vault, '.obsidian'), { recursive: true });
 mkdirSync(join(vault, 'Data'), { recursive: true });
 writeFileSync(join(vault, 'Data/walk.csv'), prices());
+writeFileSync(join(vault, 'Data/fall.csv'), prices(0.56));
 const NOTE = ['# Two strategies', '', '```strategy', 'name: Walk trend', 'universe: csv:Data/walk.csv', 'buy when close > sma(50)', 'sell when close < sma(50)', '```', '', '> [!note]', '> ```strategy', '> name: Walk dips', '> universe: csv:Data/walk.csv', '> buy when rsi(2) < 10', '> sell when rsi(2) > 70', '> ```', ''].join('\n');
 writeFileSync(join(vault, 'Two.md'), NOTE);
 writeFileSync(join(vault, 'Broken.md'), ['```strategy', 'universe: SPY', 'from: 01/31/2015', 'buy when close > moving_average(200)', '```', ''].join('\n'));
 writeFileSync(join(vault, 'Prose.md'), 'Just a note.\n\n```js\nconsole.log(1)\n```\n');
 
-async function call(args: string[], stdin = ''): Promise<{ code: number; out: string; err: string }> {
+async function call(args: string[], stdin = '', with_: Partial<Io> = {}): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -45,6 +46,7 @@ async function call(args: string[], stdin = ''): Promise<{ code: number; out: st
     env: {},
     cwd: vault,
     fetch: () => Promise.reject(new Error('no network in tests')),
+    ...with_,
   };
   const code = await cli(args, io);
   return { code, out: out.join('\n'), err: err.join('\n') };
@@ -152,8 +154,8 @@ test('check goes on past a note it can not read, reports every other problem, an
   assert.match(both.err, /can't read Missing\.md/);
   const one = await call(['check', 'Two.md', 'Prose.md']);
   assert.equal(one.code, 1);
-  assert.equal(one.err, 'Prose.md: no strategy block\n2 blocks checked: 1 note with no strategy block');
-  assert.equal((await call(['check', 'Prose.md'])).err, 'Prose.md: no strategy block\n0 blocks checked: 1 note with no strategy block');
+  assert.equal(one.err, 'Prose.md: no strategy block: a block opens with ```strategy\n2 blocks checked: 1 note with no strategy block');
+  assert.equal((await call(['check', 'Prose.md'])).err, 'Prose.md: no strategy block: a block opens with ```strategy\n0 blocks checked: 1 note with no strategy block');
 });
 
 test('a CSV path reads from the vault as Obsidian does, and never from outside it', async () => {
@@ -178,4 +180,48 @@ test('explain takes a word as a block writes it: a call with its arguments, a se
   assert.match((await call(['explain', 'sma(200)'])).out, /^sma\(n\)/);
   assert.match((await call(['explain', 'rebalance: monthly'])).out, /^rebalance: monthly/);
   assert.match((await call(['explain', 'stop loss: 10%'])).out, /^stop loss: /);
+});
+
+test('the MCP server exits quietly when its client closes standard input', () => {
+  const r = spawnSync(process.execPath, ['src/cli/bin.ts', 'mcp'], { input: '', encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: join(dir, 'xdg') } });
+  assert.equal(r.stderr, '');
+  assert.equal(r.status, 0);
+});
+
+test('a FRED or Tiingo key that is missing or refused names the variable to set, not the plugin settings', async () => {
+  const fred = 'universe: csv:Data/walk.csv\nbuy when close of fred:T10Y2Y > 0\nsell when close of fred:T10Y2Y < 0';
+  const missing = await call(['run', '-'], fred);
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /FRED needs an API key to load T10Y2Y\. Set FRED_API_KEY in the environment\./);
+  assert.match((await call(['run', '-'], 'data: tiingo\nuniverse: SPY\nbuy when close > sma(20)\nsell when close < sma(20)')).err, /Set TIINGO_API_KEY in the environment\./);
+  const refused = await call(['run', '-'], fred, {
+    env: { FRED_API_KEY: 'wrong' },
+    fetch: async () => new Response('{"error_code":400,"error_message":"Bad Request.  The value for variable api_key is not registered."}', { status: 400 }),
+  });
+  assert.match(refused.err, /FRED did not accept the API key\. Check FRED_API_KEY/);
+  for (const r of [missing, refused]) assert.doesNotMatch(r.err, /plugin settings/);
+});
+
+test('a note with no strategy fence is not read as a block, however plain its text', async () => {
+  writeFileSync(join(vault, 'Plain.md'), '# Ideas\n\nBuy SPY when it looks cheap.\n');
+  const r = await call(['check', 'Plain.md']);
+  assert.equal(r.code, 1);
+  assert.equal(r.out, '');
+  assert.match(r.err, /^Plain\.md: no strategy block/);
+  // A file that is not a note, and standard input, may still be a bare block.
+  writeFileSync(join(vault, 'draft.txt'), 'universe: SPY\nbuy when close > sma(200)\nsell when close < sma(200)\n');
+  assert.equal((await call(['check', 'draft.txt'])).code, 0);
+});
+
+test('a block in a plain fence is not checked, and the message says how to fence it', async () => {
+  const r = await call(['check', '-'], '```\nuniverse: SPY\nbuy when close > sma(200)\n```');
+  assert.equal(r.code, 1);
+  assert.equal(r.err, '-: no strategy block: a block opens with ```strategy, or give its lines with no fence\n0 blocks checked: 1 note with no strategy block');
+});
+
+test('the run table writes a negative Sharpe ratio with the same minus as the other figures', async () => {
+  const r = await call(['run', '-'], 'universe: csv:Data/fall.csv\nbuy when close > 0\nsell when close < 0');
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^Sharpe ratio +−\d\.\d\d +−\d\.\d\d$/m);
+  assert.doesNotMatch(r.out, /(^|\s)-\d/m);
 });

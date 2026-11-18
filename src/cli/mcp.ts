@@ -6,7 +6,7 @@ import { MISTAKES } from '../corpus/mistakes.ts';
 import type { DataDeps } from '../data.ts';
 import { generatedFiles, wordList } from '../llm-files.ts';
 import { SYSTEM_PROMPT, userMessage } from '../llm.ts';
-import { checkSource, explainText, problemLine, runNote, version, WORD_KINDS, wordNames, type Io } from './main.ts';
+import { checkSource, explainText, noBlock, problemLine, runNote, version, WORD_KINDS, wordNames, type Io } from './main.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
@@ -28,7 +28,7 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps): 
     async ({ source }) => {
       const { blocks, problems } = checkSource(source, 'strategy');
       const errors = problems.filter((p) => p.severity === 'error').length;
-      const summary = blocks === 0 ? 'No strategy block found.' : problems.length === 0 ? `${blocks === 1 ? 'The block has' : `All ${blocks} blocks have`} no problems.` : problems.map(problemLine).join('\n');
+      const summary = blocks === 0 ? `Found ${noBlock('strategy')}.` : problems.length === 0 ? `${blocks === 1 ? 'The block has' : `All ${blocks} blocks have`} no problems.` : problems.map(problemLine).join('\n');
       return { content: [text(summary)], structuredContent: { blocks, errors, warnings: problems.length - errors, problems } };
     },
   );
@@ -113,5 +113,7 @@ export async function serve(io: Io): Promise<void> {
   const transport = new StdioServerTransport();
   const closed = new Promise<void>((resolve) => (transport.onclose = resolve));
   await server.connect(transport);
+  // The transport doesn't close itself when the client hangs up: it only stops getting data.
+  process.stdin.once('end', () => void transport.close());
   await closed;
 }

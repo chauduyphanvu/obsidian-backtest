@@ -121,3 +121,8 @@ test('run_backtest names a problem at its line in the note, as check_strategy do
   const line = checked.match(/^strategy:\d+:\d+: error: .*$/m)![0];
   assert.ok(textOf(ran).includes(line), `${textOf(ran)}\n--- should hold ---\n${line}`);
 });
+
+test('check_strategy on a block in a plain fence says how to fence it', async () => {
+  const r = await client.callTool({ name: 'check_strategy', arguments: { source: '```\nuniverse: SPY\nbuy when close > sma(200)\n```' } });
+  assert.match(textOf(r), /```strategy/);
+});
