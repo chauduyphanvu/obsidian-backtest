@@ -129,6 +129,9 @@
   box-sizing: border-box;
   white-space: normal;
 }
+.bt-root .bt-price-tip.bt-tip-measure {
+  left: 0;
+}
 .bt-price-tip-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

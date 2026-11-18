@@ -435,8 +435,9 @@ const tableLine = (cells: string[]): string => `| ${cells.map((c) => c.replace(/
 
 /** The cells of a table line, with an escaped bar read as the character. */
 function cellsOf(line: string): string[] {
-  const text = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '');
-  return text.split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+  // An escaped bar is set aside as a character no note holds, so every bar left divides cells.
+  const text = line.trim().replace(/\\\|/g, '\u0000').replace(/^\|/, '').replace(/\|$/, '');
+  return text.split('|').map((c) => c.replace(/\u0000/g, '|').trim());
 }
 
 const RULE_CELL = /^:?-{3,}:?$/;

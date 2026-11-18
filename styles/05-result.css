@@ -604,6 +604,9 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.bt-ruler-zone-label.bt-ruler-start {
+  left: 0;
+}
 .bt-ruler-zone-label.bt-ruler-end {
   right: 0;
 }

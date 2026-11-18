@@ -22,8 +22,8 @@ export interface CompareEntry {
   line: number;
 }
 
-// The lookbehind, not a leading \s+, keeps a long run of spaces from being retried at every position.
-const WEIGHT_AT_END = /(?<=\s)([+-]?\d+(?:\.\d+)?\s*%)$/;
+// One space, not \s+, keeps a long run of spaces from being retried at every position. No lookbehind: iOS before 16.4 has none.
+const WEIGHT_AT_END = /\s([+-]?\d+(?:\.\d+)?\s*%)$/;
 const WEIGHT = /^([+-]?\d+(?:\.\d+)?)\s*%$/;
 const BARE_PATH = /^(.+?\.md)(?:#(.*))?$/i;
 const EPS = 1e-9;

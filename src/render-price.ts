@@ -274,8 +274,10 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     }
     tip.hidden = false;
     // To the right of the crosshair, or to the left when it would run off the chart. Measured from the left edge, where it has the most room.
-    tip.style.left = '0px';
+    tip.style.removeProperty('left');
+    tip.classList.add('bt-tip-measure');
     const w = tip.offsetWidth;
+    tip.classList.remove('bt-tip-measure');
     tip.style.left = `${px + 12 + w <= width ? px + 12 : Math.max(0, px - 12 - w)}px`;
     tip.style.top = `${top + 4}px`;
   };

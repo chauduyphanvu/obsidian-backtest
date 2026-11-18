@@ -137,8 +137,9 @@ function removes(ctx: Context, e: Edit): boolean {
   const edited = applied(ctx.lines, e);
   if (ctx.strict) {
     // A problem that names the old text now names the new text, and is still the same problem.
-    const typed = new RegExp(`(?<![A-Za-z0-9_])${escaped(textOf(ctx.lines, e.line, e.from, e.to))}(?![A-Za-z0-9_])`, 'gi');
-    const had = ctx.strict.problems.map((b) => ({ line: b.line, message: b.message.replace(typed, e.insert) }));
+    // The character before is matched and put back, not looked behind at: iOS before 16.4 has no lookbehind.
+    const typed = new RegExp(`(^|[^A-Za-z0-9_])${escaped(textOf(ctx.lines, e.line, e.from, e.to))}(?![A-Za-z0-9_])`, 'gi');
+    const had = ctx.strict.problems.map((b) => ({ line: b.line, message: b.message.replace(typed, (_, before: string) => before + e.insert) }));
     return !problemsOf(edited, ctx.defaults).some((x) => !had.some((b) => b.line === x.line && b.message === x.message));
   }
   const after = errorsOf(edited, ctx.defaults);

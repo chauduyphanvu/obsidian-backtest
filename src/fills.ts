@@ -164,8 +164,8 @@ function dayOf(cell: string, dayFirst: boolean): number {
   else {
     // The engine's own reading of a date in words gives a year, 2001, to one that has none, so the cell must name the year it gives.
     t = Date.parse(`${text} UTC`);
-    const year = text.match(/(?<!\d)\d{4}(?!\d)/g);
-    if (!year || !year.includes(String(new Date(t).getUTCFullYear()))) t = NaN;
+    const years = (text.match(/\d+/g) ?? []).filter((d) => d.length === 4);
+    if (!years.includes(String(new Date(t).getUTCFullYear()))) t = NaN;
   }
   return Number.isFinite(t) ? Math.floor(t / DAY) * DAY : NaN;
 }

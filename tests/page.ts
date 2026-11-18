@@ -27,7 +27,20 @@ export class El {
   listeners: Record<string, ((e: unknown) => void)[]> = {};
   children: (El | string)[] = [];
   parent: El | null = null;
-  style = { left: '', right: '', top: '', width: '', props: {} as Record<string, string>, setProperty(k: string, v: string) { this.props[k] = v; } };
+  style = {
+    left: '',
+    right: '',
+    top: '',
+    width: '',
+    props: {} as Record<string, string>,
+    setProperty(k: string, v: string) {
+      this.props[k] = v;
+    },
+    removeProperty(k: string) {
+      if (k === 'left' || k === 'right' || k === 'top' || k === 'width') this[k] = '';
+      else delete this.props[k];
+    },
+  };
   classList = {
     add: (c: string) => this.setClass(c, true),
     remove: (c: string) => this.setClass(c, false),

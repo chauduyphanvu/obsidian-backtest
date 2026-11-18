@@ -122,7 +122,7 @@ export function ruler(parent: HTMLElement, t: Trigger, also: Trigger[] = []): vo
     zone.style.width = `${Math.max(z - a, 0.4).toFixed(2)}%`;
     // Named at its outer end, away from the last close in the middle.
     const name = h(box, 'div', 'bt-ruler-zone-label', `${verb} here`);
-    if (b.lo === null) name.style.left = '0';
+    if (b.lo === null) name.classList.add('bt-ruler-start');
     else if (b.hi === null) name.classList.add('bt-ruler-end');
     else {
       name.style.left = `${((a + z) / 2).toFixed(2)}%`;
