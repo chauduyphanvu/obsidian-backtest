@@ -150,6 +150,8 @@ export default class BacktestBlocks extends Plugin {
     this.registerEvent(this.app.vault.on('rename', (_file, oldPath) => this.prices.forgetColumns(oldPath)));
     this.registerEvent(
       this.app.vault.on('rename', (file, oldPath) => {
+        // Only notes hold blocks, and folders hold notes.
+        if (file instanceof TFile && file.extension !== 'md') return;
         const folder = file instanceof TFolder;
         void this.ledgers.rename(blockKeyPrefix(oldPath, folder), blockKeyPrefix(file.path, folder));
       }),

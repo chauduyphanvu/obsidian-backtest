@@ -55,6 +55,8 @@ export class JsonStore<T> {
   private loading = new Map<string, Promise<T | null>>();
   /** Every write of a key waits for the one before it, so two writes never interleave their read and write. */
   private chains = new Map<string, Promise<void>>();
+  /** The key each file holds, by its path, once read or written. A file is named by its key, so this never goes stale. */
+  private keys = new Map<string, string>();
 
   constructor(opts: StoreOptions<T>) {
     this.o = {
@@ -142,12 +144,18 @@ export class JsonStore<T> {
     if (await this.o.files.exists(dir)) {
       for (const path of (await this.o.files.list(dir)).files) {
         if (!path.endsWith('.json')) continue;
-        try {
-          const key = (JSON.parse(await this.o.files.read(path)) as { key?: unknown }).key;
-          if (typeof key === 'string' && key.startsWith(from)) keys.add(key);
-        } catch {
-          // Not a record: left alone.
+        let key = this.keys.get(path);
+        if (key === undefined) {
+          try {
+            const held = (JSON.parse(await this.o.files.read(path)) as { key?: unknown }).key;
+            if (typeof held !== 'string') continue;
+            this.keys.set(path, (key = held));
+          } catch {
+            // Not a record: left alone.
+            continue;
+          }
         }
+        if (key.startsWith(from)) keys.add(key);
       }
     }
     for (const key of keys) await this.rename(key, to + key.slice(from.length));
@@ -191,6 +199,7 @@ export class JsonStore<T> {
       const dir = this.o.normalize(this.o.dir);
       if (!(await this.o.files.exists(dir))) await this.o.files.mkdir(dir);
       await this.o.files.write(this.path(key), JSON.stringify({ key, value }));
+      this.keys.set(this.path(key), key);
     });
   }
 }

@@ -102,8 +102,11 @@ export function renderVersions(parent: HTMLElement, input: VersionsInput): () =>
 function fill(body: HTMLElement, input: VersionsInput): () => void {
   let gone = false;
   const now = { hash: versionHash(input.source, input.defaults), defaults: defaultsHash(input.defaults) };
+  let drawn: readonly Version[] | null = null;
   const draw = (l: Ledger) => {
-    if (gone) return;
+    // A change to the tries alone leaves the list, and any changes shown in it, as they are.
+    if (gone || l.versions === drawn) return;
+    drawn = l.versions;
     body.replaceChildren();
     const rows = versionRows(l.versions, now);
     if (rows.length === 0) {

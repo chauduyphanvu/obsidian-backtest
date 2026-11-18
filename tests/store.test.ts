@@ -7,10 +7,12 @@ function setup(files: Record<string, string> = {}) {
   const map = new Map(Object.entries(files));
   const dirs = new Set<string>();
   const writes: string[] = [];
+  const reads: string[] = [];
   const io: StoreFiles = {
     // A folder exists once it was made or holds a file, as on disk.
     exists: async (p) => map.has(p) || dirs.has(p) || [...map.keys()].some((k) => k.startsWith(`${p}/`)),
     read: async (p) => {
+      reads.push(p);
       const text = map.get(p);
       if (text === undefined) throw new Error(`no ${p}`);
       return text;
@@ -44,7 +46,7 @@ function setup(files: Record<string, string> = {}) {
     await new Promise((r) => setTimeout(r, 0));
     await store.flush();
   };
-  return { map, dirs, writes, store, timers, fire };
+  return { map, dirs, writes, reads, store, timers, fire };
 }
 
 const path = (key: string) => `plugin/ledger/${fileId(key)}.json`;
@@ -148,4 +150,19 @@ test('a record moved onto a key that already has one is merged with it', async (
   await s.store.flush();
   assert.deepEqual(JSON.parse(s.map.get(path('B.md\u0000name:x'))!).value, [1, 2]);
   assert.equal(s.map.has(path('A.md\u0000name:x')), false);
+});
+
+test('a file\'s key is read once: later renames by a prefix read only files not seen before', async () => {
+  const s = setup({ [path('A.md\u0000name:x')]: file('A.md\u0000name:x', [1]), [path('B.md\u0000name:y')]: file('B.md\u0000name:y', [2]) });
+  await s.store.renamePrefix('C.md\u0000', 'D.md\u0000');
+  assert.equal(s.reads.length, 2);
+  s.reads.length = 0;
+  await s.store.renamePrefix('E.md\u0000', 'F.md\u0000');
+  assert.deepEqual(s.reads, []);
+  // A file a sync brought in is read, and moved.
+  s.map.set(path('G.md\u0000name:z'), file('G.md\u0000name:z', [3]));
+  await s.store.renamePrefix('G.md\u0000', 'H.md\u0000');
+  await s.store.flush();
+  assert.ok(s.reads.includes(path('G.md\u0000name:z')));
+  assert.deepEqual(JSON.parse(s.map.get(path('H.md\u0000name:z'))!).value, [3]);
 });
