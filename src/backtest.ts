@@ -286,6 +286,10 @@ function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intrad
   if (csv.length) {
     notes.push(`${list(csv)} ${csv.length === 1 ? 'is a CSV file, which has' : 'are CSV files, which have'} no smaller bars, so ${csv.length === 1 ? 'its' : 'their'} bars are read whole.`);
   }
+  const tiingo = spec.universe.filter((a) => a.source === 'tiingo').map((a) => a.name);
+  if (tiingo.length) {
+    notes.push(`${list(tiingo)} ${tiingo.length === 1 ? 'comes' : 'come'} from Tiingo, which gives no smaller bars here, so ${tiingo.length === 1 ? 'its' : 'their'} bars are read whole.`);
+  }
   return notes;
 }
 

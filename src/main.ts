@@ -3,6 +3,7 @@ import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, nor
 import { compareCurves, parseCompare } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
+import { withoutQueries } from './data.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { HOUR } from './format.ts';
 import { GalleryModal } from './gallery-modal.ts';
@@ -40,12 +41,23 @@ export default class BacktestBlocks extends Plugin {
     files: this.app.vault.adapter,
     cacheDir: normalizePath(`${this.manifest.dir}/cache`),
     normalize: normalizePath,
-    fetchText: async (url) => {
-      const res = await requestUrl({ url, throw: false });
+    fetchText: async (url, headers) => {
+      let res;
+      try {
+        res = await requestUrl({ url, headers, throw: false });
+      } catch (e) {
+        // FRED takes its key in the query, and a network error can quote the address.
+        throw new Error(withoutQueries(e instanceof Error ? e.message : String(e)));
+      }
       // The services explain a bad ticker in a JSON body, which the parsers turn into a message.
       if (res.status >= 400 && !res.text.trimStart().startsWith('{')) throw new Error(`HTTP ${res.status}`);
       return res.text;
     },
+    secret: (service) => {
+      const name = service === 'fred' ? this.settings.fredSecret : this.settings.tiingoSecret;
+      return name ? this.app.secretStorage.getSecret(name) : null;
+    },
+    tiingoFallback: () => this.settings.tiingoFallback,
   });
   private results = new Results({
     deps: () => this.prices.deps(),

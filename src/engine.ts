@@ -602,8 +602,9 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
 
   const rateBars = p.cash.k === 'ticker' ? data.get(p.cash.ref.name) : null;
   if (p.cash.k === 'ticker' && !rateBars) throw new Error(`No data for the cash rate ticker ${p.cash.ref.name}`);
-  // The yield quoted at the close of the timeline's bar k: that of the rate's latest bar ended by then.
-  const rateIdx = rateBars ? ind.alignByEnd(rateBars.t, timeline) : null;
+  // The yield quoted at the close of the timeline's bar k: that of the rate's latest bar ended by then. A row of values
+  // (FRED) is known at the end of the day it is dated, whatever its spacing, where a monthly bar would end a month later.
+  const rateIdx = !rateBars ? null : rateBars.values ? ind.endedBy(rateBars.t, ind.barEnds(timeline), ind.valueEnds(rateBars.t)) : ind.alignByEnd(rateBars.t, timeline);
   const rateAt = (k: number): number => {
     if (!rateBars) return p.cash.k === 'fixed' ? p.cash.rate : 0;
     return rateIdx![k] < 0 ? 0 : rateBars.c[rateIdx![k]] / 100;

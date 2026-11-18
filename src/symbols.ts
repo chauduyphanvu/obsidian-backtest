@@ -1,5 +1,6 @@
 import type { Defaults } from './dsl.ts';
 import { lineKinds, tokenizeBlock } from './highlight.ts';
+import { DATA_SOURCES, SOURCE_PREFIX, type DataSource } from './types.ts';
 
 export interface LookupDeps {
   /** GET a URL and return its body; rejects on a network error. */
@@ -9,7 +10,10 @@ export interface LookupDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** The sources tickers are looked up at. Tiingo's and FRED's are never sent anywhere, and a CSV file is not a ticker. */
 export type LookupSource = 'yahoo' | 'binance';
+
+export const isLookupSource = (s: string): s is LookupSource => s === 'yahoo' || s === 'binance';
 
 export interface SymbolHit {
   ticker: string;
@@ -192,9 +196,10 @@ export class SymbolLookup {
   /**
    * Tickers to offer for what is being typed, each with how a block whose plain tickers come from
    * `blockSource` writes it. A typed `binance:` or `yahoo:` prefix limits the search to that source;
-   * without one the block's source comes first and the other adds a few.
+   * without one the block's source comes first and the other adds a few. A word for another source
+   * (`csv:`, `tiingo:`, `fred:`, or a plain word in a block whose tickers come from Tiingo) is not looked up.
    */
-  async suggest(word: string, blockSource: LookupSource): Promise<Suggestion[]> {
+  async suggest(word: string, blockSource: DataSource): Promise<Suggestion[]> {
     const { prefix, query, sources } = this.plan(word, blockSource);
     if (!query) return [];
     const found = await Promise.all(sources.map((s) => this.search(query, s)));
@@ -202,22 +207,23 @@ export class SymbolLookup {
   }
 
   /** As `suggest`, from what is already known: null while a search is still to be made. */
-  peekSuggest(word: string, blockSource: LookupSource): Suggestion[] | null {
+  peekSuggest(word: string, blockSource: DataSource): Suggestion[] | null {
     const { prefix, query, sources } = this.plan(word, blockSource);
     if (!query) return [];
     const found = sources.map((s) => this.peekSearch(query, s));
     return found.every((f): f is SymbolHit[] => f !== null) ? this.combine(prefix, blockSource, sources, found) : null;
   }
 
-  private plan(word: string, blockSource: LookupSource) {
-    const m = word.match(/^(yahoo|binance):/i);
+  private plan(word: string, blockSource: DataSource): { prefix: string; query: string; sources: LookupSource[] } {
+    const m = word.match(SOURCE_PREFIX);
     const prefix = m ? m[0] : '';
-    const other: LookupSource = blockSource === 'yahoo' ? 'binance' : 'yahoo';
-    const sources: LookupSource[] = m ? [m[1].toLowerCase() as LookupSource] : [blockSource, other];
+    const source = m ? m[1].toLowerCase() : blockSource;
+    if (!isLookupSource(source)) return { prefix, query: '', sources: [] };
+    const sources: LookupSource[] = m ? [source] : [source, source === 'yahoo' ? 'binance' : 'yahoo'];
     return { prefix, query: word.slice(prefix.length), sources };
   }
 
-  private combine(prefix: string, blockSource: LookupSource, sources: LookupSource[], found: SymbolHit[][]): Suggestion[] {
+  private combine(prefix: string, blockSource: DataSource, sources: LookupSource[], found: SymbolHit[][]): Suggestion[] {
     const seen = new Set<string>();
     return found.flatMap((hits, i) =>
       hits
@@ -315,16 +321,18 @@ export interface Suggestion {
 }
 
 /** How a hit is written in a block whose plain tickers come from `blockSource`; `typedPrefix` is a prefix the user already wrote. */
-export function writtenAs(hit: SymbolHit, blockSource: LookupSource, typedPrefix = ''): string {
+export function writtenAs(hit: SymbolHit, blockSource: DataSource, typedPrefix = ''): string {
   if (typedPrefix) return typedPrefix + hit.ticker;
   return hit.source === blockSource ? hit.ticker : `${hit.source}:${hit.ticker}`;
 }
 
+const DATA_LINE = new RegExp(String.raw`^\s*data\s*:\s*(${DATA_SOURCES.join('|')})\s*$`, 'i');
+
 /** Where plain tickers in a block come from: its `data` line, or the plugin's default. */
-export function blockSource(lines: string[], defaults: Partial<Defaults> = {}): LookupSource {
+export function blockSource(lines: string[], defaults: Partial<Defaults> = {}): DataSource {
   for (const line of lines) {
-    const m = line.replace(/(^|\s)(#|\/\/).*$/, '').match(/^\s*data\s*:\s*(yahoo|binance)\s*$/i);
-    if (m) return m[1].toLowerCase() as LookupSource;
+    const m = line.replace(/(^|\s)(#|\/\/).*$/, '').match(DATA_LINE);
+    if (m) return m[1].toLowerCase() as DataSource;
   }
   return defaults.dataSource ?? 'yahoo';
 }
@@ -349,18 +357,23 @@ const csvName = (path: string): string => path.split('/').pop()!.replace(/\.csv$
 /**
  * Every Yahoo or Binance ticker a block names: universe, symbol, benchmark, cash rate and `of` tickers. CSV files are not
  * tickers, and neither is a bare name that the parser resolves to a CSV file the block names (`of myfund` for
- * `csv:Data/myfund.csv`, whatever the capitals), so none of them is ever sent to a lookup.
+ * `csv:Data/myfund.csv`, whatever the capitals), so none of them is ever sent to a lookup. Nor is a Tiingo ticker or a FRED
+ * series, written with its prefix, by a bare name the parser resolves to one, or plain in a block whose tickers come from Tiingo.
  */
 export function blockTickers(lines: string[], defaults: Partial<Defaults> = {}): TickerRef[] {
   const tokens = tokenizeBlock(lines);
   const kinds = lineKinds(lines);
   const plain = blockSource(lines, defaults);
-  const files = new Set<string>();
+  const others = new Set<string>();
   lines.forEach((line, i) => {
     if (kinds[i] === 'for') return;
     for (const t of tokens[i]) {
       const written = t.kind === 'ticker' ? line.slice(t.from, t.to) : '';
-      if (/^csv:/i.test(written)) files.add(csvName(written.slice(4)));
+      const m = written.match(SOURCE_PREFIX);
+      if (!m || written.length === m[0].length) continue;
+      const id = written.slice(m[0].length);
+      if (m[1].toLowerCase() === 'csv') others.add(csvName(id));
+      else if (!isLookupSource(m[1].toLowerCase())) others.add(id.toLowerCase());
     }
   });
   const out: TickerRef[] = [];
@@ -369,12 +382,12 @@ export function blockTickers(lines: string[], defaults: Partial<Defaults> = {}):
     for (const t of tokens[i]) {
       if (t.kind !== 'ticker') continue;
       const written = line.slice(t.from, t.to);
-      const m = written.match(/^(yahoo|binance|csv):/i);
-      const prefix = m ? m[1].toLowerCase() : '';
+      const m = written.match(SOURCE_PREFIX);
+      const source = m ? m[1].toLowerCase() : plain;
       const id = written.slice(m ? m[0].length : 0);
-      if (prefix === 'csv' || !/^[A-Za-z0-9^._=-]+$/.test(id) || /^[\d.]+$/.test(id)) continue;
-      if (!prefix && files.has(id.toLowerCase())) continue;
-      out.push({ line: i, from: t.from, to: t.to, idFrom: t.from + (m ? m[0].length : 0), ticker: id.toUpperCase(), source: (prefix || plain) as LookupSource });
+      if (!isLookupSource(source) || !/^[A-Za-z0-9^._=-]+$/.test(id) || /^[\d.]+$/.test(id)) continue;
+      if (!m && others.has(id.toLowerCase())) continue;
+      out.push({ line: i, from: t.from, to: t.to, idFrom: t.from + (m ? m[0].length : 0), ticker: id.toUpperCase(), source });
     }
   });
   return out;

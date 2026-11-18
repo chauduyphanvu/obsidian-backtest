@@ -1,6 +1,7 @@
 import { FUNCTIONS, tickers } from './complete.ts';
 import { CALENDAR, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
 import { declaredParams, NUMERIC_SETTINGS, settingKey, tokenizeBlock } from './highlight.ts';
+import { SOURCE_PREFIX } from './types.ts';
 
 /** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
 export interface FixEdit {
@@ -261,7 +262,7 @@ function habit(ctx: Context, found: string): Fix | null {
 function optionsOf(message: string): string[] | null {
   const m = message.match(/^[A-Za-z ]+ must be one of: (.+)$/) ?? message.match(/^Binance intervals: (.+)$/);
   if (m) return m[1].split(', ');
-  return /^Yahoo data comes as 1d or 1w bars, not "/.test(message) ? ['1d', '1w'] : null;
+  return /^(Yahoo|Tiingo) data comes as 1d or 1w bars, not "/.test(message) ? ['1d', '1w'] : null;
 }
 
 function settingValue(ctx: Context, options: string[]): Fix | null {
@@ -362,7 +363,7 @@ function otherPlaces(lines: string[], at: { line: number; from: number }, prefix
     for (const t of row) {
       if (t.kind !== 'ticker' || (i + 1 === at.line && t.from === at.from)) continue;
       const written = lines[i].slice(t.from, t.to);
-      const there = written.match(/^(yahoo|binance|csv):/i)?.[0] ?? '';
+      const there = written.match(SOURCE_PREFIX)?.[0] ?? '';
       // A bare name refers to the ticker by name, whatever its prefix; another prefix is another ticker.
       if (written.slice(there.length).toUpperCase() !== typed.toUpperCase() || (there && there.toLowerCase() !== prefix.toLowerCase())) continue;
       out.push({ line: i + 1, from: t.from + there.length, to: t.to, insert: '' });
