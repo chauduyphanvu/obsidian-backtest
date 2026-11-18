@@ -140,10 +140,11 @@ function expression(line: string, from: number, to: number, params: Set<string>,
       } else if ((word === 'bars' || word === 'bar') && windowCount(out, line)) {
         out.push({ from: start, to: end, kind: 'keyword' });
       } else if (KEYWORDS.includes(word)) out.push({ from: start, to: end, kind: 'keyword' });
+      // A block's own name wins over a word the language took up later (dsl.ts LATER_WORDS); no name can be an older one.
+      else if (params.has(word)) out.push({ from: start, to: end, kind: 'param' });
       else if (CONSTANTS.includes(word)) out.push({ from: start, to: end, kind: 'value' });
       else if (FUNCTIONS.includes(word)) out.push({ from: start, to: end, kind: 'function' });
       else if ((SERIES as string[]).includes(word) || VALUES.includes(word)) out.push({ from: start, to: end, kind: 'series' });
-      else if (params.has(word)) out.push({ from: start, to: end, kind: 'param' });
       if (word === 'of') {
         const sym = line.slice(end, to).match(/^\s*([A-Za-z0-9^:/._=-]+)/);
         if (sym) {

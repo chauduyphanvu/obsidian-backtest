@@ -60,6 +60,8 @@ export interface Written {
   text: string;
   parts: string[];
   params: string[];
+  /** The places in `walk` order of the parts that stand for one thing the user wrote: a definition used by name, a `between`. */
+  whole?: number[];
 }
 
 /** A stop distance: a fraction of the price, or a multiple of the average true range. */
@@ -306,12 +308,25 @@ export const SETTINGS = [
 export const STOP_SETTINGS = ['stop loss', 'trailing stop', 'take profit'];
 
 /** Names a parameter can't take. */
-export const RESERVED = new Set([
-  'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
-  'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'sqrt', 'log', 'exp', 'if', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
-  'between', 'within', 'highest_since_entry', 'lowest_since_entry', 'position_return',
-  ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
+/**
+ * Words that came into the language after 0.7.0, when blocks were already being written. A block may still give one of them
+ * to a parameter or definition, which it then means in that block, so a block that used the name before keeps working;
+ * only the built-in meaning of that word is lost there. A word added later goes here too.
+ */
+export const LATER_WORDS = new Set([
+  'count', 'sum', 'dema', 'tema', 'kama', 'aroon_up', 'aroon_down', 'psar', 'cmf', 'linreg', 'rsquared', 'efficiency', 'streak',
+  'sqrt', 'log', 'exp', 'if', 'between', 'within', 'highest_since_entry', 'lowest_since_entry', 'position_return',
+  'quarter', 'week_start', 'week_end', 'quarter_start', 'quarter_end', 'year_start', 'year_end', 'trading_day', 'trading_days_left',
 ]);
+
+/** Names a parameter or definition can't take. */
+export const RESERVED = new Set(
+  [
+    'and', 'or', 'not', 'crosses', 'above', 'below', 'is', 'of', 'buy', 'sell', 'when', 'for', 'all', 'in', 'step', 'at', 'top', 'by',
+    'true', 'false', 'always', 'never', 'min', 'max', 'abs', 'bars', 'entry', 'bars_held', 'entry_price', 'last_entry_price', 'entries_made',
+    ...SERIES, ...Object.keys(INDICATORS), ...CALENDAR, ...SETTINGS.filter((s) => !s.includes(' ')),
+  ].filter((w) => !LATER_WORDS.has(w)),
+);
 
 /** `name = value`, optionally followed by `in lo..hi step s`. A single `=`, so `x == 1` stays a comparison. */
 export const PARAM_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*(.*)$/;
@@ -351,6 +366,11 @@ class SpecError extends Error {
     super(message);
     this.at = at;
   }
+}
+
+/** A definition written where only a number or a parameter can go; `needs` says what that place takes. */
+function notADefinition(where: At, name: string, needs: string, example: string): SpecError {
+  return new SpecError(where, `"${name}" is a definition, and ${needs}. Declare it as a parameter instead, as in ${name} = ${example}`);
 }
 
 /** A position value read where no position can be: kept apart so a definition that reads one is blamed at its use. */
@@ -461,27 +481,17 @@ export function isBool(e: Expr): boolean {
 const COLUMN_USAGE = 'column needs the name of a column in brackets, as in column(score) of signals. A name is letters, digits and underscores; a header with spaces goes in quotes, as in column("News Sentiment")';
 
 /**
- * Whether a part of a rule that joins conditions stands for one thing the user wrote, so a table of its parts keeps it whole
- * instead of opening it into the chain it sits in: a definition's name, or `a between lo and hi`, which is two comparisons.
- * `text` gives the text of a part, from `Written.parts`.
+ * The parts of a rule that stand for one thing the user wrote, so a table of its parts keeps them whole instead of opening
+ * them into the chain they sit in: a definition used by name, and `a between lo and hi`, which is two comparisons.
  */
-export function isOneThing(e: Expr, text: (x: Expr) => string): boolean {
-  const own = unbracketed(text(e));
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(own)) return true;
-  return e.k === 'logic' && e.op === 'and' && e.a.k === 'cmp' && e.a.op === '>=' && e.b.k === 'cmp' && e.b.op === '<=' && own.startsWith(`${text(e.a.a)} between `);
-}
-
-/** `text` without the brackets that enclose all of it, as a part written `(uptrend)` has them: `((a))` is `a`, `(a) and (b)` stays. */
-function unbracketed(text: string): string {
-  for (;;) {
-    if (!text.startsWith('(') || !text.endsWith(')')) return text;
-    let depth = 0;
-    for (let k = 0; k < text.length - 1; k++) {
-      depth += text[k] === '(' ? 1 : text[k] === ')' ? -1 : 0;
-      if (depth === 0) return text;
-    }
-    text = text.slice(1, -1).trim();
-  }
+export function wholeParts(e: Expr, w: Written | null | undefined): Set<Expr> {
+  const out = new Set<Expr>();
+  if (!w?.whole) return out;
+  let k = 0;
+  walk(e, (x) => {
+    if (w.whole!.includes(k++)) out.add(x);
+  });
+  return out;
 }
 
 /** The first position value the expression reads, or null when it reads none. */
@@ -627,6 +637,8 @@ class ExprParser {
   private paramOf = new Map<Expr, string>();
   /** The expression a definition stands for where it is used, with the definition's name. */
   private defUse = new Map<Expr, string>();
+  /** The nodes that stand for one thing the user wrote (wholeParts): a definition's expression where it is used, a `between`. */
+  private wholes = new Set<Expr>();
   /** Parameters read, by their declared names. */
   private used = new Set<string>();
   /** How many tokens of definitions have been read so far for the expression, nested ones included, shared with the parsers that read them. */
@@ -642,8 +654,14 @@ class ExprParser {
   /** The parsed expression as written; call after parseCondition or parseNumber. */
   written(root: Expr): Written {
     const parts: string[] = [];
-    walk(root, (e) => parts.push(this.textOf(e)));
-    return { text: this.ctx.text(this.toks[0], this.toks[this.toks.length - 2]), parts, params: [...this.used] };
+    const whole: number[] = [];
+    walk(root, (e) => {
+      if (this.wholes.has(e)) whole.push(parts.length);
+      parts.push(this.textOf(e));
+    });
+    const out: Written = { text: this.ctx.text(this.toks[0], this.toks[this.toks.length - 2]), parts, params: [...this.used] };
+    if (whole.length) out.whole = whole;
+    return out;
   }
 
   private textOf(e: Expr): string {
@@ -674,6 +692,7 @@ class ExprParser {
       else this.told.set(y, { text: this.textOf(x), at: this.placeOf(x) });
       const d = this.depths.get(x);
       if (d !== undefined) this.depths.set(y, d);
+      if (this.wholes.has(x)) this.wholes.add(y);
     });
     return out;
   }
@@ -865,6 +884,7 @@ class ExprParser {
     const again = this.copy(a);
     const high = this.said(this.node({ k: 'cmp', op: '<=', a: again, b: hi }, t, again, hi), `${aText} <= ${hiText}`);
     const e: Expr = this.mark(this.node({ k: 'logic', op: 'and', a: low, b: high }, t, low, high), start);
+    this.wholes.add(e);
     const pa = barePrice(a);
     if (pa !== undefined && (isFixed(lo) || isFixed(hi))) this.ctx.priceVsNumber(this.spanFrom(start), pa);
     return e;
@@ -886,7 +906,7 @@ class ExprParser {
       const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
       const v = n.t === 'num' ? n.v : p?.value;
       if (n.t === 'id' && this.ctx.defs.has(n.s)) {
-        throw new SpecError(at(n), `"${n.s}" is a definition, and the number of bars must be a number or a parameter. Declare it as a parameter instead, as in ${n.s} = 3`);
+        throw notADefinition(at(n), n.s, 'the number of bars must be a number or a parameter', '3');
       }
       if (v === undefined || !Number.isInteger(v) || v < 1 || v > MAX_PERIOD) {
         throw new SpecError(at(n), `"${t.s}" needs a whole number of bars from 1 to ${MAX_PERIOD}, as in ${example}`);
@@ -954,7 +974,7 @@ class ExprParser {
         const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
         const v = n.t === 'num' ? n.v : p?.value;
         if (n.t === 'id' && this.ctx.defs.has(n.s)) {
-          throw new SpecError(at(n), `"${n.s}" is a definition, and bars ago must be a whole number or a parameter. Declare it as a parameter instead, as in ${n.s} = 5`);
+          throw notADefinition(at(n), n.s, 'bars ago must be a whole number or a parameter', '5');
         }
         if (v === undefined || !Number.isInteger(v) || v < 0) throw new SpecError(at(n), 'Bars ago must be a whole number, as in close[1]');
         this.expect(']');
@@ -992,6 +1012,14 @@ class ExprParser {
   private leaf(t: Tok): Expr {
     if (t.t === 'num') return { k: 'num', v: t.v };
     if (t.t === 'id') {
+      // A word the language took up after the block was written may be the block's own name, which it then means here.
+      if (LATER_WORDS.has(t.s) && (this.ctx.defs.has(t.s) || this.ctx.params.has(t.s))) {
+        if (this.isOp('(')) {
+          const [kind, name] = this.ctx.defs.has(t.s) ? ['definition', this.ctx.defs.get(t.s)!.name] : ['parameter', this.ctx.params.get(t.s)!.name];
+          throw new SpecError(at(t), `"${name}" is your ${kind} in this block, so ${t.s}() can't be used here. Rename it, such as my_${t.s}, to use ${t.s}()`);
+        }
+        return this.declared(t)!;
+      }
       if (t.s === 'true' || t.s === 'always') return { k: 'bool', v: true };
       if (t.s === 'false' || t.s === 'never') return { k: 'bool', v: false };
       if ((SERIES as string[]).includes(t.s)) return { k: 'series', name: t.s as SeriesName };
@@ -1003,15 +1031,8 @@ class ExprParser {
       if ((CALENDAR as string[]).includes(t.s)) return { k: 'cal', name: t.s as CalName };
       const pos = this.position(t);
       if (pos) return pos;
-      const d = this.ctx.defs.get(t.s);
-      if (d) return this.definition(t, d);
-      const p = this.ctx.params.get(t.s);
-      if (p) {
-        this.used.add(p.name);
-        const e: Expr = { k: 'num', v: p.value };
-        this.paramOf.set(e, p.name);
-        return e;
-      }
+      const own = this.declared(t);
+      if (own) return own;
       if (t.s === 'column') throw new SpecError(at(t), COLUMN_USAGE);
       const known = [
         `Series: ${SERIES.join(', ')}`,
@@ -1023,6 +1044,18 @@ class ExprParser {
       throw new SpecError(at(t), `Unknown name "${t.s}". ${known.join('. ')}`);
     }
     throw new SpecError(at(t), t.t === 'end' ? 'The rule ends too early' : `Unexpected "${t.s}"`);
+  }
+
+  /** The block's own definition or parameter of this name, as the rule reads it; null when it has none. */
+  private declared(t: Tok): Expr | null {
+    const d = this.ctx.defs.get(t.s);
+    if (d) return this.definition(t, d);
+    const p = this.ctx.params.get(t.s);
+    if (!p) return null;
+    this.used.add(p.name);
+    const e: Expr = { k: 'num', v: p.value };
+    this.paramOf.set(e, p.name);
+    return e;
   }
 
   /** `column(score)`: the name was read as one token, so the brackets and the name are all that follow. */
@@ -1095,6 +1128,8 @@ class ExprParser {
     this.told.delete(root);
     this.depths.set(root, sub.depths.get(root) ?? 1);
     this.defUse.set(root, d.name);
+    for (const x of sub.wholes) this.wholes.add(x);
+    this.wholes.add(root);
     return root;
   }
 
@@ -1190,7 +1225,7 @@ class ExprParser {
         return dflt;
       }
       const named = this.defUse.get(a.e);
-      if (named !== undefined) throw new SpecError(a.at, `"${named}" is a definition, and ${t.s}() needs a plain number for its period. Declare it as a parameter instead, as in ${named} = 20`);
+      if (named !== undefined) throw notADefinition(a.at, named, `${t.s}() needs a plain number for its period`, '20');
       if (a.e.k !== 'num') throw new SpecError(a.at, `${t.s}() periods must be plain numbers`);
       const n = a.e.v;
       const noun = def.real?.[i];
@@ -1552,7 +1587,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const plain = (text: string, where: At, what: string, example: string): number => {
     const p = params.get(text.toLowerCase());
     const d = defs.get(text.toLowerCase());
-    if (d) throw new SpecError(where, `"${d.name}" is a definition, and ${what} needs a number or a parameter. Declare it as a parameter instead, as in ${d.name} = 10`);
+    if (d) throw notADefinition(where, d.name, `${what} needs a number or a parameter`, '10');
     if (p) {
       if (p.percent) throw new SpecError(where, `${what} needs a plain number, and "${p.name}" is a percentage`);
       return p.value;
@@ -1563,7 +1598,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const percentage = (text: string, where: At, what: string, max: number): number => {
     const p = params.get(text.toLowerCase());
     const d = defs.get(text.toLowerCase());
-    if (d) throw new SpecError(where, `"${d.name}" is a definition, and ${what} needs a percentage or a parameter. Declare it as a parameter instead, as in ${d.name} = 10%`);
+    if (d) throw notADefinition(where, d.name, `${what} needs a percentage or a parameter`, '10%');
     if (!p) return parsePercent(text, where, what, max * 100);
     if (!p.percent) throw new SpecError(where, `${what} needs a percentage, and "${p.name}" is a plain number. Declare it as ${p.name} = 10%`);
     if (p.value <= 0 || p.value > max) throw new SpecError(where, `${what} is ${Number((p.value * 100).toPrecision(6))}% here, but must be above 0% and at most ${max * 100}%`);

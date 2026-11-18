@@ -4,7 +4,7 @@
 // bar where the run made no trade is explained by reading the rules at that bar, never by simulating again.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { children, findPos, isCross, isOneThing, walk, type Expr, type Written } from './dsl.ts';
+import { children, findPos, isCross, walk, wholeParts, type Expr, type Written } from './dsl.ts';
 import { barAt, missingInputAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
@@ -210,6 +210,7 @@ function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: 
   let k = 0;
   walk(e, (x) => texts.set(x, w.parts[k++] ?? ''));
   const text = (x: Expr) => texts.get(x) || '';
+  const wholes = wholeParts(e, w);
   const percentText = (s: string) => s.trim().endsWith('%') || params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
   const caption = CAPTIONS[group];
 
@@ -220,7 +221,7 @@ function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: 
       const parts: Expr[] = [];
       // A definition's name, or a `between`, is one part, not opened into the chain it sits in.
       const flat = (y: Expr, top = false): void => {
-        if (y.k === 'logic' && y.op === x.op && (top || !isOneThing(y, text))) {
+        if (y.k === 'logic' && y.op === x.op && (top || !wholes.has(y))) {
           flat(y.a);
           flat(y.b);
         } else parts.push(y);

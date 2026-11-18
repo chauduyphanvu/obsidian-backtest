@@ -295,10 +295,10 @@ test('a position value cannot be read over a window, and the error says so at th
   assert.match(parseSpec('universe: A\nbuy when true\nsell when (position return > 1) within 4 bars').errors[0].message, /"position return" can't be read over several bars/);
 });
 
-test('words that can open a window or a range are not names a parameter can take', () => {
+test('words that open a window or a range, added after 0.7.0, can still be names, and still open one where they stand', () => {
   for (const word of ['between', 'within', 'count']) {
-    const { errors } = parseSpec(`universe: A\n${word} = 5\nbuy when close > sma(5)`);
-    assert.match(errors[0].message, new RegExp(`"${word}" is a built-in name`));
+    const { errors } = parseSpec(`universe: A\n${word} = 5\nbuy when close > sma(${word}) and close > 1 within 3 bars and rsi(2) between 10 and 30`);
+    assert.deepEqual(errors, [], word);
   }
   // A "for" inside a rule is not a section: it needs a number of bars, and a line that ends in a colon is the section.
   assert.deepEqual(parseSpec('universe: A\nbuy when close > sma(20)\n  for 3 bars\nsell when close < 1').errors, []);

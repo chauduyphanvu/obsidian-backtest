@@ -3,7 +3,7 @@
 // same prices, so each value shown is the one the run used. Pure data; render-trades.ts draws it.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { findPos, isBool, isOneThing, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
+import { findPos, isBool, ownColumns, walk, wholeParts, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import { barAt, commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import { DAY, fixed, isIntraday, minus, pair, places, price, shareCount, stamp, ungroupedOrdinal, ungroupedPlural } from './format.ts';
@@ -301,6 +301,7 @@ class Explainer {
     let k = 0;
     walk(e, (x) => texts.set(x, written.parts[k++] ?? ''));
     const text = (x: Expr) => texts.get(x) || '';
+    const wholes = wholeParts(e, written);
     const at = (x: Expr, j: number) => (j < 0 ? NaN : findPos(x) ? this.ev.compile(x, asset)(j, pos) : this.ev.eval(x, asset)[j]);
     const percentText = (s: string) => s.trim().endsWith('%') || this.bt.spec.params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
     // A number written out, such as 30, 5% or -2, needs no value beside it.
@@ -352,7 +353,7 @@ class Explainer {
         const parts: Expr[] = [];
         // A definition's name, or a `between`, is one part, not opened into the chain it sits in.
         const flat = (y: Expr, top = false): void => {
-          if (y.k === 'logic' && y.op === x.op && (top || !isOneThing(y, text))) {
+          if (y.k === 'logic' && y.op === x.op && (top || !wholes.has(y))) {
             flat(y.a);
             flat(y.b);
           } else parts.push(y);

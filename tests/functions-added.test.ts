@@ -7,7 +7,7 @@ import { runBacktest, type Backtest } from '../src/backtest.ts';
 import { complete } from '../src/complete.ts';
 import { cellText, debugColumns, debugRange, debugRows } from '../src/debug.ts';
 import { docFor, shortOf } from '../src/docs.ts';
-import { INDICATORS, RESERVED, parseSpec, type Expr } from '../src/dsl.ts';
+import { type Expr, INDICATORS, LATER_WORDS, parseSpec, RESERVED } from '../src/dsl.ts';
 import { Evaluator } from '../src/evaluate.ts';
 import { explainTrade } from '../src/explain.ts';
 import { fixFor } from '../src/fixes.ts';
@@ -137,9 +137,12 @@ test('the position values go inside the pointwise functions in sell rules, and n
   assert.match(problems('if(bars held > 3, close, 1)[1] > 0')[0], /can't be read for an earlier bar/);
 });
 
-test('a parameter cannot be named like a function or a calendar value', () => {
-  for (const name of [...NEW, ...POINTWISE]) assert.match(parseSpec(`universe: A\n${name} = 5\nbuy when true`).errors[0]?.message ?? '', /is a built-in name/, name);
-  for (const name of [...NEW, ...POINTWISE]) assert.ok(RESERVED.has(name), name);
+test('a function added after 0.7.0 can still name a parameter, which the block then means by it', () => {
+  for (const name of [...NEW, ...POINTWISE]) {
+    assert.deepEqual(parseSpec(`universe: A\n${name} = 5\nbuy when close > sma(${name})`).errors, [], name);
+    assert.match(parseSpec(`universe: A\n${name} = 5\nbuy when ${name}(close) > 0`).errors[0]?.message ?? '', new RegExp(`"${name}" is your parameter in this block, so ${name}\\(\\) can't be used here`), name);
+    assert.ok(!RESERVED.has(name) && LATER_WORDS.has(name), name);
+  }
 });
 
 test('every function except the conditions is a number', () => {
@@ -330,13 +333,19 @@ const lookback = (rule: string, extra = '') => {
 
 test('lookbackBars covers each function: its window, and the settling of the ones that start from where they began', () => {
   // The run keeps at least 250 bars, so these use periods that need more.
-  for (const name of ['sum', 'aroon_up', 'aroon_down', 'cmf', 'linreg', 'rsquared', 'efficiency']) assert.equal(lookback(`${name}(300) > 0`), 300, name);
-  // Averages that depend on where they started count five times their period for each smoothing, kama five times its slow period.
+  for (const name of ['sum', 'cmf', 'linreg', 'rsquared']) assert.equal(lookback(`${name}(300) > 0`), 300, name);
+  // A window of n + 1 values counts one more, as percent_rank does.
+  for (const name of ['aroon_up', 'aroon_down', 'efficiency']) assert.equal(lookback(`${name}(300) > 0`), 301, name);
+  // Averages that depend on where they started count five times their period for each smoothing.
   assert.equal(lookback('dema(300) > 0'), 3000);
   assert.equal(lookback('tema(100) > 0'), 1500);
-  assert.equal(lookback('kama(300, 2, 30) > 0'), 300 + 150);
-  assert.equal(lookback('kama(10, 2, 100) > 0'), 10 + 500);
-  assert.equal(lookback('kama(10, 2, 30) > 0'), 250);
+  // kama: ten time constants of its slowest smoothing, ((slow + 1) / 2) squared bars each, as five periods of an ema are,
+  // after the n + 1 values of its efficiency ratio. At efficiency 0 for all of them, under 0.005% of where it began is left.
+  assert.equal(lookback('kama(10, 2, 30) > 0'), 11 + 2403);
+  assert.equal(lookback('kama(300, 2, 30) > 0'), 301 + 2403);
+  assert.equal(lookback('kama(10, 2, 3) > 0'), 250);
+  assert.equal(lookback('kama(10, 2, 1000) > 0'), 11 + 50_000);
+  assert.ok((1 - (2 / 31) ** 2) ** 2403 < 5e-5);
   // streak counts back no further than the prices loaded; psar reads that much history for the trend it began in.
   assert.equal(lookback('streak() > 0'), 250);
   assert.equal(lookback('sma(streak(), 300) > 0'), 250 + 300);
@@ -357,9 +366,10 @@ test('lookbackBars nests, and counts a parameter with a range at the top of its 
   const p = (name: string, rule: string, range: string) => lookback(rule, `${name} = ${range.split(' in ')[0]} in ${range.split(' in ')[1]}\n`);
   assert.equal(p('n', 'dema(n) > 0', '20 in 20..300 step 40'), 3000);
   // 20..400 step 60 stops at 380.
-  assert.equal(p('n', 'kama(n, 2, 30) > 0', '20 in 20..400 step 60'), 380 + 150);
-  assert.equal(p('s', 'kama(10, 2, s) > 0', '30 in 10..100 step 30'), 10 + 500);
-  assert.equal(p('n', 'aroon_up(n) > 0', '25 in 10..350 step 20'), 350);
+  assert.equal(p('n', 'kama(n, 2, 30) > 0', '20 in 20..400 step 60'), 381 + 2403);
+  // 10..100 step 30 stops at 100: ten time constants of (101 / 2) squared bars.
+  assert.equal(p('s', 'kama(10, 2, s) > 0', '30 in 10..100 step 30'), 11 + 25_503);
+  assert.equal(p('n', 'aroon_up(n) > 0', '25 in 10..350 step 20'), 351);
   // A multiplier is not a length: psar's step and maximum add nothing.
   assert.equal(p('m', 'psar(0.02, m) > 0', '0.2 in 0.1..0.5 step 0.1'), 250);
 });
@@ -370,7 +380,7 @@ test('each function is known, and settled, from the first bar of a run that has 
   // [expression, how far from the full-history value it may be, relative, when run from the lookback: windowed ones depend on nothing before their window (only rounding), and the others on where they started]
   const cases: [string, number][] = [
     ['sum(300)', 1e-9], ['aroon_up(300)', 0], ['aroon_down(300)', 0], ['cmf(300)', 1e-9], ['linreg(300)', 1e-9], ['rsquared(300)', 1e-9], ['efficiency(300)', 1e-9],
-    ['dema(60)', 1e-6], ['tema(40)', 1e-6], ['kama(10, 2, 30)', 0.005], ['kama(30, 3, 100)', 0.005],
+    ['dema(60)', 1e-6], ['tema(40)', 1e-6], ['kama(10, 2, 30)', 1e-4], ['kama(30, 3, 40)', 1e-4],
     ['psar(0.02, 0.2)', 0], ['psar(0.1, 0.3)', 0], ['streak()', 0], ['rsi(streak(), 2)', 0], ['sma(psar(), 50)', 0],
   ];
   const starts = [2500, 3300, 4100, 5200, 6100];
@@ -380,7 +390,10 @@ test('each function is known, and settled, from the first bar of a run that has 
     const lb = lookbackBars(spec!);
     const e = (spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a;
     const all = new Evaluator(new Map([['A', full]])).eval(e, 'A');
-    for (const s of starts) {
+    // A run needs its history before it, so a start is tried only where the bars reach back that far.
+    const fits = starts.filter((s) => s >= lb);
+    assert.ok(fits.length >= 2, `${text}: ${lb} bars of history leave too few starts to try`);
+    for (const s of fits) {
       const part = new Evaluator(new Map([['A', cut(full, s - lb)]])).eval(e, 'A');
       const [got, want] = [part[lb], all[s]];
       assert.ok(!Number.isNaN(got), `${text}: unknown at the first bar of a run starting at bar ${s} with ${lb} bars before it`);

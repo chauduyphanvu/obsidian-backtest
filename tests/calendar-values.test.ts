@@ -8,7 +8,7 @@ import { complete } from '../src/complete.ts';
 import type { DataDeps } from '../src/data.ts';
 import { cellText, debugColumns, debugRange, debugRows } from '../src/debug.ts';
 import { docFor } from '../src/docs.ts';
-import { CALENDAR, RESERVED, parseSpec, type CalName, type Expr } from '../src/dsl.ts';
+import { CALENDAR, type CalName, type Expr, LATER_WORDS, parseSpec, RESERVED } from '../src/dsl.ts';
 import { periodKey } from '../src/engine.ts';
 import { Evaluator } from '../src/evaluate.ts';
 import { explainTrade } from '../src/explain.ts';
@@ -46,10 +46,10 @@ test('the new calendar values are in the language, and the conditions among them
     assert.deepEqual(parseSpec(`universe: A\nbuy when ${name} == 3 and close > sma(5)`).errors, [], name);
     assert.match(parseSpec(`universe: A\nbuy when ${name}`).errors[0].message, /A rule needs a condition/, name);
   }
-  // A parameter can't take one of their names.
+  // They came after 0.7.0, so a block that already named a parameter so keeps working, the name meaning the parameter there.
   for (const name of names) {
-    assert.match(parseSpec(`universe: A\n${name} = 3\nbuy when true`).errors[0]?.message ?? '', /is a built-in name/, name);
-    assert.ok(RESERVED.has(name), name);
+    assert.deepEqual(parseSpec(`universe: A\n${name} = 3\nbuy when close > sma(${name})`).errors, [], name);
+    assert.ok(!RESERVED.has(name) && LATER_WORDS.has(name), name);
   }
 });
 

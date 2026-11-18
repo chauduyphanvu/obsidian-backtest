@@ -170,7 +170,7 @@ test('definitions made of definitions cannot grow a rule without bound', () => {
 
 test('a name follows the parameter rules: not a word of the language, once, whatever the case', () => {
   assert.match(only('universe: SPY\nclose = close > 1\nbuy when true')[3], /"close" is a built-in name/);
-  assert.match(only('universe: SPY\nbetween = close > 1\nbuy when true')[3], /"between" is a built-in name/);
+  assert.match(only('universe: SPY\nsma = close > 1\nbuy when true')[3], /"sma" is a built-in name/);
   assert.match(only('universe: SPY\nx = close > 1\nX = close > 2\nbuy when x')[3], /"X" is declared twice/);
   assert.deepEqual(only('universe: SPY\nup = close > 1\nup = 5\nbuy when up')[0], 3);
   assert.match(only('universe: SPY\nup = 5\nUp = close > 1\nbuy when close > up')[3], /"Up" is declared twice/);
@@ -288,6 +288,15 @@ test('a definition or a between in brackets is still kept whole in the rule tabl
   ]);
 });
 
+test('a between written with extra spaces or a tab is kept whole, as the parser built it', () => {
+  const run = (rule: string) => runBacktest(ok(`universe: A\nbuy when ${rule}`), new Map<string, Bars>([['A', bars(wave(160))]]));
+  const depths = (rule: string) => debugColumns(run(rule), 'A').filter((c) => c.group === 'buy').map((c) => c.depth);
+  const one = depths('rsi(2) between 10 and 30 and close > sma(20)');
+  assert.deepEqual(one, [1, 2, 2, 1, 0]);
+  assert.deepEqual(depths('rsi(2)  between 10 and 30 and close > sma(20)'), one);
+  assert.deepEqual(depths('rsi(2)\tbetween  10 and 30 and close > sma(20)'), one);
+});
+
 test('explaining a trade shows the definition by its name, with its parts below, and lists the parameters inside it', () => {
   const A = bars([10, 12, 12, 15, 9, 9, 9], { opens: [10, 10, 12, 12, 15, 9, 9] });
   const spec = ok('universe: A\ncapital: 1000\nlimit = 10 in 5..15\nbig = close > limit and volume > 0\nbuy when big\nsell when not big');
@@ -326,7 +335,23 @@ test('a definition alone in a function is its series, so a missing period says s
 });
 
 test('a built-in name is refused in words that fit a definition as well as a parameter', () => {
-  assert.equal(only('universe: SPY\nsum = close > 1\nbuy when true')[3], '"sum" is a built-in name. Choose another name, such as my_sum');
+  assert.equal(only('universe: SPY\nsma = close > 1\nbuy when true')[3], '"sma" is a built-in name. Choose another name, such as my_sma');
+});
+
+test('a word added after 0.7.0 can still be a name, which the block then means by it; calling it as a function says so', () => {
+  // Blocks written before the word came keep working.
+  const spec = ok('universe: SPY\nsum = close > sma(50)\ncount = 20 in 10..30 step 10\nbuy when sum and close > sma(count)\nsell when not sum');
+  assert.deepEqual(spec.params.map((p) => p.name), ['count']);
+  assert.ok(lookbackBars(spec) >= 50);
+  assert.equal(
+    only('universe: SPY\ncount = 5\nbuy when count(close > close[1], 10) > count')[3],
+    '"count" is your parameter in this block, so count() can\'t be used here. Rename it, such as my_count, to use count()',
+  );
+  assert.equal(only('universe: SPY\nsum = close > 1\nbuy when sum(volume, 3) > 0')[3], '"sum" is your definition in this block, so sum() can\'t be used here. Rename it, such as my_sum, to use sum()');
+  // Words around them are not taken: position return and last entry price beside parameters called position and last.
+  ok('universe: SPY\nposition = 3\nlast = 2\nbuy when close > position\nsell when position return > 5% or close < last entry price');
+  // A keyword stays a keyword where it opens a window or a range, and is the name everywhere else.
+  ok('universe: SPY\nwithin = 3\nbetween = 20\nbuy when close > sma(between) within within bars and rsi(2) between 10 and 30');
 });
 
 test('a problem met once for each rule that reads a definition, or at each empty place of a for list, is reported once', () => {

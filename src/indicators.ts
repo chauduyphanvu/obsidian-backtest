@@ -273,11 +273,22 @@ export function percentRank(src: number[], n: number): number[] {
 export function slope(src: number[], n: number): number[] {
   const mid = (n - 1) / 2;
   const spread = (n * (n * n - 1)) / 12;
-  return rolling(src, n, (s, e) => {
-    let top = 0;
-    for (let i = s; i <= e; i++) top += (i - s - mid) * (src[i] - src[s]);
-    return top / spread;
-  });
+  return rolling(src, n, (s, e) => lineSums(src, s, e, mid)[1] / spread);
+}
+
+/**
+ * The sums a least-squares line through src[s..e] against the bar number is made of, each value taken less the first so
+ * large prices lose no precision: of those values, and of each times its bar's distance from the middle bar `mid`. The
+ * second over n (n² - 1) / 12 is the slope.
+ */
+function lineSums(src: number[], s: number, e: number, mid: number): [number, number] {
+  let [total, top] = [0, 0];
+  for (let i = s; i <= e; i++) {
+    const d = src[i] - src[s];
+    total += d;
+    top += (i - s - mid) * d;
+  }
+  return [total, top];
 }
 
 /** Pearson correlation of the one-bar changes (as fractions) of `a` and `b` over the last `n` bars; unknown when either is constant. */
@@ -475,11 +486,7 @@ export function supertrend(h: number[], l: number[], c: number[], n: number, mul
 
 /** The sum of each window of `n` known values. */
 export function sum(src: number[], n: number): number[] {
-  return rolling(src, n, (s, e) => {
-    let total = 0;
-    for (let i = s; i <= e; i++) total += src[i];
-    return total;
-  });
+  return windowSum(src, n);
 }
 
 /** Double exponential average: 2 * e1 - e2, where e1 is ema(src, n) and e2 is the ema of e1. */
@@ -626,11 +633,7 @@ export function linreg(src: number[], n: number): number[] {
   const mid = (n - 1) / 2;
   const spread = (n * (n * n - 1)) / 12;
   return rolling(src, n, (s, e) => {
-    let [total, top] = [0, 0];
-    for (let i = s; i <= e; i++) {
-      total += src[i] - src[s];
-      top += (i - s - mid) * (src[i] - src[s]);
-    }
+    const [total, top] = lineSums(src, s, e, mid);
     return src[s] + total / n + (top / spread) * mid;
   });
 }
@@ -640,15 +643,10 @@ export function rsquared(src: number[], n: number): number[] {
   const mid = (n - 1) / 2;
   const spread = (n * (n * n - 1)) / 12;
   return rolling(src, n, (s, e) => {
-    let total = 0;
-    for (let i = s; i <= e; i++) total += src[i] - src[s];
+    const [total, top] = lineSums(src, s, e, mid);
     const mean = total / n;
-    let [top, own] = [0, 0];
-    for (let i = s; i <= e; i++) {
-      const d = src[i] - src[s] - mean;
-      top += (i - s - mid) * d;
-      own += d * d;
-    }
+    let own = 0;
+    for (let i = s; i <= e; i++) own += (src[i] - src[s] - mean) ** 2;
     return own === 0 ? NaN : Math.min(1, (top * top) / (spread * own));
   });
 }

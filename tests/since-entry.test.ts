@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { cellText, debugColumns, debugRange, debugRows } from '../src/debug.ts';
-import { parseSpec, POSITION, RESERVED, type Expr } from '../src/dsl.ts';
+import { LATER_WORDS, parseSpec, POSITION, RESERVED, type Expr } from '../src/dsl.ts';
 import { Evaluator, type PosState } from '../src/evaluate.ts';
 import { explainTrade } from '../src/explain.ts';
 import { lookbackBars } from '../src/runner.ts';
@@ -33,7 +33,9 @@ const spike = bars(closes, { opens, highs: [13, 12, 11, 11.5, 10.2], lows: [9, 9
 // ---------------------------------------------------------------- how they are written
 
 test('the three values, with spaces or underscores, in sell, cover and add rules only', () => {
-  for (const [name, words] of Object.entries(POSITION)) assert.ok(RESERVED.has(name), `${name} is reserved`);
+  // The older ones are reserved; the three added after 0.7.0 can still name a parameter, as any later word can.
+  for (const name of ['bars_held', 'entry_price', 'last_entry_price', 'entries_made']) assert.ok(RESERVED.has(name), `${name} is reserved`);
+  for (const name of ['highest_since_entry', 'lowest_since_entry', 'position_return']) assert.ok(!RESERVED.has(name) && LATER_WORDS.has(name), name);
   assert.equal(POSITION.highest_since_entry, 'highest since entry');
   assert.equal(POSITION.lowest_since_entry, 'lowest since entry');
   assert.equal(POSITION.position_return, 'position return');

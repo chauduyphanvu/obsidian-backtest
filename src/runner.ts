@@ -9,11 +9,11 @@ const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: DAY, w
 const MIN_LOOKBACK = 250;
 /** Recursive averages (EMA, RSI, ATR) depend on where they started; this many periods makes that negligible. */
 const SETTLE = 5;
-/** How far back before the run `bars_since` looks for the last bar its condition held, on top of what the condition itself needs. */
-const BARS_SINCE_REACH = 250;
-/** How far back `streak` counts, and how far back `psar` starts before its trend is taken to have settled, on top of what they read. */
-const STREAK_REACH = 250;
-const PSAR_REACH = 250;
+/**
+ * How far back before the run a function that depends on every bar before it reads, on top of what its input needs: the last
+ * bar `bars_since`'s condition held, the start of a `streak`, and the trend `psar` began in.
+ */
+const REACH = 250;
 /** Before a run's first bar, the data must begin by this much for `trading_day` to be known there: a month, and a week more for the days the month before may lack. */
 const MONTH_REACH = 38 * DAY;
 /** Daily and longer bars skip weekends and holidays, so a run of trading bars spans more calendar time. */
@@ -78,17 +78,23 @@ function exprLookback(e: Expr, w: Widest, closeFill: boolean, month: number): nu
         case 'keltner_lower':
           return Math.max(src + SETTLE * a, 1 + SETTLE * c);
         case 'bars_since':
-          return src + BARS_SINCE_REACH;
+          return src + REACH;
         case 'dema':
           return src + 2 * SETTLE * a;
         case 'tema':
           return src + 3 * SETTLE * a;
+        // Its slowest smoothing, (2 / (slow + 1)) squared, has a time constant of ((slow + 1) / 2) squared bars: ten of
+        // them, as SETTLE periods of an ema are, capped where the longest ema's settling is.
         case 'kama':
-          return src + a + SETTLE * c;
+          return src + a + 1 + Math.min(Math.ceil(2 * SETTLE * ((c + 1) / 2) ** 2), SETTLE * MAX_PERIOD);
+        case 'aroon_up':
+        case 'aroon_down':
+        case 'efficiency':
+          return src + a + 1;
         case 'streak':
-          return src + STREAK_REACH;
+          return src + REACH;
         case 'psar':
-          return PSAR_REACH;
+          return REACH;
         default:
           return src + a;
       }

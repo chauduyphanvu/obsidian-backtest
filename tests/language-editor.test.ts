@@ -33,9 +33,10 @@ test('a line of a name and a number is a parameter, and any other value makes it
   const kinds = lineKinds(BLOCK);
   assert.deepEqual(kinds, ['setting', 'param', 'define', 'define', 'continuation', 'rule', 'rule', 'for', 'rule']);
   assert.deepEqual(['x = 5', 'x = 5 in 1..9', 'x = -3%', 'x = 5 * close', 'x = close > 1', 'x = 5 in', 'x ='].map((l) => lineKind(l, false)), ['param', 'param', 'param', 'define', 'define', 'param', 'param']);
-  // A built-in name is neither.
+  // A built-in name is neither, but a word the language took up after 0.7.0 can still be a name.
   assert.equal(lineKind('close = 5', false), 'other');
-  assert.equal(lineKind('between = close > 1', false), 'other');
+  assert.equal(lineKind('between = close > 1', false), 'define');
+  assert.equal(lineKind('count = 5', false), 'param');
   assert.deepEqual(declaredParams(BLOCK).map((p) => p.name), ['fast']);
   assert.deepEqual(declaredDefinitions(BLOCK), [
     { name: 'uptrend', value: 'close > sma(200)' },
