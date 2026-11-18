@@ -92,6 +92,36 @@ test('between in the parts of a rule: the whole text, then each side as it means
   assert.deepEqual(w.parts, ['rsi(2) between 10 and 30', 'rsi(2) >= 10', 'rsi(2)', '', '10', 'rsi(2) <= 30', 'rsi(2)', '', '30']);
 });
 
+test('the explanation and the table keep a between whole, opening it into its two comparisons', () => {
+  const A = bars([9, 11, 11.2, 12, 15, 9, 9, 9], { opens: [9, 9, 11, 11.2, 12, 15, 9, 9] });
+  const spec = parseSpec('universe: A\ncapital: 1000\nbuy when close between 10 and 12 and not close between 11.5 and 13\nsell when close > 14').spec!;
+  const bt = runBacktest(spec, new Map([['A', A]]));
+  // Day 1 closes at 11: inside 10 to 12, and outside 11.5 to 13. Bought at day 2's open, 11, sold at day 5's open, 15.
+  assert.deepEqual(bt.run.trades.map((t) => [t.entryPrice, t.exitPrice]), [[11, 15]]);
+  const bought = explainTrade(bt, bt.run.trades[0]).sections.find((s) => s.id === 'bought')!.rows.map((r) => [r.label, r.value, r.outcome, r.depth]);
+  assert.deepEqual(bought.slice(1), [
+    ['buy when close between 10 and 12 and not close between 11.5 and 13', 'all of these must hold', 'yes', 0],
+    ['close between 10 and 12', 'all of these must hold', 'yes', 1],
+    ['close >= 10', 'close 11 ≥ 10', 'yes', 2],
+    ['close <= 12', 'close 11 ≤ 12', 'yes', 2],
+    ['not close between 11.5 and 13', 'holds when the part below does not', 'yes', 1],
+    ['close between 11.5 and 13', 'all of these must hold', 'no', 2],
+    ['close >= 11.5', 'close 11 ≥ 11.5', 'no', 3],
+    ['close <= 13', 'close 11 ≤ 13', 'yes', 3],
+  ]);
+  const cols = debugColumns(bt, 'A').filter((c) => c.group === 'buy').map((c) => [c.kind, c.depth, c.text]);
+  assert.deepEqual(cols, [
+    ['join', 1, 'close between 10 and 12'],
+    ['test', 2, 'close >= 10'],
+    ['test', 2, 'close <= 12'],
+    ['join', 1, 'not close between 11.5 and 13'],
+    ['join', 2, 'close between 11.5 and 13'],
+    ['test', 3, 'close >= 11.5'],
+    ['test', 3, 'close <= 13'],
+    ['join', 0, 'close between 10 and 12 and not close between 11.5 and 13'],
+  ]);
+});
+
 // ---------------------------------------------------------------- crosses
 
 test('crosses with no direction holds where the value crosses above or below', () => {

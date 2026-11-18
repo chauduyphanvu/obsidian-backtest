@@ -439,8 +439,16 @@ export function isBool(e: Expr): boolean {
 
 const COLUMN_USAGE = 'column needs the name of a column in brackets, as in column(score) of signals. A name is letters, digits and underscores; a header with spaces goes in quotes, as in column("News Sentiment")';
 
-/** Whether the text of a rule's part is one bare name: for a part that joins conditions, only a definition's name reads like that. */
-export const isNameText = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(text);
+/**
+ * Whether a part of a rule that joins conditions stands for one thing the user wrote, so a table of its parts keeps it whole
+ * instead of opening it into the chain it sits in: a definition's name, or `a between lo and hi`, which is two comparisons.
+ * `text` gives the text of a part, from `Written.parts`.
+ */
+export function isOneThing(e: Expr, text: (x: Expr) => string): boolean {
+  const own = text(e);
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(own)) return true;
+  return e.k === 'logic' && e.op === 'and' && e.a.k === 'cmp' && e.a.op === '>=' && e.b.k === 'cmp' && e.b.op === '<=' && own.startsWith(`${text(e.a.a)} between `);
+}
 
 /** The first position value the expression reads, or null when it reads none. */
 export function findPos(e: Expr): PosName | null {

@@ -3,7 +3,7 @@
 // same prices, so each value shown is the one the run used. Pure data; render-trades.ts draws it.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { findPos, isBool, isNameText, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
+import { findPos, isBool, isOneThing, ownColumns, walk, type CmpOp, type Expr, type StopLevel, type Written } from './dsl.ts';
 import { barAt, commissionFee, insideBar, insideKey, type AddWhy, type ExitReason, type ExitWhy, type RankPlace, type Trade, type TradeEntry, type TradeWhy } from './engine.ts';
 import { specEvaluator, type Evaluator, type PosState } from './evaluate.ts';
 import { DAY, fixed, isIntraday, minus, pair, places, price, shareCount, stamp, ungroupedOrdinal, ungroupedPlural } from './format.ts';
@@ -350,9 +350,9 @@ class Explainer {
       const result = outcome(at(x, i));
       if (x.k === 'logic') {
         const parts: Expr[] = [];
-        // A definition's own name is one part, not opened into the chain it stands for.
+        // A definition's name, or a `between`, is one part, not opened into the chain it sits in.
         const flat = (y: Expr, top = false): void => {
-          if (y.k === 'logic' && y.op === x.op && (top || !isNameText(text(y)))) {
+          if (y.k === 'logic' && y.op === x.op && (top || !isOneThing(y, text))) {
             flat(y.a);
             flat(y.b);
           } else parts.push(y);

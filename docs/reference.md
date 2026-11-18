@@ -210,7 +210,7 @@ From loosest to tightest, the order is:
 7. a leading `-`
 8. `[n]` and `of`, then function calls and brackets
 
-So `not close > 1 + 2 * 3 or close < 0 and volume > 5` reads as `(not (close > 1 + (2 * 3))) or ((close < 0) and (volume > 5))`. `rsi(2) between 10 and 30 and close > sma(200)` reads as `(rsi(2) between 10 and 30) and (close > sma(200))`, and `not rsi(2) between 10 and 30` as `not (rsi(2) between 10 and 30)`.
+So `not close > 1 + 2 * 3 or close < 0 and volume > 5` reads as `(not (close > 1 + (2 * 3))) or ((close < 0) and (volume > 5))`. `rsi(2) between 10 and 30 and close > sma(200)` reads as `(rsi(2) between 10 and 30) and (close > sma(200))`, and `not rsi(2) between 10 and 30` as `not (rsi(2) between 10 and 30)`. In the rule values table and in "Explain this trade", a `between` is one part that opens into its two comparisons, and a window is one part that shows the count it rests on.
 
 A rule has to be a condition: `buy when sma(200)` is an error. Both sides of a comparison have to be numbers, and `and`, `or` and `not` need conditions on their sides. A rule can nest at most 64 levels of brackets, functions and operators, a long chain such as `a + b + c + ...` counting one level for each term; deeper is an error.
 
