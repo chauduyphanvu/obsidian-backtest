@@ -123,6 +123,20 @@ setting(
   'cash rate: 4%',
 );
 setting(
+  'borrow fee',
+  'borrow fee: 0.5%',
+  'yearly fee on the value of short positions',
+  'A yearly fee on the value of each short position, paid for every day it is held. Without it, 0.5% a year.',
+  'borrow fee: 1%',
+);
+setting(
+  'margin rate',
+  'margin rate: 6%',
+  'yearly interest on money borrowed',
+  'Yearly interest on the money a strategy owes when it holds more than its equity. Without it, 6% a year.',
+  'margin rate: 7%',
+);
+setting(
   'test from',
   'test from: 2019-01-01',
   'report results before and from this day apart',

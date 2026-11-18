@@ -420,8 +420,8 @@ export function computeTriggers(spec: Spec, data: Map<string, Bars>, run: Trigge
 /** The rules that decide a ticker's next order: sell and add while held, the buy rule (and the sell rule, which can veto it) while flat. */
 function rulesFor(spec: Spec, st: AssetState): { read: Expr[]; addable: boolean } {
   const rules = spec.rules[st.name];
-  const addable = st.long && !!rules.add && (st.entries ?? 1) < (spec.entries ?? 1);
-  const exprs = st.long ? [rules.sell, addable ? rules.add! : null] : st.rearming ? [rules.buy] : [rules.buy, rules.sell];
+  const addable = st.side === 'long' && !!rules.add && (st.entries ?? 1) < (spec.entries ?? 1);
+  const exprs = st.side === 'long' ? [rules.sell, addable ? rules.add! : null] : st.rearming ? [rules.buy] : [rules.buy, rules.sell];
   return { read: exprs.filter((e): e is Expr => e !== null && e !== undefined), addable };
 }
 
@@ -434,11 +434,11 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   const name = st.name;
   const rules = spec.rules[name];
   const levels = st.levels ? { levels: { ...st.levels } } : {};
-  if (csv) return [{ ...blank(st, st.long ? 'sell' : 'buy'), blocked: 'csv' }];
-  if (st.pending) return [{ ...blank(st, st.pending), blocked: 'pending' }];
-  if (!st.long && spec.rank) return [{ ...blank(st, 'buy'), blocked: 'ranking' }];
+  if (csv) return [{ ...blank(st, st.side === 'long' ? 'sell' : 'buy'), blocked: 'csv' }];
+  if (st.pending) return [{ ...blank(st, st.pending === 'short' ? 'sell' : st.pending === 'cover' ? 'buy' : st.pending), blocked: 'pending' }];
+  if (st.side !== 'long' && spec.rank) return [{ ...blank(st, 'buy'), blocked: 'ranking' }];
   const { read, addable } = rulesFor(spec, st);
-  if (st.long && !rules.sell && !addable) return [{ ...blank(st, 'sell'), noRule: true, ...levels }];
+  if (st.side === 'long' && !rules.sell && !addable) return [{ ...blank(st, 'sell'), noRule: true, ...levels }];
 
   const plan = planFor(data, apart, name, read, intraday);
   const { driver, added } = plan;
@@ -447,7 +447,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   const last = driverBars.c[driverBars.c.length - 1];
   const r = values ? 0 : spread(driverBars.c);
   let range = values ? valueRange(driverBars.c) : { lo: last * (1 - r), hi: last * (1 + r) };
-  const sides: TriggerSide[] = st.long ? [...(rules.sell ? (['sell'] as const) : []), ...(addable ? (['add'] as const) : [])] : [st.rearming ? 'rearm' : 'buy'];
+  const sides: TriggerSide[] = st.side === 'long' ? [...(rules.sell ? (['sell'] as const) : []), ...(addable ? (['add'] as const) : [])] : [st.rearming ? 'rearm' : 'buy'];
   const made = (fires: Band[], side: TriggerSide, more: Partial<Trigger> = {}): Trigger => ({
     ticker: name,
     side,
@@ -491,7 +491,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   const pos = posIn(base);
   const n = base.get(name)!.t.length;
 
-  if (!st.long && !st.rearming) {
+  if (st.side !== 'long' && !st.rearming) {
     const own = withBars(base.get(name)!, added.get(name)!, base.get(name)!.c.at(-1)!);
     const missing = missingInputAt(
       spec.sizing,
@@ -504,7 +504,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
 
   // A held ticker's stop and target act inside the bar before its close, so the closes searched stop short of them; one
   // the bar opens beyond (at the last close, as it is taken to open) sells it at the open whatever the close.
-  if (st.long && st.levels) {
+  if (st.side === 'long' && st.levels) {
     const { stop, target } = st.levels;
     if ((stop !== null && st.lastClose <= stop) || (target !== null && st.lastClose >= target)) return sides.map((side) => made([], side));
     if (driver === name) range = { lo: stop === null ? range.lo : Math.max(range.lo, stop * (1 + 1e-9)), hi: target === null ? range.hi : Math.min(range.hi, target * (1 - 1e-9)) };
@@ -514,7 +514,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
   let known = false;
   const outcome = (x: number): Outcome => {
     const ev = specEvaluator(spec, tryData(base, x));
-    if (st.long) {
+    if (st.side === 'long') {
       if (rules.sell && ev.compile(rules.sell, name)(n, pos) === 1) return 'sell';
       if (!addable || ev.compile(rules.add!, name)(n, pos) !== 1) return 'none';
       // An add is made only while the position is below its whole size (engine.ts, the state of an add at the end).
@@ -527,7 +527,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
     return buy === 1 && !(rules.sell && ev.compile(rules.sell, name)(n, null) === 1) ? 'buy' : 'none';
   };
   const stretches = search(range.lo, range.hi, outcome, values);
-  if (!st.long && !st.rearming && !known) return [made([], 'buy', { blocked: 'warmup', warmup: null })];
+  if (st.side !== 'long' && !st.rearming && !known) return [made([], 'buy', { blocked: 'warmup', warmup: null })];
   return sides.map((side) => made(stretches.filter((s) => s.label === side).map((s) => ({ lo: s.from, hi: s.to })), side));
 }
 

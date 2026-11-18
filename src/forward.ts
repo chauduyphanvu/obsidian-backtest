@@ -390,7 +390,7 @@ export function logRows(bt: { run: Pick<RunResult, 't' | 'equity' | 'trades' | '
     else if (why.exit?.k === 'rank') give(why.exit.rank.decision.t, 'sell', trade.asset);
   }
   const last = run.t[run.t.length - 1];
-  for (const st of run.states) if (st.pending) give(last, st.pending, st.name);
+  for (const st of run.states) if (st.pending) give(last, st.pending === 'short' ? 'sell' : st.pending === 'cover' ? 'buy' : st.pending, st.name);
   return [...byBar]
     .sort(([a], [b]) => a - b)
     .map(([t, orders]) => ({ t, orders, value: run.equity[barAt(run.t, t)] }));

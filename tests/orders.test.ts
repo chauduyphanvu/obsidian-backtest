@@ -339,7 +339,7 @@ test('an order made at the last close is worded in the past, the others as somet
 });
 
 test('a position\'s order is worded as the positions table words it', () => {
-  const st = (o: Partial<AssetState>): AssetState => ({ name: 'A', weight: 1, long: false, since: null, pending: null, shares: 0, lastClose: 1, value: 0, targetWeight: 1, ...o });
+  const st = (o: Partial<AssetState>): AssetState => ({ name: 'A', weight: 1, side: null, since: null, pending: null, shares: 0, lastClose: 1, value: 0, targetWeight: 1, ...o });
   assert.equal(positionOrder(st({}), undefined), '');
   assert.equal(positionOrder(st({ pending: 'buy' }), undefined), 'buys at the next open');
   assert.equal(positionOrder(st({ pending: 'sell' }), 'next open'), 'sells at the next open');

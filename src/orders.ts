@@ -37,8 +37,8 @@ export const LAST_CLOSE_NOTE = 'The backtest made these at the last close. To ma
 
 /** How a position's order reads in the positions table: "buys at the next close", "adds at the next open", "bought at the last close"; empty for none. */
 export function positionOrder(st: AssetState, fill?: Fill): string {
-  if (st.pending) return `${{ buy: 'buys', sell: 'sells', add: 'adds' }[st.pending]} ${timingPhrase(pendingTiming(fill))}`;
-  return st.filled ? `${{ buy: 'bought', sell: 'sold', add: 'added' }[st.filled.side]} at the last close` : '';
+  if (st.pending) return `${{ buy: 'buys', sell: 'sells', add: 'adds', short: 'sells', cover: 'buys' }[st.pending]} ${timingPhrase(pendingTiming(fill))}`;
+  return st.filled ? `${{ buy: 'bought', sell: 'sold', add: 'added', short: 'sold', cover: 'bought' }[st.filled.side]} at the last close` : '';
 }
 
 export interface OrderRow {
@@ -207,14 +207,14 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
     if (st.filled) {
       // A whole position bought or sold at the last close, or an entry added to one, valued there.
       const value = st.filled.shares * st.lastClose;
-      if (st.filled.side !== 'sell') {
+      if (st.filled.side !== 'sell' && st.filled.side !== 'short') {
         orders.push({ ticker: st.name, action: 'buy', when: 'last close', weight: equity > 0 ? value / equity : 0, value, lastClose: st.lastClose, since: null, ...step(made) });
       } else {
         const closed = run.trades.filter((t) => t.asset === st.name && t.reason !== 'open').pop();
         orders.push({ ticker: st.name, action: 'sell', when: 'last close', weight: 0, value, lastClose: st.lastClose, since: closed?.entryT ?? null });
       }
     }
-    if (orders.length === before && st.long) {
+    if (orders.length === before && st.side === 'long') {
       const open = run.trades.find((t) => t.asset === st.name && t.reason === 'open');
       holdings.push({ ticker: st.name, weight: equity > 0 ? st.value / equity : 0, since: st.since!, lastClose: st.lastClose, gain: open ? open.ret : null });
     }

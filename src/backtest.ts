@@ -77,14 +77,19 @@ export function maxDrawdown(equity: number[]): number {
   return worst;
 }
 
-/** `cashReturn[i]` is what cash earned from bar i - 1 to bar i; Sharpe and Sortino measure returns above it. */
-export function computeStats(t: number[], equity: number[], capital: number, exposure: number[], cashReturn?: number[]): Stats {
+/**
+ * `cashReturn[i]` is what cash earned from bar i - 1 to bar i; Sharpe and Sortino measure returns above it. A run ruined at
+ * bar `ruin` (RunResult.ruin) has nothing left to return on after it, so its returns stop there: its equity of 0 after
+ * the ruin still makes the total return and CAGR -100% and the worst drawdown -100%.
+ */
+export function computeStats(t: number[], equity: number[], capital: number, exposure: number[], cashReturn?: number[], ruin?: number): Stats {
   if (equity.length < 2) return { totalReturn: NaN, cagr: NaN, maxDrawdown: NaN, volatility: NaN, sharpe: NaN, sortino: NaN, exposure: NaN };
   const years = (t[t.length - 1] - t[0]) / YEAR;
   const total = equity[equity.length - 1] / capital - 1;
   const rets: number[] = [];
   const excess: number[] = [];
-  for (let i = 1; i < equity.length; i++) {
+  const steps = ruin === undefined ? equity.length : Math.max(1, Math.min(equity.length, ruin + 1));
+  for (let i = 1; i < steps; i++) {
     const r = equity[i] / equity[i - 1] - 1;
     rets.push(r);
     excess.push(r - (cashReturn?.[i] ?? 0));
@@ -95,7 +100,8 @@ export function computeStats(t: number[], equity: number[], capital: number, exp
   const meanExcess = avg(excess);
   const sdExcess = Math.sqrt(avg(excess.map((r) => (r - meanExcess) ** 2)));
   const downside = Math.sqrt(avg(excess.map((r) => Math.min(0, r) ** 2)));
-  const perYear = rets.length / years;
+  // Steps a year over the time the returns cover, which a ruin cuts short.
+  const perYear = rets.length / (rets.length === equity.length - 1 ? years : (t[rets.length] - t[0]) / YEAR);
   return {
     totalReturn: total,
     cagr: (1 + total) ** (1 / years) - 1,
@@ -124,7 +130,9 @@ export function computeTradeStats(trades: Trade[]): TradeStats {
 function measure(run: RunResult, eq: number[], ex: number[], base: number, s: number, e: number, capital?: number): Stats {
   while (base < e && Number.isNaN(eq[base])) base++;
   const cut = (xs: number[]) => xs.slice(base, e);
-  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn));
+  // Only the strategy's own equity can be ruined; the benchmark never borrows.
+  const ruin = eq === run.equity && run.ruin ? run.t.indexOf(run.ruin.t) - base : undefined;
+  return computeStats(cut(run.t), cut(eq), capital ?? eq[base], ex.slice(Math.max(s, base), e), cut(run.cashReturn), ruin);
 }
 
 /**
@@ -322,12 +330,15 @@ export function specSignals(spec: Spec, data: Map<string, Bars>): Map<string, Si
   const signals = new Map<string, Signals>();
   for (const a of spec.universe) {
     const r = spec.rules[a.name];
-    signals.set(a.name, {
+    const sig: Signals = {
       buy: evaluator.eval(r.buy, a.name),
       sell: r.sell ? evaluator.compile(r.sell, a.name) : null,
       score: spec.rank ? evaluator.eval(spec.rank.by, a.name) : null,
       add: r.add ? evaluator.compile(r.add, a.name) : null,
-    });
+    };
+    if (r.short) sig.short = evaluator.eval(r.short, a.name);
+    if (r.cover) sig.cover = evaluator.compile(r.cover, a.name);
+    signals.set(a.name, sig);
   }
   return signals;
 }
@@ -339,13 +350,13 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
 
   // The benchmark holds the same weights (or the named ticker) throughout, with the same costs
   // and rebalancing, bought at the same first open the strategy could have bought at. A ranking
-  // strategy is compared with holding every ticker in equal parts of the same size.
+  // strategy is compared with holding every ticker in equal parts of the same size. It never
+  // borrows: weights that add up to more than 100% are scaled down to 100%, and a ticker the
+  // strategy shorts is held long.
   const n = spec.universe.length;
-  const held: Asset[] = spec.benchmark
-    ? [{ ...spec.benchmark, weight: 1 }]
-    : spec.rank
-      ? spec.universe.map((a) => ({ ...a, weight: (a.weight * spec.rank!.top) / n }))
-      : spec.universe;
+  const ranked = spec.rank ? spec.universe.map((a) => ({ ...a, weight: (a.weight * spec.rank!.top) / n })) : spec.universe;
+  const total = ranked.reduce((s, a) => s + a.weight, 0);
+  const held: Asset[] = spec.benchmark ? [{ ...spec.benchmark, weight: 1 }] : total > 1 + 1e-9 ? ranked.map((a) => ({ ...a, weight: a.weight / total })) : ranked;
   const params: SimParams = {
     assets: held,
     from: run.t[0],
@@ -385,6 +396,10 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
     notes.push(
       `${n} ${n === 1 ? 'add or rebalancing trade was' : 'adds and rebalancing trades were'} not made because the commission would have been ${SMALL_TRADE * 100}% of ${n === 1 ? 'its' : 'their'} value or more.`,
     );
+  }
+  if (run.conflicts) {
+    const n = run.conflicts;
+    notes.push(`On ${n} ${n === 1 ? 'bar' : 'bars'} the buy rule and the short rule both held, so neither side opened there.`);
   }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   notes.push(...insideNotes(spec, data, run, intraday));

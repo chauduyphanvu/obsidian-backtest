@@ -77,7 +77,7 @@ test('a ticker stopped out while its buy rule still holds waits for the rule to 
   const A = bars([10, 10, 10, 10], { lows: [10, 10, 10, 8.8] });
   const stopped = run('universe: A\nstop loss: 10%\nbuy when close > 9.9', { A }).run;
   assert.equal(stopped.trades[0].reason, 'stop loss');
-  assert.deepEqual([stopped.states[0].long, stopped.states[0].rearming, 'pos' in stopped.states[0]], [false, true, false]);
+  assert.deepEqual([stopped.states[0].side === 'long', stopped.states[0].rearming, 'pos' in stopped.states[0]], [false, true, false]);
   // The buy rule stopped holding at the stop's close: it may buy again.
   const cleared = run('universe: A\nstop loss: 10%\nbuy when close > 9.9', { A: bars([10, 10, 10, 9.5], { lows: [10, 10, 10, 8.8] }) }).run.states[0];
   assert.ok(!('rearming' in cleared));
@@ -182,7 +182,7 @@ test('a held position: the sell rule\'s closes stop at the stop, which acts insi
   const below = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 9.5 * (1 - 1e-6))).run;
   assert.deepEqual([below.trades.at(-1)!.reason, below.trades.at(-1)!.exitT, below.trades.at(-1)!.exitPrice, below.states[0].pending], ['stop loss', day(5), 9.5, null]);
   const above = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 9.5 * (1 + 1e-6))).run;
-  assert.deepEqual([above.states[0].long, above.states[0].pending], [true, 'sell']);
+  assert.deepEqual([above.states[0].side === 'long', above.states[0].pending], [true, 'sell']);
 });
 
 test('a stop above the last close sells at the next open whatever the close, and the text says so', () => {

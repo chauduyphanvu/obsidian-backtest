@@ -186,7 +186,7 @@ export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill ===
 export function compactFacts(out: RunOutput): CompactFacts {
   const { stats, run } = out.backtest;
   const intraday = isIntraday(run.t);
-  const long = run.states.filter((st) => st.long);
+  const long = run.states.filter((st) => st.side === 'long');
   const steps = out.spec.entries ?? 1;
   const built = long.length === 1 && steps > 1 ? `, ${long[0].entries} of ${steps} entries` : '';
   const holding = long.length === 0 ? 'In cash' : long.length === 1 ? `Long ${long[0].name} since ${stamp(long[0].since!, intraday)}${built}` : `Holds ${long.length} of ${run.states.length}`;

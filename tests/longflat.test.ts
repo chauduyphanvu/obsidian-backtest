@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runBacktest, specSignals } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { insideKey, simulate, type FillSeen } from '../src/engine.ts';
+import { barAt, insideKey, simulate, type CloseSeen, type FillSeen } from '../src/engine.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY } from './helpers.ts';
 
@@ -184,4 +184,170 @@ test('over random strategies, cash is never below 0, a ticker bought or added to
   }
   // The strategies make enough trades of every kind, and leave enough undone for their commission, for the checks to mean something.
   assert.ok(fills > 15_000 && adds > 2_000 && rebalancing > 300 && undone > 500, `${fills} fills, ${adds} adds, ${rebalancing} top-ups, ${undone} left undone`);
+});
+
+// ------------------------------------------------------------------ the long, short and leveraged promises
+
+/** A random strategy that shorts, flips or borrows (or, now and then, stays long within 100%), with its prices. */
+function randomBorrowCase(r: R): { text: string; data: Map<string, Bars> } {
+  const names: { sym: string; name: string; crypto: boolean }[] = [];
+  const stocks = r.int(1, 3);
+  for (let i = 0; i < stocks; i++) names.push({ sym: ['AAA', 'BBB', 'CCC'][i], name: ['AAA', 'BBB', 'CCC'][i], crypto: false });
+  if (r.chance(0.3)) names.push({ sym: 'binance:XUSDT', name: 'XUSDT', crypto: true });
+  const days = r.int(120, 300);
+  const magnify = r.chance(0.25);
+  const data = new Map<string, Bars>();
+  // Now and then every price jumps from one day on, so margin calls and ruin happen.
+  const jump = r.chance(0.5) ? { at: J(1) + r.int(30, days - 20) * DAY, by: r.pick([0.25, 0.4, 0.45, 0.55, 0.6, 1.3, 1.4, 1.8, 2.6]) } : null;
+  const shock = (b: Bars) => {
+    if (!jump) return b;
+    for (let i = 0; i < b.t.length; i++) if (b.t[i] >= jump.at) for (const key of ['o', 'h', 'l', 'c'] as const) b[key][i] *= jump.by;
+    return b;
+  };
+  for (const n of names) {
+    const s = series(r, days, n.crypto, r.pick([5, 20, 100, 400]), r.pick([0.003, 0.006, 0.012, 0.025]));
+    data.set(n.name, shock(s.daily));
+    if (magnify) data.set(insideKey(n.name, '1h'), shock(s.hourly));
+  }
+  const sides = r.pick(['long', 'short', 'both', 'both']);
+  const ranked = sides === 'long' && names.length > 1 && r.chance(0.3);
+  const gross = r.pick([0.5, 1, 1.5, 2]);
+  const lines: string[] = [];
+  if (!ranked && names.length > 1 && r.chance(0.5)) {
+    const parts = names.map(() => r.int(1, 5));
+    const total = parts.reduce((s, x) => s + x, 0);
+    lines.push(`universe: ${names.map((n, i) => `${n.sym} ${Math.max(1, Math.floor((100 * gross * parts[i]) / total))}%`).join(', ')}`);
+  } else {
+    lines.push(`universe: ${names.map((n) => n.sym).join(', ')}`);
+    lines.push(`size: ${gross * 100}%`);
+  }
+  lines.push(`capital: ${r.pick(['1000', '10k', '100k'])}`);
+  if (r.chance(0.5)) lines.push(`costs: ${r.pick([1, 5, 20])} bps`);
+  if (r.chance(0.5)) lines.push(`slippage: ${r.pick([1, 5, 20])} bps`);
+  if (r.chance(0.5)) lines.push(`commission: ${r.pick(['1', '0.5', '0.005 per share', '0.01 per share, min 1, max 1%'])}`);
+  if (r.chance(0.6)) lines.push(`borrow fee: ${r.pick(['0%', '0.5%', '3%', '30%'])}`);
+  if (r.chance(0.6)) lines.push(`margin rate: ${r.pick(['0%', '6%', '20%'])}`);
+  if (r.chance(0.3)) lines.push(`cash rate: ${r.pick(['2%', '5%'])}`);
+  const steps = r.chance(0.4) ? r.int(2, 3) : 1;
+  if (steps > 1) lines.push(`entries: ${steps}`);
+  const rebalance = r.chance(0.4) ? r.pick(['weekly', 'monthly']) : null;
+  if (rebalance) lines.push(`rebalance: ${rebalance}`);
+  const sizing = r.pick(rebalance ? ['none', 'none', 'invvol'] : ['none', 'none', 'risk', 'invvol']);
+  if (sizing === 'risk') lines.push(`risk per trade: ${r.pick(['1%', '5%'])} at ${r.pick(['1', '2'])} atr(${r.pick([5, 14])})`);
+  if (sizing === 'invvol') lines.push(`weighting: inverse volatility(${r.pick([10, 20])})`);
+  if (r.chance(0.5)) lines.push('fill: close');
+  if (magnify) lines.push('magnify: 1h');
+  if (r.chance(0.4)) lines.push(`stop loss: ${r.pick(['3%', '1 atr(5)'])}`);
+  if (r.chance(0.3)) lines.push(`take profit: ${r.pick(['4%', '2 atr(5)'])}`);
+  if (r.chance(0.3)) lines.push(`trailing stop: ${r.pick(['3%', '2 atr(5)'])}`);
+  if (ranked) lines.push(`hold: top ${r.int(1, names.length)} by ${r.pick(['roc(10)', '-stdev(10)'])}`);
+  if (sides !== 'short') {
+    lines.push(`buy when ${r.pick(['close > sma(10)', 'rsi(5) < 40', 'true', 'close crosses above sma(5)', 'close > close[1]'])}`);
+    if (r.chance(0.7)) lines.push(`sell when ${r.pick(['close < sma(20)', 'bars held >= 5', 'rsi(5) > 70', 'close < entry price * 0.97'])}`);
+  }
+  if (sides !== 'long') {
+    lines.push(`short when ${r.pick(['close < sma(10)', 'rsi(5) > 60', 'true', 'close crosses below sma(5)', 'close < close[1]'])}`);
+    if (r.chance(0.7)) lines.push(`cover when ${r.pick(['close > sma(20)', 'bars held >= 5', 'rsi(5) < 30', 'close > entry price * 1.03'])}`);
+  }
+  if (steps > 1) lines.push(`add when ${r.pick(['true', 'bars held >= 3', 'close > close[1]', 'close < close[1]'])}`);
+  return { text: lines.join('\n'), data };
+}
+
+test('over random long, short and leveraged strategies, the book adds up, positions stay within their room and nothing trades after ruin', () => {
+  const seen = { shorts: 0, flips: 0, calls: 0, ruins: 0, conflicts: 0, increases: 0, leveraged: 0, forced: 0 };
+  for (let seed = 1; seed <= 800; seed++) {
+    const c = randomBorrowCase(rng(seed * 6271));
+    const { spec, errors } = parseSpec(c.text);
+    assert.ok(spec, `${JSON.stringify(errors)}\n${c.text}`);
+    const where = `seed ${seed}:\n${c.text}`;
+    const names = spec.universe.map((a) => a.name);
+    const bars = names.map((n) => c.data.get(n)!);
+    const slip = spec.slippageBps / 10_000;
+    const cap = spec.margin?.cap ?? 1;
+    const atClose = spec.fill === 'close';
+    const tol = TOLERANCE * spec.capital;
+    if (cap > 1) seen.leveraged++;
+    /** The bar of asset `i` at or before `t`, and whether it is at `t`. */
+    const barOf = (i: number, t: number) => {
+      const j = barAt(bars[i].t, t);
+      return { j, live: bars[i].t[j] === t };
+    };
+    const shares = names.map(() => 0);
+    const closes: { t: number; equity: number; gross: number; held: number[] }[] = [];
+    const onFill = (f: FillSeen) => {
+      const i = names.indexOf(f.asset);
+      shares[i] = f.shares;
+      const { j, live } = barOf(i, f.t);
+      const b = bars[i];
+      // Inside the bar's range, or at the last close for a ticker with no bar there (closed by ruin).
+      if (live) assert.ok(f.price >= b.l[j] * (1 - 1e-12) && f.price <= b.h[j] * (1 + 1e-12), `${f.kind} of ${f.asset} at ${f.price} outside ${b.l[j]}..${b.h[j]}, ${where}`);
+      else assert.ok(f.kind === 'margin' && f.price === b.c[j], `${f.kind} of ${f.asset} with no bar at ${f.t}, ${where}`);
+      if (f.kind === 'sell' || f.kind === 'stop' || f.kind === 'margin') assert.equal(f.shares, 0, `${f.kind} of ${f.asset} leaves ${f.shares}, ${where}`);
+      if (f.kind === 'margin') seen.forced++;
+      if (f.kind !== 'entry' && f.kind !== 'add' && f.kind !== 'rebalance' && f.kind !== 'owed') return;
+      seen.increases++;
+      // Marked as the fill marks them: the price there for a ticker with a bar, its last close for the others. A short is
+      // measured by what selling it brings in, as its size is (see the report on the room).
+      let gross = 0;
+      names.forEach((_, k) => {
+        if (shares[k] === 0) return;
+        const at = barOf(k, f.t);
+        const mark = at.live ? (atClose ? bars[k].c[at.j] : bars[k].o[at.j]) : bars[k].c[at.j];
+        gross += Math.abs(shares[k]) * mark * (shares[k] < 0 ? 1 - slip : 1);
+      });
+      assert.ok(gross <= cap * f.equity * (1 + TOLERANCE), `gross ${gross} above ${cap} × ${f.equity} after a ${f.kind} of ${f.asset} at ${new Date(f.t).toISOString()}, ${where}`);
+      const value = Math.abs(f.shares) * f.price * (f.shares < 0 ? 1 - slip : 1);
+      assert.ok(value <= f.weight * f.equity * (1 + TOLERANCE), `${f.asset} worth ${value} after a ${f.kind}, above ${f.weight} × ${f.equity}, ${where}`);
+    };
+    const onClose = (s: CloseSeen) => {
+      let invested = 0;
+      let gross = 0;
+      s.shares.forEach((q, i) => {
+        // Each ticker is marked at its own latest close, and holds what its fills left it.
+        assert.equal(s.closes[i], bars[i].c[barAt(bars[i].t, s.t)], where);
+        assert.equal(q, shares[i], `${names[i]} holds ${q}, but its fills left ${shares[i]}, ${where}`);
+        invested += q * s.closes[i];
+        gross += Math.abs(q) * s.closes[i];
+      });
+      assert.ok(Math.abs(s.equity - (s.cash + invested)) <= tol, `equity ${s.equity} against ${s.cash} + ${invested}, ${where}`);
+      closes.push({ t: s.t, equity: s.equity, gross, held: [...s.shares] });
+    };
+    const result = simulate({ ...spec, assets: spec.universe, onFill, onClose }, c.data, specSignals(spec, c.data));
+    const { fills, trades, states } = result;
+    for (const e of result.equity) assert.ok(Number.isFinite(e) && e >= 0, `equity ${e}, ${where}`);
+    closes.forEach((x) => assert.equal(result.equity[result.t.indexOf(x.t)], x.equity, where));
+    // The sign of the shares is the side, and flat is exactly 0.
+    for (const st of states) assert.equal(st.side, st.shares > 0 ? 'long' : st.shares < 0 ? 'short' : null, where);
+    // What a run pays is never below 0, and a run that never shorts pays no borrow fee.
+    assert.ok(result.costs >= 0 && (result.commission ?? 0) >= 0 && result.interest >= 0, where);
+    if (spec.margin) {
+      assert.ok(result.borrowFees! >= 0 && result.marginInterest! >= 0, where);
+      if (!trades.some((t) => t.side === 'short')) assert.equal(result.borrowFees, 0, where);
+    } else {
+      // A block that never borrows keeps the long/flat promises.
+      assert.ok(!('borrowFees' in result) && trades.every((t) => t.side === undefined), where);
+      for (const x of result.exposure) assert.ok(x <= 1 + TOLERANCE, `exposure ${x}, ${where}`);
+    }
+    // Below the maintenance share at a close, every position held there is closed at its ticker's next bar, first thing.
+    for (const x of closes) {
+      if (!spec.margin || !(x.gross > 0 && x.equity < spec.margin.maintenance * x.gross)) continue;
+      x.held.forEach((q, i) => {
+        if (q === 0) return;
+        const next = bars[i].t[barAt(bars[i].t, x.t) + 1];
+        if (next === undefined || next > result.t.at(-1)!) return;
+        const k = fills.t.findIndex((t, n) => t > x.t && fills.asset[n] === names[i]);
+        assert.ok(k >= 0 && fills.kind[k] === 'margin' && fills.t[k] === next, `${names[i]} not closed at ${new Date(next).toISOString()} after the margin call at ${new Date(x.t).toISOString()}, ${where}`);
+      });
+    }
+    if (result.ruin) {
+      assert.ok(fills.t.every((t) => t <= result.ruin!.t), `a fill after the ruin, ${where}`);
+      assert.ok(result.equity.slice(result.t.indexOf(result.ruin.t)).every((e) => e === 0), where);
+      seen.ruins++;
+    }
+    seen.shorts += trades.filter((t) => t.side === 'short').length;
+    seen.flips += fills.t.filter((t, n) => n > 0 && t === fills.t[n - 1] && fills.asset[n] === fills.asset[n - 1] && fills.kind[n - 1] === 'sell' && fills.kind[n] === 'entry').length;
+    seen.calls += result.marginCalls ?? 0;
+    seen.conflicts += result.conflicts ?? 0;
+  }
+  assert.ok(seen.shorts > 8000 && seen.flips > 2500 && seen.calls > 8 && seen.ruins > 6 && seen.conflicts > 10_000 && seen.leveraged > 200, JSON.stringify(seen));
 });

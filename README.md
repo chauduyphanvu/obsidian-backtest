@@ -92,6 +92,8 @@ Dates are always written `2015-01-31`. A percentage is written with a percent si
 | `trailing stop` | `trailing stop: 15%` | Sell this far below the highest price since entry. Also `3 atr(14)`. | none |
 | `take profit` | `take profit: 20%` | Sell this far above the entry price. Also `4 atr(14)`. | none |
 | `cash rate` | `cash rate: 4%` | What cash earns a year, or a ticker that quotes a yield, such as `^IRX` or `fred:DGS3MO`. | the plugin setting (0%) |
+| `borrow fee` | `borrow fee: 1%` | Yearly fee on the value of short positions. | 0.5% |
+| `margin rate` | `margin rate: 7%` | Yearly interest on money borrowed. | 6% |
 | `test from` | `test from: 2019-01-01` | Reports the results before this day and from it apart. | none |
 | `hold` | `hold: top 3 by roc(126)` | Hold only the best-ranked tickers. | none |
 | `weighting` | `weighting: inverse volatility(60)` | Calmer tickers get more weight. | the weights as written |

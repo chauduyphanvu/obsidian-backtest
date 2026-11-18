@@ -1,10 +1,11 @@
-import { intervalMs, type CashRate, type Commission, type Fill, type Rebalance, type Sizing, type StopLevel, type Stops } from './dsl.ts';
+import { intervalMs, type CashRate, type Commission, type Fill, type Margin, type Rebalance, type Sizing, type StopLevel, type Stops } from './dsl.ts';
 import type { BarRule, PosState } from './evaluate.ts';
 import { DAY } from './format.ts';
 import * as ind from './indicators.ts';
 import type { Asset, Bars } from './types.ts';
 
-export type ExitReason = 'signal' | 'stop loss' | 'trailing stop' | 'take profit' | 'open';
+/** `margin call` and `ruin` are forced closes of a block that borrows (SimParams.margin). */
+export type ExitReason = 'signal' | 'stop loss' | 'trailing stop' | 'take profit' | 'open' | 'margin call' | 'ruin';
 
 /** One entry of a position built in steps. */
 export interface TradeEntry {
@@ -19,13 +20,18 @@ export interface TradeEntry {
 
 export interface Trade {
   asset: string;
+  /** Present only for a short position; a long one leaves it out. */
+  side?: 'short';
   /** When the first entry filled. */
   entryT: number;
   /** Fill prices, slippage included; with several entries, the entry price is their average, weighted by shares. */
   entryPrice: number;
   exitT: number;
   exitPrice: number;
-  /** Price return after costs on both sides. */
+  /**
+   * Price return after costs on both sides. A short's is measured on the long convention's net basis: what it brought in a
+   * share at the entry less what it paid at the exit and in borrow fees, over what it brought in.
+   */
   ret: number;
   reason: ExitReason;
   /** Bars from the entry fill to the exit fill, counted in the asset's own bars; to the last bar while still open. */
@@ -36,6 +42,8 @@ export interface Trade {
   why?: TradeWhy;
   /** With `entries` above 1: each entry, the first one first. */
   entries?: TradeEntry[];
+  /** For a short: the borrow fees it paid over its life, part of `pnl`. */
+  borrow?: number;
 }
 
 /** A ranking decision, shared by the trades it made. */
@@ -63,8 +71,11 @@ export interface RankPlace {
 
 /** Why a position was closed. */
 export type ExitWhy =
-  /** The sell rule held at the close of the ticker's bar `t`. */
-  | { k: 'rule'; t: number }
+  /**
+   * The exit rule (sell, or cover for a short) held at the close of the ticker's bar `t`; with `flip`, the other side's
+   * entry rule held there instead, which closes the position whether or not that side then opens.
+   */
+  | { k: 'rule'; t: number; flip?: true }
   /** A ranking decision, which read the ticker's bar `t`, did not keep it. */
   | { k: 'rank'; t: number; rank: RankPlace }
   /**
@@ -72,7 +83,11 @@ export type ExitWhy =
    * opened beyond the level, so the fill was at the open. With `magnify`, `inside` says how the bar was read: looked
    * inside, when `atOpen` is about the smaller bar the level was reached in, or as a whole bar, and why.
    */
-  | { k: 'level'; level: number; high: number | null; atOpen: boolean; inside?: InsideWhy };
+  | { k: 'level'; level: number; high: number | null; atOpen: boolean; inside?: InsideWhy }
+  /** A margin call made at the close `t`, where equity was below the maintenance share of the gross value of the positions. */
+  | { k: 'margin'; t: number; equity: number; gross: number }
+  /** Equity fell below 0, or to 0 with a position open, at `t` (an open or a close), so everything was closed there and trading stopped. */
+  | { k: 'ruin'; t: number; equity: number };
 
 /**
  * How a bar with a stop or target inside its range was read with `magnify`: through its smaller bars, with the start of
@@ -160,16 +175,20 @@ export interface AssetState {
   name: string;
   /** The configured weight. */
   weight: number;
-  long: boolean;
+  /** The side held at the end, null when flat. */
+  side: 'long' | 'short' | null;
   since: number | null;
   /**
    * An order from the last bar's signal that would fill at the next open (or, with `fill: close`, one a ranking decision
-   * made while the ticker had no bar, for its next close). `add` is the next entry of a position built in steps.
+   * made while the ticker had no bar, for its next close). `add` is the next entry of a position built in steps, on
+   * whichever side is held. `sell` closes a long and `cover` a short; `short` while long, or `buy` while short, is a flip:
+   * the position closes and the other side opens at the same fill.
    */
-  pending: 'buy' | 'sell' | 'add' | null;
+  pending: 'buy' | 'sell' | 'add' | 'short' | 'cover' | null;
+  /** Negative for a short. */
   shares: number;
   lastClose: number;
-  /** Shares at the last close. */
+  /** Shares at the last close, negative for a short. */
   value: number;
   /** The weight a buy at the next open would use, estimated from the last close; with `entries`, that of the next entry. */
   targetWeight: number;
@@ -178,14 +197,22 @@ export interface AssetState {
   /**
    * Only with `fill: close`: a position the rules or a ranking decision opened or sold whole at the
    * close of the ticker's last bar, at that close; null when nothing did. Rebalancing trims and
-   * top-ups and stop exits are not counted. Price with slippage.
+   * top-ups and stop exits are not counted. Price with slippage. A flip fills the new side, with `closed` the shares of the
+   * position it closed at the same close.
    */
-  filled?: { side: 'buy' | 'sell' | 'add'; shares: number; price: number } | null;
-  /** While long: the position as the sell and add rules read it at the next bar. */
+  filled?: { side: 'buy' | 'sell' | 'add' | 'short' | 'cover'; shares: number; price: number; closed?: number } | null;
+  /** While held: the position as the exit and add rules read it at the next bar. */
   pos?: PosState;
-  /** Only when flat after a stop or target exit, outside a ranking: the buy rule has to stop holding at a close before it can buy again. */
+  /**
+   * Only when not long after a stop or target exit (or a margin call), outside a ranking: the buy rule has to stop holding
+   * at a close before it can buy again. `rearmingShort` is the same for the short rule, when not short.
+   */
   rearming?: true;
-  /** While long with a stop or target: the levels in force for the next bar, the trailing stop's moved by the last bar's high. */
+  rearmingShort?: true;
+  /**
+   * While held with a stop or target: the levels in force for the next bar, the trailing stop's moved by the last bar's
+   * high (for a short, its low).
+   */
   levels?: { stop: number | null; target: number | null };
 }
 
@@ -215,21 +242,39 @@ export interface SimParams {
    */
   magnify?: string;
   interval?: string;
-  /** Told about every fill, for tests of the long/flat promises; absent in a run. */
+  /** Borrowing, for a block that shorts or holds more than its equity; absent, the block is long or flat and never borrows. */
+  margin?: Margin;
+  /** Told about every fill, for tests of the engine's promises; absent in a run. */
   onFill?: (fill: FillSeen) => void;
+  /** Told about the book at every close once it is marked, for the same tests; absent in a run. */
+  onClose?: (seen: CloseSeen) => void;
+}
+
+/** The book at a close as SimParams.onClose sees it: the cash, each asset's shares (in the universe's order) and the closes they are marked at. */
+export interface CloseSeen {
+  t: number;
+  cash: number;
+  shares: number[];
+  closes: number[];
+  equity: number;
 }
 
 /** A fill as SimParams.onFill sees it, just after it is made. */
 export interface FillSeen {
   t: number;
   asset: string;
-  kind: 'entry' | 'add' | 'rebalance' | 'owed' | 'trim' | 'sell' | 'stop';
-  /** The price it filled at before slippage, and the asset's shares after it. */
+  /**
+   * The same words for either side, the sign of `shares` giving the side: `entry` opens a long or a short, `sell` closes
+   * either by its rules, `trim` and `rebalance` make it smaller or larger, and `margin` is a forced close, by a margin call
+   * or ruin.
+   */
+  kind: 'entry' | 'add' | 'rebalance' | 'owed' | 'trim' | 'sell' | 'stop' | 'margin';
+  /** The price it filled at before slippage, and the asset's shares after it, negative for a short. */
   price: number;
   shares: number;
   /** Cash after it. */
   cash: number;
-  /** For a buy: the equity it was sized against and the weight it used (the configured one, or its inverse-volatility share); NaN for a sale. */
+  /** For a buy or a short sale that makes the position larger: the equity it was sized against and the weight it used (the configured one, or its inverse-volatility share); NaN otherwise. */
   equity: number;
   weight: number;
 }
@@ -240,6 +285,10 @@ export interface Signals {
   buy: number[];
   /** The sell rule; null when there is none. */
   sell: BarRule | null;
+  /** 1 where the short rule holds; absent when there is none. */
+  short?: number[];
+  /** The cover rule; absent or null when there is none. */
+  cover?: BarRule | null;
   /** The ranking score; null outside rank mode. */
   score: number[] | null;
   /** When to make the next entry of a position built in steps; absent or null, no entry after the first is made. */
@@ -261,7 +310,7 @@ export interface Skipped {
 export interface RunResult {
   t: number[];
   equity: number[];
-  /** Fraction of equity invested at each close. */
+  /** Gross exposure at each close: the value of the positions, long and short, as a fraction of equity. */
   exposure: number[];
   trades: Trade[];
   states: AssetState[];
@@ -279,6 +328,16 @@ export interface RunResult {
   inside?: InsideReport[];
   /** Every fill, rebalancing trims and top-ups included, in the order made: what an account following the run is set against. */
   fills: FillLog;
+  /** Only for a block that borrows (SimParams.margin): long value less short value as a fraction of equity, at each close. */
+  netExposure?: number[];
+  /** Only for a block that borrows: the borrow fees on its shorts and the interest on money owed, both part of the equity. */
+  borrowFees?: number;
+  marginInterest?: number;
+  /** Only for a block that borrows: the margin calls made, and the bars where the buy and short rules both held so neither opened. */
+  marginCalls?: number;
+  conflicts?: number;
+  /** Only for a block that borrows: when equity fell below 0, or to 0 with a position open, and what was still owed after closing everything; null when it never did. */
+  ruin?: { t: number; deficit: number } | null;
 }
 
 /**
@@ -497,7 +556,7 @@ function monthIndex(day: number): number {
 }
 
 /**
- * Long/flat portfolio simulation. Each asset is either at its target weight or in cash.
+ * Portfolio simulation. Each asset is either at its target weight, long or short, or in cash.
  *
  * Every order is decided at a close: a rule's buy or sell, a ranking decision, and a rebalance,
  * which belongs to the close of each asset's last bar of a period. An order fills at the asset's
@@ -520,9 +579,21 @@ function monthIndex(day: number): number {
  * highest the trailing level could reach in it) is read as its smaller bars, one after another, with the same rule: so
  * the smaller bars decide which level comes first and where a gap between them fills, and the trailing level moves with
  * each smaller bar that has ended. Rules, rankings and every fill other than a stop's or a target's stay on the bars.
+ *
+ * A short holds negative shares. Its stops and target are kept in "side space", as minus the price, so the long's
+ * arithmetic runs on (-open, -low, -high): its stop sits above the entry, its target below, and it trails from the lowest
+ * low. Only a block that borrows (`margin`) can short or hold more than its equity, and every rule about borrowing is
+ * gated behind it (buying room, interest on a negative balance, the borrow fee, margin calls and ruin), so a long-only
+ * block within 100% runs the long arithmetic as it always has. From flat, a long opens when buy holds and sell does not,
+ * a short when short holds and cover does not, and neither when both would. A position closes on its own exit rule or on
+ * the other side's entry rule, and the bar is then read as if flat, so the other side opens at the same fill (a flip)
+ * when its entry holds alone. When equity is below the maintenance share of the gross value at a close, every position
+ * closes at its next open, before anything else there; when equity falls below 0 at an open or a close (or to 0 with a
+ * position open), everything closes there and the run is over, its equity 0 from then on.
  */
 export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<string, Signals>): RunResult {
   const atClose = p.fill === 'close';
+  const newArm = () => ({ armed: true, stoppedT: 0, blockedT: null as number | null, cleared: null as { exitT: number; heldT: number; clearedT: number; idx: number } | null });
   const steps = p.entries ?? 1;
   const assets = p.assets.map((a, order) => {
     const bars = data.get(a.name);
@@ -549,8 +620,13 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       // Cash paid in and taken out over the position's life, for its profit.
       cashIn: 0,
       cashOut: 0,
-      // After a stop or target exit, the buy rule must stop holding before it can fire again.
-      armed: true,
+      // A short's borrow fees: in all, and summed per share held.
+      borrow: 0,
+      borrowPS: 0,
+      // After a stop or target exit (or a margin call), that side's entry rule must stop holding before it can fire again.
+      arm: { long: newArm(), short: newArm() },
+      // A margin call closes the position at the asset's next open.
+      called: false,
       pending: null as AssetState['pending'],
       // Place in the latest ranking decision (0 is the best score), for funding buys in that order.
       rankPos: Infinity,
@@ -570,10 +646,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       heldFrom: 0,
       heldInput: null as { input: WarmupInput; n: number } | null,
       warm: null as TradeWhy['warmup'],
-      stoppedT: 0,
-      blockedT: null as number | null,
-      cleared: null as { exitT: number; heldT: number; clearedT: number; idx: number } | null,
-      lastFill: null as { side: 'buy' | 'sell' | 'add'; shares: number; price: number; t: number } | null,
+      lastFill: null as (NonNullable<AssetState['filled']> & { t: number }) | null,
 
       // A position built in steps: entries made, what they bought, the latest fill, and the ATR distances its levels keep.
       made: 0,
@@ -664,11 +737,19 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const cost = p.costBps / 10_000;
   const slip = p.slippageBps / 10_000;
   const charge = p.commission ?? null;
+  const m = p.margin ?? null;
   let cash = p.capital;
   let costs = 0;
   let interest = 0;
   let commission = 0;
   let smallTrades = 0;
+  let borrowFees = 0;
+  let marginInterest = 0;
+  let marginCalls = 0;
+  let conflicts = 0;
+  let ruin = null as { t: number; deficit: number } | null;
+  // A margin call made at a close, while the positions it closes wait for their next open.
+  let call = null as Extract<ExitWhy, { k: 'margin' }> | null;
   /** The commission of the latest buy or sell, and whether the latest buy was not made because it was too small for it. */
   let lastFee = 0;
   let small = false;
@@ -677,6 +758,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const trades: Trade[] = [];
   const equity: number[] = [];
   const exposure: number[] = [];
+  const netExposure: number[] = [];
   const cashReturn: number[] = [];
   const fills: FillLog = { t: [], asset: [], kind: [], sharesAfter: [], price: [] };
   const logFill = (fill: FillSeen) => {
@@ -688,17 +770,35 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     p.onFill?.(fill);
   };
 
+  /** Where fillOrders measures a block's room: equity at the fill, and the price each asset is marked at there. */
+  let fillEquity = 0;
+  let markOf = (a: A): number => a.lastClose;
+  /**
+   * What a buy or a short sale may use: the cash, or for a block that borrows its room, the gross value it may still add,
+   * L·E − gross = cash − 2·S + (L − 1)·E, with S the value of its shorts and E the equity at the fill. With no shorts and
+   * L = 1 that is the cash.
+   */
+  const funds = (): number => {
+    if (!m) return cash;
+    let shorts = 0;
+    for (const a of assets) if (a.shares < 0) shorts -= a.shares * markOf(a);
+    return cash - 2 * shorts + (m.cap - 1) * fillEquity;
+  };
+  /** Whether a block that borrows owes money or shares now. */
+  const borrowing = (): boolean => cash < 0 || assets.some((a) => a.shares < 0);
   const commissionOf =(value: number, shares: number): number => commissionFee(charge!, value, shares);
   /**
    * The most a buy filled at `fill` can spend, with its costs and commission paid on top from the cash there is. Value
    * plus costs plus commission rises with the value, so the answer is the larger of the values at which the capped and
    * the uncapped commission use up the cash; the uncapped one is the smaller of the values at the minimum and per share.
+   * For a block that borrows, the room (funds) takes the place of the cash, for buys and short sales alike.
    */
   const affordable = (fill: number): number => {
-    if (!charge) return cash / (1 + cost);
-    if (charge.k === 'order') return (cash - charge.fee) / (1 + cost);
-    const uncapped = Math.min((cash - charge.min) / (1 + cost), cash / (1 + cost + charge.fee / fill));
-    return charge.max === null ? uncapped : Math.max(cash / (1 + cost + charge.max), uncapped);
+    const money = funds();
+    if (!charge) return money / (1 + cost);
+    if (charge.k === 'order') return (money - charge.fee) / (1 + cost);
+    const uncapped = Math.min((money - charge.min) / (1 + cost), money / (1 + cost + charge.fee / fill));
+    return charge.max === null ? uncapped : Math.max(money / (1 + cost + charge.max), uncapped);
   };
   /** Whether a commission would be too large a share of an add or a rebalancing trade worth `value` to make it. */
   const tooSmall = (value: number, shares: number) => charge !== null && commissionOf(value, shares) >= SMALL_TRADE * value;
@@ -713,8 +813,9 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       a.shares -= shares;
       return;
     }
-    // A sale pays its commission from what it brings in and the cash there is, and never takes cash below 0.
-    lastFee = Math.min(commissionOf(value, shares), cash + value - fee);
+    // A sale pays its commission from what it brings in and the cash there is, and never takes cash below 0, unless the
+    // block is borrowing already (cash below 0, or a short open): then it owes the whole commission.
+    lastFee = m && borrowing() ? commissionOf(value, shares) : Math.min(commissionOf(value, shares), cash + value - fee);
     cash += value - fee - lastFee;
     costs += fee + lastFee;
     commission += lastFee;
@@ -726,7 +827,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   /** Buys up to `notional` with the cash there is; returns what it spent. An `adjust`ment too small for its commission is not made. */
   const buy = (a: A, notional: number, price: number, adjust = false): number => {
     if (!charge) {
-      const spend = Math.min(notional, cash / (1 + cost));
+      const spend = Math.min(notional, funds() / (1 + cost));
       if (spend <= 0) return 0;
       cash -= spend * (1 + cost);
       costs += spend * cost;
@@ -751,12 +852,50 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     a.shares += spend / fill;
     return spend;
   };
+  /**
+   * Sells short up to `notional` of proceeds (shares times the price less slippage) within the room there is; returns the
+   * proceeds before costs. An `adjust`ment too small for its commission is not made.
+   */
+  const sellShort = (a: A, notional: number, price: number, adjust = false): number => {
+    const fill = price * (1 - slip);
+    const value = Math.min(notional, affordable(fill));
+    small = false;
+    if (value <= 0) return 0;
+    lastFee = charge ? commissionOf(value, value / fill) : 0;
+    small = adjust && charge !== null && lastFee >= SMALL_TRADE * value;
+    if (small) return 0;
+    const fee = value * cost;
+    cash += value - fee - lastFee;
+    costs += fee + lastFee;
+    commission += lastFee;
+    a.fees += fee + lastFee;
+    a.comm += lastFee;
+    a.cashOut += value - fee - lastFee;
+    a.shares -= value / fill;
+    return value;
+  };
+  /** Buys back `shares` of a short, paying its costs and commission whatever the cash. */
+  const cover = (a: A, shares: number, price: number) => {
+    const value = shares * price * (1 + slip);
+    const fee = value * cost;
+    lastFee = charge ? commissionOf(value, shares) : 0;
+    cash -= value + fee + lastFee;
+    costs += fee + lastFee;
+    commission += lastFee;
+    a.fees += fee + lastFee;
+    a.comm += lastFee;
+    a.cashIn += value + fee + lastFee;
+    a.shares += shares;
+  };
   const close = (a: A, t: number, price: number, reason: ExitReason, exit: ExitWhy | null) => {
-    const exitPrice = reason === 'open' ? price : price * (1 - slip);
+    const short = a.shares < 0;
+    const exitPrice = reason === 'open' ? price : price * (short ? 1 + slip : 1 - slip);
     const held = a.shares;
     if (reason !== 'open') {
-      sell(a, a.shares, price);
-      logFill({ t, asset: a.name, kind: reason === 'signal' ? 'sell' : 'stop', price, shares: a.shares, cash, equity: NaN, weight: NaN });
+      if (short) cover(a, -a.shares, price);
+      else sell(a, a.shares, price);
+      const kind = reason === 'signal' ? 'sell' : reason === 'margin call' || reason === 'ruin' ? 'margin' : 'stop';
+      logFill({ t, asset: a.name, kind, price, shares: a.shares, cash, equity: NaN, weight: NaN });
     }
     a.owed = null;
     const why = a.why!;
@@ -764,13 +903,16 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     why.trims = a.trims;
     why.fees = a.fees;
     why.exit = exit;
+    const n = Math.abs(held);
+    // Each side's commission per share: the exit's (or what closing at the last close would pay), and the entries'.
+    const exitFee = !charge ? 0 : reason === 'open' ? commissionOf(n * price, n) : lastFee;
     let ret = (exitPrice * (1 - cost)) / (a.entryPrice * (1 + cost)) - 1;
-    if (charge) {
-      // Each side's commission per share: the exit's (or what selling at the last close would pay), and the entries'.
-      const exitFee = reason === 'open' ? commissionOf(held * price, held) : lastFee;
-      ret = (exitPrice * (1 - cost) - exitFee / held) / (a.entryPrice * (1 + cost) + a.entryComm / a.entryShares) - 1;
-      why.commission = { paid: a.comm, entries: a.entryComm, exit: exitFee, exitShares: held };
+    if (charge && !short) ret = (exitPrice * (1 - cost) - exitFee / held) / (a.entryPrice * (1 + cost) + a.entryComm / a.entryShares) - 1;
+    if (short) {
+      const basis = a.entryPrice * (1 - cost) - (charge ? a.entryComm / a.entryShares : 0);
+      ret = (basis - exitPrice * (1 + cost) - exitFee / n - a.borrowPS) / basis;
     }
+    if (charge) why.commission = { paid: a.comm, entries: a.entryComm, exit: exitFee, exitShares: n };
     if (steps > 1) why.adds = a.addList;
     const trade: Trade = {
       asset: a.name,
@@ -785,22 +927,29 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       why,
     };
     if (steps > 1) trade.entries = a.entryList;
+    if (short) {
+      trade.side = 'short';
+      trade.borrow = a.borrow;
+    }
     trades.push(trade);
   };
   type Size = Pick<TradeWhy, 'equity' | 'weight' | 'wanted' | 'cash' | 'spent' | 'shares'>;
   /** `price` is the open or close it filled at, before slippage; `known` the bar whose close the ATR is read at. */
   const openPosition = (a: A, t: number, price: number, known: number, size: Size) => {
-    const fill = price * (1 + slip);
+    const short = a.shares < 0;
+    const fill = price * (short ? 1 - slip : 1 + slip);
+    // Side space: the levels and the high-water mark of a short are kept as minus its prices.
+    const at = short ? -fill : fill;
     // Distances in ATR keep the value they were set with for the position's life (known: see missingInput).
     const dist = (s: StopLevel) => (s.k === 'atr' ? s.mult * atrAt(a, s.n, known) : NaN);
     const { stopLoss, trailingStop, takeProfit } = a.stops;
     a.entryT = t;
     a.entryIdx = a.i;
     a.entryPrice = fill;
-    a.highWater = price;
-    a.hard = !stopLoss ? -Infinity : stopLoss.k === 'pct' ? fill * (1 - stopLoss.v) : fill - dist(stopLoss);
-    a.target = !takeProfit ? Infinity : takeProfit.k === 'pct' ? fill * (1 + takeProfit.v) : fill + dist(takeProfit);
-    a.trail = !trailingStop ? null : trailingStop.k === 'pct' ? { mul: 1 - trailingStop.v } : { dist: dist(trailingStop) };
+    a.highWater = short ? -price : price;
+    a.hard = !stopLoss ? -Infinity : stopLoss.k === 'pct' ? (short ? -fill * (1 + stopLoss.v) : fill * (1 - stopLoss.v)) : at - dist(stopLoss);
+    a.target = !takeProfit ? Infinity : takeProfit.k === 'pct' ? (short ? -fill * (1 - takeProfit.v) : fill * (1 + takeProfit.v)) : at + dist(takeProfit);
+    a.trail = !trailingStop ? null : trailingStop.k === 'pct' ? { mul: short ? 1 + trailingStop.v : 1 - trailingStop.v } : { dist: dist(trailingStop) };
     a.slDist = stopLoss?.k === 'atr' ? dist(stopLoss) : NaN;
     a.tpDist = takeProfit?.k === 'atr' ? dist(takeProfit) : NaN;
     a.made = 1;
@@ -815,8 +964,8 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       waited: a.waited,
       inputT: a.bars.t[known],
       ...size,
-      stopLoss: a.hard === -Infinity ? null : a.hard,
-      takeProfit: a.target === Infinity ? null : a.target,
+      stopLoss: a.hard === -Infinity ? null : short ? -a.hard : a.hard,
+      takeProfit: a.target === Infinity ? null : short ? -a.target : a.target,
       topUps: 0,
       trims: 0,
       fees: 0,
@@ -829,6 +978,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
    * ATR distance keeps the ATR of the first entry). The trailing level keeps trailing from the first entry on.
    */
   const addToPosition = (a: A, t: number, fill: number, shares: number, size: Omit<AddWhy, 'signalT' | 'average' | 'stopLoss' | 'takeProfit'>) => {
+    const short = a.shares < 0;
     a.made++;
     a.entryMoney += size.spent;
     a.entryShares += shares;
@@ -836,37 +986,45 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     a.entryPrice = a.entryMoney / a.entryShares;
     a.lastEntryPrice = fill;
     const { stopLoss, takeProfit } = a.stops;
-    if (stopLoss) a.hard = stopLoss.k === 'pct' ? a.entryPrice * (1 - stopLoss.v) : a.entryPrice - a.slDist;
-    if (takeProfit) a.target = takeProfit.k === 'pct' ? a.entryPrice * (1 + takeProfit.v) : a.entryPrice + a.tpDist;
+    if (short) {
+      if (stopLoss) a.hard = stopLoss.k === 'pct' ? -a.entryPrice * (1 + stopLoss.v) : -a.entryPrice - a.slDist;
+      if (takeProfit) a.target = takeProfit.k === 'pct' ? -a.entryPrice * (1 - takeProfit.v) : -a.entryPrice + a.tpDist;
+    } else {
+      if (stopLoss) a.hard = stopLoss.k === 'pct' ? a.entryPrice * (1 - stopLoss.v) : a.entryPrice - a.slDist;
+      if (takeProfit) a.target = takeProfit.k === 'pct' ? a.entryPrice * (1 + takeProfit.v) : a.entryPrice + a.tpDist;
+    }
     const why = a.why!;
-    why.stopLoss = a.hard === -Infinity ? null : a.hard;
-    why.takeProfit = a.target === Infinity ? null : a.target;
+    why.stopLoss = a.hard === -Infinity ? null : short ? -a.hard : a.hard;
+    why.takeProfit = a.target === Infinity ? null : short ? -a.target : a.target;
     a.entryList.push({ t, price: fill, shares, money: size.spent, signalT: a.addT });
     a.addList.push({ signalT: a.addT, ...size, average: a.entryPrice, stopLoss: why.stopLoss, takeProfit: why.takeProfit });
   };
 
-  /** The trailing level when the highest price since entry is `high`; -Infinity without a trailing stop. */
+  /** The trailing level when the highest price since entry is `high`; -Infinity without a trailing stop. In side space for a short. */
   const trailFrom = (a: A, high: number) => (!a.trail ? -Infinity : 'mul' in a.trail ? high * a.trail.mul : high - a.trail.dist);
   /**
    * Checks a bar, or one of its smaller bars with `inside`, against the stops and the target, and closes the position when
    * the low reaches the stop or the high the target; true when it did. Otherwise the bar's high moves the trailing level
-   * for the bars after it.
+   * for the bars after it. For a short the prices come in side space, (-open, -low, -high), and go back out as prices.
    */
   const reach = (a: A, t: number, o: number, h: number, l: number, inside?: InsideWhy): boolean => {
+    const short = a.shares < 0;
+    const px = (x: number) => (short ? -x : x);
     const trail = trailFrom(a, a.highWater);
     const stop = Math.max(a.hard, trail);
     const how = inside ? { inside } : {};
     if (l <= stop && o < a.target) {
       const trailing = trail > a.hard;
-      close(a, t, Math.min(o, stop), trailing ? 'trailing stop' : 'stop loss', { k: 'level', level: stop, high: trailing ? a.highWater : null, atOpen: o < stop, ...how });
+      close(a, t, px(Math.min(o, stop)), trailing ? 'trailing stop' : 'stop loss', { k: 'level', level: px(stop), high: trailing ? px(a.highWater) : null, atOpen: o < stop, ...how });
     } else if (h >= a.target) {
-      close(a, t, Math.max(o, a.target), 'take profit', { k: 'level', level: a.target, high: null, atOpen: o > a.target, ...how });
+      close(a, t, px(Math.max(o, a.target)), 'take profit', { k: 'level', level: px(a.target), high: null, atOpen: o > a.target, ...how });
     } else {
       a.highWater = Math.max(a.highWater, h);
       return false;
     }
-    a.armed = false;
-    a.stoppedT = t;
+    const arm = short ? a.arm.short : a.arm.long;
+    arm.armed = false;
+    arm.stoppedT = t;
     return true;
   };
 
@@ -899,7 +1057,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     const out = new Map(configured);
     const n = p.sizing.n;
     const known = assets
-      .filter((a) => a.shares > 0 || entering.has(a))
+      .filter((a) => a.shares !== 0 || entering.has(a))
       .map((a) => ({ a, vol: volAt(a, n, idx(a)) }))
       .filter((x) => x.vol > 0);
     const total = known.reduce((s, x) => s + x.a.weight, 0);
@@ -907,19 +1065,23 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     for (const x of known) out.set(x.a, (total * (1 / x.vol)) / inverse);
     return out;
   };
-  /** Risk sizing: the value that loses `risk` of equity if the price falls `mult` ATRs, capped at the weight. */
-  const riskNotional = (a: A, weight: number, equityNow: number, price: number, signalIdx: number): number => {
+  /**
+   * Risk sizing: the value that loses `risk` of equity if the price moves `mult` ATRs against the position, capped at the
+   * weight. For a short, the value is what the sale brings in.
+   */
+  const riskNotional = (a: A, weight: number, equityNow: number, price: number, signalIdx: number, short = false): number => {
     if (p.sizing.k !== 'risk') return weight * equityNow;
     const atr = atrAt(a, p.sizing.n, signalIdx);
     if (!(atr > 0)) return weight * equityNow;
     const shares = (p.sizing.risk * equityNow) / (p.sizing.mult * atr);
-    return Math.min(shares * price * (1 + slip), weight * equityNow);
+    return Math.min(shares * price * (short ? 1 - slip : 1 + slip), weight * equityNow);
   };
 
   /**
    * Fills the orders due at this point of the bar: at its open, or at its close with fill: close.
-   * Sells first, then the rebalance (with any top-up still owed) and the buys. A ticker is
-   * rebalanced at its own bar, so one closed on the period's first or last day still is.
+   * Every reduction first (exits by the rules, the closing half of a flip, then rebalancing trims), then every increase
+   * (entries, top-ups, owed amounts and adds). A ticker is rebalanced at its own bar, so one closed on the period's first
+   * or last day still is.
    */
   const fillOrders = (t: number, live: A[], isLive: Set<A>) => {
     const priceOf = (a: A) => (atClose ? a.bars.c[a.i] : a.bars.o[a.i]);
@@ -927,62 +1089,68 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     const known = (a: A) => (isLive.has(a) && !atClose ? a.i - 1 : a.i);
     const mark = (a: A) => (a.shares === 0 ? 0 : a.shares * (isLive.has(a) ? priceOf(a) : a.lastClose));
     const equityNow = cash + assets.reduce((s, a) => s + mark(a), 0);
+    fillEquity = equityNow;
+    markOf = (a) => (isLive.has(a) ? priceOf(a) : a.lastClose);
     for (const a of live) {
-      if (a.pending !== 'sell' || a.shares === 0) continue;
-      const shares = a.shares;
+      if (a.shares === 0) continue;
+      const long = a.shares > 0;
+      if (long ? a.pending !== 'sell' && a.pending !== 'short' : a.pending !== 'cover' && a.pending !== 'buy') continue;
+      const shares = long ? a.shares : -a.shares;
       close(a, t, priceOf(a), 'signal', a.sellWhy);
-      a.lastFill = { side: 'sell', shares, price: priceOf(a) * (1 - slip), t };
+      a.lastFill = { side: long ? 'sell' : 'cover', shares, price: priceOf(a) * (long ? 1 - slip : 1 + slip), t };
     }
     for (const a of waiting) if (a.shares === 0) waiting.delete(a);
-    const entering = new Set(live.filter((a) => a.pending === 'buy' && a.shares === 0 && waiting.size === 0));
+    const entering = new Set(live.filter((a) => (a.pending === 'buy' || a.pending === 'short') && a.shares === 0 && waiting.size === 0));
     if (waiting.size > 0) for (const a of live) if (a.pending === 'buy' && a.shares === 0) a.waited = true;
     const weights = targetWeights(entering, known);
-    type Buy = { a: A; notional: number; kind: 'entry' | 'rebalance' | 'owed' | 'add'; weight: number; full: number; held: number };
+    type Buy = { a: A; notional: number; kind: 'entry' | 'rebalance' | 'owed' | 'add'; weight: number; full: number; held: number; short: boolean };
     const buys: Buy[] = [];
     for (const a of live) {
       const price = priceOf(a);
+      const short = a.shares < 0 || (a.shares === 0 && a.pending === 'short');
       // A position built in steps is rebalanced to its entries' share of the weight.
       const part = steps > 1 ? a.made / steps : 1;
       /**
        * What the position is worth once this fill's rebalancing of it is done, which an add is sized against: the target
        * when a trim is made or a top-up is ordered, and what it is worth now when a trim is too small for its commission
-       * or nothing is traded. A top-up that buys less than it wants is caught where it fills.
+       * or nothing is traded. A top-up that buys less than it wants is caught where it fills. A short's is its size.
        */
-      let held = a.shares * price;
+      let held = short ? -a.shares * price : a.shares * price;
       if (entering.has(a)) {
         const weight = weights.get(a)!;
-        const full = riskNotional(a, weight, equityNow, price, known(a));
-        buys.push({ a, notional: steps > 1 ? full / steps : full, kind: 'entry', weight, full, held: 0 });
-      } else if (a.shares > 0 && rebalances(a)) {
+        const full = riskNotional(a, weight, equityNow, price, known(a), short);
+        buys.push({ a, notional: steps > 1 ? full / steps : full, kind: 'entry', weight, full, held: 0, short });
+      } else if (a.shares !== 0 && rebalances(a)) {
         const target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
         const delta = target - held;
         if (delta < 0) {
-          if (tooSmall(-delta * (1 - slip), -delta / price)) smallTrades++;
+          if (tooSmall(-delta * (short ? 1 + slip : 1 - slip), -delta / price)) smallTrades++;
           else {
-            sell(a, -delta / price, price);
+            if (short) cover(a, -delta / price, price);
+            else sell(a, -delta / price, price);
             a.trims++;
             held = target;
             logFill({ t, asset: a.name, kind: 'trim', price, shares: a.shares, cash, equity: NaN, weight: NaN });
           }
         } else {
-          buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0 });
+          buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0, short });
           held = target;
         }
-      } else if (a.shares > 0 && a.owed === keys[a.order][a.i]) {
+      } else if (a.shares !== 0 && a.owed === keys[a.order][a.i]) {
         // The rest of this period's top-up; a debt from an earlier period has lapsed.
         const target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
         const delta = target - held;
         if (delta > 0) {
-          buys.push({ a, notional: delta, kind: 'owed', weight: 0, full: 0, held: 0 });
+          buys.push({ a, notional: delta, kind: 'owed', weight: 0, full: 0, held: 0, short });
           held = target;
         } else a.owed = null;
       }
-      if (a.pending === 'add' && a.shares > 0 && a.made < steps) {
+      if (a.pending === 'add' && a.shares !== 0 && a.made < steps) {
         // One more step of a whole position, cut so the position stays within it.
         const weight = weights.get(a)!;
-        const full = riskNotional(a, weight, equityNow, price, known(a));
+        const full = riskNotional(a, weight, equityNow, price, known(a), short);
         const notional = Math.min(full / steps, full - held);
-        if (notional > 0) buys.push({ a, notional, kind: 'add', weight, full, held });
+        if (notional > 0) buys.push({ a, notional, kind: 'add', weight, full, held, short });
       }
       // A ranking buy stays wanted until it fills or the next decision replaces it.
       if (!(p.rank && a.pending === 'buy')) a.pending = null;
@@ -990,9 +1158,9 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     if (p.rank) buys.sort((x, y) => x.a.rankPos - y.a.rankPos || x.a.order - y.a.order);
     // Positions whose top-up at this fill bought less than it wanted; an add after it is sized from what they are worth.
     const fellShort = new Set<A>();
-    for (let { a, notional, kind, weight, full, held } of buys) {
+    for (let { a, notional, kind, weight, full, held, short } of buys) {
       if (kind === 'add' && fellShort.has(a)) {
-        held = a.shares * priceOf(a);
+        held = Math.abs(a.shares) * priceOf(a);
         notional = Math.min(full / steps, full - held);
       }
       const entry = kind === 'entry';
@@ -1003,24 +1171,29 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         a.topUps = 0;
         a.trims = 0;
         a.comm = 0;
+        a.borrow = 0;
+        a.borrowPS = 0;
       }
       const before = cash;
-      const fill = priceOf(a) * (1 + slip);
-      const short = charge !== null && affordable(fill) < notional;
-      const spent = buy(a, notional, priceOf(a), !entry);
+      const fill = priceOf(a) * (short ? 1 - slip : 1 + slip);
+      const starved = charge !== null && affordable(fill) < notional;
+      const spent = short ? sellShort(a, notional, priceOf(a), !entry) : buy(a, notional, priceOf(a), !entry);
       if (spent > 0) logFill({ t, asset: a.name, kind, price: priceOf(a), shares: a.shares, cash, equity: equityNow, weight: weights.get(a)! });
       if (small && (kind === 'add' || kind === 'rebalance')) smallTrades++;
       if (kind === 'rebalance' || kind === 'owed') {
         // The debt is for the period the rebalance opens: this one at an open, the next one at a close. A top-up left
         // undone because it was too small for its commission is owed nothing; one short of cash is.
-        const owes = notional - spent > 1e-9 * notional && (!charge || spent > 0 || short);
+        const owes = notional - spent > 1e-9 * notional && (!charge || spent > 0 || starved);
         a.owed = owes ? keys[a.order][a.i] + (atClose ? 1 : 0) : null;
         if (spent > 0) a.topUps++;
         if (spent < notional) fellShort.add(a);
       }
-      if (entry && a.shares > 0) {
-        openPosition(a, t, priceOf(a), known(a), { equity: equityNow, weight, wanted: notional, cash: before, spent, shares: a.shares });
-        a.lastFill = { side: 'buy', shares: a.shares, price: a.entryPrice, t };
+      if (entry && a.shares !== 0) {
+        const shares = Math.abs(a.shares);
+        openPosition(a, t, priceOf(a), known(a), { equity: equityNow, weight, wanted: notional, cash: before, spent, shares });
+        // A flip: the position this fill closed, on the other side.
+        const flipped = a.lastFill !== null && a.lastFill.t === t && (a.lastFill.side === 'sell' || a.lastFill.side === 'cover') ? a.lastFill.shares : 0;
+        a.lastFill = { side: short ? 'short' : 'buy', shares, price: a.entryPrice, t, ...(flipped ? { closed: flipped } : {}) };
         a.pending = null;
       }
       if (kind === 'add' && spent > 0) {
@@ -1031,9 +1204,105 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     }
   };
 
-  /** The open position as the sell and add rules read it; null when flat. */
-  const position = (a: A): PosState | null =>
-    a.shares > 0 ? { entryIdx: a.entryIdx, entryPrice: a.entryPrice, lastPrice: a.lastEntryPrice, entries: a.made } : null;
+  /** The open position as the rules of `side` (1 long, -1 short) read it; null when that side is not held. */
+  const position = (a: A, side: 1 | -1 = 1): PosState | null =>
+    (side > 0 ? a.shares > 0 : a.shares < 0) ? { entryIdx: a.entryIdx, entryPrice: a.entryPrice, lastPrice: a.lastEntryPrice, entries: a.made } : null;
+
+  /**
+   * A block that borrows, over `span` ms: the balance B = cash − short value at the last closes earns the cash rate `r`
+   * when above 0 and pays the margin rate when below, and each short pays its borrow fee. Short-sale proceeds earn
+   * nothing of their own.
+   */
+  const accrue = (margin: Margin, span: number, r: number) => {
+    let shorts = 0;
+    for (const a of assets) if (a.shares < 0) shorts -= a.shares * a.lastClose;
+    const balance = cash - shorts;
+    if (balance > 0) {
+      interest += balance * r;
+      cash += balance * r;
+    } else if (balance < 0) {
+      const owed = (-balance * margin.rate * span) / DAY / 365;
+      marginInterest += owed;
+      cash -= owed;
+    }
+    for (const a of assets) {
+      if (a.shares >= 0) continue;
+      const perShare = (a.lastClose * margin.borrowFee * span) / DAY / 365;
+      const fee = -a.shares * perShare;
+      borrowFees += fee;
+      cash -= fee;
+      a.cashIn += fee;
+      a.borrow += fee;
+      a.borrowPS += perShare;
+    }
+  };
+  /** Equity with each position marked at `at`. */
+  const worth = (at: (a: A) => number): number => {
+    let total = cash;
+    for (const a of assets) if (a.shares !== 0) total += a.shares * at(a);
+    return total;
+  };
+  /** Equity at `level` ruins the run: below 0, or at 0 with a position still open. Flat at exactly 0 owes nothing. */
+  const ruined = (level: number): boolean => level < 0 || (level <= 0 && assets.some((a) => a.shares !== 0));
+  /** Equity reached `level` (0 or below) at `t`: everything closes at `at`, and the run is over. */
+  const ruinAt = (t: number, at: (a: A) => number, level: number) => {
+    const why: ExitWhy = { k: 'ruin', t, equity: level };
+    for (const a of assets) if (a.shares !== 0) close(a, t, at(a), 'ruin', why);
+    ruin = { t, deficit: Math.max(0, -cash) };
+    for (const a of assets) {
+      a.pending = null;
+      a.called = false;
+    }
+    call = null;
+    waiting = new Set();
+  };
+  /** A margin call at the close `t`: every position closes at its next open, pending orders are cancelled and every side must re-arm. */
+  const marginCall = (t: number, level: number, gross: number) => {
+    marginCalls++;
+    call = { k: 'margin', t, equity: level, gross };
+    for (const a of assets) {
+      a.pending = null;
+      a.owed = null;
+      a.called = a.shares !== 0;
+      for (const side of [a.arm.long, a.arm.short]) {
+        side.armed = false;
+        side.stoppedT = t;
+        side.blockedT = null;
+      }
+    }
+    waiting = new Set();
+  };
+
+  /** Re-arms a side that is not held once its entry rule does not hold at a close; while it still holds, notes the bar. */
+  const rearm = (a: A, arm: A['arm']['long'], wants: boolean) => {
+    if (wants) {
+      if (!arm.armed) arm.blockedT = a.bars.t[a.i];
+      return;
+    }
+    if (!arm.armed && arm.blockedT !== null) arm.cleared = { exitT: arm.stoppedT, heldT: arm.blockedT, clearedT: a.bars.t[a.i], idx: a.i };
+    arm.armed = true;
+    arm.blockedT = null;
+  };
+  /** Orders the entry of `side` at the asset's current bar, when that side is armed and the inputs it needs are known. */
+  const enter = (a: A, side: 'buy' | 'short') => {
+    const arm = side === 'buy' ? a.arm.long : a.arm.short;
+    if (!arm.armed || !ready(a)) return;
+    a.pending = side;
+    const c = arm.cleared;
+    a.buyWhy = { buyT: a.bars.t[a.i], rank: null, warmup: a.warm, rearm: c && c.idx === a.i - 1 ? { exitT: c.exitT, heldT: c.heldT, clearedT: c.clearedT } : null };
+  };
+  /** Each side's entry as the asset's current bar reads it when flat: its rule holds and its exit rule does not. */
+  const entryHolds = (a: A) => ({
+    long: a.sig.buy[a.i] === 1 && !(a.sig.sell !== null && a.sig.sell(a.i, null) === 1),
+    short: a.sig.short?.[a.i] === 1 && !(!!a.sig.cover && a.sig.cover(a.i, null) === 1),
+  });
+  /** After an exit ordered at this close, the bar read as if flat: the other side opens at the same fill when its entry holds alone. */
+  const flipTo = (a: A, side: 'buy' | 'short') => {
+    if (!a.sig.short) return;
+    const e = entryHolds(a);
+    if (e.long && e.short) conflicts++;
+    else if (side === 'buy' ? e.long : e.short) enter(a, side);
+  };
 
   for (let k = 0; k < timeline.length; k++) {
     const t = timeline[k];
@@ -1041,10 +1310,12 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const prev = timeline[k - 1];
       const r = (rateAt(k - 1) * (t - prev)) / DAY / 365;
       cashReturn.push(r);
-      if (cash > 0) {
-        interest += cash * r;
-        cash += cash * r;
-      }
+      if (!m) {
+        if (cash > 0) {
+          interest += cash * r;
+          cash += cash * r;
+        }
+      } else if (!ruin) accrue(m, t - prev, r);
     } else {
       cashReturn.push(0);
     }
@@ -1058,21 +1329,72 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     }
     const isLive = new Set(live);
 
+    if (!ruin) step(k, t, live, isLive);
+    for (const a of live) a.lastClose = a.bars.c[a.i];
+
+    if (!m) {
+      let invested = 0;
+      for (const a of assets) if (a.shares > 0) invested += a.shares * a.lastClose;
+      const total = cash + invested;
+      equity.push(total);
+      exposure.push(total > 0 ? invested / total : 0);
+    } else {
+      let invested = 0;
+      let gross = 0;
+      for (const a of assets) {
+        if (a.shares === 0) continue;
+        invested += a.shares * a.lastClose;
+        gross += Math.abs(a.shares) * a.lastClose;
+      }
+      let total = cash + invested;
+      if (!ruin && ruined(total)) ruinAt(t, (a) => a.lastClose, total);
+      if (ruin) {
+        total = gross = invested = 0;
+      } else if (!call && gross > 0 && total < m.maintenance * gross) marginCall(t, total, gross);
+      equity.push(total);
+      exposure.push(total > 0 ? gross / total : 0);
+      netExposure.push(total > 0 ? invested / total : 0);
+    }
+    if (p.onClose && !ruin) p.onClose({ t, cash, shares: assets.map((a) => a.shares), closes: assets.map((a) => a.lastClose), equity: equity[k] });
+  }
+
+  /** One bar of the timeline, up to its close's fills: stops reached while it ruins the run leave the rest undone. */
+  function step(k: number, t: number, live: A[], isLive: Set<A>): void {
+    if (m) {
+      // At the open, before anything else: ruin, then the margin call made at the last close.
+      const at = (a: A) => (isLive.has(a) ? a.bars.o[a.i] : a.lastClose);
+      const level = worth(at);
+      if (ruined(level)) return ruinAt(t, at, level);
+      if (call) {
+        for (const a of live) {
+          if (!a.called) continue;
+          a.called = false;
+          close(a, t, a.bars.o[a.i], 'margin call', call);
+        }
+        if (!assets.some((a) => a.called)) call = null;
+      }
+    }
+
     if (!atClose) fillOrders(t, live, isLive);
 
     // Inside the bar: the open comes first, so a gap through the stop or the target fills there;
     // when stop and target both lie inside the bar, the stop is taken first. With magnify, a bar that opens between the
-    // levels and holds one in its range is followed through its smaller bars instead, each read the same way.
+    // levels and holds one in its range is followed through its smaller bars instead, each read the same way. A short's
+    // bar is read in side space, (-open, -low, -high).
     for (const a of live) {
       if (a.shares === 0) continue;
-      const { o, h, l } = { o: a.bars.o[a.i], h: a.bars.h[a.i], l: a.bars.l[a.i] };
+      const short = a.shares < 0;
+      const { o, h, l } = short ? { o: -a.bars.o[a.i], h: -a.bars.l[a.i], l: -a.bars.h[a.i] } : { o: a.bars.o[a.i], h: a.bars.h[a.i], l: a.bars.l[a.i] };
       const ins = a.inside;
       if (ins && o > Math.max(a.hard, trailFrom(a, a.highWater)) && o < a.target && h > l && (h >= a.target || l <= Math.max(a.hard, trailFrom(a, Math.max(a.highWater, h))))) {
-        const seen = lookInside(o, h, l, a.bars.c[a.i], ins.bars, ins.from[a.i], ins.to[a.i], ins.count);
+        const seen = lookInside(a.bars.o[a.i], a.bars.h[a.i], a.bars.l[a.i], a.bars.c[a.i], ins.bars, ins.from[a.i], ins.to[a.i], ins.count);
         if (seen.ok) {
           ins.looked++;
           const path = seen.path;
-          for (let j = 0; j < path.t.length && !reach(a, t, path.o[j], path.h[j], path.l[j], { k: 'inside', t: path.t[j] }); j++);
+          for (let j = 0; j < path.t.length; j++) {
+            const hit = short ? reach(a, t, -path.o[j], -path.l[j], -path.h[j], { k: 'inside', t: path.t[j] }) : reach(a, t, path.o[j], path.h[j], path.l[j], { k: 'inside', t: path.t[j] });
+            if (hit) break;
+          }
           continue;
         }
         if (ins.first >= 0 && a.i >= ins.first) ins.whole++;
@@ -1084,35 +1406,54 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
 
     // Close: read the rules, then (with fill: close) fill what they decided, then mark the book.
     for (const a of live) a.lastClose = a.bars.c[a.i];
+    if (m) {
+      const level = worth((a) => a.lastClose);
+      if (ruined(level)) return ruinAt(t, (a) => a.lastClose, level);
+    }
     const sells = (a: A) => a.sig.sell !== null && a.sig.sell(a.i, position(a)) === 1;
-    const adds = (a: A) => a.made < steps && !!a.sig.add && a.sig.add(a.i, position(a)) === 1;
+    const covers = (a: A) => !!a.sig.cover && a.sig.cover(a.i, position(a, -1)) === 1;
+    const adds = (a: A) => a.made < steps && !!a.sig.add && a.sig.add(a.i, position(a, a.shares < 0 ? -1 : 1)) === 1;
     // A buy whose sizing or stop input is still warming up waits for a later signal.
     for (const a of live) {
       if (a.shares > 0) {
+        if (a.sig.short) rearm(a, a.arm.short, a.sig.short[a.i] === 1);
         if (sells(a)) {
           a.pending = 'sell';
           a.sellWhy = { k: 'rule', t: a.bars.t[a.i] };
+          flipTo(a, 'short');
+        } else if (a.sig.short?.[a.i] === 1) {
+          a.pending = 'sell';
+          a.sellWhy = { k: 'rule', t: a.bars.t[a.i], flip: true };
+          flipTo(a, 'short');
+        } else if (adds(a)) {
+          a.pending = 'add';
+          a.addT = a.bars.t[a.i];
+        }
+      } else if (a.shares < 0) {
+        rearm(a, a.arm.long, a.sig.buy[a.i] === 1);
+        if (covers(a)) {
+          a.pending = 'cover';
+          a.sellWhy = { k: 'rule', t: a.bars.t[a.i] };
+          flipTo(a, 'buy');
+        } else if (a.sig.buy[a.i] === 1) {
+          a.pending = 'cover';
+          a.sellWhy = { k: 'rule', t: a.bars.t[a.i], flip: true };
+          flipTo(a, 'buy');
         } else if (adds(a)) {
           a.pending = 'add';
           a.addT = a.bars.t[a.i];
         }
       } else if (!p.rank) {
         const wantsBuy = a.sig.buy[a.i] === 1;
-        if (!wantsBuy) {
-          if (!a.armed && a.blockedT !== null) a.cleared = { exitT: a.stoppedT, heldT: a.blockedT, clearedT: a.bars.t[a.i], idx: a.i };
-          a.armed = true;
-          a.blockedT = null;
-        }
-        if (wantsBuy && !sells(a) && a.armed) {
-          if (ready(a)) {
-            a.pending = 'buy';
-            const c = a.cleared;
-            a.buyWhy = { buyT: a.bars.t[a.i], rank: null, warmup: a.warm, rearm: c && c.idx === a.i - 1 ? { exitT: c.exitT, heldT: c.heldT, clearedT: c.clearedT } : null };
-          }
-        } else {
-          a.heldBack = false;
-          if (wantsBuy && !a.armed) a.blockedT = a.bars.t[a.i];
-        }
+        const wantsShort = a.sig.short?.[a.i] === 1;
+        rearm(a, a.arm.long, wantsBuy);
+        if (a.sig.short) rearm(a, a.arm.short, wantsShort);
+        const longEntry = wantsBuy && !sells(a);
+        const shortEntry = wantsShort && !(!!a.sig.cover && a.sig.cover(a.i, null) === 1);
+        if (longEntry && shortEntry) conflicts++;
+        if (longEntry && !shortEntry && a.arm.long.armed) enter(a, 'buy');
+        else if (shortEntry && !longEntry && a.arm.short.armed) enter(a, 'short');
+        else a.heldBack = false;
       }
     }
 
@@ -1173,59 +1514,58 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     }
 
     if (atClose) fillOrders(t, live, isLive);
-
-    let invested = 0;
-    for (const a of assets) if (a.shares > 0) invested += a.shares * a.lastClose;
-    const total = cash + invested;
-    equity.push(total);
-    exposure.push(total > 0 ? invested / total : 0);
   }
 
   const last = timeline[timeline.length - 1];
-  for (const a of assets) if (a.shares > 0) close(a, last, a.lastClose, 'open', null);
+  for (const a of assets) if (a.shares !== 0) close(a, last, a.lastClose, 'open', null);
   trades.sort((x, y) => x.entryT - y.entryT);
 
   const equityNow = equity[equity.length - 1];
-  const finalWeights = targetWeights(new Set(assets.filter((a) => a.pending === 'buy' && a.shares === 0)), (a) => a.i);
+  const finalWeights = targetWeights(new Set(assets.filter((a) => (a.pending === 'buy' || a.pending === 'short') && a.shares === 0)), (a) => a.i);
   return {
     t: timeline,
     equity,
     exposure,
     trades,
     states: assets.map((a) => {
+      const short = a.shares < 0;
+      const goingShort = a.pending === 'short' || (short && a.pending !== 'buy');
       const st: AssetState = {
         name: a.name,
         weight: a.weight,
-        long: a.shares > 0,
-        since: a.shares > 0 ? a.entryT : null,
+        side: a.shares > 0 ? 'long' : short ? 'short' : null,
+        since: a.shares !== 0 ? a.entryT : null,
         pending: a.pending,
         shares: a.shares,
         lastClose: a.lastClose,
         value: a.shares * a.lastClose,
-        targetWeight: equityNow > 0 ? riskNotional(a, finalWeights.get(a)!, equityNow, a.lastClose, a.i) / equityNow : finalWeights.get(a)!,
+        targetWeight: equityNow > 0 ? riskNotional(a, finalWeights.get(a)!, equityNow, a.lastClose, a.i, goingShort) / equityNow : finalWeights.get(a)!,
       };
       if (steps > 1) {
         // The next entry: a step of a whole position, cut for an add so the position stays within it. An add with no room
         // left at the last close is not reported, as the next open would not make it unless the price fell. One that only
         // the cash stands in the way of is, as a buy is: the sales and trims at that open are paid out first.
         const full = st.targetWeight;
-        if (a.pending === 'buy') st.targetWeight = full / steps;
+        if (a.pending === 'buy' || a.pending === 'short') st.targetWeight = full / steps;
         if (a.pending === 'add') {
-          const room = Math.min(full / steps, full - (equityNow > 0 ? st.value / equityNow : 0));
+          const room = Math.min(full / steps, full - (equityNow > 0 ? Math.abs(st.value) / equityNow : 0));
           if (room > 0) st.targetWeight = room;
           else st.pending = null;
         }
-        st.entries = a.shares > 0 ? a.made : 0;
+        st.entries = a.shares !== 0 ? a.made : 0;
       }
       if (atClose) {
         const f = a.lastFill;
-        st.filled = f && f.t === a.bars.t[a.i] ? { side: f.side, shares: f.shares, price: f.price } : null;
+        st.filled = f && f.t === a.bars.t[a.i] ? { side: f.side, shares: f.shares, price: f.price, ...(f.closed ? { closed: f.closed } : {}) } : null;
       }
-      if (a.shares > 0) {
-        st.pos = position(a)!;
+      if (a.shares !== 0) {
+        st.pos = position(a, short ? -1 : 1)!;
+        const px = (x: number) => (short ? -x : x);
         const stop = Math.max(a.hard, trailFrom(a, a.highWater));
-        if (stop > -Infinity || a.target < Infinity) st.levels = { stop: stop > -Infinity ? stop : null, target: a.target < Infinity ? a.target : null };
-      } else if (!p.rank && !a.armed) st.rearming = true;
+        if (stop > -Infinity || a.target < Infinity) st.levels = { stop: stop > -Infinity ? px(stop) : null, target: a.target < Infinity ? px(a.target) : null };
+      }
+      if (!p.rank && !a.arm.long.armed && a.shares <= 0) st.rearming = true;
+      if (!p.rank && a.sig.short && !a.arm.short.armed && a.shares >= 0) st.rearmingShort = true;
       return st;
     }),
     costs,
@@ -1237,5 +1577,6 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     ...(p.magnify
       ? { inside: assets.flatMap((a) => (a.inside ? [{ asset: a.name, from: a.inside.first < 0 ? null : a.bars.t[a.inside.first], looked: a.inside.looked, whole: a.inside.whole }] : [])) }
       : {}),
+    ...(m ? { netExposure, borrowFees, marginInterest, marginCalls, conflicts, ruin } : {}),
   };
 }

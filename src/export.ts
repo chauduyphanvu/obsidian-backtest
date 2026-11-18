@@ -143,8 +143,8 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
         ['Ticker', 'Weight', 'Now'],
         run.states.map((st) => {
           const order = positionOrder(st, spec.fill);
-          const built = st.long && (spec.entries ?? 1) > 1 ? `, ${st.entries} of ${spec.entries} entries` : '';
-          return [st.name, pct(st.weight, 0), (st.long ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash') + (order ? `, ${order}` : '')];
+          const built = st.side === 'long' && (spec.entries ?? 1) > 1 ? `, ${st.entries} of ${spec.entries} entries` : '';
+          return [st.name, pct(st.weight, 0), (st.side === 'long' ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash') + (order ? `, ${order}` : '')];
         }),
         'lrl',
       ),
@@ -202,7 +202,7 @@ export function propertyIds(names: (string | null)[]): string[] {
 /** Values to store in a note's properties so a Base can list strategies. `id` is from `propertyIds`. */
 export function resultProperties(bt: Backtest, now: number, id = ''): Record<string, string | number> {
   const { run, stats, tradeStats, benchmark } = bt;
-  const held = run.states.filter((s) => s.long).map((s) => s.name);
+  const held = run.states.filter((s) => s.side === 'long').map((s) => s.name);
   const values: Record<string, string | number> = {
     return_per_year: round(stats.cagr * 100, 1),
     worst_drawdown: round(stats.maxDrawdown * 100, 1),

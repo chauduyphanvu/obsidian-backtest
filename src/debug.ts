@@ -63,7 +63,7 @@ export type DebugEvent =
   /** The buy rule and the sell rule both held at this close. */
   | { k: 'sell-first' }
   /** An order from this last bar of the run, not filled. */
-  | { k: 'pending'; side: 'buy' | 'sell' | 'add' }
+  | { k: 'pending'; side: NonNullable<AssetState['pending']> }
   /** `entry`: which entry of the position this is (2 for the first add). `stage` as for a buy. */
   | { k: 'add'; stage: 'decided' | 'filled' | 'both'; trade: Trade; entry: number }
   /** The add rule held with the position already built in all its entries. */

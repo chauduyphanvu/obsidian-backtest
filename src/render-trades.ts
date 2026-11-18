@@ -29,8 +29,8 @@ export function renderPositions(root: HTMLElement, bt: Backtest, intraday: boole
     h(row, 'td', undefined, st.name);
     h(row, 'td', 'bt-num', pct(st.weight, 0));
     const steps = bt.spec.entries ?? 1;
-    const built = st.long && steps > 1 ? `, ${st.entries} of ${steps} entries` : '';
-    const now = st.long ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash';
+    const built = st.side === 'long' && steps > 1 ? `, ${st.entries} of ${steps} entries` : '';
+    const now = st.side === 'long' ? `Long since ${stamp(st.since!, intraday)}${built}` : 'In cash';
     const order = positionOrder(st, bt.spec.fill);
     h(row, 'td', undefined, order ? `${now}, ${order}` : now);
     if (triggers) {

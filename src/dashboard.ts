@@ -111,7 +111,7 @@ export type DashRow = PendingRow | FailedRow | DoneRow;
 const MORE_AFTER = 3;
 
 function holding(states: AssetState[]): { now: string; held: string[] } {
-  const held = states.filter((s) => s.long).map((s) => s.name);
+  const held = states.filter((s) => s.side === 'long').map((s) => s.name);
   const now = held.length === 0 ? 'In cash' : held.length === 1 ? `Long ${held[0]}` : `Long ${held.length} of ${states.length}`;
   return { now, held };
 }
