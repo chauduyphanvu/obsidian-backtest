@@ -151,6 +151,8 @@ export interface ResultView {
   remember?: { get(): boolean | undefined; set(open: boolean): void };
   /** Sliders for the strategy's parameters; ignored when it declares none. */
   params?: ParamsHook;
+  /** Fills a line under the figures for the run on screen; returns a cleanup function when it keeps watching something. */
+  figuresNote?: (el: HTMLElement, out: RunOutput) => (() => void) | void;
   /**
    * The trigger prices of a run on screen, asked for when its positions are drawn: for the block as written and for a
    * slider once let go, never while it is dragged. Null when the run has none to show.
@@ -160,7 +162,12 @@ export interface ResultView {
 
 /** Keys the remembered state of a block: its note and its name, or its place among the note's blocks when it has no name. */
 export function blockStateKey(notePath: string, name: string | null, index: number): string {
-  return `${notePath}\u0000${name ? `name:${name.toLowerCase()}` : `block:${index}`}`;
+  return `${blockKeyPrefix(notePath, false)}${name ? `name:${name.toLowerCase()}` : `block:${index}`}`;
+}
+
+/** The start of the key of every block in the note at `path`, or with `folder`, in every note under the folder at `path`. */
+export function blockKeyPrefix(path: string, folder: boolean): string {
+  return folder ? `${path}/` : `${path}\u0000`;
 }
 
 export interface CompactFacts {
@@ -350,6 +357,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
 
     const notes = h(body, 'div', 'bt-notes');
     const tiles = h(h(body, 'div', 'bt-tiles-box'), 'div', 'bt-tiles');
+    const figuresNote = h(body, 'div', 'bt-figures-note');
     const legend = h(body, 'div', 'bt-legend');
     const chart = h(body, 'div', 'bt-chart');
     const tip = h(chart, 'div', 'bt-tip');
@@ -388,9 +396,11 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
       for (const text of notesOf(view, out)) h(notes, 'div', 'bt-warning', text);
       paint(out);
       stopRest();
+      figuresNote.replaceChildren();
+      const watching = view.figuresNote?.(figuresNote, out);
       rest.replaceChildren();
       rest.classList.remove('bt-stale');
-      stops = fillRest(rest, out, view.sections?.(out) ?? [], view.triggers?.(out) ?? null);
+      stops = [...fillRest(rest, out, view.sections?.(out) ?? [], view.triggers?.(out) ?? null), ...(watching ? [watching] : [])];
     };
     // Between two frames of a drag only what is at the top is worth redrawing; the rest says it is out of date.
     show = (out, settled) => {

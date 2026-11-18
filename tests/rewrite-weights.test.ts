@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseAccount } from '../src/account.ts';
 import { parseCompare } from '../src/compare.ts';
-import { NOTE_CHANGED, findBlock, rewriteNote, setSettingInNote, setWeightsInNote, withWeight } from '../src/rewrite.ts';
+import { NOTE_CHANGED, findBlock, setSettingInNote, setWeightsInNote, withWeight, writeInNote } from '../src/rewrite.ts';
 
 test('a weight is put in place of the one a line has, or after the note when it has none', () => {
   assert.equal(withWeight('[[Trend following]] 40%', 35), '[[Trend following]] 35%');
@@ -69,10 +69,10 @@ test('a new setting goes after the last line that sets something, or first', () 
 test('a write through the note goes through only when the block is as drawn, and says so when not', async () => {
   let note = ACCOUNT;
   const process = async (edit: (text: string) => string) => (note = edit(note));
-  await rewriteNote(process, 0, (text, line) => setSettingInNote(text, line, SOURCE, 'account', 'cash', '5,000'));
+  await writeInNote(process, 0, (text, line) => setSettingInNote(text, line, SOURCE, 'account', 'cash', '5,000'));
   assert.ok(note.includes('cash: 5,000'));
   const before = note;
-  await assert.rejects(rewriteNote(process, 0, (text, line) => setSettingInNote(text, line, SOURCE, 'account', 'cash', '6,000')), { message: NOTE_CHANGED });
+  await assert.rejects(writeInNote(process, 0, (text, line) => setSettingInNote(text, line, SOURCE, 'account', 'cash', '6,000')), { message: NOTE_CHANGED });
   assert.equal(note, before);
-  await assert.rejects(rewriteNote(process, undefined, () => 'x'), { message: NOTE_CHANGED });
+  await assert.rejects(writeInNote(process, undefined, () => 'x'), { message: NOTE_CHANGED });
 });

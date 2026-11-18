@@ -1,5 +1,5 @@
 import type { EditorView } from '@codemirror/view';
-import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
+import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { compareCurves, parseCompare } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
@@ -8,6 +8,7 @@ import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
 import { HOUR, isoDate } from './format.ts';
 import { makeForward, writeLog, type ForwardStart } from './forward.ts';
 import { GalleryModal } from './gallery-modal.ts';
+import { Ledgers, mergeLedgers, parseLedger, type Ledger } from './ledger.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { drawHeld } from './live-core.ts';
@@ -19,9 +20,10 @@ import { PriceStore } from './price-store.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
 import { renderForward, type ForwardHost } from './render-forward.ts';
-import { blockStateKey } from './render.ts';
+import { blockKeyPrefix, blockStateKey } from './render.ts';
 import { Results } from './results.ts';
-import { findBlock, setParamValues, writeValuesInNote } from './rewrite.ts';
+import { findBlock, setParamValues, writeBlockInNote, writeValuesInNote } from './rewrite.ts';
+import { JsonStore } from './store.ts';
 import { StrategyBlocks, type StrategyOptions } from './strategy-block.ts';
 import { SymbolLookup } from './symbols.ts';
 import { createNote, createWithFreeName, NoteProperties, saveDatedFile } from './vault-writes.ts';
@@ -74,9 +76,19 @@ export default class BacktestBlocks extends Plugin {
     runSource: (source, opts) => this.results.runSource(source, opts),
     notice: (text) => void new Notice(text),
   });
+  /** Each strategy block's record of tries and versions, one file for each block in the plugin's folder. */
+  private ledgerFiles = new JsonStore<Ledger>({
+    files: this.app.vault.adapter,
+    dir: `${this.manifest.dir}/ledger`,
+    normalize: normalizePath,
+    parse: parseLedger,
+    merge: mergeLedgers,
+  });
+  private ledgers = new Ledgers(this.ledgerFiles);
   /** The strategy blocks on screen. */
   private blocks = new StrategyBlocks({
     results: this.results,
+    ledgers: this.ledgers,
     settings: () => this.settings,
     saveFile: (title, ext, text) => this.saveFile(title, ext, text),
     scheduleProperties: (notePath) => {
@@ -136,6 +148,14 @@ export default class BacktestBlocks extends Plugin {
 
     this.registerEvent(this.app.vault.on('delete', (file) => this.prices.forgetColumns(file.path)));
     this.registerEvent(this.app.vault.on('rename', (_file, oldPath) => this.prices.forgetColumns(oldPath)));
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        // Only notes hold blocks, and folders hold notes.
+        if (file instanceof TFile && file.extension !== 'md') return;
+        const folder = file instanceof TFolder;
+        void this.ledgers.rename(blockKeyPrefix(oldPath, folder), blockKeyPrefix(file.path, folder));
+      }),
+    );
 
     this.addCommand({
       id: 'insert-strategy',
@@ -203,6 +223,7 @@ export default class BacktestBlocks extends Plugin {
     this.blocks.checkDefaults.cancel();
     shutdownWorkers();
     this.properties.cancel();
+    void this.ledgerFiles.flush();
   }
 
   async saveSettings(): Promise<void> {
@@ -234,7 +255,7 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** What a strategy block can do because of where it sits in its note: write values back into it, and have its open or folded state remembered. */
-  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'stateKey' | 'blockKey'> {
+  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'restore' | 'stateKey' | 'blockKey'> {
     const info = ctx.getSectionInfo(el);
     const found = info ? findBlock(info.text, info.lineStart, source) : null;
     if (!found) return {};
@@ -243,7 +264,8 @@ export default class BacktestBlocks extends Plugin {
     if (!(file instanceof TFile)) return { stateKey, blockKey: stateKey };
     // The block's line is asked for again now: the note may have moved it since it was drawn.
     const apply = (values: Record<string, number>): Promise<void> => writeValuesInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, values);
-    return { stateKey, blockKey: stateKey, apply };
+    const restore = (text: string): Promise<void> => writeBlockInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, text);
+    return { stateKey, blockKey: stateKey, apply, restore };
   }
 
   private liveHost(): LiveHost {

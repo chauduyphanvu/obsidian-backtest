@@ -73,27 +73,58 @@ export function setParamValuesInNote(note: string, line: number, source: string,
   return lines.join('\n');
 }
 
+/** Callout and quote markers at the start of a line, every level of them. */
+const QUOTES = /^(?:[ \t]*>[ \t]?)*/;
+
+/**
+ * The note with the whole text of the block that opens on `line` replaced by `text`, or null when that is no longer a
+ * block with the text `source`. Each new line gets the callout or quote markers of the block's opening fence and the
+ * note's line ending.
+ */
+export function replaceBlockInNote(note: string, line: number, source: string, text: string): string | null {
+  const found = findBlock(note, line, source);
+  // An empty block has no lines to tell its place by; a drawn result never comes from one.
+  if (!found || found.block.source === '') return null;
+  const lines = note.split('\n');
+  const fence = lines[line];
+  const cr = fence.endsWith('\r') ? '\r' : '';
+  const prefix = fence.match(QUOTES)![0];
+  const now = text.split(/\r?\n/).map((l) => prefix + l + cr);
+  lines.splice(line + 1, found.block.source.split('\n').length, ...now);
+  return lines.join('\n');
+}
+
 export const NOTE_CHANGED = 'The note has changed since this result was drawn, so nothing was written. Try again.';
 
 /**
- * Writes values into the block that opens on `line` of a note, through `process`, which edits the note's text in place
+ * Changes the block that opens on `line` of a note with `change`, through `process`, which edits the note's text in place
  * (Obsidian's `vault.process`). Rejects with a message fit to show when nothing was written: the block has no known place,
- * or is no longer there with the text `source`.
+ * or `change` found it no longer there with the text it was drawn from.
  */
-export async function writeValuesInNote(
+export async function writeInNote(process: (edit: (note: string) => string) => Promise<unknown>, line: number | undefined, change: (note: string, line: number) => string | null): Promise<void> {
+  if (line === undefined) throw new Error(NOTE_CHANGED);
+  let written = false;
+  await process((note) => {
+    const next = change(note, line);
+    written = next !== null;
+    return next ?? note;
+  });
+  if (!written) throw new Error(NOTE_CHANGED);
+}
+
+/** Writes values into the block that opens on `line` of a note (see setParamValuesInNote). */
+export function writeValuesInNote(
   process: (edit: (note: string) => string) => Promise<unknown>,
   line: number | undefined,
   source: string,
   values: Record<string, number>,
 ): Promise<void> {
-  if (line === undefined) throw new Error(NOTE_CHANGED);
-  let written = false;
-  await process((note) => {
-    const next = setParamValuesInNote(note, line, source, values);
-    written = next !== null;
-    return next ?? note;
-  });
-  if (!written) throw new Error(NOTE_CHANGED);
+  return writeInNote(process, line, (note, at) => setParamValuesInNote(note, at, source, values));
+}
+
+/** Replaces the whole text of the block that opens on `line` of a note (see replaceBlockInNote). */
+export function writeBlockInNote(process: (edit: (note: string) => string) => Promise<unknown>, line: number | undefined, source: string, text: string): Promise<void> {
+  return writeInNote(process, line, (note, at) => replaceBlockInNote(note, at, source, text));
 }
 
 /**
@@ -157,20 +188,4 @@ export function setSettingInNote(note: string, line: number, source: string, lan
   if (at >= 0) return editBlockLines(note, line, source, lang, new Map([[at, `${was[at].match(SETTING_AT)![1]}${key}: ${value}`]]));
   const last = was.reduce((found, text, i) => (name(text) !== null && !text.trimStart().startsWith('[[') ? i : found), -1);
   return editBlockLines(note, line, source, lang, new Map(), { after: last, text: `${key}: ${value}` });
-}
-
-/**
- * Writes a change into the note through `process` (Obsidian's `vault.process`): `change` gets the note's text and the
- * block's line and gives the new text, or null when the block is no longer as drawn. Rejects with NOTE_CHANGED when
- * nothing was written.
- */
-export async function rewriteNote(process: (edit: (note: string) => string) => Promise<unknown>, line: number | undefined, change: (note: string, line: number) => string | null): Promise<void> {
-  if (line === undefined) throw new Error(NOTE_CHANGED);
-  let written = false;
-  await process((note) => {
-    const next = change(note, line);
-    written = next !== null;
-    return next ?? note;
-  });
-  if (!written) throw new Error(NOTE_CHANGED);
 }

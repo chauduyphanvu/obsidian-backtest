@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
-import { NOTE_CHANGED, findBlock, setParamValues, setParamValuesInNote, writeValuesInNote } from '../src/rewrite.ts';
+import { NOTE_CHANGED, findBlock, replaceBlockInNote, setParamValues, setParamValuesInNote, writeBlockInNote, writeValuesInNote } from '../src/rewrite.ts';
 
 const block = (...params: string[]) => ['universe: SPY', ...params, 'buy when rsi(2) < fast', 'sell when rsi(2) > fast'].join('\n');
 
@@ -260,4 +260,54 @@ test('writeValuesInNote rejects when the note cannot be written', async () => {
     throw new Error('The file is locked');
   };
   await assert.rejects(writeValuesInNote(failing, 2, WRITE_SRC, { fast: 25 }), /The file is locked/);
+});
+
+// ---- restoring a version: the whole text of a block
+
+const SECOND = 'universe: QQQ\nfast = 20 # keep\nbuy when close > sma(fast)';
+
+test('a block\'s whole text is replaced, longer or shorter, and nothing around it', () => {
+  const longer = 'name: Back\nuniverse: QQQ\nfast = 30\nbuy when close > sma(fast)\nsell when close < sma(fast)';
+  const lines = NOTE.split('\n');
+  assert.equal(replaceBlockInNote(NOTE, 10, SECOND, longer), [...lines.slice(0, 11), ...longer.split('\n'), ...lines.slice(14)].join('\n'));
+  assert.equal(replaceBlockInNote(NOTE, 10, SECOND, 'universe: QQQ\nbuy when true'), [...lines.slice(0, 11), 'universe: QQQ', 'buy when true', ...lines.slice(14)].join('\n'));
+  // The first block is left as it was.
+  assert.ok(replaceBlockInNote(NOTE, 10, SECOND, 'universe: QQQ\nbuy when true')!.startsWith(lines.slice(0, 11).join('\n')));
+  // The same text gives the same note.
+  assert.equal(replaceBlockInNote(NOTE, 10, SECOND, SECOND), NOTE);
+});
+
+test('a block whose note changed since it was drawn is not replaced', () => {
+  assert.equal(replaceBlockInNote(NOTE.replace('fast = 20', 'fast = 21'), 10, SECOND, 'universe: QQQ\nbuy when true'), null);
+  assert.equal(replaceBlockInNote(`new first line\n${NOTE}`, 10, SECOND, 'universe: QQQ\nbuy when true'), null);
+  assert.equal(replaceBlockInNote('```strategy\n```\n', 0, '', 'universe: QQQ'), null);
+});
+
+test('a block in a callout gets the callout\'s markers on every new line, the empty ones too', () => {
+  const note = ['> [!note]', '> ```strategy', '> universe: SPY', '> fast = 50', '> buy when close > sma(fast)', '> ```', 'after'].join('\n');
+  const src = 'universe: SPY\nfast = 50\nbuy when close > sma(fast)';
+  assert.equal(
+    replaceBlockInNote(note, 1, src, 'universe: SPY\n\nbuy when true'),
+    ['> [!note]', '> ```strategy', '> universe: SPY', '> ', '> buy when true', '> ```', 'after'].join('\n'),
+  );
+  const nested = note.replace(/^> /gm, '> > ');
+  assert.equal(replaceBlockInNote(nested, 1, src, 'universe: QQQ'), ['> > [!note]', '> > ```strategy', '> > universe: QQQ', '> > ```', 'after'].join('\n'));
+});
+
+test('a note with Windows line endings keeps them on the new lines, whichever ending the text has', () => {
+  const note = NOTE.replace(/\n/g, '\r\n');
+  const next = replaceBlockInNote(note, 2, 'universe: SPY\nfast = 50\nbuy when close > sma(fast)', 'universe: SPY\r\nfast = 60\nbuy when true')!;
+  assert.equal(next, note.replace('fast = 50\r\nbuy when close > sma(fast)', 'fast = 60\r\nbuy when true'));
+  assert.ok(!/[^\r]\n/.test(next));
+});
+
+test('writeBlockInNote writes the text, or rejects with the same message as a write of values', async () => {
+  const { note, process } = memoryNote(WRITE_NOTE);
+  await writeBlockInNote(process, 2, WRITE_SRC, 'universe: SPY\nbuy when true');
+  assert.equal(note.text, 'Intro\n\n```strategy\nuniverse: SPY\nbuy when true\n```\n');
+  await assert.rejects(writeBlockInNote(process, 2, WRITE_SRC, 'universe: QQQ'), (e: unknown) => e instanceof Error && e.message === NOTE_CHANGED);
+  assert.equal(note.text, 'Intro\n\n```strategy\nuniverse: SPY\nbuy when true\n```\n');
+  const untouched = memoryNote(WRITE_NOTE);
+  await assert.rejects(writeBlockInNote(untouched.process, undefined, WRITE_SRC, 'universe: SPY'), (e: unknown) => e instanceof Error && e.message === NOTE_CHANGED);
+  assert.equal(untouched.note.runs, 0);
 });
