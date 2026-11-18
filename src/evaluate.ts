@@ -1,5 +1,6 @@
 import { children, findPos, type CalName, type CmpOp, type Expr, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
+import { priceMemo } from './price-memo.ts';
 import type { Bars } from './types.ts';
 import * as ind from './indicators.ts';
 
@@ -22,9 +23,7 @@ export type Apart = (from: string, to: string) => boolean;
  */
 export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefined {
   if (spec.fill !== 'close') return undefined;
-  const sources = new Map<string, string>();
-  const refs = [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...(spec.cash.k === 'ticker' ? [spec.cash.ref] : [])];
-  for (const r of refs) if (!sources.has(r.name)) sources.set(r.name, r.source);
+  const sources = sourcesOf(spec);
   const clocks = new Map<string, string>();
   const clock = (name: string) => {
     let c = clocks.get(name);
@@ -32,6 +31,22 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
     return c;
   };
   return (from, to) => clock(from) !== clock(to);
+}
+
+/** The source of each series a spec names, the first one given when a name comes more than once. */
+function sourcesOf(spec: Spec): Map<string, string> {
+  const sources = new Map<string, string>();
+  const refs = [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...(spec.cash.k === 'ticker' ? [spec.cash.ref] : [])];
+  for (const r of refs) if (!sources.has(r.name)) sources.set(r.name, r.source);
+  return sources;
+}
+
+/**
+ * What clocksApart's answer rests on besides the prices, as text. Two specs with the same key read every series alike on
+ * one map of prices, so their Evaluators can share indicator series (price-memo.ts).
+ */
+export function apartKey(spec: Spec): string {
+  return spec.fill === 'close' ? JSON.stringify([...sourcesOf(spec)].sort(([a], [b]) => (a < b ? -1 : 1))) : '';
 }
 
 /** When each row of a series is known: a bar of prices when it ends, a row of a file of dated values by ind.valueEnds. */
@@ -58,7 +73,7 @@ export function specEvaluator(spec: Spec, data: Map<string, Bars>): Evaluator {
       throw new Error(`${name} has no prices, only columns. A strategy can read its columns with column(...) of ${name}, but ${name} cannot ${role}.`);
     }
   }
-  return new Evaluator(data, clocksApart(spec, data));
+  return new Evaluator(data, clocksApart(spec, data), apartKey(spec));
 }
 
 /** The files whose columns a spec's rules read, as the rules name them, in the order they are first read. */
@@ -242,20 +257,29 @@ function calendar(name: CalName, t: number[]): number[] {
 export class Evaluator {
   private data: Map<string, Bars>;
   private apart: Apart | undefined;
+  private shared: string | undefined;
   private memo = new Map<string, number[]>();
   private alignments = new Map<string, number[]>();
 
-  /** `apart` names the series a rule reads one bar early (clocksApart); without it every series is read by bar end. */
-  constructor(data: Map<string, Bars>, apart?: Apart) {
+  /**
+   * `apart` names the series a rule reads one bar early (clocksApart); without it every series is read by bar end. With
+   * `shared`, the apartKey that `apart` was made with, indicator series are shared with other Evaluators on the same prices.
+   */
+  constructor(data: Map<string, Bars>, apart?: Apart, shared?: string) {
     this.data = data;
     this.apart = apart;
+    this.shared = shared;
   }
 
   eval(e: Expr, asset: string): number[] {
     const key = asset + '\u0000' + JSON.stringify(e);
     let out = this.memo.get(key);
     if (!out) {
-      out = this.compute(e, asset);
+      // Only an indicator is kept for other runs: they read the same ones, while each variant compares them its own way.
+      out =
+        e.k === 'ind' && this.shared !== undefined
+          ? priceMemo.get(this.data, `ind\u0000${key}\u0000${this.shared}`, () => this.compute(e, asset), (v) => v.length)
+          : this.compute(e, asset);
       this.memo.set(key, out);
     }
     return out;

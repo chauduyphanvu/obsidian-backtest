@@ -3,6 +3,7 @@
 import { runBacktest, type Backtest, type Stats } from './backtest.ts';
 import { paramValues, parseSpec, type ParseResult, type Spec } from './dsl.ts';
 import { tidy } from './format.ts';
+import { priceMemo } from './price-memo.ts';
 import type { Bars } from './types.ts';
 
 export type Metric = 'cagr' | 'sharpe' | 'sortino' | 'maxDrawdown' | 'totalReturn';
@@ -145,6 +146,7 @@ export async function runSweep(
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
+  priceMemo.share(data);
   const result: SweepResult = { params, points: [], tried: 0, total, stopped: false };
   for (const index of grid(params)) {
     if (opts.shouldStop?.()) {

@@ -37,19 +37,11 @@ export function stdev(src: number[], n: number): number[] {
 }
 
 export function highest(src: number[], n: number): number[] {
-  return rolling(src, n, (s, e) => {
-    let m = -Infinity;
-    for (let i = s; i <= e; i++) if (src[i] > m) m = src[i];
-    return m;
-  });
+  return extreme(src, n, 1);
 }
 
 export function lowest(src: number[], n: number): number[] {
-  return rolling(src, n, (s, e) => {
-    let m = Infinity;
-    for (let i = s; i <= e; i++) if (src[i] < m) m = src[i];
-    return m;
-  });
+  return extreme(src, n, -1);
 }
 
 /** Exponential smoothing seeded with the simple average of the first `n` values. */
@@ -116,7 +108,11 @@ export function returns(src: number[]): number[] {
   return src.map((x, i) => (i > 0 ? x / src[i - 1] - 1 : NaN));
 }
 
-/** The highest (`sign` 1) or lowest (-1) of each full window of `n` known values, in one pass with a queue of candidates. */
+/**
+ * The highest (`sign` 1) or lowest (-1) of each full window of `n` known values, in one pass with a queue of candidates.
+ * Of equal candidates the oldest is kept, so a window holding both 0 and -0 gives the one that came first, as a scan of
+ * the window from its start does.
+ */
 function extreme(src: number[], n: number, sign: 1 | -1): number[] {
   const out = filled(src.length);
   const keep: number[] = [];
@@ -131,7 +127,7 @@ function extreme(src: number[], n: number, sign: 1 | -1): number[] {
       continue;
     }
     valid++;
-    while (keep.length > head && sign * src[keep[keep.length - 1]] <= sign * x) keep.pop();
+    while (keep.length > head && sign * src[keep[keep.length - 1]] < sign * x) keep.pop();
     keep.push(i);
     if (keep[head] <= i - n) head++;
     if (valid >= n) out[i] = src[keep[head]];

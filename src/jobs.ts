@@ -4,6 +4,7 @@
 import { runBacktest, type Backtest } from './backtest.ts';
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
+import { priceMemo } from './price-memo.ts';
 import { baseSpec, runSweep, sweepParams, sweepSize, type Parse, type SweepPoint, type SweepResult } from './sweep.ts';
 import type { Bars } from './types.ts';
 
@@ -68,6 +69,8 @@ export type Ran = Omit<Backtest, 'spec' | 'data'>;
 export function runBlock(block: Block, data: Map<string, Bars>): Ran {
   const { spec, errors } = parseSpec(block.source, { defaults: block.defaults, overrides: block.overrides });
   if (!spec) throw new Error(`Line ${errors[0].line}: ${errors[0].message}`);
+  // A block's prices are sent once and read by each run its slider makes.
+  priceMemo.share(data);
   const { spec: _spec, data: _data, ...ran } = runBacktest(spec, data);
   return ran;
 }

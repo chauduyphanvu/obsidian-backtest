@@ -400,22 +400,67 @@ export function insideBar(bars: Bars, i: number, source: string, small: Bars, in
 /** How many smaller bars a bar of `span` must hold: all of them on Binance, any number from 1 elsewhere. */
 const insideCount = (source: string, span: number, small: number): number => (source === 'binance' ? span / small : 0);
 
+/** Every time of the series `ts` from `start` to `end`, once each and in order. Each series' times rise, so they merge in one pass. */
+function mergeTimes(ts: number[][], start: number, end: number): number[] {
+  let out: number[] = [];
+  for (const t of ts) {
+    const merged: number[] = [];
+    let i = 0;
+    let j = firstAtOrAfter(t, start);
+    const stop = barAt(t, end) + 1;
+    while (i < out.length && j < stop) {
+      if (out[i] < t[j]) merged.push(out[i++]);
+      else if (t[j] < out[i]) merged.push(t[j++]);
+      else {
+        merged.push(out[i++]);
+        j++;
+      }
+    }
+    while (i < out.length) merged.push(out[i++]);
+    while (j < stop) merged.push(t[j++]);
+    out = merged;
+  }
+  return out;
+}
+
 /** The period of time `t` for a rebalance or ranking: bars with the same key fall in one period. */
 export function periodKey(t: number, mode: Rebalance): number {
-  const d = new Date(t);
   switch (mode) {
     case 'weekly':
       // Epoch day 0 was a Thursday; shifting by 3 starts weeks on Monday.
       return Math.floor((Math.floor(t / DAY) + 3) / 7);
     case 'monthly':
-      return d.getUTCFullYear() * 12 + d.getUTCMonth();
+      return monthIndex(Math.floor(t / DAY));
     case 'quarterly':
-      return d.getUTCFullYear() * 4 + Math.floor(d.getUTCMonth() / 3);
+      return Math.floor(monthIndex(Math.floor(t / DAY)) / 3);
     case 'yearly':
-      return d.getUTCFullYear();
+      return Math.floor(monthIndex(Math.floor(t / DAY)) / 12);
     case 'never':
       return 0;
   }
+}
+
+const seriesKeys = new WeakMap<number[], Partial<Record<Rebalance, number[]>>>();
+
+/** periodKey of each of the times `t`, worked out once per series, since every run of a sweep reads them on every bar. */
+export function periodKeys(t: number[], mode: Rebalance): number[] {
+  let byMode = seriesKeys.get(t);
+  if (!byMode) seriesKeys.set(t, (byMode = {}));
+  return (byMode[mode] ??= t.map((x) => periodKey(x, mode)));
+}
+
+/**
+ * The UTC year times 12 plus the month (0 for January) of the day `day` days after the epoch, as Date gives them, without
+ * a Date for every bar: Howard Hinnant's civil_from_days. Its years start in March, which only moves January and February
+ * to the end of the year before, and the count of months comes out the same.
+ */
+function monthIndex(day: number): number {
+  const z = day + 719_468;
+  const era = Math.floor(z / 146_097);
+  const doe = z - era * 146_097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36_524) - Math.floor(doe / 146_096)) / 365);
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  return (era * 400 + yoe) * 12 + Math.floor((5 * doy + 2) / 153) + 2;
 }
 
 /**
@@ -520,9 +565,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   // Start once every asset has data, so the weights mean the same thing throughout.
   const start = Math.max(p.from ?? -Infinity, ...assets.map((a) => a.bars.t[0]));
   const end = p.to ?? Infinity;
-  const times = new Set<number>();
-  for (const a of assets) for (const t of a.bars.t) if (t >= start && t <= end) times.add(t);
-  const timeline = [...times].sort((x, y) => x - y);
+  const timeline = mergeTimes(assets.map((a) => a.bars.t), start, end);
   if (timeline.length < 2) throw new Error('No bars in the chosen date range');
 
   for (const a of assets) {
@@ -577,11 +620,12 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const clocks = atClose && p.rank ? assets.map((a) => ind.clockOf(a.source, a.bars.t)) : null;
   const mixed = clocks !== null && new Set(clocks).size > 1;
   const endedAt = mixed ? assets.map((a) => ind.endedBy(a.bars.t, timeline)) : null;
+  const keys = assets.map((a) => periodKeys(a.bars.t, p.rebalance));
   /** Whether the asset's current bar is the one its rebalance fills at: its first bar of a period (at the open), or its last (at the close). */
   const rebalances = (a: A) =>
     atClose
       ? p.rebalance !== 'never' && cached(`end ${a.name}`, () => ind.periodEnds(a.bars.t, (x) => periodKey(x, p.rebalance)))[a.i] === 1
-      : a.i > 0 && periodKey(a.bars.t[a.i], p.rebalance) !== periodKey(a.bars.t[a.i - 1], p.rebalance);
+      : a.i > 0 && keys[a.order][a.i] !== keys[a.order][a.i - 1];
 
   const cost = p.costBps / 10_000;
   const slip = p.slippageBps / 10_000;
@@ -808,14 +852,16 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     return !a.heldBack;
   };
 
+  const configured = new Map(assets.map((a) => [a, a.weight]));
   /**
    * Target weights for the assets held or being bought. Inverse volatility shares out those
    * assets' configured weights by 1 / volatility, measured up to `idx(a)`; an asset whose volatility
-   * is 0 (or, for a buy not yet signalled, unknown) keeps its configured weight.
+   * is 0 (or, for a buy not yet signalled, unknown) keeps its configured weight. Read only: without
+   * inverse volatility every call gives the same map.
    */
   const targetWeights = (entering: Set<A>, idx: (a: A) => number): Map<A, number> => {
-    const out = new Map(assets.map((a) => [a, a.weight]));
-    if (p.sizing.k !== 'invvol') return out;
+    if (p.sizing.k !== 'invvol') return configured;
+    const out = new Map(configured);
     const n = p.sizing.n;
     const known = assets
       .filter((a) => a.shares > 0 || entering.has(a))
@@ -887,7 +933,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
           buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0 });
           held = target;
         }
-      } else if (a.shares > 0 && a.owed === periodKey(a.bars.t[a.i], p.rebalance)) {
+      } else if (a.shares > 0 && a.owed === keys[a.order][a.i]) {
         // The rest of this period's top-up; a debt from an earlier period has lapsed.
         const target = (steps > 1 ? weights.get(a)! * part : weights.get(a)!) * equityNow;
         const delta = target - held;
@@ -933,7 +979,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         // The debt is for the period the rebalance opens: this one at an open, the next one at a close. A top-up left
         // undone because it was too small for its commission is owed nothing; one short of cash is.
         const owes = notional - spent > 1e-9 * notional && (!charge || spent > 0 || short);
-        a.owed = owes ? periodKey(a.bars.t[a.i], p.rebalance) + (atClose ? 1 : 0) : null;
+        a.owed = owes ? keys[a.order][a.i] + (atClose ? 1 : 0) : null;
         if (spent > 0) a.topUps++;
         if (spent < notional) fellShort.add(a);
       }
