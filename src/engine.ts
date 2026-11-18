@@ -400,6 +400,29 @@ export function insideBar(bars: Bars, i: number, source: string, small: Bars, in
 /** How many smaller bars a bar of `span` must hold: all of them on Binance, any number from 1 elsewhere. */
 const insideCount = (source: string, span: number, small: number): number => (source === 'binance' ? span / small : 0);
 
+/** Every time of the series `ts` from `start` to `end`, once each and in order. Each series' times rise, so they merge in one pass. */
+function mergeTimes(ts: number[][], start: number, end: number): number[] {
+  let out: number[] = [];
+  for (const t of ts) {
+    const merged: number[] = [];
+    let i = 0;
+    let j = firstAtOrAfter(t, start);
+    const stop = barAt(t, end) + 1;
+    while (i < out.length && j < stop) {
+      if (out[i] < t[j]) merged.push(out[i++]);
+      else if (t[j] < out[i]) merged.push(t[j++]);
+      else {
+        merged.push(out[i++]);
+        j++;
+      }
+    }
+    while (i < out.length) merged.push(out[i++]);
+    while (j < stop) merged.push(t[j++]);
+    out = merged;
+  }
+  return out;
+}
+
 /** The period of time `t` for a rebalance or ranking: bars with the same key fall in one period. */
 export function periodKey(t: number, mode: Rebalance): number {
   switch (mode) {
@@ -542,9 +565,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   // Start once every asset has data, so the weights mean the same thing throughout.
   const start = Math.max(p.from ?? -Infinity, ...assets.map((a) => a.bars.t[0]));
   const end = p.to ?? Infinity;
-  const times = new Set<number>();
-  for (const a of assets) for (const t of a.bars.t) if (t >= start && t <= end) times.add(t);
-  const timeline = [...times].sort((x, y) => x - y);
+  const timeline = mergeTimes(assets.map((a) => a.bars.t), start, end);
   if (timeline.length < 2) throw new Error('No bars in the chosen date range');
 
   for (const a of assets) {
