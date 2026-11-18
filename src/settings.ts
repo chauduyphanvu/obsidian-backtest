@@ -12,7 +12,8 @@ export interface SettingsHost {
 }
 
 export class BacktestSettingTab extends PluginSettingTab {
-  private host: Plugin & SettingsHost;
+  // Only what the tab needs: through Plugin, `settings` would read as the API of Obsidian 1.13, newer than minAppVersion.
+  private host: SettingsHost;
 
   constructor(app: App, plugin: Plugin & SettingsHost) {
     super(app, plugin);

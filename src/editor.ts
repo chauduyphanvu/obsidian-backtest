@@ -280,7 +280,7 @@ function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf:
         positioned() {
           const frame = dom.parentElement;
           if (!frame) return;
-          frame.style.transform = '';
+          frame.style.removeProperty('transform');
           const editor = view.dom.getBoundingClientRect();
           const box = frame.getBoundingClientRect();
           let shift = Math.min(0, editor.right - box.right);
