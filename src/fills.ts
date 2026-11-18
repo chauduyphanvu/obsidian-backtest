@@ -2,7 +2,7 @@
 // caller reads the file and hands in each strategy's run.
 
 import { detectCsvSeparator, parseCsvTime, slashedDatesAreDayFirst, splitCsvLine } from './data.ts';
-import type { FillSeen } from './engine.ts';
+import type { FillLog } from './engine.ts';
 import { DAY } from './format.ts';
 
 export type Side = 'buy' | 'sell';
@@ -359,19 +359,9 @@ export function fillColumnsText(c: Partial<FillColumns>): string {
 
 // --- Matching ----------------------------------------------------------------------------------------------------
 
-/**
- * A strategy run's fills, one entry per fill in time order, as columns: when, which asset, what kind of fill, the asset's
- * shares after it and the price it filled at before slippage, in the run's own (adjusted) prices.
- */
-export interface FillLog {
-  t: number[];
-  asset: string[];
-  kind: FillSeen['kind'][];
-  sharesAfter: number[];
-  price: number[];
-}
+export type { FillLog };
 
-/** A strategy the account follows: its share of the account, its fills, and its run's times and equity. */
+/** A strategy the account follows: its share of the account, its fills (the run's `fills`), and its run's times and equity. */
 export interface Followed {
   label: string;
   alloc: number;

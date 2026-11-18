@@ -165,7 +165,7 @@ export function anywayLabel(error: LimitError): string {
   return error.kind === 'time' ? `Run it anyway, for up to ${duration(LIMITS.anywayMs)}` : 'Run it anyway';
 }
 
-/** About how many bytes a kept result holds: its prices, its steps and its trades. */
+/** About how many bytes a kept result holds: its prices, its steps, its trades and its fills (five numbers or names each). */
 export function resultBytes(out: Pick<RunOutput, 'data'> & { backtest: Pick<Backtest, 'run'> }): number {
   let bars = 0;
   let columnValues = 0;
@@ -174,7 +174,7 @@ export function resultBytes(out: Pick<RunOutput, 'data'> & { backtest: Pick<Back
     columnValues += b.t.length * (b.columns?.length ?? 0);
   }
   const { run } = out.backtest;
-  return 64 * bars + 8 * columnValues + 100 * run.t.length + 600 * run.trades.length;
+  return 64 * bars + 8 * columnValues + 100 * run.t.length + 600 * run.trades.length + 40 * run.fills.t.length;
 }
 
 /**

@@ -127,11 +127,11 @@ test('a limit error says which limit, and whether it may be run anyway', () => {
   assert.equal(anywayLabel(new LimitError('size', 'too large', true)), 'Run it anyway');
 });
 
-test('a result is weighed by its prices, steps and trades', () => {
+test('a result is weighed by its prices, steps, trades and fills', () => {
   const data = prices({ A: 2000, B: 2000 });
   const bt = runBacktest(spec('universe: A, B\nbuy when close > sma(10)\nsell when close < sma(10)'), data);
   assert.ok(bt.run.trades.length > 10);
-  assert.equal(resultBytes({ data, backtest: bt }), 64 * 4000 + 100 * bt.run.t.length + 600 * bt.run.trades.length);
+  assert.equal(resultBytes({ data, backtest: bt }), 64 * 4000 + 100 * bt.run.t.length + 600 * bt.run.trades.length + 40 * bt.run.fills.t.length);
 });
 
 /** A cache of numbers that weigh what they are. */
