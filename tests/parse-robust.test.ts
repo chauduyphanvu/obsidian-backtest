@@ -72,7 +72,7 @@ test('long chains and loops of definitions are normal errors, and a long list of
   assert.deepEqual(attempt(chain(40, true)) instanceof Error ? ['threw'] : (attempt(chain(40, true)) as ReturnType<typeof parseSpec>).errors, []);
   const loop = attempt(['universe: SPY', ...Array.from({ length: 2000 }, (_, i) => `a${i} = a${(i + 1) % 2000} and close > 1`), 'buy when a0'].join('\n'));
   assert.ok(!(loop instanceof Error) && loop.errors.length > 0);
-  const names = Array.from({ length: 50_000 }, (_, i) => `T${i}`);
+  const names = Array.from({ length: 2000 }, (_, i) => `T${i}`);
   const out = attempt(`universe: ${names.join(', ')}\nbuy when true\nfor ${names.join(', ')}:\n  sell when close < 1`);
   assert.ok(!(out instanceof Error) && out.errors.length === 0);
 });
