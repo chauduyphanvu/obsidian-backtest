@@ -49,7 +49,7 @@ test("the plan's account block reads without errors", () => {
 });
 
 test('settings take other spellings, and the defaults are whole shares, no band and no cash', () => {
-  const { config, errors } = parseAccount('Holdings: btcusdt 0.25; SPY 1,200, brk-b 3\nCASH: $1,000.50\nWhole Shares: NO\nfills: [[Broker/fid.csv]]\n[[A]]');
+  const { config, errors } = parseAccount('Holdings: btcusdt 0.25; SPY 1,200, brk-b 3\nCASH: $1,000.50\nWhole Shares: NO\nfills: [[Broker/fid.csv]]\nfills from: 2026-06-01\n[[A]]');
   assert.deepEqual(errors, []);
   assert.deepEqual(config.holdings, [
     { ticker: 'BTCUSDT', shares: 0.25 },
@@ -65,6 +65,13 @@ test('settings take other spellings, and the defaults are whole shares, no band 
   assert.equal(plain.skipUnder, 0);
   assert.deepEqual(parseAccount('holdings: none\ncash: 10\n[[A]]').config.holdings, []);
   assert.deepEqual(parseAccount('holdings:\ncash: 10\n[[A]]').errors, []);
+});
+
+test('a fills file needs the day the account started following the strategies', () => {
+  assert.deepEqual(parseAccount('cash: 1\nfills: Broker/x.csv\n[[A]]').errors, [
+    { line: 2, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' },
+  ]);
+  assert.deepEqual(parseAccount('cash: 1\nfills from: 2026-06-01\n[[A]]').errors, []);
 });
 
 test('the fills columns setting is read with the block', () => {

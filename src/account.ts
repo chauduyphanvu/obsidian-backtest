@@ -177,7 +177,7 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
       errors.push({ line, message: NOT_A_LINE });
       return;
     }
-    const r = parseLine(raw, line, true);
+    const r = parseLine(raw, line);
     if ('message' in r) errors.push(r);
     else entries.push(r);
   });
@@ -187,6 +187,9 @@ export function parseAccount(source: string): { config: AccountConfig; entries: 
   if (entries.length === 0 && errors.length === 0) errors.push({ line: 1, message: 'Add the strategies the account follows, such as [[Trend following]] 60%' });
   errors.push(...weightProblems(entries));
   if (!seen.has('cash') && !seen.has('holdings')) errors.push({ line: 1, message: "Write the account's cash, its holdings or both, such as cash: 10,000" });
+  if (config.fills !== null && !seen.has('fills from')) {
+    errors.push({ line: seen.get('fills')!, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' });
+  }
   return { config, entries, errors: errors.sort((a, b) => a.line - b.line) };
 }
 
