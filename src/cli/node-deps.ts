@@ -1,23 +1,41 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, normalize } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { withoutQueries, type DataDeps } from '../data.ts';
 import { PriceStore } from '../price-store.ts';
 
 /** Where prices are saved between runs: $XDG_CACHE_HOME/backtest-blocks, or ~/.cache/backtest-blocks. */
 export const defaultCacheDir = (env: NodeJS.ProcessEnv): string => join(env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'backtest-blocks');
 
+/** A vault path as Obsidian's normalizePath writes it: one slash between parts, none at either end, plain spaces. */
+export const vaultPath = (path: string): string =>
+  path.replace(/[\\/]+/g, '/').replace(/^\/+|\/+$/g, '').replace(/[  ]/g, ' ').normalize('NFC') || '/';
+
 /**
  * What the engine reads from outside, on Node instead of Obsidian: prices over the network, saved under `cacheDir`, CSV
- * files under `vault`, and the Tiingo and FRED keys from TIINGO_API_KEY and FRED_API_KEY.
+ * files under `vault` and nowhere else, and the Tiingo and FRED keys from TIINGO_API_KEY and FRED_API_KEY.
  */
 export function nodeDeps(o: { vault: string; cacheDir: string; env: NodeJS.ProcessEnv; fetch?: typeof fetch }): DataDeps {
   const get = o.fetch ?? fetch;
-  // The engine names CSV files as the vault does, from its root; the cache folder is given whole.
-  const at = (path: string) => (isAbsolute(path) ? path : join(o.vault, path));
+  const vault = resolve(o.vault);
+  // The price store gives the cache folder whole, and a vault file as the vault names it, from the vault's root.
+  const at = (path: string): string => {
+    if (path === o.cacheDir || path.startsWith(`${o.cacheDir}/`)) return path;
+    const full = resolve(vault, path);
+    const rel = relative(vault, full);
+    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`${path} is outside the vault`);
+    return full;
+  };
   const store = new PriceStore({
     files: {
-      exists: (path) => stat(at(path)).then(() => true, () => false),
+      exists: async (path) => {
+        try {
+          await stat(at(path));
+          return true;
+        } catch {
+          return false;
+        }
+      },
       read: (path) => readFile(at(path), 'utf8'),
       write: (path, text) => writeFile(at(path), text),
       mkdir: async (path) => {
@@ -26,7 +44,7 @@ export function nodeDeps(o: { vault: string; cacheDir: string; env: NodeJS.Proce
       rmdir: (path, recursive) => rm(at(path), { recursive, force: true }),
     },
     cacheDir: o.cacheDir,
-    normalize,
+    normalize: vaultPath,
     fetchText: async (url, headers) => {
       let res: Response;
       try {

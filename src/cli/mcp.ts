@@ -4,11 +4,9 @@ import { z } from 'zod';
 import { CORPUS } from '../corpus/examples.ts';
 import { MISTAKES } from '../corpus/mistakes.ts';
 import type { DataDeps } from '../data.ts';
-import { generatedFiles, languageJson, llmsFull } from '../llm-files.ts';
+import { generatedFiles, wordList } from '../llm-files.ts';
 import { SYSTEM_PROMPT, userMessage } from '../llm.ts';
-import { Runner } from '../runner.ts';
-import { DEFAULT_SETTINGS, defaultsFrom } from '../settings-core.ts';
-import { checkSource, findDoc, pickBlock, problemLine, version, type Io } from './main.ts';
+import { checkSource, explainText, problemLine, runNote, version, WORD_KINDS, wordNames, type Io } from './main.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
@@ -50,17 +48,9 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps): 
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ source, block, vault_path, refresh }) => {
-      const picked = pickBlock(source, 'strategy', block);
-      if ('error' in picked) return { content: [text(picked.error)], isError: true };
-      const problems = checkSource(picked.block.source, 'strategy').problems.filter((p) => p.severity === 'error');
-      if (problems.length > 0) return { content: [text(`The block has errors, so it was not run:\n${problems.map(problemLine).join('\n')}`)], isError: true };
-      const runner = new Runner(depsFor(vault_path), defaultsFrom(DEFAULT_SETTINGS));
-      try {
-        const out = await runner.run(runner.parse(picked.block.source).spec!, refresh ?? false);
-        return { content: [text(runText(out))], structuredContent: runSummary(out) };
-      } catch (e) {
-        return { content: [text(`The backtest could not run: ${e instanceof Error ? e.message : e}`)], isError: true };
-      }
+      const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, 'the block argument');
+      if ('code' in result) return { content: [text(result.message)], isError: true };
+      return { content: [text(runText(result.out))], structuredContent: runSummary(result.out) };
     },
   );
 
@@ -73,33 +63,30 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps): 
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ word }) => {
-      const d = findDoc(word);
-      if (!d) return { content: [text(`"${word}" is not a word of the language. list_words gives them all.`)], isError: true };
-      return { content: [text([d.signature, '', d.text, ...(d.example ? ['', 'Example:', d.example] : [])].join('\n'))] };
+      const found = explainText(word);
+      return 'error' in found ? { content: [text(found.error)], isError: true } : { content: [text(found.text)] };
     },
   );
 
-  const KINDS = ['functions', 'series', 'calendar', 'position', 'settings', 'words', 'units'] as const;
   server.registerTool(
     'list_words',
     {
       title: 'List the words of the language',
       description: 'Every word of the strategy language of one kind, with its form and a short meaning. Without a kind, the names of every word by kind.',
-      inputSchema: { kind: z.enum(KINDS).optional() },
+      inputSchema: { kind: z.enum(WORD_KINDS).optional() },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ kind }) => {
-      const list = JSON.parse(languageJson());
-      if (!kind) return { content: [text(KINDS.map((k) => `${k}: ${list[k].map((w: { name: string }) => w.name).join(', ')}`).join('\n'))] };
-      return { content: [text(list[kind].map((w: { signature: string; summary: string }) => `${w.signature}: ${w.summary}`).join('\n'))] };
-    },
+    async ({ kind }) => ({
+      content: [text(kind ? wordList()[kind].map((w) => `${w.signature}: ${w.summary}`).join('\n') : wordNames())],
+    }),
   );
 
+  // Made once: a server runs for as long as its client does.
   const files = generatedFiles();
   const resource = (name: string, uri: string, title: string, description: string, mimeType: string, body: () => string) =>
     server.registerResource(name, uri, { title, description, mimeType }, async (u) => ({ contents: [{ uri: u.href, mimeType, text: body() }] }));
-  resource('guide', 'backtest-blocks://guide', 'Writing strategy blocks', 'The whole language for a writer, with worked examples and how to check a block.', 'text/markdown', llmsFull);
-  resource('words', 'backtest-blocks://words', 'Word list', 'Every function, setting, value and word, with its form, meaning and an example.', 'application/json', languageJson);
+  resource('guide', 'backtest-blocks://guide', 'Writing strategy blocks', 'The whole language for a writer, with worked examples and how to check a block.', 'text/markdown', () => files['llms-full.txt']);
+  resource('words', 'backtest-blocks://words', 'Word list', 'Every function, setting, value and word, with its form, meaning and an example.', 'application/json', () => files['docs/language.json']);
   resource('examples', 'backtest-blocks://examples', 'Worked examples', `${CORPUS.length} requests in plain English and the blocks that answer them, one JSON object a line.`, 'application/jsonl', () => files['docs/corpus/examples.jsonl']);
   resource('mistakes', 'backtest-blocks://mistakes', 'Mistakes and fixes', `${MISTAKES.length} blocks with a mistake, what the parser says, and the block put right, one JSON object a line.`, 'application/jsonl', () => files['docs/corpus/mistakes.jsonl']);
   resource('grammar-lark', 'backtest-blocks://grammar/lark', 'Lark grammar', 'The text of one block, for generating under a grammar. It takes more than the parser does: check the result.', 'text/plain', () => files['docs/grammar/strategy.lark']);

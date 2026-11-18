@@ -6,7 +6,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { cli, type Io } from '../src/cli/main.ts';
+import { cli, readText, type Io } from '../src/cli/main.ts';
+import { nodeDeps } from '../src/cli/node-deps.ts';
 import { makeRng } from '../src/rng.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'backtest-blocks-cli-'));
@@ -109,7 +110,7 @@ test('run asks which block when a note has several, and does not run a block wit
   assert.equal(several.err, 'Two.md has 2 blocks (1: Walk trend, 2: Walk dips). Choose one with --block');
   const broken = await call(['run', 'Broken.md']);
   assert.equal(broken.code, 1);
-  assert.match(broken.err, /^Broken\.md:3:7: error: /);
+  assert.match(broken.err, /^The block has errors, so it was not run:\nBroken\.md:3:7: error: /);
   assert.equal(broken.out, '');
 });
 
@@ -124,7 +125,7 @@ test('explain gives a word\'s form, meaning and example, in any case, and points
 });
 
 test('words, guide, help and version', async () => {
-  assert.match((await call(['words'])).out, /^Functions: sma, ema, /);
+  assert.match((await call(['words'])).out, /^functions: sma, ema, /);
   assert.ok(JSON.parse((await call(['words', '--json'])).out).functions.length > 50);
   assert.match((await call(['guide'])).out, /^# Backtest Blocks: writing strategy blocks\n/);
   assert.match((await call(['--help'])).out, /backtest-blocks check <file\|->/);
@@ -137,4 +138,44 @@ test('the command runs as a program and sets its exit code', () => {
   const version = execFileSync(process.execPath, ['src/cli/bin.ts', '--version'], { encoding: 'utf8' });
   assert.match(version, /^\d+\.\d+\.\d+\n$/);
   assert.throws(() => execFileSync(process.execPath, ['src/cli/bin.ts', 'check', join(vault, 'Broken.md')], { stdio: 'pipe' }), (e: { status: number }) => e.status === 1);
+});
+
+test('a Yahoo retry waits on Node, where there is no browser window', async () => {
+  const deps = nodeDeps({ vault, cacheDir: join(dir, 'cache'), env: {} });
+  await deps.sleep!(1);
+});
+
+test('check goes on past a note it can not read, reports every other problem, and fails each note with no block', async () => {
+  const both = await call(['check', 'Broken.md', 'Missing.md']);
+  assert.equal(both.code, 2);
+  assert.match(both.out, /^Broken\.md:3:7: error: /);
+  assert.match(both.err, /can't read Missing\.md/);
+  const one = await call(['check', 'Two.md', 'Prose.md']);
+  assert.equal(one.code, 1);
+  assert.equal(one.err, 'Prose.md: no strategy block\n2 blocks checked: 1 note with no strategy block');
+  assert.equal((await call(['check', 'Prose.md'])).err, 'Prose.md: no strategy block\n0 blocks checked: 1 note with no strategy block');
+});
+
+test('a CSV path reads from the vault as Obsidian does, and never from outside it', async () => {
+  writeFileSync(join(dir, 'outside.csv'), prices());
+  const slash = await call(['run', '-'], 'universe: csv:/Data/walk.csv\nbuy when close > sma(20)\nsell when close < sma(20)');
+  assert.equal(slash.code, 0, slash.err);
+  const out = await call(['run', '-'], 'universe: csv:../outside.csv\nbuy when close > sma(20)\nsell when close < sma(20)');
+  assert.equal(out.code, 1);
+  assert.match(out.err, /No file at \.\.\/outside\.csv|outside the vault/);
+});
+
+test('standard input is read as UTF-8 even when a character falls between two chunks', async () => {
+  const times = Buffer.from('×');
+  async function* chunks() {
+    yield Buffer.concat([Buffer.from('name: a'), times.subarray(0, 1)]);
+    yield Buffer.concat([times.subarray(1), Buffer.from('b')]);
+  }
+  assert.equal(await readText(chunks()), 'name: a×b');
+});
+
+test('explain takes a word as a block writes it: a call with its arguments, a setting with its value', async () => {
+  assert.match((await call(['explain', 'sma(200)'])).out, /^sma\(n\)/);
+  assert.match((await call(['explain', 'rebalance: monthly'])).out, /^rebalance: monthly/);
+  assert.match((await call(['explain', 'stop loss: 10%'])).out, /^stop loss: /);
 });

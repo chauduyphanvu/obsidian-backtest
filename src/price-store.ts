@@ -80,7 +80,8 @@ export class PriceStore {
     // One object for the plugin's life, so several blocks asking for the same ticker share a download.
     this.dataDeps = {
       now: () => Date.now(),
-      sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+      // globalThis, not window: the command line runs this on Node, which has no window.
+      sleep: (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)),
       fetchText: this.o.fetchText,
       secret: this.o.secret,
       tiingoFallback: this.o.tiingoFallback,

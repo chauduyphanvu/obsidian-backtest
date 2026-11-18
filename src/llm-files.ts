@@ -10,8 +10,17 @@ import { LANGUAGE_GUIDE } from './language-guide.ts';
 const entry = (d: Doc) => ({ name: d.id, signature: d.signature, summary: d.short, text: d.text, example: d.example });
 const ofKind = (kind: DocKind) => ALL_DOCS.filter((d) => d.kind === kind).map(entry);
 
-/** Every word of the language with its form, meaning and an example, from the editor's help (docs.ts). */
-export function languageJson(): string {
+let words: ReturnType<typeof buildWordList> | null = null;
+
+/** Every word of the language with its form, meaning and an example, from the editor's help (docs.ts); built once. */
+export function wordList(): ReturnType<typeof buildWordList> {
+  return (words ??= buildWordList());
+}
+
+/** The word list as docs/language.json writes it. */
+export const languageJson = (): string => `${JSON.stringify(wordList(), null, 2)}\n`;
+
+function buildWordList() {
   const values = (setting: string) =>
     (FIXED_VALUES[setting] ?? []).map((v) => {
       const d = ALL_DOCS.find((x) => x.id === `${setting}=${v}`);
@@ -33,7 +42,7 @@ export function languageJson(): string {
       words: [...LATER_WORDS].sort(),
     },
   };
-  return `${JSON.stringify(list, null, 2)}\n`;
+  return list;
 }
 
 const FENCE = '```';

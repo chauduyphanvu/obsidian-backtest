@@ -112,3 +112,12 @@ test('write_strategy gives the drafter\'s instructions and the idea', async () =
   assert.match(t, /Buy QQQ on dips/);
   assert.match(t, /check_strategy/);
 });
+
+test('run_backtest names a problem at its line in the note, as check_strategy does', async () => {
+  const note = ['# Note', '', 'Some text.', '', '> [!tip]', '> ```strategy', '> universe: SPY', '> buy when close > sma(20', '> ```'].join('\n');
+  const checked = textOf(await client.callTool({ name: 'check_strategy', arguments: { source: note } }));
+  const ran = await client.callTool({ name: 'run_backtest', arguments: { source: note } });
+  assert.equal(ran.isError, true);
+  const line = checked.match(/^strategy:\d+:\d+: error: .*$/m)![0];
+  assert.ok(textOf(ran).includes(line), `${textOf(ran)}\n--- should hold ---\n${line}`);
+});

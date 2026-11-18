@@ -5,8 +5,9 @@ import { parseArgs } from 'node:util';
 import { extractBlocks } from '../blocks.ts';
 import { ALL_DOCS, docFor, type Doc } from '../docs.ts';
 import { parseSpec, type Diagnostic } from '../dsl.ts';
-import { languageJson, llmsFull } from '../llm-files.ts';
-import { Runner } from '../runner.ts';
+import { languageJson, llmsFull, wordList } from '../llm-files.ts';
+import type { DataDeps } from '../data.ts';
+import { Runner, type RunOutput } from '../runner.ts';
 import { DEFAULT_SETTINGS, defaultsFrom } from '../settings-core.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
@@ -21,6 +22,13 @@ export interface Io {
   env: NodeJS.ProcessEnv;
   cwd: string;
   fetch?: typeof fetch;
+}
+
+/** A stream read whole as UTF-8, joined as bytes first so a character split between two chunks stays whole. */
+export async function readText(stream: AsyncIterable<Buffer | string>): Promise<string> {
+  const parts: Buffer[] = [];
+  for await (const chunk of stream) parts.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  return Buffer.concat(parts).toString('utf8');
 }
 
 const HELP = `backtest-blocks: check and backtest the strategy blocks of Backtest Blocks, outside Obsidian.
@@ -99,6 +107,8 @@ async function readInput(path: string, io: Io): Promise<string> {
   return path === '-' ? io.stdin() : readFile(resolve(io.cwd, path), 'utf8');
 }
 
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
 async function check(files: string[], json: boolean, io: Io): Promise<number> {
   if (files.length === 0) {
     io.err('check: name a note, or - to read a block from standard input');
@@ -106,27 +116,39 @@ async function check(files: string[], json: boolean, io: Io): Promise<number> {
   }
   const problems: Problem[] = [];
   let blocks = 0;
+  let empty = 0;
+  let unread = 0;
   for (const file of files) {
     let text: string;
     try {
       text = await readInput(file, io);
     } catch (e) {
+      // The other notes are still checked, so their problems are not lost.
       io.err(`check: can't read ${file}: ${e instanceof Error ? e.message : e}`);
-      return 2;
+      unread++;
+      continue;
     }
     const found = checkSource(text, file);
-    if (found.blocks === 0) io.err(`${file}: no strategy block`);
+    // A note with no block to check is a mistake too: the fence may be misspelt.
+    if (found.blocks === 0) {
+      io.err(`${file}: no strategy block`);
+      empty++;
+    }
     blocks += found.blocks;
     problems.push(...found.problems);
   }
   const errors = problems.filter((p) => p.severity === 'error').length;
-  if (json) io.out(JSON.stringify({ blocks, errors, warnings: problems.length - errors, problems }, null, 2));
+  if (json) io.out(JSON.stringify({ blocks, errors, warnings: problems.length - errors, notesWithoutBlock: empty, notesUnread: unread, problems }, null, 2));
   else {
     for (const p of problems) io.out(problemLine(p));
-    io.err(`${blocks} ${blocks === 1 ? 'block' : 'blocks'} checked: ${errors === 0 && problems.length === 0 ? 'no problems' : `${errors} ${errors === 1 ? 'error' : 'errors'}, ${problems.length - errors} ${problems.length - errors === 1 ? 'warning' : 'warnings'}`}`);
+    const said = [
+      ...(problems.length ? [`${plural(errors, 'error', 'errors')}, ${plural(problems.length - errors, 'warning', 'warnings')}`] : []),
+      ...(empty ? [`${plural(empty, 'note', 'notes')} with no strategy block`] : []),
+      ...(unread ? [`${plural(unread, 'note', 'notes')} not read`] : []),
+    ];
+    io.err(`${plural(blocks, 'block', 'blocks')} checked: ${said.join('; ') || 'no problems'}`);
   }
-  // A note with no block to check is a mistake too: the fence may be misspelt.
-  return errors > 0 || blocks === 0 ? 1 : 0;
+  return unread > 0 ? 2 : errors > 0 || empty > 0 ? 1 : 0;
 }
 
 /** The folder above `from` that holds .obsidian, which makes it a vault; null when there is none. */
@@ -138,7 +160,7 @@ function vaultAbove(from: string): string | null {
 }
 
 /** The block of a note to run: the one named or numbered, or the only one; else what to say. */
-export function pickBlock(text: string, file: string, block: string | undefined): { block: FoundBlock } | { error: string } {
+export function pickBlock(text: string, file: string, block: string | undefined, how = '--block'): { block: FoundBlock } | { error: string } {
   const found = blocksIn(text);
   let b: FoundBlock | undefined;
   if (block !== undefined) b = /^\d+$/.test(block) ? found[Number(block) - 1] : found.find((x) => x.name?.toLowerCase() === block.toLowerCase());
@@ -147,8 +169,25 @@ export function pickBlock(text: string, file: string, block: string | undefined)
   const list = found.map((x, i) => `${i + 1}${x.name ? `: ${x.name}` : ''}`).join(', ');
   return {
     error:
-      found.length === 0 ? `${file}: no strategy block` : block === undefined ? `${file} has ${found.length} blocks (${list}). Choose one with --block` : `${file} has no block "${block}". Its blocks: ${list}`,
+      found.length === 0 ? `${file}: no strategy block` : block === undefined ? `${file} has ${found.length} blocks (${list}). Choose one with ${how}` : `${file} has no block "${block}". Its blocks: ${list}`,
   };
+}
+
+/** Why a block was not run: which block to run is unclear (2), or it has errors, each at its line in the note (1). */
+export type NotRun = { code: 1 | 2; message: string };
+
+/** Runs one block of a note, or a bare block, with the plugin's default settings. Shared by `run` and the MCP tool. */
+export async function runNote(text: string, file: string, block: string | undefined, deps: DataDeps, refresh: boolean, how = '--block'): Promise<{ out: RunOutput } | NotRun> {
+  const picked = pickBlock(text, file, block, how);
+  if ('error' in picked) return { code: 2, message: picked.error };
+  const errors = problemsOf(file, text, picked.block).filter((p) => p.severity === 'error');
+  if (errors.length > 0) return { code: 1, message: `The block has errors, so it was not run:\n${errors.map(problemLine).join('\n')}` };
+  const runner = new Runner(deps, defaultsFrom(DEFAULT_SETTINGS));
+  try {
+    return { out: await runner.run(runner.parse(picked.block.source).spec!, refresh) };
+  } catch (e) {
+    return { code: 1, message: `The backtest could not run: ${e instanceof Error ? e.message : e}` };
+  }
 }
 
 async function run(file: string | undefined, o: { block?: string; vault?: string; cache?: string; refresh: boolean; json: boolean }, io: Io): Promise<number> {
@@ -163,17 +202,6 @@ async function run(file: string | undefined, o: { block?: string; vault?: string
     io.err(`run: can't read ${file}: ${e instanceof Error ? e.message : e}`);
     return 2;
   }
-  const picked = pickBlock(text, file, o.block);
-  if ('error' in picked) {
-    io.err(picked.error);
-    return 2;
-  }
-  const b = picked.block;
-  const problems = problemsOf(file, text, b);
-  if (problems.some((p) => p.severity === 'error')) {
-    for (const p of problems) io.err(problemLine(p));
-    return 1;
-  }
   const noteDir = file === '-' ? io.cwd : dirname(resolve(io.cwd, file));
   const deps = nodeDeps({
     vault: o.vault ? resolve(io.cwd, o.vault) : (vaultAbove(noteDir) ?? noteDir),
@@ -181,21 +209,33 @@ async function run(file: string | undefined, o: { block?: string; vault?: string
     env: io.env,
     fetch: io.fetch,
   });
-  const runner = new Runner(deps, defaultsFrom(DEFAULT_SETTINGS));
-  try {
-    const out = await runner.run(runner.parse(b.source).spec!, o.refresh);
-    io.out(o.json ? JSON.stringify(runSummary(out), null, 2) : runText(out));
-    return 0;
-  } catch (e) {
-    io.err(`run: ${e instanceof Error ? e.message : e}`);
-    return 1;
+  const result = await runNote(text, file, o.block, deps, o.refresh);
+  if ('code' in result) {
+    io.err(result.message);
+    return result.code;
   }
+  io.out(o.json ? JSON.stringify(runSummary(result.out), null, 2) : runText(result.out));
+  return 0;
 }
 
-/** A word's entry, found the way it is written, in any case; for a setting's value, "rebalance=monthly". */
+/**
+ * A word's entry, found as a block writes it, in any case: `sma`, `sma(200)`, `stop loss`, `stop loss: 10%`, and a
+ * setting's fixed value as `rebalance: monthly` or `rebalance=monthly`.
+ */
 export function findDoc(word: string): Doc | undefined {
-  const w = word.trim().replace(/\s+/g, ' ');
-  return docFor(w) ?? ALL_DOCS.find((d) => d.id.toLowerCase() === w.toLowerCase() || d.id.toLowerCase().replace(/[()]/g, '') === w.toLowerCase());
+  const w = word.trim().replace(/\s+/g, ' ').toLowerCase();
+  const byId = (id: string) => docFor(id) ?? ALL_DOCS.find((d) => d.id.toLowerCase() === id);
+  const call = w.match(/^([a-z_]+)\s*\(.*\)$/);
+  const setting = w.match(/^([a-z ]+?)\s*[:=]\s*(.+)$/);
+  return byId(w) ?? (call ? byId(call[1]) : undefined) ?? (setting ? (byId(`${setting[1]}=${setting[2]}`) ?? byId(setting[1])) : undefined);
+}
+
+/** A word's form, meaning and example as text, or what to say when it is not a word of the language. */
+export function explainText(word: string): { text: string } | { error: string } {
+  const d = findDoc(word);
+  if (d) return { text: [d.signature, '', d.text, ...(d.example ? ['', 'Example:', d.example] : [])].join('\n') };
+  const near = ALL_DOCS.filter((x) => x.id.toLowerCase().includes(word.trim().toLowerCase())).map((x) => x.id);
+  return { error: `"${word}" is not a word of the language.${near.length ? ` Did you mean: ${near.slice(0, 8).join(', ')}?` : ' list_words, or backtest-blocks words, gives them all.'}` };
 }
 
 function explain(word: string | undefined, io: Io): number {
@@ -203,36 +243,23 @@ function explain(word: string | undefined, io: Io): number {
     io.err('explain: name a word, such as sma or stop loss');
     return 2;
   }
-  const d = findDoc(word);
-  if (!d) {
-    const near = ALL_DOCS.filter((x) => x.id.toLowerCase().includes(word.toLowerCase())).map((x) => x.id);
-    io.err(`"${word}" is not a word of the language.${near.length ? ` Did you mean: ${near.slice(0, 8).join(', ')}?` : ' See: backtest-blocks words'}`);
+  const found = explainText(word);
+  if ('error' in found) {
+    io.err(found.error);
     return 1;
   }
-  io.out([d.signature, '', d.text, ...(d.example ? ['', 'Example:', d.example] : [])].join('\n'));
+  io.out(found.text);
   return 0;
 }
 
+/** The kinds of word the word list has, in the order they are listed. */
+export const WORD_KINDS = ['functions', 'series', 'calendar', 'position', 'settings', 'words', 'units'] as const;
+
+/** The names of every word, a line for each kind. */
+export const wordNames = (): string => WORD_KINDS.map((k) => `${k}: ${wordList()[k].map((w) => w.name).join(', ')}`).join('\n');
+
 function words(json: boolean, io: Io): number {
-  if (json) {
-    io.out(languageJson().trimEnd());
-    return 0;
-  }
-  const list = JSON.parse(languageJson());
-  const names = (key: string) => list[key].map((w: { name: string }) => w.name).join(', ');
-  io.out(
-    [
-      `Functions: ${names('functions')}`,
-      `Series: ${names('series')}`,
-      `Calendar: ${names('calendar')}`,
-      `Position: ${names('position')}`,
-      `Settings: ${names('settings')}`,
-      `Words: ${names('words')}`,
-      `Units: ${names('units')}`,
-      '',
-      'For one of them: backtest-blocks explain <word>',
-    ].join('\n'),
-  );
+  io.out(json ? languageJson().trimEnd() : `${wordNames()}\n\nFor one of them: backtest-blocks explain <word>`);
   return 0;
 }
 
