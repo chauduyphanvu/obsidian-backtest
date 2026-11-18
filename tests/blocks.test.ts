@@ -86,9 +86,14 @@ test('Windows line ends give the same blocks, without carriage returns in the te
 });
 
 test('a long run of spaces or fence characters is read in linear time', () => {
-  const t0 = performance.now();
-  extractBlocks(['```strategy', `name:${' '.repeat(50_000)}x${' '.repeat(50_000)}`, '```'].join('\n'));
-  extractBlocks('```strategy\n'.repeat(20_000));
-  extractBlocks(`> ${'> '.repeat(50_000)}\`\`\`strategy\nuniverse: SPY\n`);
-  assert.ok(performance.now() - t0 < 2000);
+  // Up to three tries, so a pause or the other test files running alongside don't count; a slow reader is slow every time.
+  let best = Infinity;
+  for (let i = 0; i < 3 && best >= 2000; i++) {
+    const t0 = performance.now();
+    extractBlocks(['```strategy', `name:${' '.repeat(50_000)}x${' '.repeat(50_000)}`, '```'].join('\n'));
+    extractBlocks('```strategy\n'.repeat(20_000));
+    extractBlocks(`> ${'> '.repeat(50_000)}\`\`\`strategy\nuniverse: SPY\n`);
+    best = Math.min(best, performance.now() - t0);
+  }
+  assert.ok(best < 2000, `${best.toFixed(0)} ms`);
 });
