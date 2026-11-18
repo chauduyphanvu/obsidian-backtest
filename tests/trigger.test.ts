@@ -179,9 +179,12 @@ test('after a stop the buy rule must stop holding: the close below which it does
 
 test('a buy that has to wait for its sizing or stop input, or for its own rule, is said so instead of a price', () => {
   const A = bars(Array.from({ length: 10 }, (_, i) => 10 + i));
-  const input = report('universe: A\nstop loss: 2 atr(20)\nbuy when close > 30', { A }).report;
+  const { bt, report: input, data } = report('universe: A\nstop loss: 2 atr(20)\nbuy when close > 30', { A });
   assert.deepEqual([only(input).blocked, only(input).warmup], ['warmup', { input: 'stop loss', n: 20 }]);
   assert.equal(tickerText(input, 'A').text, "Can't buy at the next close: the 20-bar ATR for the stop loss is still unknown there.");
+  // The engine agrees: a next close that holds the buy rule is held back, not bought.
+  const after = runBacktest(bt.spec, nextBarData(bt.spec, data, bt.run.states[0], 40)).run;
+  assert.deepEqual([after.states[0].pending, after.skipped], [null, [{ asset: 'A', input: 'stop loss', n: 20, count: 1 }]]);
   const rule = report('universe: A\nbuy when close > sma(50)', { A }).report;
   assert.deepEqual([only(rule).blocked, only(rule).warmup], ['warmup', null]);
   assert.equal(tickerText(rule, 'A').text, "Can't buy at the next close: the buy rule is still unknown there.");

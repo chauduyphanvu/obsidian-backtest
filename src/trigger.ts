@@ -345,7 +345,7 @@ function blank(st: AssetState, side: TriggerSide): Trigger {
 function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st: AssetState, csv: boolean, apart: Apart | undefined, full: () => Evaluator, intraday: boolean): Trigger[] {
   const name = st.name;
   const rules = spec.rules[name];
-  const levels = st.levels ? { levels: st.levels } : {};
+  const levels = st.levels ? { levels: { ...st.levels } } : {};
   if (csv) return [{ ...blank(st, st.long ? 'sell' : 'buy'), blocked: 'csv' }];
   if (st.pending) return [{ ...blank(st, st.pending), blocked: 'pending' }];
   if (!st.long && spec.rank) return [{ ...blank(st, 'buy'), blocked: 'ranking' }];
