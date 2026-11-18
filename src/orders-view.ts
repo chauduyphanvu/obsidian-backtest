@@ -1,7 +1,7 @@
 import { Modal, Notice, setIcon, type App } from 'obsidian';
 import { h } from './dom.ts';
 import { price, signedPct } from './format.ts';
-import { actionWord, barLabel, barTime, basisOf, CLOSE_FILL_NOTE, LAST_CLOSE_NOTE, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoGroups, todoRows, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
+import { actionWord, barLabel, barTime, basisOf, CLOSE_FILL_NOTE, LAST_CLOSE_NOTE, notOurNoteMessage, orderSize, ordersMarkdown, problemsOf, share, sortStatuses, todoGroups, todoRows, WATCH_HEADING, WATCH_NOTE, watchList, type SaveOutcome, type StrategyStatus, type TodoRow } from './orders.ts';
 
 export interface OrdersHost {
   /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches every price once. */
@@ -73,6 +73,7 @@ export class OrdersModal extends Modal {
     const todo = todoRows(list);
     this.header(root, list);
     this.todo(root, todo);
+    this.watch(root, list);
     this.holding(root, list, todo.length > 0);
     this.closeFills(root, list);
     this.problems(root, list);
@@ -154,6 +155,27 @@ export class OrdersModal extends Modal {
         h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
         if (order.since !== null) h(detail, 'span', undefined, `Held since ${barTime(status, order.since)}`);
       }
+    }
+  }
+
+  /** The closes at the next bar that would give an order, nearest first: what to keep an eye on before that close. */
+  private watch(root: HTMLElement, list: StrategyStatus[]): void {
+    const rows = watchList(list);
+    if (rows.length === 0) return;
+    const section = h(root, 'section', 'bt-orders-section');
+    this.heading(section, WATCH_HEADING);
+    h(section, 'p', 'bt-orders-muted', WATCH_NOTE);
+    const items = h(section, 'ul', 'bt-orders-list bt-orders-watch');
+    for (const { status, row } of rows) {
+      const item = h(items, 'li', 'bt-orders-row');
+      h(item, 'span', `bt-orders-action bt-orders-${row.side === 'sell' ? 'sell' : 'buy'}`, { buy: 'Buy', sell: 'Sell', add: 'Add' }[row.side]);
+      const what = h(item, 'div', 'bt-orders-what');
+      h(what, 'span', 'bt-orders-ticker', row.ticker);
+      h(what, 'span', undefined, `${row.phrase}, ${row.when}`);
+      const detail = h(item, 'div', 'bt-orders-detail');
+      this.link(detail, status);
+      h(detail, 'span', undefined, `Last close ${price(row.lastClose)}`);
+      h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
     }
   }
 

@@ -35,7 +35,7 @@ export function clocksApart(spec: Spec, data: Map<string, Bars>): Apart | undefi
 }
 
 /** When each row of a series is known: a bar of prices when it ends, a row of a file of dated values by ind.valueEnds. */
-const rowEnds = (b: Bars): number[] => (b.unpriced ? ind.valueEnds(b.t) : ind.barEnds(b.t));
+export const rowEnds = (b: Bars): number[] => (b.unpriced ? ind.valueEnds(b.t) : ind.barEnds(b.t));
 
 /** Functions given a series that still read the ticker's own prices: its closes, or its average true range. */
 const OWN_PRICES = ['correl', 'keltner_upper', 'keltner_lower'];

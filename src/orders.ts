@@ -2,6 +2,7 @@ import type { Fill } from './dsl.ts';
 import type { AssetState } from './engine.ts';
 import { DAY, isoDate, money, price, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
+import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
 
 /**
  * When an order applies: at the next open (a pending order of a strategy that fills at the next open), at the next
@@ -63,6 +64,20 @@ export interface HoldingRow {
   gain: number | null;
 }
 
+/** A close at the next bar that would make a rule give an order (trigger.ts), for the reader to watch. */
+export interface WatchRow {
+  ticker: string;
+  side: 'buy' | 'sell' | 'add';
+  /** The rule's part in words, such as "Buys if it closes above 512.30 (+1.2%)", and when its order fills, such as "at the following open". */
+  phrase: string;
+  when: string;
+  /** The last close of the ticker whose close it is about, and the signed share of it to the nearest price where the outcome changes (NaN when none was found). */
+  lastClose: number;
+  distance: number;
+  /** It gives its order at an unchanged close. */
+  now: boolean;
+}
+
 export interface StrategyStatus {
   /** Vault path of the note. */
   note: string;
@@ -85,6 +100,8 @@ export interface StrategyStatus {
    * 3 bars old for shorter ones, and more than 2 bars old for bars of a week or longer.
    */
   stale: boolean;
+  /** The closes to watch at the next bar, nearest first (watchRows); absent when no trigger prices were worked out. */
+  watch?: WatchRow[];
 }
 
 const STALE_DAYS = 4;
@@ -126,7 +143,41 @@ function localDate(t: number): string {
   return isoDate(localDay(t) * DAY);
 }
 
-export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS): StrategyStatus {
+/** A trigger is worth watching within this share of the last close, and always for a strategy with `fill: close`. */
+export const WATCH_WITHIN = 0.02;
+
+/** How near a watch row is, for listing the nearest first: 0 for one that fires at an unchanged close. */
+const nearness = (w: WatchRow) => (w.now || Number.isNaN(w.distance) ? 0 : Math.abs(w.distance));
+
+/**
+ * The trigger prices worth watching at the next close: those that give an order at an unchanged close or within
+ * WATCH_WITHIN of it, and every one of a strategy that fills at the close, whose orders have to be placed before it.
+ */
+export function watchRows(report: TriggerReport): WatchRow[] {
+  const rows: WatchRow[] = [];
+  for (const t of report.triggers) {
+    const phrase = rulePhrase(t);
+    const near = nearest(t);
+    if (t.side === 'rearm' || phrase === null || near === null) continue;
+    if (!report.closeFill && !near.now && !(Math.abs(near.distance) <= WATCH_WITHIN)) continue;
+    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), lastClose: t.last, distance: near.distance, now: near.now });
+  }
+  return rows.sort((a, b) => nearness(a) - nearness(b) || compare(a.ticker, b.ticker));
+}
+
+/** Every strategy's rows to watch as one list, nearest first. */
+export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row: WatchRow }[] {
+  return list
+    .flatMap((status) => (status.watch ?? []).map((row) => ({ status, row })))
+    .sort((a, b) => nearness(a.row) - nearness(b.row) || compare(a.status.note, b.status.note) || compare(a.row.ticker, b.row.ticker));
+}
+
+export const WATCH_HEADING = 'Watch at the next close';
+
+/** Said under the closes to watch. */
+export const WATCH_NOTE = `Closes at the next bar that would make a rule give an order, worked out from the rules as they stand: those within ${WATCH_WITHIN * 100}% of the last close or that give one at an unchanged close, and every one of a strategy with fill: close, whose order has to be placed before that close.`;
+
+export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS, triggers: TriggerReport | null = null): StrategyStatus {
   const { run } = out.backtest;
   const { interval } = out.spec;
   const closeFill = out.spec.fill === 'close';
@@ -178,6 +229,7 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
       : barMs(interval) >= 7 * DAY
         ? now - asOf > STALE_LONG_BARS * barMs(interval)
         : localDay(now) - Math.floor(asOf / DAY) > staleDays,
+    ...(triggers ? { watch: watchRows(triggers) } : {}),
   };
 }
 
@@ -321,6 +373,8 @@ export interface ScanHost {
   find(): Promise<{ note: string; name: string; source: string }[]>;
   /** Runs a block's text (Results.runSource). */
   run(source: string, opts: { freshForMs?: number; background: boolean }): Promise<RunOutput>;
+  /** The trigger prices of a result `run` gave (Results.triggers); absent, or null for a result, when there are none. */
+  triggers?(out: RunOutput): Promise<TriggerReport | null> | null;
 }
 
 /** Every strategy in the vault, run and read as today's orders. `force` refetches every price once. */
@@ -336,7 +390,10 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
     let status: StrategyStatus;
     try {
       const freshForMs = force ? Date.now() - started : undefined;
-      status = statusFrom(f.note, f.name, await host.run(f.source, { freshForMs, background: true }), Date.now());
+      const out = await host.run(f.source, { freshForMs, background: true });
+      // A strategy is listed without its closes to watch when those could not be worked out.
+      const triggers = (await host.triggers?.(out)?.catch(() => null)) ?? null;
+      status = statusFrom(f.note, f.name, out, Date.now(), undefined, triggers);
     } catch (e) {
       status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
     }
@@ -363,6 +420,16 @@ export function ordersMarkdown(list: StrategyStatus[], now: number): string {
     for (const { status, order } of rows) {
       const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
       lines.push(`| ${link(status, true)} | ${actionWord(order)} | ${order.ticker} | ${orderSize(order)} | ${price(order.lastClose)} | ${basisCell} |`);
+    }
+    lines.push('');
+  }
+
+  const watching = watchList(sorted);
+  if (watching.length) {
+    lines.push(`## ${WATCH_HEADING}`, '', WATCH_NOTE, '', '| Strategy | Ticker | Watch for | Last close | Based on |', '| --- | --- | --- | ---: | --- |');
+    for (const { status, row } of watching) {
+      const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
+      lines.push(`| ${link(status, true)} | ${row.ticker} | ${row.phrase}, ${row.when} | ${price(row.lastClose)} | ${basisCell} |`);
     }
     lines.push('');
   }

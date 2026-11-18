@@ -1208,6 +1208,7 @@ Layout of `src/`:
 - `store.ts`: small records kept in the plugin's folder, one file for each, written a moment after they change and merged with any copy a sync brought in meanwhile.
 - `vault-writes.ts`: writing into the vault: a note's `bt_` properties once its blocks have rendered, saved results under a dated name, and the CSV helper's cleaned copies under a free name.
 - `compare.ts`, `dashboard.ts`, `orders.ts`, `orders-badge.ts`, `export.ts`, `rewrite.ts`: the compare block, the `backtests` block (its parser, sorting and running), orders, the status bar count of orders, the files, notes and properties a result can become, and writing parameter values into a block's text.
+- `trigger.ts`: trigger prices: the closes at a ticker's next bar that would make its rules give an order, found by working the rules out again with that bar added, and how they are said in words.
 - `sweep.ts`, `luck.ts`, `rng.ts`: parameter sweeps and the luck checks (reshuffled history, random entries, walk-forward), and the seeded random numbers they use.
 - `jobs.ts`, `worker.ts`, `worker-client.ts`, `limits.ts`: backtests, sweeps and luck checks as jobs, the two background workers that run them (one for single backtests, one for sweeps and luck checks), the plugin's side of them, which starts the workers, sends them prices and stops them, and the limits on how large one backtest may be and how long it may run.
 - `llm.ts`, `llm-modal.ts`: drafting.
