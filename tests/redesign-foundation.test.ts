@@ -97,3 +97,29 @@ test('each figure says who did better, and "even" exactly when the words call th
   const all = runBacktest(parseSpec('universe: A\nbuy when true')!.spec!, new Map([['A', bars(closes)]]));
   for (const f of figures(all).filter((x) => x.judge)) assert.equal(f.judge, 'even', f.label);
 });
+
+test('a slider track shows the return of each value with the other parameters where they are now, or nothing off the grid', async () => {
+  const { trackOf } = await import('../src/render-params.ts');
+  const paint = {
+    params: [
+      { name: 'fast', values: [20, 50] },
+      { name: 'slow', values: [150, 200] },
+    ],
+    points: [
+      { values: { fast: 20, slow: 150 }, cagr: 0.05 },
+      { values: { fast: 50, slow: 150 }, cagr: 0.06 },
+      { values: { fast: 20, slow: 200 }, cagr: 0.07 },
+      { values: { fast: 50, slow: 200 }, cagr: 0.08 },
+    ],
+  };
+  const declared = { fast: 50, slow: 200, stop: 0.05 };
+  assert.deepEqual(trackOf(paint, 'fast', { fast: 50, slow: 200, stop: 0.05 }, declared), [
+    { value: 20, cagr: 0.07 },
+    { value: 50, cagr: 0.08 },
+  ]);
+  assert.deepEqual(trackOf(paint, 'slow', { fast: 20, slow: 200, stop: 0.05 }, declared)?.map((x) => x.cagr), [0.05, 0.07]);
+  // Another parameter off the sweep's grid, or one the sweep did not move away from its declared value: no paint.
+  assert.equal(trackOf(paint, 'fast', { fast: 50, slow: 180, stop: 0.05 }, declared), null);
+  assert.equal(trackOf(paint, 'fast', { fast: 50, slow: 200, stop: 0.08 }, declared), null);
+  assert.equal(trackOf(paint, 'stop', declared, declared), null);
+});

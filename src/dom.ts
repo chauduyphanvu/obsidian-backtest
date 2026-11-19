@@ -27,8 +27,11 @@ export function colourSource(pre: HTMLElement, text: string): void {
   });
 }
 
-/** Like colourSource, with each line in an element of its own (returned in order), for showing some lines only. */
-export function colourLines(pre: HTMLElement, text: string): HTMLElement[] {
+/**
+ * Like colourSource, with each line in an element of its own (returned in order), for showing some lines only. `token` is
+ * told each token's element, its line and its columns.
+ */
+export function colourLines(pre: HTMLElement, text: string, token?: (el: HTMLElement, line: number, from: number, to: number) => void): HTMLElement[] {
   const lines = text.split('\n');
   return tokenizeBlock(lines).map((tokens, i) => {
     const line = lines[i];
@@ -36,7 +39,8 @@ export function colourLines(pre: HTMLElement, text: string): HTMLElement[] {
     let at = 0;
     for (const t of tokens) {
       if (t.from > at) el.append(line.slice(at, t.from));
-      h(el, 'span', `bt-tok bt-tok-${t.kind}`, line.slice(t.from, t.to));
+      const span = h(el, 'span', `bt-tok bt-tok-${t.kind}`, line.slice(t.from, t.to));
+      token?.(span, i, t.from, t.to);
       at = t.to;
     }
     el.append(line.slice(at));

@@ -10,6 +10,7 @@ import { forwardLink, type ForwardStart } from './forward.ts';
 import { trialOf, versionFigures, type Ledgers } from './ledger.ts';
 import { LimitError } from './limits.ts';
 import type { Action, MenuItems } from './render-actions.ts';
+import type { TrackPaint } from './render-params.ts';
 import { renderDebug } from './render-debug.ts';
 import { renderLuck, renderTriesNote } from './render-luck.ts';
 import { renderPriceCharts } from './render-price.ts';
@@ -86,6 +87,9 @@ export class StrategyBlocks {
   private shown = new ResultCache<true>(KEPT_SHOWN, Infinity);
   /** The result each block shows now. */
   private cards = new WeakMap<object, DrawnResult>();
+  /** What the last sweep of each block's text found, by result key, for its slider tracks; and who is listening. */
+  private sweeps = new ResultCache<TrackPaint>(KEPT_BLOCK_STATES, Infinity);
+  private sweepListeners = new Map<string, Set<(paint: TrackPaint) => void>>();
   /** The strategy blocks on screen with the defaults each was drawn with, so each can say when the settings have since changed. */
   private onScreen = new Map<object, { source: string; drawn: Defaults; say: (changed: boolean) => void }>();
   /** Tells each block on screen whether the settings have changed what it means, once settings stop changing for a moment. */
@@ -98,6 +102,19 @@ export class StrategyBlocks {
 
   constructor(host: BlocksHost) {
     this.host = host;
+  }
+
+  /** Calls `listen` with what the last sweep of the block with result key `key` found, now if known and after each sweep. */
+  private listenSweeps(key: string, listen: (paint: TrackPaint) => void): () => void {
+    const kept = this.sweeps.get(key);
+    if (kept) listen(kept);
+    const set = this.sweepListeners.get(key) ?? new Set();
+    set.add(listen);
+    this.sweepListeners.set(key, set);
+    return () => {
+      set.delete(listen);
+      if (set.size === 0) this.sweepListeners.delete(key);
+    };
   }
 
   /** Runs what a drawing of the block left to do before it is drawn again or goes away. */
@@ -168,7 +185,18 @@ export class StrategyBlocks {
         const intraday = isIntraday(bt.run.t);
         const name = shown.spec.name ?? 'Backtest';
         // The sweep and the luck checks start from the block's own text and put values on top of it.
-        const tryValues = { source, backtest: bt, parse: drawing.parse, defaults: drawing.defaults, apply: opts.apply, ledger };
+        const tryValues = {
+          source,
+          backtest: bt,
+          parse: drawing.parse,
+          defaults: drawing.defaults,
+          apply: opts.apply,
+          ledger,
+          onResult: (paint: TrackPaint) => {
+            this.sweeps.set(key, paint);
+            for (const listen of this.sweepListeners.get(key) ?? []) listen(paint);
+          },
+        };
         // A kept note carries the values that made its result.
         const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
         return [
@@ -266,7 +294,7 @@ export class StrategyBlocks {
           sections,
           compact: opts.compact ?? this.host.settings().resultView === 'compact',
           remember: stateKey === undefined ? undefined : { get: () => this.blockState.get(stateKey), set: (open) => this.blockState.set(stateKey, open) },
-          params: spec.params.length > 0 ? { ...sliders, apply } : undefined,
+          params: spec.params.length > 0 ? { ...sliders, apply, sweep: (listen) => this.listenSweeps(key, listen) } : undefined,
           figuresNote: ledger ? (note, now) => renderTriesNote(note, ledger, now.backtest) : undefined,
           triggers: (shown) => this.host.results.triggers(shown, runs),
           menu,

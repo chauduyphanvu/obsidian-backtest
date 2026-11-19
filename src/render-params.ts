@@ -28,6 +28,39 @@ export interface ParamsHook {
    * no range of its own to values the language accepts. Without it such a slider offers every value from about half to double.
    */
   accepts?: (values: Record<string, number>) => boolean;
+  /**
+   * The returns of a parameter sweep of this block, once one has run: the slider tracks are painted with them. Calls
+   * `listen` with what is known now and again when a sweep finishes; returns a function that stops listening.
+   */
+  sweep?: (listen: (paint: TrackPaint) => void) => () => void;
+}
+
+/** What a sweep found, cut down to what a slider's track shows: each variant's values and its return per year. */
+export interface TrackPaint {
+  params: { name: string; values: number[] }[];
+  points: { values: Record<string, number>; cagr: number }[];
+}
+
+const same = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+
+/**
+ * The return per year at each value of `name` that the sweep tried, with every other parameter where it is now (`now`):
+ * null when the sweep did not try that place, as when another parameter is off its grid, or one it did not sweep is
+ * not at its declared value.
+ */
+export function trackOf(paint: TrackPaint, name: string, now: Record<string, number>, declared: Record<string, number>): { value: number; cagr: number }[] | null {
+  const mine = paint.params.find((q) => q.name === name);
+  if (!mine) return null;
+  for (const [other, v] of Object.entries(now)) {
+    if (other === name) continue;
+    const swept = paint.params.find((q) => q.name === other);
+    if (swept ? !swept.values.some((x) => same(x, v)) : !same(v, declared[other])) return null;
+  }
+  const out = mine.values.map((value) => {
+    const point = paint.points.find((p) => same(p.values[name], value) && paint.params.every((q) => q.name === name || same(p.values[q.name], now[q.name])));
+    return { value, cagr: point ? point.cagr : NaN };
+  });
+  return out.some((x) => Number.isFinite(x.cagr)) ? out : null;
 }
 
 const shown = (p: Pick<Param, 'percent'>, value: number) => tidy(p.percent ? value * 100 : value);
@@ -132,6 +165,8 @@ export interface ParamBarInput {
   hook: ParamsHook;
   /** Draws a run. `settled` is false while a slider is still being dragged: the caller may redraw only part of the result. */
   show(out: RunOutput, settled: boolean): void;
+  /** The numbers of the parameters' lines in the block's text, by parameter name in lower case, to drag like the sliders. */
+  scrubs?: Map<string, HTMLElement>;
 }
 
 /** What the bar does with the answers to the runs it asks for. */
@@ -214,13 +249,23 @@ const WAITING = 'For this value, the plugin must load more price history. The re
 const LOADING = 'More price history loads…';
 const ON_RELEASE = 'This strategy is too slow to run again at each step of a drag. It runs when you release the slider.';
 
-/** The "Parameters" bar. The bar is built once and never redrawn, so the slider under a finger survives. Returns a cleanup function. */
+const HINT_PAINTED = 'Track colour: return per year of each value, from Try other values. The tick is the value in the block.';
+const HINT = 'Drag a number in the rules, or use a slider.';
+
+/** Pixels of drag for one step of a number in the rules. */
+const SCRUB_STEP_PX = 16;
+
+/**
+ * The parameters: a slider for each, the numbers in the rules (`scrubs`, by parameter name) that drag the same way, and one
+ * line of fixed height under them for what to do when the result on screen differs from the block. Nothing under the bar
+ * moves while a slider is dragged. The bar is built once and never redrawn, so the slider under a finger survives.
+ * Returns a cleanup function.
+ */
 export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () => void {
   const { params, hook } = input;
   const bar = h(parent, 'div', 'bt-params');
   bar.setAttribute('role', 'group');
   bar.setAttribute('aria-label', 'Parameters');
-  h(bar, 'div', 'bt-params-title', 'Parameters');
 
   const declared: Record<string, number> = Object.fromEntries(params.map((p) => [p.name, p.declared]));
   const wanted = { ...declared };
@@ -239,47 +284,62 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     slider.max = String(scale.hi);
     slider.step = String(scale.step);
     const value = h(row, 'span', 'bt-param-value');
+    const scrub = input.scrubs?.get(p.name.toLowerCase()) ?? null;
     const set = (v: number) => {
       slider.value = String(shown(p, v));
       value.textContent = formatParam(p, v);
       slider.setAttribute('aria-valuetext', value.textContent);
+      if (scrub) {
+        scrub.textContent = formatParam(p, v);
+        scrub.setAttribute('aria-valuenow', String(shown(p, v)));
+        scrub.setAttribute('aria-valuetext', formatParam(p, v));
+        scrub.classList.toggle('bt-scrub-changed', tidy(v) !== tidy(p.declared));
+      }
     };
     set(p.declared);
-    return { p, slider, value, set };
+    return { p, slider, value, set, scale, scrub };
   });
 
-  const diff = h(bar, 'div', 'bt-param-diff');
-  diff.hidden = true;
+  // One line of fixed height: the key to the tracks, or what differs from the block with Reset and Write, or a problem.
+  const slot = h(bar, 'div', 'bt-param-slot');
+  const hint = h(slot, 'div', 'bt-param-hint', HINT);
+  const diff = h(slot, 'div', 'bt-param-diff');
+  diff.setAttribute('aria-live', 'polite');
   const diffText = h(diff, 'span', 'bt-param-diff-text');
   const diffButtons = h(diff, 'span', 'bt-param-diff-buttons');
   const reset = h(diffButtons, 'button', 'bt-button', 'Reset');
-  const write = hook.apply ? h(diffButtons, 'button', 'bt-button', 'Write these values to the block') : null;
-  const problem = h(bar, 'div', 'bt-param-problem');
-  problem.hidden = true;
+  const write = hook.apply ? h(diffButtons, 'button', 'bt-button mod-cta', 'Write these values to the block') : null;
+  const problem = h(slot, 'div', 'bt-param-problem');
   problem.setAttribute('aria-live', 'polite');
+  let said: { text: string; plain: boolean } | null = null;
+  const sync = () => {
+    const differs = differenceText(params, onScreen);
+    diffText.textContent = differs;
+    const showing = said ? 'problem' : differs ? 'diff' : 'hint';
+    for (const [el, name] of [[hint, 'hint'], [diff, 'diff'], [problem, 'problem']] as const) {
+      el.classList.toggle('bt-slot-on', name === showing);
+      el.inert = name !== showing;
+    }
+    problem.classList.toggle('bt-param-plain', said?.plain ?? false);
+    problem.textContent = said?.text ?? '';
+  };
 
   /** What sits under the bar: a problem, or with `plain` a note that is not one. */
   const say = (text: string | null, plain = false) => {
-    problem.hidden = text === null;
-    problem.classList.toggle('bt-param-plain', plain);
-    problem.textContent = text;
-  };
-  const showDifference = () => {
-    const text = differenceText(params, onScreen);
-    diff.hidden = text === null;
-    diffText.textContent = text;
+    said = text === null ? null : { text, plain };
+    sync();
   };
 
   let last: RunOutput | null = null;
   let lastSettled = true;
   const requester = createRequester(hook, {
     shown(out, values, settled) {
-      say(null);
       onScreen = values;
       last = out;
       lastSettled = settled;
-      showDifference();
+      say(null);
       input.show(out, settled);
+      paintTracks();
     },
     waiting: () => say(WAITING, true),
     loading: () => say(LOADING, true),
@@ -294,6 +354,10 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
   });
   let frame = 0;
   const schedule = () => {
+    if (hook.followsDrag?.() === false) {
+      say(ON_RELEASE, true);
+      return;
+    }
     if (!frame) {
       frame = window.requestAnimationFrame(() => {
         frame = 0;
@@ -307,19 +371,107 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     requester.request(wanted, true);
   };
 
+  // The tracks: each value's return per year from a sweep, on one scale for the whole sweep, and a tick at the block's value.
+  let paint: TrackPaint | null = null;
+  const paintTracks = () => {
+    const finite = paint ? paint.points.map((x) => x.cagr).filter(Number.isFinite) : [];
+    const [lo, hi] = finite.length ? [Math.min(...finite), Math.max(...finite)] : [0, 0];
+    let painted = false;
+    for (const { p, slider, scale } of rows) {
+      const track = paint ? trackOf(paint, p.name, onScreen, declared) : null;
+      if (!track) {
+        slider.style.removeProperty('--bt-track');
+        slider.classList.remove('bt-painted');
+        continue;
+      }
+      painted = true;
+      const span = scale.hi - scale.lo || 1;
+      const at = (v: number) => Math.min(1, Math.max(0, (shown(p, v) - scale.lo) / span));
+      const where = (k: number) => `calc(var(--slider-thumb-width, 18px) / 2 + (100% - var(--slider-thumb-width, 18px)) * ${k.toFixed(4)})`;
+      const stops: string[] = [];
+      track.forEach((x, i) => {
+        const a = i === 0 ? 0 : (at(track[i - 1].value) + at(x.value)) / 2;
+        const b = i === track.length - 1 ? 1 : (at(x.value) + at(track[i + 1].value)) / 2;
+        const share = Number.isFinite(x.cagr) ? Math.round(12 + (88 * (x.cagr - lo)) / (hi - lo || 1)) : 0;
+        const colour = `color-mix(in srgb, var(--bt-strategy) ${share}%, transparent)`;
+        stops.push(`${colour} ${a === 0 ? '0%' : where(a)}`, `${colour} ${b === 1 ? '100%' : where(b)}`);
+      });
+      const tick = at(p.declared);
+      slider.style.setProperty('--bt-track', `linear-gradient(90deg, ${stops.join(', ')})`);
+      slider.style.setProperty('--bt-tick', where(tick));
+      slider.classList.add('bt-painted');
+    }
+    hint.textContent = painted ? HINT_PAINTED : HINT;
+  };
+  const unlisten = hook.sweep?.((next) => {
+    paint = next;
+    paintTracks();
+  });
+
   for (const { p, slider, value } of rows) {
     const read = () => {
       wanted[p.name] = stored(p, slider.valueAsNumber);
       value.textContent = formatParam(p, wanted[p.name]);
       slider.setAttribute('aria-valuetext', value.textContent);
+      rows.find((r) => r.p === p)!.set(wanted[p.name]);
     };
     slider.addEventListener('input', () => {
       read();
-      if (hook.followsDrag?.() === false) say(ON_RELEASE, true);
-      else schedule();
+      schedule();
     });
     slider.addEventListener('change', () => {
       read();
+      settle();
+    });
+  }
+
+  // A number in the rules is the same control: drag it sideways a step at a time, or use the arrow keys.
+  for (const { p, scrub, scale, set } of rows) {
+    if (!scrub) continue;
+    scrub.classList.add('bt-scrub');
+    scrub.tabIndex = 0;
+    scrub.setAttribute('role', 'spinbutton');
+    scrub.setAttribute('aria-label', p.name);
+    scrub.setAttribute('aria-valuemin', String(scale.lo));
+    scrub.setAttribute('aria-valuemax', String(scale.hi));
+    const count = Math.floor((scale.hi - scale.lo) / scale.step + 1e-9);
+    const indexOf = (v: number) => Math.max(0, Math.min(count, Math.round((shown(p, v) - scale.lo) / scale.step)));
+    const valueAt = (k: number) => stored(p, tidy(scale.lo + Math.max(0, Math.min(count, k)) * scale.step));
+    let start = 0;
+    let from = 0;
+    let moved = false;
+    scrub.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      scrub.setPointerCapture(e.pointerId);
+      start = e.clientX;
+      from = indexOf(wanted[p.name]);
+      moved = false;
+      scrub.classList.add('bt-scrub-active');
+    });
+    scrub.addEventListener('pointermove', (e) => {
+      if (!scrub.hasPointerCapture(e.pointerId)) return;
+      const v = valueAt(from + Math.round((e.clientX - start) / SCRUB_STEP_PX));
+      if (tidy(v) === tidy(wanted[p.name])) return;
+      moved = true;
+      wanted[p.name] = v;
+      set(v);
+      schedule();
+    });
+    const end = () => {
+      scrub.classList.remove('bt-scrub-active');
+      if (moved) settle();
+      moved = false;
+    };
+    scrub.addEventListener('pointerup', end);
+    scrub.addEventListener('pointercancel', end);
+    scrub.addEventListener('keydown', (e) => {
+      const d = ({ ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 } as Record<string, number>)[e.key];
+      if (!d) return;
+      e.preventDefault();
+      const v = valueAt(indexOf(wanted[p.name]) + d);
+      if (tidy(v) === tidy(wanted[p.name])) return;
+      wanted[p.name] = v;
+      set(v);
       settle();
     });
   }
@@ -344,9 +496,11 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
       reset.disabled = write.disabled = false;
     }
   });
+  sync();
 
   return () => {
     window.cancelAnimationFrame(frame);
     requester.cancel();
+    unlisten?.();
   };
 }

@@ -1,25 +1,21 @@
-/* The Parameters bar: a slider for each parameter, and what to do when the result on screen differs from the block. */
+/* The parameters, in the rules well under the rules they change: a slider for each, the numbers in the rules that drag
+   the same way, and one line of fixed height for what to do when the result on screen differs from the block. */
 
 .bt-params {
   container-type: inline-size;
-  margin-top: 10px;
-  padding: 8px 12px 10px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-s);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.bt-params-title {
-  font-weight: var(--font-semibold);
-  margin-bottom: 2px;
-}
-
 .bt-param {
   display: grid;
   grid-template-columns: minmax(4.5em, max-content) minmax(0, 1fr) 4.5em;
   align-items: center;
   gap: 0 12px;
-  padding: 3px 0;
+  padding: 2px 0;
 }
 .bt-param-name {
+  color: var(--text-muted);
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   overflow-wrap: anywhere;
@@ -30,20 +26,79 @@
   min-width: 0;
   margin: 0;
 }
+/* After a sweep, the track shows each value's return per year, darker for more, with a tick at the block's value. */
+.bt-root input.bt-param-slider.bt-painted {
+  background-image:
+    linear-gradient(90deg, transparent calc(var(--bt-tick) - 1px), var(--text-normal) calc(var(--bt-tick) - 1px), var(--text-normal) calc(var(--bt-tick) + 1px), transparent calc(var(--bt-tick) + 1px)),
+    var(--bt-track);
+}
 .bt-param-value {
   text-align: right;
+  font-weight: var(--font-semibold);
   font-variant-numeric: tabular-nums;
 }
 
+/* A number in the rules that is a control: drag it sideways, or use the arrow keys. */
+.bt-scrub {
+  margin: 0 -1px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, currentColor 55%, transparent);
+  font-weight: var(--font-semibold);
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
+  transition: background var(--bt-t-micro) var(--bt-ease);
+}
+.bt-scrub:hover,
+.bt-scrub.bt-scrub-active {
+  background: color-mix(in srgb, currentColor 24%, transparent);
+}
+.bt-scrub:focus-visible {
+  outline: 2px solid var(--background-modifier-border-focus);
+  outline-offset: 1px;
+}
+.bt-scrub.bt-scrub-changed {
+  background: color-mix(in srgb, var(--bt-strategy) 20%, transparent);
+  box-shadow: inset 0 -1.5px 0 var(--bt-strategy);
+  color: var(--bt-strategy);
+}
+
+/* One line of fixed height: the key to the tracks, what differs from the block, or a problem; one shows at a time. */
+.bt-param-slot {
+  display: grid;
+  align-items: center;
+  min-height: 34px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-param-slot > * {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition:
+    opacity var(--bt-t-comp) var(--bt-ease),
+    transform var(--bt-t-comp) var(--bt-ease);
+}
+.bt-param-slot > .bt-slot-on {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.bt-param-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
 .bt-param-diff {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 6px 12px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
 }
 .bt-param-diff-buttons {
   display: inline-flex;
@@ -51,10 +106,10 @@
   gap: 6px;
 }
 .bt-param-problem {
-  margin-top: 8px;
   padding: 6px 10px;
   border-left: 3px solid var(--bt-critical);
-  background: var(--background-secondary);
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
 }
 /* A line that says what is going on is not a problem. */
 .bt-param-problem.bt-param-plain {

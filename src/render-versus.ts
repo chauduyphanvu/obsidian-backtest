@@ -7,7 +7,7 @@ import { pct, signedPct } from './format.ts';
 import { figures, moreFigures, verdict, type Figure, type Judge } from './verdict.ts';
 
 /** The opening sentence, drawn again for each run shown. */
-export function verdictView(parent: HTMLElement): { show(bt: Backtest, opts?: { arrive?: boolean }): void } {
+export function verdictView(parent: HTMLElement): { show(bt: Backtest, opts?: { arrive?: boolean }): void; wait(): void } {
   const box = h(parent, 'div', 'bt-verdict');
   const lead = h(box, 'p', 'bt-verdict-lead');
   const more = h(box, 'p', 'bt-verdict-more');
@@ -23,7 +23,10 @@ export function verdictView(parent: HTMLElement): { show(bt: Backtest, opts?: { 
       }
       more.textContent = v.more;
       more.hidden = !v.more;
+      box.classList.remove('bt-waiting');
     },
+    /** A slider is being dragged: the sentence is for the values before it, until the release. */
+    wait: () => box.classList.add('bt-waiting'),
   };
 }
 
@@ -76,7 +79,18 @@ function judgeIcon(parent: HTMLElement, judge: Judge | undefined): void {
 /** Which part of the chart a figure comes from, for the rows that light it up. */
 const LINKS: Record<string, string> = { 'Return per year': 'end', 'Total return': 'end', 'Worst drawdown': 'dd', Volatility: 'vol', 'Time invested': 'held', 'Exposure, gross': 'held' };
 
-function row(parent: HTMLElement, f: Figure, arrive: boolean): HTMLElement {
+/** How far a figure moved from the block as written: "+0.5 pts from the block", "as written"; null for one that has no number. */
+function moved(f: Figure, was: Figure | undefined): { text: string; better: boolean | null } | null {
+  if (!was || !Number.isFinite(f.s) || !Number.isFinite(was.s) || f.textOnly) return null;
+  const ratio = f.label === 'Sharpe ratio';
+  const d = f.s - was.s;
+  const shown = ratio ? Math.abs(d).toFixed(2) : (Math.abs(d) * 100).toFixed(1);
+  if (Number(shown) === 0) return { text: 'as written', better: null };
+  const text = `${d > 0 ? '+' : '\u2212'}${shown}${ratio ? '' : ' pts'} from the block`;
+  return { text, better: f.direction ? d * f.direction > 0 : null };
+}
+
+function row(parent: HTMLElement, f: Figure, arrive: boolean, was?: Figure): HTMLElement {
   const r = h(parent, 'div', 'bt-vs-row');
   const link = LINKS[f.label];
   if (link) {
@@ -95,6 +109,8 @@ function row(parent: HTMLElement, f: Figure, arrive: boolean): HTMLElement {
     if (f.judge) h(judge, 'span', 'bt-sr', `${JUDGE_WORD[f.judge]}: `);
     h(judge, 'span', 'bt-vs-delta', f.delta);
   }
+  const m = moved(f, was);
+  if (m) h(judge, 'span', `bt-vs-moved${m.better === null ? '' : m.better ? ' bt-moved-better' : ' bt-moved-worse'}`, m.text);
   return r;
 }
 
@@ -114,14 +130,19 @@ const MORE_FIGURES = 8;
  * a mark of who did better, and the trades in a line under them. "All figures" adds the rest, and stays open or closed
  * across the runs a slider shows. `link` is told the part of the chart a row comes from while the pointer is on it.
  */
-export function versusView(parent: HTMLElement, o: { more?: boolean; link?: (part: string | null) => void } = {}): { show(bt: Backtest, opts?: { arrive?: boolean }): void; more(): boolean } {
+export function versusView(
+  parent: HTMLElement,
+  o: { more?: boolean; link?: (part: string | null) => void } = {},
+): { show(bt: Backtest, opts?: { arrive?: boolean; from?: Backtest | null }): void; more(): boolean } {
   const box = h(parent, 'div', 'bt-vs');
   let more = o.more ?? false;
   let shown: Backtest | null = null;
+  let from: Backtest | null = null;
   const draw = (arrive: boolean) => {
     const bt = shown!;
     box.replaceChildren();
     const list = figures(bt).filter((f) => !f.textOnly);
+    const before = from ? figures(from) : [];
     const head = h(box, 'div', 'bt-vs-head');
     const s = h(head, 'span', 'bt-vs-key');
     h(s, 'span', 'bt-vs-key-dot bt-dumbbell-strategy');
@@ -144,7 +165,7 @@ export function versusView(parent: HTMLElement, o: { more?: boolean; link?: (par
       tally.append(said.join(' \u00b7 '));
     }
     for (const f of list) {
-      const r = row(box, f, arrive);
+      const r = row(box, f, arrive, before.find((x) => x.label === f.label));
       const part = r.getAttribute('data-bt-hl');
       if (part && o.link) {
         r.addEventListener('pointerenter', () => o.link!(part));
@@ -168,6 +189,7 @@ export function versusView(parent: HTMLElement, o: { more?: boolean; link?: (par
   return {
     show(bt, opts = {}) {
       shown = bt;
+      from = opts.from ?? null;
       draw(opts.arrive ?? false);
     },
     more: () => more,

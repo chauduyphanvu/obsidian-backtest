@@ -218,6 +218,7 @@ body {
    tooltip code throws; this variable is what it checks first. */
 .bt-svg,
 .bt-status,
+.bt-scrub,
 .bt-tabs-main,
 .bt-tabs-more,
 .bt-range,

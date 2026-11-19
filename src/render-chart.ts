@@ -3,7 +3,7 @@
 // the chart reads out that bar in the line above it; the buttons beside the read-out show the last years only.
 
 import type { Backtest } from './backtest.ts';
-import { h, motionOK, onWidth, s, tween } from './dom.ts';
+import { easeOut, h, motionOK, onWidth, s, tween } from './dom.ts';
 import { DAY, YEAR, isIntraday, money, moneyTicks, niceStep, pct, stamp, timeTicks } from './format.ts';
 import { crisesFor, type Crisis } from './regimes.ts';
 
@@ -22,7 +22,7 @@ export interface ValueChart {
    * Draws another run of the same block, keeping the span shown. `ghost` is the block's run as written, drawn as a dashed
    * line while a slider shows other values; `arrive` draws the lines in once, for a new result.
    */
-  show(bt: Backtest, opts?: { ghost?: Backtest | null; arrive?: boolean }): void;
+  show(bt: Backtest, opts?: { ghost?: Backtest | null; arrive?: boolean; drag?: boolean }): void;
   /** The span of time shown, or 0 for the whole run. */
   span(): number;
   /** Lights up the part of the chart a figure comes from: 'end', 'dd', 'vol', 'held', or null for none. */
@@ -55,6 +55,8 @@ const below = (dd: number): string => (!Number.isFinite(dd) ? '' : dd > -0.0005 
 
 /** How long a change of the span takes. */
 const RANGE_MS = 420;
+/** How long the lines take to change to another run of the block. */
+const MORPH_MS = 160;
 /** How long the arrival of a new result's lines takes, and a margin after it. */
 const ARRIVE_MS = 1700;
 
@@ -131,10 +133,12 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
   const readout = { date, fall, mine, ghost: ghostKey, theirs, state, stateMark, stateText };
   /** The mapping of the drawing on screen. */
   let last: Drawn | null = null;
-  const draw = (o2: { from?: number; arrive?: boolean; settled?: boolean } = {}) => {
+  // During a drag the value scale only grows, so the lines move and the axis does not jump from frame to frame.
+  let keep: [number, number] | null = null;
+  const draw = (o2: { from?: number; arrive?: boolean; settled?: boolean; run?: Backtest } = {}) => {
     if (!bt || width <= 0) return null;
     drawnWidth = width;
-    const drawn = drawChart({ chart, legend, width, bt, ghost, span, from: o2.from, id, read: readout });
+    const drawn = drawChart({ chart, legend, width, bt: o2.run ?? bt, ghost, span, from: o2.from, id, read: readout, keep: keep ?? undefined });
     const svg = chart.querySelector('svg');
     if (svg && part) svg.setAttribute('data-bt-hl', part);
     if (svg && (o2.arrive || arriving) && motionOK()) svg.classList.add('bt-arrive');
@@ -192,7 +196,9 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
   return {
     show(next, opts = {}) {
       stopTween();
+      const was = bt;
       bt = next;
+      keep = opts.drag && last ? [last.logLo, last.logHi] : null;
       ghost = opts.ghost && opts.ghost !== next ? opts.ghost : null;
       theirs.label.textContent = next.benchmark.label;
       ghostKey.label.parentElement!.hidden = !ghost;
@@ -206,7 +212,27 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
           chart.querySelector('svg')?.classList.remove('bt-arrive');
         }, ARRIVE_MS);
       }
-      draw({ arrive: opts.arrive });
+      // A single step to other values (a key, Reset, a release) morphs the lines from the old run to the new one.
+      const morph = !opts.arrive && !opts.drag && was && was !== next && was.run.t.length === next.run.t.length && was.run.t[0] === next.run.t[0];
+      if (!morph || !motionOK() || width <= 0) {
+        draw({ arrive: opts.arrive });
+        return;
+      }
+      const [a, b] = [was.run.equity, next.run.equity];
+      const [da, db] = [was.drawdown, next.drawdown];
+      stopTween = tween(
+        MORPH_MS,
+        (k) => {
+          if (k >= 1) {
+            draw();
+            return;
+          }
+          const equity = b.map((v, i) => (v > 0 && a[i] > 0 ? Math.exp(Math.log(a[i]) + (Math.log(v) - Math.log(a[i])) * k) : v));
+          const drawdown = db.map((v, i) => da[i] + (v - da[i]) * k);
+          draw({ run: { ...next, run: { ...next.run, equity }, drawdown } });
+        },
+        easeOut,
+      );
     },
     span: () => span,
     highlight(next) {
@@ -245,6 +271,8 @@ interface DrawInput {
   span: number;
   /** Draws the run from this time on, even before the span starts (for the eased change of the span). */
   from?: number;
+  /** The log values the value scale must at least cover, while a drag goes on. */
+  keep?: [number, number];
   id: number;
   read: Readout;
 }
@@ -262,7 +290,7 @@ interface Drawn {
   yDd: (v: number) => number;
 }
 
-function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, read }: DrawInput): Drawn {
+function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, read, keep }: DrawInput): Drawn {
   chart.querySelector('svg')?.remove();
   const { run, benchmark, drawdown } = bt;
   const t = run.t;
@@ -306,7 +334,7 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
   }
   if (!(lo > 0)) [lo, hi] = [1, 2];
   const pad = Math.max(Math.log(hi / lo) * 0.05, 0.01);
-  const [l0, l1] = [Math.log(lo) - pad, Math.log(hi) + pad];
+  const [l0, l1] = [Math.min(Math.log(lo) - pad, keep?.[0] ?? Infinity), Math.max(Math.log(hi) + pad, keep?.[1] ?? -Infinity)];
   const yLog = (l: number) => top + (1 - (l - l0) / (l1 - l0)) * eqH;
   const yEq = (v: number) => yLog(Math.log(v));
   const ticks = moneyTicks(Math.exp(l0), Math.exp(l1));

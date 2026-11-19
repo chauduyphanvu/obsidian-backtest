@@ -135,6 +135,8 @@ export interface Figure {
    * rather than a result (time invested), for one with no benchmark, and for a value that is not known.
    */
   judge?: Judge;
+  /** 1 when a higher value is better, -1 when a lower one is; absent when neither is. */
+  direction?: 1 | -1;
 }
 
 export type Judge = 'better' | 'worse' | 'even';
@@ -164,7 +166,7 @@ export function figures(bt: Backtest): Figure[] {
   const sharpe = apart(Math.round(s.sharpe * 100) / 100, Math.round(b.sharpe * 100) / 100, 'higher', 'lower', 1, 2, '');
   const row = (label: string, sv: number, bv: number, sText: string, bText: string, delta: string, higher: 1 | -1, same = delta === 'the same'): Figure => {
     const judge = judged(sv, bv, higher, same);
-    return { label, s: sv, b: bv, sText, bText, delta, ...(judge ? { judge } : {}) };
+    return { label, s: sv, b: bv, sText, bText, delta, direction: higher, ...(judge ? { judge } : {}) };
   };
   const out: Figure[] = [
     // The verdict calls returns the same when they read the same, and drawdowns when they read the same as falls.

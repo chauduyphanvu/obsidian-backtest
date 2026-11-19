@@ -2,6 +2,7 @@
 // worker-client.ts), reads the result honestly, and can write a variant's values into the block.
 
 import type { Backtest, Stats } from './backtest.ts';
+import type { TrackPaint } from './render-params.ts';
 import { h, s } from './dom.ts';
 import type { Defaults } from './dsl.ts';
 import { minus, niceStep, ordinal, pct, plural, tidy } from './format.ts';
@@ -40,6 +41,16 @@ export interface SweepInput {
   apply?: Apply;
   /** The block's record of tries, which the variants run here count in; absent for a block that can't be told apart. */
   ledger?: BlockLedger;
+  /** Told each sweep that finished or was stopped, with what it ran, for the slider tracks of the block's result. */
+  onResult?: (paint: TrackPaint) => void;
+}
+
+/** What a sweep found, cut down to what the slider tracks show: each variant's values and its return per year. */
+export function trackPaint(result: SweepResult): TrackPaint {
+  return {
+    params: result.params.map((p) => ({ name: p.name, values: p.values })),
+    points: result.points.map((p) => ({ values: p.values, cagr: p.error === null ? metricOf(p, 'cagr') : NaN })),
+  };
 }
 
 export type Apply = (values: Record<string, number>) => Promise<void>;
@@ -213,6 +224,7 @@ function build(body: HTMLElement, input: SweepInput, params: SweepParam[], life:
       );
       const result = await running.done;
       if (result) void input.ledger?.add(sweepTrials(result));
+      if (result && result.points.length) input.onResult?.(trackPaint(result));
       if (life.gone) return;
       if (result) showResults(results, input, result, life);
       if (!result || result.stopped) {

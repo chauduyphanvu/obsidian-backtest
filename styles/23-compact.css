@@ -104,8 +104,43 @@
   white-space: nowrap;
 }
 
-/* While a slider is being dragged only the top of the result is redrawn. */
+/* While a slider is being dragged only the top of the result follows it; the trades and the tabs wait, blurred, with a
+   label that says why, and fade in when the slider is let go. */
+.bt-rest-wrap {
+  position: relative;
+}
+.bt-rest {
+  transition:
+    filter var(--bt-t-comp) var(--bt-ease),
+    opacity var(--bt-t-comp) var(--bt-ease);
+}
 .bt-rest.bt-stale {
-  opacity: 0.45;
+  filter: blur(1.6px) saturate(0.3);
+  opacity: 0.5;
   pointer-events: none;
+}
+.bt-rest.bt-fresh {
+  animation: bt-fade-in 600ms var(--bt-ease);
+}
+.bt-stale-note {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--text-normal);
+  color: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, 0) scale(0.96);
+  pointer-events: none;
+  transition:
+    opacity var(--bt-t-comp) var(--bt-ease),
+    transform var(--bt-t-comp) var(--bt-ease);
+}
+.bt-rest-wrap.bt-stale .bt-stale-note {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
 }

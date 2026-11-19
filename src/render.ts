@@ -5,7 +5,7 @@ import { debounce } from './result-cache.ts';
 import type { AssetState } from './engine.ts';
 import { hintFor } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from './format.ts';
-import { commentStart, declaredParams, settingKey } from './highlight.ts';
+import { commentStart, declaredParams, paramName, settingKey } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, timingPhrase } from './orders.ts';
 import { renderNextStep, type Action } from './render-actions.ts';
@@ -474,14 +474,27 @@ function moreIcon(parent: HTMLElement): void {
  * well's right, since the line under the title says them in words. Settings after a `for` line are the ticker's own and
  * stay in view, and so does a setting the parser has a note about (`flagged`, 1-based lines of the block).
  */
-function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = new Set()): HTMLElement | null {
+function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = new Set(), scrubs?: Map<string, HTMLElement>): HTMLElement | null {
   const src = text.trim();
   if (!src) return null;
   // Lines the trim took off the top, so the parser's line numbers still point at the right lines.
   const skipped = text.slice(0, text.length - text.trimStart().length).split('\n').length - 1;
   const box = h(parent, 'div', 'bt-src');
-  const pre = h(box, 'pre', 'bt-source');
-  const lines = colourLines(pre, src);
+  const top = h(box, 'div', 'bt-src-top');
+  const pre = h(top, 'pre', 'bt-source');
+  // The number of each `name = value` line is the parameter's control (render-params.ts).
+  const values = new Map<number, { name: string; at: number }>();
+  if (scrubs) {
+    src.split('\n').forEach((line, i) => {
+      const name = paramName(line);
+      const m = name ? line.match(/^(\s*[A-Za-z_]\w*\s*=\s*)(-?\d)/) : null;
+      if (name && m) values.set(i, { name: name.toLowerCase(), at: m[1].length });
+    });
+  }
+  const lines = colourLines(pre, src, (el, i, from) => {
+    const v = values.get(i);
+    if (v && from === v.at && scrubs && !scrubs.has(v.name)) scrubs.set(v.name, el);
+  });
   let inFor = false;
   let afterSetting = false;
   const fold = src.split('\n').map((line, i) => {
@@ -497,7 +510,7 @@ function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = n
   fold.forEach((f, i) => (f.setting || f.gap) && lines[i].classList.add('bt-src-setting'));
   const count = fold.filter((f) => f.setting).length;
   const closed = count === 1 ? '1 setting' : `${count} settings`;
-  const toggle = h(box, 'button', 'bt-chip-button bt-src-toggle', closed);
+  const toggle = h(top, 'button', 'bt-chip-button bt-src-toggle', closed);
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', 'false');
   toggle.addEventListener('click', () => {
@@ -595,12 +608,15 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
         intraday: isIntraday(out.backtest.run.t),
         ended: watchable(out.spec) ? null : stamp(out.backtest.run.t[out.backtest.run.t.length - 1], isIntraday(out.backtest.run.t)),
       });
-    sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)));
+    const tuned = !!view.params && first.spec.params.length > 0;
+    const scrubs = tuned ? new Map<string, HTMLElement>() : undefined;
+    const well = sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)), scrubs);
 
-    // The bar is made once, before the result it drives, and is never redrawn.
+    // The bar is made once, before the result it drives, and is never redrawn; it sits in the well with the rules it changes.
     let show = (_out: RunOutput, _settled: boolean): void => {};
-    if (view.params && first.spec.params.length > 0) {
-      cleanups.push(renderParamBar(body, { params: first.spec.params, hook: view.params, show: (out, settled) => show(out, settled) }));
+    if (tuned) {
+      well?.classList.add('bt-src-tune');
+      cleanups.push(renderParamBar(well ?? body, { params: first.spec.params, hook: view.params!, scrubs, show: (out, settled) => show(out, settled) }));
     }
 
     const notes = h(body, 'div', 'bt-notes');
@@ -612,15 +628,21 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     const chart = renderValueChart(body, { span: view.initial?.span ?? 0 });
     lit = (part) => chart.highlight(part);
     cleanups.push(chart.stop);
-    const rest = h(body, 'div', 'bt-rest');
+    // What waits for a drag to end: the trades and the tabs, blurred while the result above them follows the drag.
+    const restWrap = h(body, 'div', 'bt-rest-wrap');
+    const rest = h(restWrap, 'div', 'bt-rest');
+    const staleNote = h(restWrap, 'div', 'bt-stale-note', 'Let go to update the trades and the tabs');
+    staleNote.setAttribute('aria-hidden', 'true');
     current = () => ({ tab: tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null), span: chart.span(), more: figs.more() });
 
-    // The run as written stays on the chart as a dashed line while a slider shows other values.
-    const paint = (out: RunOutput, arrive = false) => {
+    // The run as written stays on the chart as a dashed line while a slider shows other values, and each figure says how
+    // far it moved from it. While a drag goes on the sentence waits, so its length does not move what is under it.
+    const paint = (out: RunOutput, arrive = false, drag = false) => {
       meta.textContent = metaLine(out, view.source);
-      said.show(out.backtest, { arrive });
-      figs.show(out.backtest, { arrive });
-      chart.show(out.backtest, { ghost: out === first ? null : first.backtest, arrive });
+      if (drag) said.wait();
+      else said.show(out.backtest, { arrive });
+      figs.show(out.backtest, { arrive, from: out === first ? null : first.backtest });
+      chart.show(out.backtest, { ghost: out === first ? null : first.backtest, arrive, drag });
     };
     let stops: (() => void)[] = [];
     const stopRest = () => {
@@ -640,7 +662,11 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       // The tab open before a slider is let go stays open on the new run.
       const open = tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null);
       rest.replaceChildren();
+      const was = rest.classList.contains('bt-stale');
       rest.classList.remove('bt-stale');
+      restWrap.classList.remove('bt-stale');
+      // Coming back from a drag, the new trades and tabs fade in.
+      rest.classList.toggle('bt-fresh', was);
       stops = [...fillRest(rest, out, view.sections?.(out) ?? [], view.nextStep?.(out) ?? null), ...(watching ? [watching] : [])];
       const again = sectionsIn(rest.querySelector('.bt-sections')).find((d) => tabName(d) === open);
       if (again) again.open = true;
@@ -649,8 +675,9 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     show = (out, settled) => {
       if (settled) paintAll(out, showHead(out));
       else {
-        paint(out);
+        paint(out, false, true);
         rest.classList.add('bt-stale');
+        restWrap.classList.add('bt-stale');
       }
     };
     paintAll(first, firstTriggers, arrival);

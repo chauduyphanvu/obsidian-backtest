@@ -361,3 +361,36 @@ test('each tab names the section it opens, and the arrow keys move along a row o
   main.at(-1)!.dispatch('keydown', { key: 'Home', preventDefault() {} });
   assert.equal(page.activeElement, main[0]);
 });
+
+test('a number in the rules is a control: the arrow keys step it on the slider’s grid, and the slot under the bar says what differs', async () => {
+  const src = 'name: Trend\nuniverse: A\n\nn = 20 in 10..40 step 10\nbuy when close > sma(n)\nsell when close < sma(n)';
+  const asked: number[] = [];
+  const params = {
+    rerun: (values: Record<string, number>) => {
+      asked.push(values.n);
+      return Promise.resolve(run(src.replace('n = 20', `n = ${values.n}`)));
+    },
+  };
+  const root = draw(run(src), { source: src, params });
+  const scrub = root.byClass('bt-scrub')[0];
+  assert.equal(scrub.textContent, '20');
+  assert.equal(scrub.attrs.role, 'spinbutton');
+  // The slot shows one thing at a time, and the hint while nothing differs.
+  const on = () => root.byClass('bt-param-slot')[0].children.filter((c): c is El => typeof c !== 'string' && c.classes().includes('bt-slot-on'));
+  assert.deepEqual(on().map((e) => e.classes()[0]), ['bt-param-hint']);
+  scrub.dispatch('keydown', { key: 'ArrowRight', preventDefault: () => {} });
+  await settle();
+  assert.deepEqual(asked, [30]);
+  assert.equal(scrub.textContent, '30');
+  assert.ok(scrub.classes().includes('bt-scrub-changed'));
+  assert.equal((root.byClass('bt-param-slider')[0] as El & { value: string }).value, '30');
+  assert.deepEqual(on().map((e) => e.classes()[0]), ['bt-param-diff']);
+  assert.equal(root.byClass('bt-param-diff-text')[0].textContent, 'The result shows n 30. The values in the block are n 20.');
+  // The figures say how far each moved from the block as written.
+  assert.match(root.byClass('bt-vs-moved')[0].textContent, /^(as written|[+−][\d.]+ pts from the block)$/);
+  // The top of the grid is the end: a step past it asks for nothing.
+  scrub.dispatch('keydown', { key: 'ArrowUp', preventDefault: () => {} });
+  scrub.dispatch('keydown', { key: 'ArrowUp', preventDefault: () => {} });
+  await settle();
+  assert.deepEqual(asked, [30, 40]);
+});
