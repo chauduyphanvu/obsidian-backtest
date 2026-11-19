@@ -4,9 +4,11 @@ import { EditorSuggest, type App, type Editor, type EditorPosition, type EditorS
 import { closesFence, fenceOf, findBlocks } from './blocks.ts';
 import { complete, hitCompletions, localTickers, tickerPosition, writtenTickers, type Completion } from './complete.ts';
 import { analyzeBlock, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
-import { helpAt, type Doc } from './docs.ts';
+import { callAt, helpAt, type Doc } from './docs.ts';
 import type { Defaults } from './dsl.ts';
+import type { HoverValue } from './debug.ts';
 import { fixChanges, type Fix } from './fixes.ts';
+import { pct, price, stamp } from './format.ts';
 import { lineKinds, TICKER_SETTINGS, type TokenKind } from './highlight.ts';
 import { ResultCache } from './result-cache.ts';
 import { blockSource, blockTickers, isLookupSource, type SymbolLookup, type TickerRef } from './symbols.ts';
@@ -63,6 +65,11 @@ const SUGGEST_DELAY_MS = 250;
 export interface EditorOptions {
   /** The ticker lookup, or null while the setting for it is off. Read each time, so the setting takes effect at once. */
   lookup?: () => SymbolLookup | null;
+  /**
+   * The value of the part of a rule written as `call` (such as "sma(200)") in a block, on its ticker, from saved prices
+   * only; null when there is none. The hover shows it when it comes.
+   */
+  value?: (block: string[], call: string) => Promise<HoverValue | null>;
 }
 
 /** Marks that a lookup answered, so the underlines are drawn again. */
@@ -243,7 +250,51 @@ const element = (doc: Document, tag: string, cls: string, text?: string): HTMLEl
   return el;
 };
 
-function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf: (p: Problem) => Change | null): Tooltip {
+/** The value panel of a hover, filled when the value comes; removed when there is none. */
+function valuePanel(doc: Document, box: HTMLElement, v: HoverValue): void {
+  box.replaceChildren();
+  const head = element(doc, 'div', 'bt-hv-head');
+  head.append(element(doc, 'span', 'bt-hv-label', `${v.label} at the last close`), element(doc, 'span', 'bt-hv-value', price(v.value)));
+  box.append(head);
+  if (v.close !== null) {
+    const d = v.close / v.value - 1;
+    const away = Math.abs(d) < 0.00005 ? 'the same' : `${pct(Math.abs(d), Math.abs(d) < 0.01 ? 2 : 1)} ${d > 0 ? 'above' : 'below'}`;
+    box.append(element(doc, 'div', 'bt-hv-close', `Close ${price(v.close)}, ${away}`));
+  }
+  const width = 300;
+  const height = 56;
+  const known = [...v.values, ...(v.closes ?? [])].filter(Number.isFinite);
+  if (known.length > 1) {
+    const [lo, hi] = [Math.min(...known), Math.max(...known)];
+    const n = v.values.length;
+    const x = (i: number) => 2 + (i / Math.max(1, n - 1)) * (width - 4);
+    const y = (u: number) => 4 + (1 - (u - lo) / (hi - lo || 1)) * (height - 8);
+    const path = (list: number[]) =>
+      list
+        .map((u, i) => (Number.isFinite(u) ? `${x(i).toFixed(1)},${y(u).toFixed(1)}` : ''))
+        .filter(Boolean)
+        .map((p, i) => `${i ? 'L' : 'M'}${p}`)
+        .join('');
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = doc.createElementNS(ns, 'svg');
+    for (const [k, val] of Object.entries({ width, height, viewBox: `0 0 ${width} ${height}`, class: 'bt-svg bt-hv-chart', role: 'img', 'aria-label': `The last ${n} values${v.closes ? ' and closes' : ''}` })) svg.setAttribute(k, String(val));
+    if (v.closes) {
+      const c = doc.createElementNS(ns, 'path');
+      c.setAttribute('d', path(v.closes.slice(-n)));
+      c.setAttribute('class', 'bt-hv-closes');
+      svg.append(c);
+    }
+    const line = doc.createElementNS(ns, 'path');
+    line.setAttribute('d', path(v.values));
+    line.setAttribute('class', 'bt-hv-line');
+    svg.append(line);
+    box.append(svg);
+  }
+  box.append(element(doc, 'div', 'bt-hv-foot', `From the saved prices, to ${stamp(v.at, v.intraday)}${v.closes ? ' · dotted: the closes' : ''}`));
+  box.hidden = false;
+}
+
+function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf: (p: Problem) => Change | null, value?: Promise<HoverValue | null> | null): Tooltip {
   const from = Math.min(...hits.map((h) => h.from), help?.from ?? Infinity);
   const to = Math.max(...hits.map((h) => h.to), help?.to ?? -Infinity);
   return {
@@ -273,6 +324,19 @@ function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf:
         box.append(element(doc, 'div', 'bt-help-sig', help.doc.signature), element(doc, 'div', 'bt-help-text', help.doc.text));
         if (help.doc.example) box.append(element(doc, 'div', 'bt-help-example', help.doc.example));
         dom.append(box);
+      }
+      // The value on the block's ticker comes a moment later, from the saved prices, under the help.
+      if (value) {
+        const box = element(doc, 'div', 'bt-hover-value');
+        box.hidden = true;
+        dom.append(box);
+        value.then(
+          (v) => {
+            if (v) valuePanel(doc, box, v);
+            else box.remove();
+          },
+          () => box.remove(),
+        );
       }
       return {
         dom,
@@ -320,7 +384,13 @@ export function strategyEditor(getDefaults: () => Partial<Defaults>, options: Ed
       const help = helpUnder(view, sv, pos, side);
       if (!hits.length && !help) return null;
       const changes = new Map(hits.map((h) => [h, fixOf(view, h)] as const));
-      return tooltipFor(view, hits, help, (p) => changes.get(p) ?? null);
+      // Only a block with no problem has values to show.
+      const block = help && !hits.length && options.value ? sv.blockAt(view.state.doc.lineAt(pos).number - 1) : undefined;
+      const value =
+        block && help && !block.analysis.diagnostics.some((d) => d.severity === 'error')
+          ? options.value!(block.lines, callAt(view.state.doc.lineAt(pos).text, help.from - view.state.doc.lineAt(pos).from, help.to - view.state.doc.lineAt(pos).from))
+          : null;
+      return tooltipFor(view, hits, help, (p) => changes.get(p) ?? null, value);
     },
     { hideOnChange: true },
   );

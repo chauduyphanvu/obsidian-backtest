@@ -4,7 +4,7 @@
 // bar where the run made no trade is explained by reading the rules at that bar, never by simulating again.
 
 import { WARMUP_INPUT, type Backtest } from './backtest.ts';
-import { children, findPos, isCross, walk, wholeParts, type Expr, type Written } from './dsl.ts';
+import { children, findPos, isCross, walk, wholeParts, type Expr, type Spec, type Written } from './dsl.ts';
 import { barAt, missingInputAt, periodKey, SMALL_TRADE, type AssetState, type RankPlace, type Trade, type WarmupInput } from './engine.ts';
 import { OPS, outcome, type Outcome } from './explain.ts';
 import { specEvaluator, type BarRule, type Evaluator, type PosState } from './evaluate.ts';
@@ -1326,4 +1326,80 @@ export async function inSlices<T>(
     await wait();
     if (opts.stop?.()) return null;
   }
+}
+
+/** What the editor's hover says of a part of a rule: its value on the ticker it is read on, at the last saved bar. */
+export interface HoverValue {
+  /** "sma(200) of SPY". */
+  label: string;
+  value: number;
+  /** The ticker's last close, when the value is a price near it (half to double), for "Close 730.20, 0.02% above". */
+  close: number | null;
+  /** The last values, and the closes over the same bars when `close` is shown. */
+  values: number[];
+  closes: number[] | null;
+  /** The time of the last bar, and whether the bars are shorter than a day. */
+  at: number;
+  intraday: boolean;
+}
+
+/** Bars of history the hover's line shows. */
+const HOVER_BARS = 20;
+
+const squeeze = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+
+/**
+ * The part of a rule written as `call` (such as "sma(200)" or "close"), found by its text among the parts of each
+ * ticker's rules, with the ticker it is read on: the ticker whose rule it is in, or the one after `of` around it.
+ */
+export function ruleNode(spec: Pick<Spec, 'universe' | 'rules' | 'written'>, call: string): { e: Expr; asset: string } | null {
+  const want = squeeze(call);
+  for (const a of spec.universe) {
+    const rules = spec.rules[a.name];
+    const written = spec.written?.rules[a.name];
+    if (!rules || !written) continue;
+    for (const kind of ['buy', 'sell', 'add', 'short', 'cover'] as const) {
+      const rule = rules[kind];
+      const w = written[kind];
+      if (!rule || !w) continue;
+      // Each node in walk order, with the ticker of the nearest `of` around it.
+      const found: { e: Expr; asset: string }[] = [];
+      const visit = (e: Expr, asset: string): void => {
+        found.push({ e, asset });
+        for (const c of children(e)) visit(c, e.k === 'of' ? e.asset : asset);
+      };
+      visit(rule, a.name);
+      const at = found.findIndex((f, k) => squeeze(w.parts[k] ?? '') === want && f.e.k !== 'cmp' && f.e.k !== 'logic' && f.e.k !== 'not');
+      if (at >= 0) return found[at];
+    }
+  }
+  return null;
+}
+
+/** The value of the part of a rule written as `call` at the last bar, on the ticker it is read on; null when it has none. */
+export function hoverValue(spec: Spec, data: Map<string, Bars>, call: string): HoverValue | null {
+  const node = ruleNode(spec, call);
+  if (!node) return null;
+  const bars = data.get(node.asset);
+  if (!bars || bars.c.length === 0) return null;
+  let values: number[];
+  try {
+    values = specEvaluator(spec, data).eval(node.e, node.asset);
+  } catch {
+    return null;
+  }
+  const value = values[values.length - 1];
+  if (!Number.isFinite(value)) return null;
+  const last = bars.c[bars.c.length - 1];
+  const isClose = node.e.k === 'series' && node.e.name === 'close';
+  const near = !isClose && last > 0 && value >= last * 0.5 && value <= last * 2;
+  return {
+    label: `${call.trim()} of ${node.asset}`,
+    value,
+    close: near ? last : null,
+    values: values.slice(-HOVER_BARS),
+    closes: near ? bars.c.slice(-HOVER_BARS) : null,
+    at: bars.t[bars.t.length - 1],
+    intraday: isIntraday(bars.t),
+  };
 }

@@ -1004,3 +1004,19 @@ function lagSpan(line: string, toks: Token[], i: number): { from: number; to: nu
   }
   return null;
 }
+
+/**
+ * The call a word under the pointer starts, as the rule writes it: "sma(200)" for the word sma followed by its brackets,
+ * the word alone for a series such as close.
+ */
+export function callAt(line: string, from: number, to: number): string {
+  let at = to;
+  while (line[at] === ' ') at++;
+  if (line[at] !== '(') return line.slice(from, to);
+  let depth = 0;
+  for (let i = at; i < line.length; i++) {
+    if (line[i] === '(') depth++;
+    else if (line[i] === ')' && --depth === 0) return line.slice(from, i + 1);
+  }
+  return line.slice(from, to);
+}

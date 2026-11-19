@@ -2,10 +2,11 @@
 // and whether a block's prices are all saved and fresh. The plugin hands in the vault's file calls and the network.
 
 import { csvColumnNames, type DataDeps } from './data.ts';
-import { parseSpec, type Defaults } from './dsl.ts';
+import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { WeighedCache } from './limits.ts';
 import { ReadyMemo, loadNeeds } from './live-core.ts';
 import { Runner } from './runner.ts';
+import type { Bars } from './types.ts';
 
 /**
  * Saved price files kept in memory, by their total length in characters, which is about a byte each. A Binance ticker's
@@ -111,6 +112,17 @@ export class PriceStore {
       },
     };
     return this.dataDeps;
+  }
+
+  /** The prices a block reads, from the saved files only: nothing is downloaded or written. Null when one is not saved. */
+  async savedData(spec: Spec, defaults: Defaults): Promise<Map<string, Bars> | null> {
+    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
+    try {
+      const { data } = await new Runner(offline, defaults, { freshForMs: Infinity }).loadPrices(spec);
+      return data;
+    } catch {
+      return null;
+    }
   }
 
   /**

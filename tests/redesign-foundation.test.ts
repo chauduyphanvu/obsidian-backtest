@@ -219,3 +219,35 @@ test('the dashboard has six columns, a shimmer for a running row, the near chip 
   assert.deepEqual(fixed, ['done']);
   release(out(good));
 });
+
+test('the hover finds the part of a rule it is over, reads it on its ticker, and gives its value at the last bar', async () => {
+  const { hoverValue, ruleNode } = await import('../src/debug.ts');
+  const closes = Array.from({ length: 60 }, (_, i) => 100 + i);
+  const other = Array.from({ length: 60 }, (_, i) => 50 + i / 2);
+  const { spec } = parseSpec('universe: A\nbuy when close > sma(10) and close of B > sma( 5 ) of B\nsell when close < sma(10)');
+  const data = new Map([
+    ['A', bars(closes)],
+    ['B', bars(other)],
+  ]);
+  assert.equal(ruleNode(spec!, 'sma(10)')?.asset, 'A');
+  // Spaces do not count, and a part after `of` is read on that ticker.
+  assert.equal(ruleNode(spec!, 'sma(5)')?.asset, 'B');
+  assert.equal(ruleNode(spec!, 'ema(3)'), null);
+  const v = hoverValue(spec!, data, 'sma(10)')!;
+  // The average of the last ten closes, 150 to 159, beside the last close it is near.
+  assert.equal(v.label, 'sma(10) of A');
+  assert.equal(v.value, 154.5);
+  assert.equal(v.close, 159);
+  assert.equal(v.values.length, 20);
+  assert.equal(v.closes?.length, 20);
+  // The close itself has no close to compare with.
+  assert.equal(hoverValue(spec!, data, 'close')!.close, null);
+});
+
+test('the call under the pointer runs to its closing bracket, or is the word alone', async () => {
+  const { callAt } = await import('../src/docs.ts');
+  const line = 'buy when close > sma(max(5, 10)) and rsi (2) < 10';
+  assert.equal(callAt(line, 17, 20), 'sma(max(5, 10))');
+  assert.equal(callAt(line, 9, 14), 'close');
+  assert.equal(callAt(line, 37, 40), 'rsi (2)');
+});

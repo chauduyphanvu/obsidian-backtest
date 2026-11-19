@@ -126,6 +126,13 @@ body {
   --bt-strategy: #3987e5;
   --bt-benchmark: #d95926;
 }
+/* The editor's hover draws its line in the strategy's blue too. */
+.bt-diag-tip {
+  --bt-strategy: #2a78d6;
+}
+.theme-dark .bt-diag-tip {
+  --bt-strategy: #3987e5;
+}
 
 .bt-head {
   display: flex;

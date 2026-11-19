@@ -6,6 +6,9 @@ import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import { withoutQueries } from './data.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
+import { hoverValue, type HoverValue } from './debug.ts';
+import { parseSpec, type Spec } from './dsl.ts';
+import type { Bars } from './types.ts';
 import { applyFix, suggestion } from './fixes.ts';
 import { HOUR, isoDate } from './format.ts';
 import { makeForward, writeLog, type ForwardStart } from './forward.ts';
@@ -41,6 +44,10 @@ function place(editor: Editor, text: string): void {
 }
 
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+
+/** Blocks whose parse and saved prices the editor's hover keeps. */
+const HOVERED_BLOCKS = 4;
+const HOVER_FRESH_MS = 5 * 60_000;
 
 export default class BacktestBlocks extends Plugin {
   settings: Settings = normalizeSettings(null);
@@ -162,7 +169,7 @@ export default class BacktestBlocks extends Plugin {
     this.registerView(VIEW_TYPE_LIVE, (leaf) => new LiveView(leaf, this.liveHost()));
     this.registerEditorExtension(liveEditorExtension(pokeLiveViews));
 
-    this.registerEditorExtension(strategyEditor(() => defaultsFrom(this.settings), { lookup: () => this.lookup() }));
+    this.registerEditorExtension(strategyEditor(() => defaultsFrom(this.settings), { lookup: () => this.lookup(), value: (block, call) => this.hoverValue(block.join('\n'), call) }));
     this.registerEditorSuggest(
       new StrategySuggest(this.app, {
         defaults: () => defaultsFrom(this.settings),
@@ -494,6 +501,27 @@ export default class BacktestBlocks extends Plugin {
       if (offered) return { label: offered.fix.label, text: offered.text, write: () => this.fixInNote(note, source, applyFix(lines, offered.fix).join('\n')) };
     }
     return null;
+  }
+
+  /** Each block text the editor's hover read lately, parsed and with its saved prices; newest last. */
+  private hovered = new Map<string, { at: number; read: Promise<{ spec: Spec; data: Map<string, Bars> } | null> }>();
+
+  /** The value of a part of a block's rules on its ticker, from the saved prices only, for the editor's hover. */
+  private async hoverValue(source: string, call: string): Promise<HoverValue | null> {
+    const kept = this.hovered.get(source);
+    // Prices saved since are read again after a while, so a hover in a long session is not days behind.
+    let read = kept && Date.now() - kept.at < HOVER_FRESH_MS ? kept.read : null;
+    if (!read) {
+      const defaults = defaultsFrom(this.settings);
+      const { spec } = parseSpec(source, { defaults });
+      read = spec ? this.prices.savedData(spec, defaults).then((data) => (data ? { spec, data } : null)) : Promise.resolve(null);
+      this.hovered.delete(source);
+      this.hovered.set(source, { at: Date.now(), read });
+      // A few blocks are kept: the ones being edited.
+      for (const key of this.hovered.keys()) if (this.hovered.size > HOVERED_BLOCKS) this.hovered.delete(key);
+    }
+    const got = await read;
+    return got ? hoverValue(got.spec, got.data, call) : null;
   }
 
   /** Writes a fixed block into its note, found by its text, for a list that does not know where the block is. */
