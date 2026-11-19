@@ -109,7 +109,7 @@ export function tween(ms: number, step: (k: number) => void, curve: (k: number) 
 }
 
 /** The time a layout change takes (`--bt-t-layout` in the stylesheet), with a margin for the last frame. */
-const LAYOUT_MS = 300;
+export const LAYOUT_MS = 300;
 
 /**
  * Makes a change to a box's content and lets the box's height ease from the old height to the new one, so the note
@@ -122,21 +122,53 @@ export function easeHeight(box: HTMLElement, change: () => void): void {
   }
   const from = box.offsetHeight;
   change();
+  easeFrom(box, from);
+}
+
+/** Eases a box from the height `from` to the height its content gives it now. */
+function easeFrom(box: HTMLElement, from: number): void {
   box.style.removeProperty('height');
   const to = box.offsetHeight;
-  if (Math.abs(from - to) < 1) return;
+  const token = String(Math.random());
+  box.setAttribute('data-bt-ease', token);
+  if (Math.abs(from - to) < 1) {
+    box.classList.remove('bt-easing');
+    return;
+  }
   box.classList.add('bt-easing');
   box.style.setProperty('height', `${from}px`);
   void box.offsetHeight;
   box.style.setProperty('height', `${to}px`);
-  const token = String(Math.random());
-  box.setAttribute('data-bt-ease', token);
   window.setTimeout(() => {
     if (box.getAttribute('data-bt-ease') !== token) return;
     box.removeAttribute('data-bt-ease');
     box.classList.remove('bt-easing');
     box.style.removeProperty('height');
   }, LAYOUT_MS + 40);
+}
+
+/** How long a held height waits for the content that is to replace it. */
+const HOLD_MS = 250;
+
+/**
+ * Keeps a box at its height now, for a change whose content comes a moment later (a section built on its toggle event).
+ * The function returned eases the box to its new height; it runs by itself after HOLD_MS if nothing calls it.
+ */
+export function holdHeight(box: HTMLElement): () => void {
+  if (!motionOK()) return () => {};
+  const from = box.offsetHeight;
+  box.classList.add('bt-easing');
+  box.style.setProperty('height', `${from}px`);
+  const token = String(Math.random());
+  box.setAttribute('data-bt-ease', token);
+  let done = false;
+  const release = () => {
+    if (done) return;
+    done = true;
+    if (box.getAttribute('data-bt-ease') === token) easeFrom(box, from);
+  };
+  window.setTimeout(release, HOLD_MS);
+  return release;
 }
 
 /**

@@ -50,11 +50,15 @@
 .bt-root .bt-table tr.bt-explain-tr > td {
   padding: 0;
 }
-.bt-explain {
+/* The box that eases open is the one that stays in view when the table scrolls sideways: the explanation is inside a
+   box that clips it while it opens, which would hold a sticky child in place. */
+.bt-explain-reveal {
   position: sticky;
   left: 0;
   box-sizing: border-box;
   width: 100cqw;
+}
+.bt-explain {
   padding: 10px 12px 12px;
   background: var(--background-secondary);
   border-left: 2px solid var(--interactive-accent);

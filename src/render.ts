@@ -446,7 +446,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], next: 
     const stop = section(host);
     if (stop) stops.push(stop);
   }
-  tabify(host);
+  stops.push(tabify(host));
   if (next) renderNextStep(root, { title: 'Run it forward', text: 'Copy these rules to a new note, and count only prices after today.', action: next });
   finePrint(root, out);
   return stops;

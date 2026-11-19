@@ -26,6 +26,7 @@ import {
   type SweepResult,
   type SweepSummary,
 } from './sweep.ts';
+import { tabInfo } from './tabs.ts';
 import { blockJobs, type BlockJobs, type Running } from './worker-client.ts';
 
 export interface SweepInput {
@@ -177,6 +178,7 @@ export function renderSweep(parent: HTMLElement, input: SweepInput): () => void 
   const jobs = blockJobs(input);
   const details = h(parent, 'details', 'bt-details bt-sweep');
   h(details, 'summary', undefined, 'Try other parameter values');
+  tabInfo(details, 'Try other values');
   details.addEventListener('toggle', () => build(h(details, 'div', 'bt-sweep-body'), input, params, life, jobs), { once: true });
   return () => {
     life.gone = true;

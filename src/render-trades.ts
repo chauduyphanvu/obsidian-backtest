@@ -1,5 +1,5 @@
 import type { Backtest } from './backtest.ts';
-import { h, onWidth, s } from './dom.ts';
+import { h, LAYOUT_MS, motionOK, onWidth, reveal, revealBox, s } from './dom.ts';
 import type { Trade } from './engine.ts';
 import { explainTrade, MARK, type Explanation } from './explain.ts';
 import { boughtText, hasShorts, positionText, sideText } from './export.ts';
@@ -197,26 +197,33 @@ function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest
   button.title = 'Show the reasons for this trade';
   button.setAttribute('aria-expanded', 'false');
   button.setAttribute('aria-controls', id);
-  let open: HTMLTableRowElement | null = null;
+  let open: { row: HTMLTableRowElement; box: HTMLElement } | null = null;
   button.addEventListener('click', () => {
+    // The reasons open and close like the other parts of a result: the space eases, the text fades.
     if (open) {
-      open.remove();
+      const { row: gone, box } = open;
       open = null;
       button.setAttribute('aria-expanded', 'false');
+      reveal(box, false);
+      if (!motionOK()) gone.remove();
+      else window.setTimeout(() => gone.remove(), LAYOUT_MS + 60);
       return;
     }
-    open = document.createElement('tr');
-    open.className = 'bt-explain-tr';
-    const td = h(open, 'td');
+    const tr = document.createElement('tr');
+    tr.className = 'bt-explain-tr';
+    const td = h(tr, 'td');
     td.colSpan = columns;
-    const box = h(td, 'div', 'bt-explain');
-    box.id = id;
+    const { box, inner } = revealBox(td, 'bt-explain-reveal');
+    const explain = h(inner, 'div', 'bt-explain');
+    explain.id = id;
     try {
-      renderExplanation(box, explainTrade(bt, trade));
+      renderExplanation(explain, explainTrade(bt, trade));
     } catch (e) {
-      h(box, 'div', 'bt-warning', `Cannot show the reasons for this trade: ${e instanceof Error ? e.message : String(e)}`);
+      h(explain, 'div', 'bt-warning', `Cannot show the reasons for this trade: ${e instanceof Error ? e.message : String(e)}`);
     }
-    row.after(open);
+    row.after(tr);
+    reveal(box, true);
+    open = { row: tr, box };
     button.setAttribute('aria-expanded', 'true');
   });
 }

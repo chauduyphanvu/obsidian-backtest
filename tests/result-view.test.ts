@@ -394,3 +394,27 @@ test('a number in the rules is a control: the arrow keys step it on the sliderâ€
   await settle();
   assert.deepEqual(asked, [30, 40]);
 });
+
+test('the tools sit under the tabs as "Test the idea", tests first, each with an icon, and open in the same place', () => {
+  const tool = (name: string) => (root: HTMLElement) => {
+    const d = document.createElement('details');
+    root.append(d);
+    const summary = document.createElement('summary');
+    summary.textContent = name;
+    d.append(summary);
+  };
+  const root = draw(run(TREND), { sections: () => [tool('Versions'), tool('Prices and trades'), tool('Was it luck?')] });
+  const host = root.byClass('bt-sections')[0];
+  const more = root.byClass('bt-tabs-more')[0];
+  assert.equal(host.children.at(-1), more);
+  assert.equal(more.attrs['aria-label'], 'Test the idea');
+  const tools = root.byClass('bt-tool');
+  assert.deepEqual(texts(tools), ['Was it luck?', 'Prices and trades', 'Versions']);
+  assert.ok(tools.every((t) => t.children.some((c) => typeof c !== 'string' && c.tag === 'svg')));
+  // A tool and a tab share the place: opening one closes the other.
+  const trades = root.byClass('bt-tab')[0];
+  trades.dispatch('click');
+  tools[0].dispatch('click');
+  assert.equal(trades.attrs['aria-selected'], 'false');
+  assert.equal(tools[0].attrs['aria-selected'], 'true');
+});
