@@ -200,7 +200,10 @@ export function setSettingInNote(note: string, line: number, source: string, lan
   const name = (text: string) => text.match(SETTING_AT)?.[2].toLowerCase().replace(/\s+/g, ' ') ?? null;
   const at = was.findIndex((text) => name(text) === key.toLowerCase());
   if (at >= 0) return editBlockLines(note, line, source, lang, new Map([[at, `${was[at].match(SETTING_AT)![1]}${key}: ${value}`]]));
-  const last = was.reduce((found, text, i) => (name(text) !== null && !text.trimStart().startsWith('[[') ? i : found), -1);
+  // A `for X:` line looks like a setting, and what follows it belongs to that ticker's group: only the lines above the
+  // first one hold settings of the whole block.
+  const groups = was.findIndex((text) => /^\s*for\b/i.test(text));
+  const last = (groups < 0 ? was : was.slice(0, groups)).reduce((found, text, i) => (name(text) !== null && !text.trimStart().startsWith('[[') ? i : found), -1);
   return editBlockLines(note, line, source, lang, new Map(), { after: last, text: `${key}: ${value}` });
 }
 

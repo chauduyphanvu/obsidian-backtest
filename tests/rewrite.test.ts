@@ -567,3 +567,13 @@ test('the new name is written on the block\'s name line, or added after its sett
   const unnamed = ['```strategy', 'universe: SPY', 'buy when true', '```'].join('\n');
   assert.equal(setSettingInNote(unnamed, 0, 'universe: SPY\nbuy when true', 'strategy', 'name', 'Dip'), ['```strategy', 'universe: SPY', 'name: Dip', 'buy when true', '```'].join('\n'));
 });
+
+test('a new name goes above the first for line, not into a group of rules', () => {
+  const source = ['universe: SPY, QQQ', '', 'for SPY:', '  stop loss: 5%', '  buy when close > sma(200)', 'for QQQ:', '  buy when close > sma(100)'].join('\n');
+  const note = ['```strategy', source, '```'].join('\n');
+  const named = setSettingInNote(note, 0, source, 'strategy', 'name', 'Two funds')!;
+  assert.equal(named, ['```strategy', 'universe: SPY, QQQ', 'name: Two funds', '', 'for SPY:', '  stop loss: 5%', '  buy when close > sma(200)', 'for QQQ:', '  buy when close > sma(100)', '```'].join('\n'));
+  const parsed = parseSpec(named.split('\n').slice(1, -1).join('\n'));
+  assert.deepEqual(parsed.errors, []);
+  assert.equal(parsed.spec?.name, 'Two funds');
+});
