@@ -383,11 +383,6 @@ export function suggestion(lines: string[], d: Diagnostic, defaults: Partial<Def
   return { fix: found, text: short ? `Did you mean ${word}, the ${short}?` : `Did you mean ${word}?` };
 }
 
-/** The same suggestion as a sentence, for places that cannot offer a button. */
-export function hintFor(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): string | null {
-  return fixFor(lines, d, defaults)?.hint ?? null;
-}
-
 /** Where else a block writes a ticker, as the same ticker: on `for` lines, after `of`, in the universe and so on. */
 function otherPlaces(lines: string[], at: { line: number; from: number }, prefix: string, typed: string): FixEdit[] {
   const out: FixEdit[] = [];

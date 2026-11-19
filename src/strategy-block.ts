@@ -152,7 +152,7 @@ export class StrategyBlocks {
     try {
       const { spec, errors, warnings } = drawing.parse();
       if (!spec) {
-        renderErrors(el, errors, source);
+        renderErrors(el, errors, source, { defaults: drawing.defaults, fix: opts.restore });
         return;
       }
       // The panel keeps its own view of a block, apart from the note's folded or open state.

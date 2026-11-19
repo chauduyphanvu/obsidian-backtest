@@ -123,3 +123,34 @@ test('a slider track shows the return of each value with the other parameters wh
   assert.equal(trackOf(paint, 'fast', { fast: 50, slow: 200, stop: 0.08 }, declared), null);
   assert.equal(trackOf(paint, 'stop', declared, declared), null);
 });
+
+test('a block that cannot run shows its own lines, the word marked, a short message, and a fix that writes the block', async () => {
+  const { renderErrors } = await import('../src/render.ts');
+  const { El } = await import('./page.ts');
+  const src = 'name: Trend\nuniverse: SPY\ncosts: 5 bps\n\nbuy when close > smaa(200)\nsell when close < sma(200)\n';
+  const { errors } = parseSpec(src);
+  const written: string[] = [];
+  const root = new El('div');
+  renderErrors(root as unknown as HTMLElement, errors, src, { fix: (text) => (written.push(text), Promise.resolve()) });
+  assert.equal(root.byClass('bt-title')[0].textContent, 'Trend');
+  assert.equal(root.byClass('bt-chip-problem')[0].textContent, 'Cannot run · 1 problem');
+  // The three settings and the blank line after them fold into one line; the rules stay, the bad one tinted.
+  assert.equal(root.byClass('bt-err-folded')[0].textContent, '· · ·  3 settings');
+  const bad = root.byClass('bt-err-bad');
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].byClass('bt-err-g')[0].textContent, '5');
+  assert.equal(bad[0].byClass('bt-squig')[0].textContent, 'smaa');
+  assert.equal(root.byClass('bt-err-msg')[0].textContent, 'Unknown name "smaa". Did you mean sma, the simple average of the last n closes?');
+  assert.ok(root.byClass('bt-err-all')[0].textContent.startsWith('All names'));
+  const fix = root.byClass('bt-err-fix')[0];
+  assert.equal(fix.textContent, 'Change to sma');
+  fix.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(written, [src.replace('smaa', 'sma')]);
+  assert.equal(bad[0].byClass('bt-squig-fixed')[0].textContent, 'sma');
+  // Where the block cannot be written, as in the preview panel, the fix is a sentence only.
+  const panel = new El('div');
+  renderErrors(panel as unknown as HTMLElement, errors, src);
+  assert.equal(panel.byClass('bt-err-fix').length, 0);
+  assert.match(panel.byClass('bt-err-msg')[0].textContent, /Did you mean sma/);
+});

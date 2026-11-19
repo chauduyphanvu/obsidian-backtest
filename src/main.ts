@@ -304,6 +304,7 @@ export default class BacktestBlocks extends Plugin {
       },
       pricesReady: (source) => this.pricesReady(source),
       errors: (source) => this.results.runner().parse(source).errors,
+      defaults: () => defaultsFrom(this.settings),
       rewrite: setParamValues,
     };
   }

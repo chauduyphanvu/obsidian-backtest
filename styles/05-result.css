@@ -1416,3 +1416,131 @@
   margin: 0;
   font-size: var(--font-ui-smaller);
 }
+
+/* A block that cannot run: its name and a chip, then its own lines with each problem marked where it is. */
+.bt-root.bt-problem .bt-head {
+  align-items: center;
+  margin-bottom: 12px;
+}
+.bt-problem-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.bt-chip-problem {
+  flex: none;
+  border-color: transparent;
+  background: var(--bt-warn-bg);
+  color: var(--bt-warn-ink);
+  font-weight: var(--font-semibold);
+}
+.bt-err-src {
+  padding: 8px 0;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--code-size);
+  line-height: 1.75;
+  overflow-x: auto;
+}
+.bt-err-ln {
+  display: grid;
+  grid-template-columns: 2.8em minmax(0, 1fr);
+  white-space: pre;
+}
+.bt-root button.bt-err-ln.bt-err-folded {
+  width: 100%;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bt-root button.bt-err-ln.bt-err-folded:hover {
+  background: var(--background-modifier-hover);
+}
+.bt-err-folded .bt-err-code {
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+}
+.bt-err-g {
+  padding-right: 12px;
+  color: var(--text-faint);
+  text-align: right;
+  user-select: none;
+}
+.bt-err-ln.bt-err-bad {
+  background: color-mix(in srgb, var(--bt-warn-dot) 14%, transparent);
+}
+.bt-squig {
+  text-decoration: underline wavy var(--bt-bad);
+  text-decoration-skip-ink: none;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+}
+.bt-squig-fixed {
+  border-radius: 3px;
+  animation: bt-flash 1s var(--bt-ease);
+}
+@keyframes bt-flash {
+  from {
+    background: color-mix(in srgb, var(--bt-good) 40%, transparent);
+  }
+}
+.bt-err-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 4px 12px 8px 2.8em;
+  padding: 9px 10px 9px 12px;
+  border-radius: 9px;
+  background: var(--background-primary);
+  box-shadow:
+    0 0 0 1px var(--background-modifier-border),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+  white-space: normal;
+}
+.bt-err-msg {
+  flex: 1 1 14em;
+  min-width: 0;
+}
+.bt-err-said:empty {
+  display: none;
+}
+.bt-err-said {
+  flex-basis: 100%;
+  color: var(--bt-bad);
+}
+.bt-err-all {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.bt-err-all summary {
+  width: fit-content;
+  cursor: pointer;
+}
+.bt-problem-say {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+.bt-problem-message {
+  flex: 1 1 18em;
+}
+.bt-root.bt-problem > .bt-source {
+  margin: 0;
+  border-radius: 10px;
+}

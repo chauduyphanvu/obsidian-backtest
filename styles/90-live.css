@@ -62,25 +62,13 @@
 .bt-live-top .bt-note {
   margin: 4px 0 8px;
 }
-/* The line number gets a column of its own, so a message that wraps in a narrow pane does not run under it. */
-.bt-live-top .bt-errors li {
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  column-gap: 4px;
-}
-.bt-live-top .bt-error-line {
-  min-width: 0;
-}
-.bt-live-top .bt-error-src {
-  grid-column: 2;
-  margin: 2px 0 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
+/* In a narrow pane a long line of the block wraps instead of scrolling. */
+.bt-live-top .bt-err-ln {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.bt-live-top .bt-error-hint {
-  grid-column: 2;
-  margin: 2px 0 0;
+.bt-live-top .bt-error-title {
+  margin-bottom: 8px;
 }
 .bt-live-empty {
   margin-top: 6px;

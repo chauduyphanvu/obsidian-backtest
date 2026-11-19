@@ -2,10 +2,9 @@ import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { ItemView, MarkdownView, type App, type WorkspaceLeaf } from 'obsidian';
 import { h } from './dom.ts';
-import type { Diagnostic } from './dsl.ts';
-import { hintFor } from './fixes.ts';
+import type { Defaults, Diagnostic } from './dsl.ts';
 import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, viewText, waitFor, type Choice, type Shown } from './live-core.ts';
-import { blockStateKey } from './render.ts';
+import { blockStateKey, problemLines } from './render.ts';
 import { debounce } from './result-cache.ts';
 import { findBlock, writeValuesInNote } from './rewrite.ts';
 
@@ -23,6 +22,8 @@ export interface LiveHost {
   pricesReady(source: string): Promise<boolean>;
   /** The block's problems, empty when it can run. */
   errors(source: string): Diagnostic[];
+  /** The parser defaults the settings imply now, for the fixes the problems offer. */
+  defaults(): Partial<Defaults>;
   /** The block's text with these parameter values written in. */
   rewrite(source: string, values: Record<string, number>): string;
 }
@@ -355,7 +356,7 @@ export class LiveView extends ItemView {
     this.status.textContent = this.running ? 'The result updates…' : '';
     if (problem) {
       const box = h(top, 'div', 'bt-root');
-      if (problem.kind === 'errors') drawErrors(box, problem.errors, problem.text);
+      if (problem.kind === 'errors') drawErrors(box, problem.errors, problem.text, this.host.defaults());
       else {
         h(box, 'div', 'bt-error-title', 'The backtest did not run');
         h(box, 'div', 'bt-note', problem.message);
@@ -392,20 +393,10 @@ export class LiveView extends ItemView {
   }
 }
 
-/** The problems with a block, in the words of the result shown in the note, without repeating the block itself. */
-export function drawErrors(root: HTMLElement, errors: Diagnostic[], text: string): void {
+/** The problems with a block, as the result in the note shows them: in the block's own lines, without a fix button. */
+export function drawErrors(root: HTMLElement, errors: Diagnostic[], text: string, defaults: Partial<Defaults> = {}): void {
   h(root, 'div', 'bt-error-title', errors.length === 1 ? 'This strategy cannot run' : `This strategy cannot run: ${errors.length} problems`);
-  const lines = text.split('\n');
-  const list = h(root, 'ul', 'bt-errors');
-  for (const e of errors.slice(0, MAX_ERRORS)) {
-    const li = h(list, 'li');
-    h(li, 'span', 'bt-error-line', `Line ${e.line}`);
-    h(li, 'span', undefined, e.message);
-    const line = lines[e.line - 1]?.trim();
-    if (line) h(li, 'code', 'bt-error-src', line);
-    const hint = hintFor(lines, e);
-    if (hint) h(li, 'span', 'bt-error-hint', hint);
-  }
+  problemLines(root, errors.slice(0, MAX_ERRORS), text, { defaults });
   if (errors.length > MAX_ERRORS) h(root, 'div', 'bt-note', `And ${errors.length - MAX_ERRORS} more.`);
 }
 

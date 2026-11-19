@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec, type Diagnostic } from '../src/dsl.ts';
-import { closest, editDistance, fixChanges, fixEdits, fixFor, hintFor, tickerFix, type Fix } from '../src/fixes.ts';
+import { closest, editDistance, fixChanges, fixEdits, fixFor, tickerFix, type Fix } from '../src/fixes.ts';
 
 const errorsOf = (lines: string[]) => parseSpec(lines.join('\n')).errors;
 
@@ -72,7 +72,7 @@ test('a misspelt setting name', () => {
   assert.equal(after[1], 'rebalance: monthly');
   const f = firstFix(lines)!.fix;
   assert.deepEqual([f.line, f.from, f.to, f.insert, f.label], [2, 0, 9, 'rebalance', 'Change to rebalance']);
-  assert.equal(hintFor(lines, firstFix(lines)!.d), 'Possible correction: rebalance.');
+  assert.equal(fixFor(lines, firstFix(lines)!.d)?.hint, 'Possible correction: rebalance.');
   assert.equal(fixedBlock([HEAD, 'stoploss: 5%', RULE])[1], 'stop loss: 5%');
   assert.equal(fixedBlock([HEAD, '  trailing stp: 5%', RULE])[1], '  trailing stop: 5%');
   assert.equal(fixedBlock([HEAD, 'Capitl: 10k', RULE])[1], 'capital: 10k');
@@ -146,7 +146,7 @@ test('a ticker in a for line that is not in the universe but is close to one tha
   assert.deepEqual(errorsOf(apply(lines, f)), []);
   assert.equal(fixedBlock([HEAD, RULE, 'for tlt2:', '  stop loss: 5%'])[2], 'for TLT:');
   assert.equal(fixedBlock([HEAD, RULE, '  for   TLTT  :  # sleeve', '  stop loss: 5%'])[2], '  for   TLT  :  # sleeve');
-  assert.equal(hintFor(lines, errors[0]), 'Possible correction: TLT.');
+  assert.equal(fixFor(lines, errors[0])?.hint, 'Possible correction: TLT.');
 });
 
 test('a ticker in a for line that is not close to anything gets no fix', () => {
@@ -171,7 +171,7 @@ test('a misspelt parameter name', () => {
 test('habits from other languages', () => {
   const and = [HEAD, 'buy when close > 5 && rsi(2) < 3'];
   assert.equal(fixedBlock(and)[1], 'buy when close > 5 and rsi(2) < 3');
-  assert.equal(hintFor(and, errorsOf(and)[0]), 'Write and, not &&.');
+  assert.equal(fixFor(and, errorsOf(and)[0])?.hint, 'Write and, not &&.');
   assert.equal(fixedBlock([HEAD, 'buy when close > 5||rsi(2) < 3'])[1], 'buy when close > 5 or rsi(2) < 3');
   assert.equal(fixedBlock([HEAD, 'buy when close > 5 & rsi(2) < 3'])[1], 'buy when close > 5 and rsi(2) < 3');
   assert.equal(fixedBlock([HEAD, 'buy when !close > 5'])[1], 'buy when not close > 5');

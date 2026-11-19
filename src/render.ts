@@ -1,11 +1,12 @@
 import type { Backtest, Segment } from './backtest.ts';
-import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
-import { colourLines, colourSource, easeHeight, h, motionOK, s } from './dom.ts';
+import { STOP_SETTINGS, type Commission, type Defaults, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
+import { placeDiagnostic } from './diagnostics.ts';
+import { colourLines, colourSource, easeHeight, h, motionOK, reveal, revealBox, s } from './dom.ts';
 import { debounce } from './result-cache.ts';
 import type { AssetState } from './engine.ts';
-import { hintFor } from './fixes.ts';
+import { applyFix, fixWord, shortMessage, suggestion } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from './format.ts';
-import { commentStart, declaredParams, paramName, settingKey } from './highlight.ts';
+import { commentStart, declaredParams, paramName, settingKey, tokenizeBlock } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, timingPhrase } from './orders.ts';
 import { renderNextStep, type Action } from './render-actions.ts';
@@ -84,30 +85,141 @@ export function renderLoading(el: HTMLElement, o: { title: string; tickers: stri
   };
 }
 
-export function renderErrors(el: HTMLElement, errors: Diagnostic[], src: string): void {
+/** A block's name, from its `name:` line, for a card drawn before the block parses. */
+const nameLine = (text: string): string | null => text.match(/^\s*name\s*:\s*(.+?)\s*$/im)?.[1] ?? null;
+
+/** What the fix button does: writes the block's new text into the note; rejects with a message fit to show. */
+export type WriteBlock = (text: string) => Promise<void>;
+
+/**
+ * A block that cannot run: a card with its name and "Cannot run · 1 problem", and the block's own lines with each problem
+ * marked where it is (problemLines). With `fix`, a problem that has a fix gets a button that writes it into the note.
+ */
+export function renderErrors(el: HTMLElement, errors: Diagnostic[], src: string, o: { defaults?: Partial<Defaults>; fix?: WriteBlock } = {}): void {
   el.replaceChildren();
-  const root = h(el, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? 'This strategy cannot run' : `This strategy cannot run: ${errors.length} problems`);
-  const lines = src.split('\n');
-  const list = h(root, 'ul', 'bt-errors');
-  for (const e of errors) {
-    const li = h(list, 'li');
-    h(li, 'span', 'bt-error-line', `Line ${e.line}`);
-    h(li, 'span', undefined, e.message);
-    const text = lines[e.line - 1]?.trim();
-    if (text) h(li, 'code', 'bt-error-src', text);
-    const hint = hintFor(lines, e);
-    if (hint) h(li, 'span', 'bt-error-hint', hint);
-  }
-  source(root, src);
+  const root = h(el, 'div', 'bt-root bt-result bt-problem');
+  const head = h(root, 'div', 'bt-head');
+  const title = h(head, 'div', 'bt-problem-title');
+  h(title, 'span', 'bt-title', nameLine(src) ?? 'Backtest');
+  h(head, 'span', 'bt-chip bt-chip-problem', `Cannot run \u00b7 ${errors.length === 1 ? '1 problem' : `${errors.length} problems`}`);
+  problemLines(root, errors, src, o);
 }
 
+/** Text and token spans for one line, with the columns in `marks` under a wavy line. */
+function markedLine(el: HTMLElement, line: string, tokens: { from: number; to: number; kind: string }[], marks: { from: number; to: number }[]): void {
+  const cuts = [...new Set([0, line.length, ...tokens.flatMap((t) => [t.from, t.to]), ...marks.flatMap((m) => [m.from, m.to])])].filter((x) => x >= 0 && x <= line.length).sort((a, b) => a - b);
+  let squig: HTMLElement | null = null;
+  for (let k = 0; k < cuts.length - 1; k++) {
+    const [a, b] = [cuts[k], cuts[k + 1]];
+    const tok = tokens.find((t) => t.from <= a && t.to >= b);
+    const marked = marks.some((m) => m.from <= a && m.to >= b);
+    if (!marked) squig = null;
+    const host = marked ? (squig ??= h(el, 'span', 'bt-squig')) : el;
+    if (tok) h(host, 'span', `bt-tok bt-tok-${tok.kind}`, line.slice(a, b));
+    else host.append(line.slice(a, b));
+  }
+}
+
+/**
+ * A block's problems in its own lines: a gutter of line numbers, the settings folded into one line unless one has a
+ * problem, each problem's line tinted with the word underlined, and under it the message cut short, what to write instead,
+ * a button that writes it (with `fix`), and the full list of names behind "All names".
+ */
+export function problemLines(parent: HTMLElement, errors: Diagnostic[], text: string, o: { defaults?: Partial<Defaults>; fix?: WriteBlock } = {}): void {
+  const all = text.split('\n');
+  let end = all.length;
+  while (end > 0 && !all[end - 1].trim()) end--;
+  const lines = all.slice(0, end);
+  const placed = errors.map((e) => ({ e, at: placeDiagnostic(lines, e, 'error') }));
+  const tokens = tokenizeBlock(lines);
+  const box = h(parent, 'div', 'bt-err-src');
+  box.setAttribute('role', 'group');
+  box.setAttribute('aria-label', 'The block, with its problems');
+  // The settings are folded as in a result's rules well: a setting with a problem, and the lines after `for`, stay.
+  let inFor = false;
+  const setting = lines.map((line, i) => {
+    if (/^\s*for\s+.+:\s*(#.*|\/\/.*)?$/i.test(line)) inFor = true;
+    return !inFor && settingKey(line) !== null && !placed.some((p) => p.at.line === i);
+  });
+  const folded = (i: number): boolean => setting[i] || (!lines[i].trim() && i > 0 && folded(i - 1));
+  const count = setting.filter(Boolean).length;
+  const foldAll = count > 0 && lines.some((_, i) => !folded(i));
+  const rows: HTMLElement[] = [];
+  let more: HTMLButtonElement | null = null;
+  lines.forEach((line, i) => {
+    const hidden = foldAll && folded(i);
+    if (hidden && !more) {
+      more = h(box, 'button', 'bt-err-ln bt-err-folded');
+      more.type = 'button';
+      h(more, 'span', 'bt-err-g');
+      h(more, 'span', 'bt-err-code', `\u00b7 \u00b7 \u00b7  ${count === 1 ? '1 setting' : `${count} settings`}`);
+      more.addEventListener('click', () => {
+        for (const r of rows) r.hidden = false;
+        more!.remove();
+      });
+    }
+    const mine = placed.filter((p) => p.at.line === i);
+    const row = h(box, 'div', `bt-err-ln${mine.length ? ' bt-err-bad' : ''}`);
+    if (hidden) {
+      row.hidden = true;
+      rows.push(row);
+    }
+    h(row, 'span', 'bt-err-g', String(i + 1));
+    markedLine(h(row, 'span', 'bt-err-code'), line, tokens[i] ?? [], mine.map((p) => p.at));
+    for (const { e } of mine) problemNote(box, row, e, all, o);
+  });
+}
+
+/** Under a problem's line: the message cut short, what to write instead, the fix button, and the rest of the message. */
+function problemNote(box: HTMLElement, row: HTMLElement, e: Diagnostic, lines: string[], o: { defaults?: Partial<Defaults>; fix?: WriteBlock }): void {
+  const { box: diag, inner } = revealBox(box, 'bt-err-diag', true);
+  const note = h(inner, 'div', 'bt-err-note');
+  const msg = h(note, 'div', 'bt-err-msg');
+  const { head, rest } = shortMessage(e.message);
+  h(msg, 'b', undefined, head);
+  const offered = suggestion(lines, e, o.defaults);
+  if (offered) msg.append(` ${offered.text}`);
+  if (offered && o.fix) {
+    const write = o.fix;
+    const button = h(note, 'button', 'bt-button mod-cta bt-err-fix', offered.fix.label);
+    button.type = 'button';
+    const said = h(note, 'div', 'bt-err-said');
+    said.setAttribute('aria-live', 'polite');
+    button.addEventListener('click', () => {
+      button.disabled = true;
+      // The word changes where it was, flashes, and the note closes; the block then runs again from the note.
+      const word = row.querySelector('.bt-squig');
+      if (word) {
+        word.textContent = fixWord(offered.fix);
+        word.className = 'bt-squig-fixed';
+      }
+      row.classList.remove('bt-err-bad');
+      write(applyFix(lines, offered.fix).join('\n')).then(
+        () => reveal(diag, false),
+        (err: unknown) => {
+          button.disabled = false;
+          said.textContent = `Cannot change the block. ${err instanceof Error ? err.message : String(err)}`;
+        },
+      );
+    });
+  }
+  if (rest) {
+    const names = h(note, 'details', 'bt-err-all');
+    h(names, 'summary', undefined, 'All names');
+    h(names, 'div', undefined, rest);
+  }
+}
+
+/** A run that failed, such as for prices it could not get: the card of a block that cannot run, with "Run again". */
 export function renderFailure(el: HTMLElement, message: string, src: string, onRetry: () => void): void {
   el.replaceChildren();
-  const root = h(el, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', 'The backtest did not run');
-  h(root, 'div', 'bt-note', message);
-  h(root, 'button', 'bt-button', 'Run again').addEventListener('click', onRetry);
+  const root = h(el, 'div', 'bt-root bt-result bt-problem');
+  const head = h(root, 'div', 'bt-head');
+  h(h(head, 'div', 'bt-problem-title'), 'span', 'bt-title', nameLine(src) ?? 'Backtest');
+  h(head, 'span', 'bt-chip bt-chip-problem', 'The backtest did not run');
+  const say = h(root, 'div', 'bt-problem-say');
+  h(say, 'span', 'bt-problem-message', message);
+  h(say, 'button', 'bt-button', 'Run again').addEventListener('click', onRetry);
   source(root, src);
 }
 
