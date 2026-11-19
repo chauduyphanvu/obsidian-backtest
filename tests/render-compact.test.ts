@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { isoDate } from '../src/format.ts';
-import { blockStateKey, compactFacts, fillSentence, summary } from '../src/render.ts';
+import { blockStateKey, compactFacts, fillSentence, summary, tickerList } from '../src/render.ts';
 import type { RunOutput } from '../src/runner.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY, T0 } from './helpers.ts';
@@ -26,17 +26,6 @@ test('a strategy with nothing held is in cash', () => {
   const facts = compactFacts(run('universe: A\nbuy when close > 100', { A: bars([10, 10, 12, 15]) }));
   assert.equal(facts.holding, 'In cash');
   assert.equal(facts.order, null);
-});
-
-test('the figures are the return per year and the worst drawdown', () => {
-  const out = run('universe: A\nbuy when true', { A: bars([10, 10, 12, 9, 15]) });
-  const { cagr, maxDrawdown } = out.backtest.stats;
-  const facts = compactFacts(out);
-  assert.equal(facts.figures.length, 2);
-  assert.match(facts.figures[0], /^[+\u2212]?\d+(\.\d)?% a year$/);
-  assert.match(facts.figures[1], /^worst drawdown \u2212\d+\.\d%$/);
-  assert.ok(cagr > 0 && maxDrawdown < 0);
-  assert.ok(facts.figures[0].startsWith('+'));
 });
 
 test('a buy waiting for the next open is said', () => {
@@ -72,12 +61,10 @@ test('orders for several tickers share one sentence, and a long list is counted'
   assert.equal(compactFacts(run('universe: A, B, C, D\nbuy when close > 11', data)).order, 'buys 4 tickers at the next open');
 });
 
-test('a strategy with no name shows its tickers, so folded blocks can be told apart', () => {
-  const data = { A: bars([10, 11, 12]), B: bars([10, 11, 12]), C: bars([10, 11, 12]), D: bars([10, 11, 12]) };
-  assert.equal(compactFacts(run('universe: A\nbuy when true', data)).tickers, 'A');
-  assert.equal(compactFacts(run('universe: A, B, C\nbuy when true', data)).tickers, 'A, B, C');
-  assert.equal(compactFacts(run('universe: A, B, C, D\nbuy when true', data)).tickers, '4 tickers');
-  assert.equal(compactFacts(run('name: Mine\nuniverse: A\nbuy when true', data)).tickers, null);
+test('a folded result names its tickers under its name, the first four and how many more', () => {
+  assert.equal(tickerList(['A']), 'A');
+  assert.equal(tickerList(['A', 'B', 'C', 'D']), 'A, B, C, D');
+  assert.equal(tickerList(['A', 'B', 'C', 'D', 'E', 'F']), 'A, B, C, D and 2 more');
 });
 
 test('a block is keyed by its note and its name, or by its place when it has no name', () => {

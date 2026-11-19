@@ -1,6 +1,6 @@
 import type { Backtest, Segment } from './backtest.ts';
 import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
-import { colourLines, colourSource, h, s } from './dom.ts';
+import { colourLines, colourSource, easeHeight, h, motionOK, s } from './dom.ts';
 import { debounce } from './result-cache.ts';
 import type { AssetState } from './engine.ts';
 import { hintFor } from './fixes.ts';
@@ -276,13 +276,13 @@ export function blockKeyPrefix(path: string, folder: boolean): string {
 }
 
 export interface CompactFacts {
-  /** The tickers, for a strategy with no name, so folded blocks can be told apart. */
-  tickers: string | null;
-  figures: string[];
   holding: string;
   /** What is waiting for the next open or close, or was done at the last close, or null. */
   order: string | null;
 }
+
+/** The tickers under a folded result's name: "SPY", "QQQ, TLT, GLD, IEF and 3 more". */
+export const tickerList = (names: string[]): string => (names.length > 4 ? `${names.slice(0, 4).join(', ')} and ${names.length - 4} more` : names.join(', '));
 
 /** When a rule's order fills, as the result's fine print says it. */
 export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill === 'close' ? 'An order fills at the close where its rule is true.' : 'An order fills at the next open after its rule is true.');
@@ -292,7 +292,7 @@ export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill ===
  * and sells short A", "buys to cover A and buys A".
  */
 export function compactFacts(out: RunOutput): CompactFacts {
-  const { stats, run } = out.backtest;
+  const { run } = out.backtest;
   const intraday = isIntraday(run.t);
   const held = run.states.filter((st) => st.side !== null);
   const steps = out.spec.entries ?? 1;
@@ -342,8 +342,6 @@ export function compactFacts(out: RunOutput): CompactFacts {
     ...(done.length ? [`${done.join(' and ')} at the last close`] : []),
   ];
   return {
-    tickers: out.spec.name ? null : list(out.spec.universe.map((a) => a.name), 3, ', '),
-    figures: [`${signedPct(stats.cagr)} a year`, `worst drawdown ${pct(stats.maxDrawdown)}`],
     holding,
     order: order.length ? order.join(', ') : null,
   };
@@ -522,6 +520,9 @@ function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = n
   return box;
 }
 
+/** How long a closing result's content takes to fade before its space closes. */
+const FADE_MS = 120;
+
 /**
  * The result of a run. The title is a button that folds the result to one line (its growth, figures, what it holds, what
  * is due) and opens it again. The result itself is not built until the block is first open.
@@ -570,17 +571,31 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     onScreen = out;
     const facts = compactFacts(out);
     meta.textContent = metaLine(out, view.source);
+    // Folded, the line is on fixed columns, so a stack of folded results reads as one list: the tickers (and any notes)
+    // under the name, the growth against the benchmark, the return per year, the worst drawdown, then the position and
+    // what is near or due.
     line.replaceChildren();
-    sparkline(line, bt);
-    for (const fact of [...(facts.tickers ? [facts.tickers] : []), ...facts.figures]) h(line, 'span', 'bt-fold-fact', fact);
-    const held = h(line, 'span', `bt-fold-held${bt.run.states.some((st) => st.side !== null) ? '' : ' bt-chip-cash'}`);
-    h(held, 'span', 'bt-chip-dot');
-    held.append(facts.holding);
-    if (facts.order) h(line, 'span', 'bt-chip bt-fold-order', facts.order);
-    const watch = h(line, 'span', 'bt-chip bt-chip-watch');
-    watch.hidden = true;
+    const sub = h(line, 'span', 'bt-fold-sub');
+    h(sub, 'span', 'bt-fold-tickers', tickerList(out.spec.universe.map((a) => a.name)));
     const noteCount = notesOf(view, out).length;
-    if (noteCount > 0) h(line, 'span', 'bt-fold-mark', noteCount === 1 ? '1 note' : `${noteCount} notes`);
+    if (noteCount > 0) h(sub, 'span', 'bt-fold-mark', noteCount === 1 ? '1 note' : `${noteCount} notes`);
+    sparkline(line, bt);
+    const figure = (cls: string, value: string, unit: string) => {
+      const f = h(line, 'span', `bt-fold-fig ${cls}`);
+      h(f, 'span', 'bt-fold-fig-value', value);
+      h(f, 'span', 'bt-fold-fig-unit', unit);
+    };
+    figure('bt-fold-cagr', signedPct(bt.stats.cagr), 'a year');
+    figure('bt-fold-dd', pct(bt.stats.maxDrawdown), 'worst');
+    const state = h(line, 'span', 'bt-fold-state');
+    const holding = holdingFacts(out);
+    const held = h(state, 'span', `bt-fold-held${holding.held === null ? ' bt-chip-cash' : ''}`);
+    h(held, 'span', 'bt-chip-dot');
+    h(held, 'span', 'bt-fold-held-text', holding.text);
+    if (holding.more) held.title = holding.more;
+    if (facts.order) h(state, 'span', 'bt-chip bt-fold-order', facts.order);
+    const watch = h(state, 'span', 'bt-chip bt-chip-watch');
+    watch.hidden = true;
     const asked = view.triggers?.(out) ?? null;
     asked?.then(
       (report) => {
@@ -699,10 +714,29 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       build();
     }
   };
+  // Opening makes the space first and the content fades in after it; closing fades the content, then closes the space.
+  let folding = 0;
   fold.addEventListener('click', () => {
     const open = fold.getAttribute('aria-expanded') !== 'true';
-    setOpen(open);
     view.remember?.set(open);
+    if (folding) window.clearTimeout(folding);
+    folding = 0;
+    root.classList.remove('bt-closing');
+    if (open || !motionOK()) {
+      root.classList.toggle('bt-opening', open && motionOK());
+      easeHeight(root, () => setOpen(open));
+      return;
+    }
+    root.classList.remove('bt-opening');
+    root.classList.add('bt-closing');
+    folding = window.setTimeout(() => {
+      folding = 0;
+      root.classList.remove('bt-closing');
+      easeHeight(root, () => setOpen(false));
+    }, FADE_MS);
+  });
+  cleanups.push(() => {
+    if (folding) window.clearTimeout(folding);
   });
   // A new result arrives once, and only if it is open when it comes: one opened later is simply there.
   let arrival = view.arrive ?? false;

@@ -180,8 +180,10 @@ test('folded, the line has the growth, the figures and what is held; the chip sa
   assert.ok(root.children[0] instanceof El && (root.children[0] as El).classes().includes('bt-folded'));
   const facts = root.byClass('bt-fold-facts')[0];
   assert.equal(facts.byClass('bt-spark').length, 1);
-  assert.deepEqual(texts(facts.byClass('bt-fold-fact')).map((f) => f.replace(/[−+\d.]+%/g, 'X')), ['X a year', 'worst drawdown X']);
-  assert.match(root.byClass('bt-fold-held')[0].textContent, /^(Long A since \d{4}-\d\d-\d\d|In cash)$/);
+  assert.equal(facts.byClass('bt-fold-tickers')[0].textContent, 'A');
+  // Each figure is a number over its unit, in a column of its own.
+  assert.deepEqual(facts.byClass('bt-fold-fig').map((f) => [f.byClass('bt-fold-fig-value')[0].textContent.replace(/^[−+]?[\d.]+%$/, 'X'), f.byClass('bt-fold-fig-unit')[0].textContent]), [['X', 'a year'], ['X', 'worst']]);
+  assert.match(root.byClass('bt-fold-held')[0].textContent, /^(Long A|In cash)$/);
   const chip = root.byClass('bt-chip-watch')[0];
   assert.equal(chip.hidden, true);
   await settle();

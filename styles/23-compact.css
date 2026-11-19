@@ -41,15 +41,10 @@
   flex: none;
   padding-top: 5px;
   color: var(--text-muted);
-  transition: transform 0.12s ease;
+  transition: transform var(--bt-t-comp) var(--bt-ease);
 }
 .bt-fold[aria-expanded='true'] .bt-chevron {
   transform: rotate(90deg);
-}
-@media (prefers-reduced-motion: reduce) {
-  .bt-chevron {
-    transition: none;
-  }
 }
 
 .bt-fold-text {
@@ -60,13 +55,90 @@
   gap: 4px 14px;
   min-width: 0;
 }
-/* Folded, the growth and the figures sit beside the name when there is room, each fact wrapping on its own. */
-.bt-fold-facts {
-  display: flex;
-  flex-wrap: wrap;
+.bt-fold[aria-expanded='true'] .bt-fold-facts {
+  display: none;
+}
+
+/* Folded, one line on fixed columns, the same on every result, so a stack of them reads as one list: the name with its
+   tickers under it, the growth, the return per year, the worst drawdown, and the position with what is near or due. */
+.bt-root.bt-folded .bt-fold-text {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) 68px 4.8em 4.8em minmax(8.6em, 1fr);
+  grid-template-rows: auto auto;
   align-items: center;
-  gap: 2px 12px;
+  gap: 0 12px;
+}
+.bt-root.bt-folded .bt-title-row {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
+}
+.bt-root.bt-folded .bt-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bt-root.bt-folded .bt-meta {
+  display: none;
+}
+.bt-root.bt-folded .bt-fold-facts {
+  display: contents;
+  animation: none;
+}
+.bt-fold-sub {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.3;
+}
+.bt-fold-tickers {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bt-root.bt-folded .bt-fold-facts > .bt-spark {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.bt-fold-fig {
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.bt-fold-cagr {
+  grid-column: 3;
+}
+.bt-fold-dd {
+  grid-column: 4;
+}
+.bt-fold-fig-value {
+  font-weight: var(--font-semibold);
+}
+.bt-fold-fig-unit {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.bt-fold-state {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+}
+.bt-fold-state > * {
+  max-width: 100%;
 }
 .bt-spark {
   flex: none;
@@ -79,29 +151,80 @@
   stroke-width: 1.1;
   opacity: 0.85;
 }
-.bt-fold-fact {
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.bt-fold[aria-expanded='true'] .bt-fold-facts {
-  display: none;
-}
-.bt-fold-order {
-  color: var(--text-normal);
-}
 .bt-fold-held {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   white-space: nowrap;
 }
+.bt-fold-held-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bt-fold-state .bt-chip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bt-fold-order {
+  color: var(--text-normal);
+}
 .bt-fold-mark {
+  flex: none;
   padding: 0 7px;
   border: 1px solid var(--bt-warning);
   border-radius: 999px;
   color: var(--text-normal);
   font-size: var(--font-ui-smaller);
   white-space: nowrap;
+}
+/* In a narrow pane: the name and the return per year on top, the position and a smaller sparkline under them, on every
+   line the same way; the drawdown goes. */
+@container bt-result (max-width: 500px) {
+  .bt-root.bt-folded .bt-fold-text {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto;
+    gap: 2px 10px;
+  }
+  .bt-fold-cagr {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+  .bt-fold-dd {
+    display: none;
+  }
+  .bt-fold-state {
+    grid-column: 1;
+    grid-row: 3;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    padding-top: 4px;
+  }
+  .bt-root.bt-folded .bt-fold-facts > .bt-spark {
+    grid-column: 2;
+    grid-row: 3;
+    justify-self: end;
+    padding-top: 4px;
+  }
+  .bt-root.bt-folded .bt-fold-facts > .bt-spark svg {
+    width: 56px;
+    height: auto;
+  }
+}
+
+/* Opening makes the space and then fades the content in; closing fades the content out first. */
+.bt-root.bt-opening > .bt-body {
+  animation: bt-rise-in var(--bt-t-comp) 90ms var(--bt-ease) both;
+}
+.bt-root.bt-closing > .bt-body {
+  opacity: 0;
+  transition: opacity 120ms var(--bt-ease);
+}
+.bt-root.bt-folded .bt-fold-facts > * {
+  animation: bt-fade-in var(--bt-t-comp) var(--bt-ease) both;
 }
 
 /* While a slider is being dragged only the top of the result follows it; the trades and the tabs wait, blurred, with a
@@ -143,4 +266,13 @@
 .bt-rest-wrap.bt-stale .bt-stale-note {
   opacity: 1;
   transform: translate(-50%, 0) scale(1);
+}
+.bt-root.bt-folded .bt-head,
+.bt-root.bt-folded button.bt-fold,
+.bt-root.bt-folded button.bt-fold:hover,
+.bt-root.bt-folded button.bt-fold:active {
+  align-items: center;
+}
+.bt-root.bt-folded .bt-chevron {
+  padding-top: 0;
 }
