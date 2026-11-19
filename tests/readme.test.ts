@@ -151,9 +151,9 @@ test('the reference says what the orders note carries, what refuses a save, and 
 
 test('the reference quotes the messages about writing values, sliders and luck checks as the plugin words them', () => {
   assert.ok(readme.includes(`"${WRITTEN}"`));
-  assert.ok(readme.includes(`"Couldn't write the values to the block. ${NOTE_CHANGED}"`));
-  assert.ok(read('src/render-params.ts').includes("`Couldn't write the values to the block. ${sentence(e)}`"));
-  assert.ok(readme.includes('"Loading more price history…"') && read('src/render-params.ts').includes("'Loading more price history…'"));
+  assert.ok(readme.includes(`"Cannot write the values to the block. ${NOTE_CHANGED}"`));
+  assert.ok(read('src/render-params.ts').includes('`Cannot write the values to the block. ${sentence(e)}`'));
+  assert.ok(readme.includes('"More price history loads…"') && read('src/render-params.ts').includes("'More price history loads…'"));
   const block = 'universe: SPY\nfast = 10 in 5..25 step 5\nbuy when sma(fast) > sma(50)';
   const used = valuesUsed(parseSpec(block, { overrides: { fast: 25 } }).spec!.params);
   assert.ok(used !== null && readme.includes(`"${used}"`));
@@ -226,12 +226,12 @@ test('the reference says what the parser says for the example with the three mis
 
 test('the reference quotes the limit messages, buttons and numbers as the plugin words them', () => {
   const refusal = sizeRefusal({ bars: 2_100_000, tickers: 40, ruleWork: 0, windowWork: 0 }, 'worker');
-  assert.ok(refusal !== null && refusal.startsWith('This run has 2.1 million bars across 40 tickers; the limit is 1 million.'));
-  assert.ok(readme.includes('"This run has 2.1 million bars across 40 tickers; the limit is 1 million."'));
+  assert.ok(refusal !== null && refusal.startsWith('This run has 2.1 million bars across 40 tickers. The limit is 1 million.'));
+  assert.ok(readme.includes('"This run has 2.1 million bars across 40 tickers. The limit is 1 million."'));
   const draw = read('src/render.ts');
-  for (const title of ['This backtest is too large to run', 'This backtest took too long']) assert.ok(readme.includes(`"${title}"`) && draw.includes(`'${title}'`), title);
+  for (const title of ['This backtest is too large to run', 'This backtest used too much time']) assert.ok(readme.includes(`"${title}"`) && draw.includes(`'${title}'`), title);
   for (const label of [anywayLabel(new LimitError('size', '', true)), anywayLabel(new LimitError('time', '', true))]) assert.ok(readme.includes(`"${label}"`), label);
-  assert.ok(read('src/limits.ts').includes("'Backtests run in the foreground here, so") && readme.includes('"Backtests run in the foreground here"'));
+  assert.ok(read('src/limits.ts').includes("'Backtests run in the foreground here. ") && readme.includes('"Backtests run in the foreground here"'));
   const release = read('src/render-params.ts').match(/const ON_RELEASE = '([^']+)'/)?.[1];
   assert.ok(release && readme.includes(`"${release}"`));
   assert.ok(readme.includes(`"${WAITING}"`));
@@ -249,19 +249,19 @@ test('the reference quotes the limit messages, buttons and numbers as the plugin
 
 test('the reference names the controls of the bar-by-bar table as the plugin words them', () => {
   const debug = read('src/render-debug.ts');
-  const labels = ['Rule values, bar by bar', '← Earlier', 'Later →', 'Go to date', '← Previous trade', 'Next trade →', 'Only bars where something happened or nearly happened', 'Save as CSV', 'Save every bar', 'Position', 'What happened'];
+  const labels = ['Rule values, bar by bar', '← Previous bars', 'Next bars →', 'Go to date', '← Previous trade', 'Next trade →', 'Only bars where something occurred or almost occurred', 'Save as CSV', 'Save all bars', 'Position', 'What occurred'];
   for (const label of labels) assert.ok(debug.includes(`'${label}'`) && readme.includes(`"${label}"`), label);
   assert.ok(readme.includes(`over about ${CSV_ASK_BYTES / 1e6} MB`) && readme.includes(`over about ${CSV_MAX_BYTES / 1e6} MB`));
   assert.ok(debug.includes('` bars ${shown.from + 1} to ${shown.to}`') && readme.includes('`<name> rule values <ticker> bars 121 to 180 <date>`'));
   const columns = readme.match(/\*\*The columns\.\*\*[^\n]*/)![0];
-  assert.ok(columns.indexOf('"What happened" and "Position"') > columns.indexOf('the close'), 'the reference gives the columns in the order of the table');
-  assert.match(debug, /'Close'\)[^]*?'What happened'\)[^]*?'Position'\)/, 'the table draws Close, What happened, then Position');
+  assert.ok(columns.indexOf('"What occurred" and "Position"') > columns.indexOf('the close'), 'the reference gives the columns in the order of the table');
+  assert.match(debug, /'Close'\)[^]*?'What occurred'\)[^]*?'Position'\)/, 'the table draws Close, What occurred, then Position');
 });
 
 test('the reference quotes the line about changed default settings and the CSV helper\'s words as the plugin has them', () => {
   const quoted: [string, string][] = [
-    ['src/render.ts', 'The default settings were changed after this result was worked out. It still has the old ones.'],
-    ['src/csv-modal.ts', 'Are some of these columns prices? Choose them yourself'],
+    ['src/render.ts', 'You changed the default settings after the plugin calculated this result. This result uses the previous settings.'],
+    ['src/csv-modal.ts', 'Are some of these columns prices? Select them here'],
     ['src/csv-modal.ts', 'This file has no prices. A strategy can read its columns but cannot trade it.'],
   ];
   for (const [file, text] of quoted) assert.ok(read(file).includes(`'${text}'`) && readme.includes(`"${text}"`), text);
@@ -314,7 +314,7 @@ test('the reference words the tries, the overfitting check and the versions as t
     [luck, 'How many tries'],
     [luck, 'Start again'],
     [luck, 'Keep the count'],
-    [sweep, 'How often the best fell back'],
+    [sweep, 'Overfitting check'],
     [versions, 'Versions'],
     [versions, 'Show the changes'],
     [versions, 'Show the text'],
@@ -322,11 +322,11 @@ test('the reference words the tries, the overfitting check and the versions as t
     assert.ok(file.includes(`'${text}'`) && readme.includes(`"${text}"`), text);
   }
   for (const text of [RESET, RESTORE]) assert.ok(readme.includes(`"${text}"`), text);
-  const bound = 'is an upper bound: neighbouring variants are alike, so they make fewer independent tries than their count';
+  const bound = 'is the maximum number of different tries. Variants that are near each other give almost the same results. Thus the number of different tries is smaller';
   assert.ok(upperBound(7).startsWith(`7 ${bound}`) && readme.includes(`N ${bound}`));
   assert.ok(readme.includes(`summed over ${STRETCHES} equal stretches`));
   assert.ok(readme.includes(`needs at least ${PBO_MIN_VARIANTS} of them and ${PBO_MIN_STEPS_PER_GROUP} bars in each part`));
-  assert.ok(readme.includes(`The first version and the latest ${MAX_VERSIONS} are kept.`));
+  assert.ok(readme.includes(`The plugin keeps the first version and the last ${MAX_VERSIONS} versions.`));
 });
 
 // ------------------------------------------------------------------------------------------------ the short README

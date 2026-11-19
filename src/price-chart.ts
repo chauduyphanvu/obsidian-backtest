@@ -202,7 +202,7 @@ export function boughtWording(trade: Trade, when: (t: number) => string, price: 
 
 /** Why a position ended, worded as in the trades table. */
 export function exitWording(reason: ExitReason): string {
-  return reason === 'open' ? 'still held' : reason === 'signal' ? 'sell rule' : reason;
+  return reason === 'open' ? 'not closed' : reason === 'signal' ? 'sell rule' : reason;
 }
 
 const openedAt = new WeakMap<Trade[], Set<string>>();
@@ -231,6 +231,6 @@ export function tradeExit(trade: Trade, trades: Trade[]): string {
 
 /** One line above the chart: how often the strategy held the ticker, long or short, and what simply holding it would have returned. */
 export function summaryLine(tradeCount: number, share: number, hold: number | null): string {
-  const mine = tradeCount === 0 ? 'No trades.' : `${tradeCount} ${tradeCount === 1 ? 'trade' : 'trades'}, held ${pct(share, share < 0.1 ? 1 : 0)} of the time.`;
-  return hold === null ? mine : `${mine} Bought and held, it returned ${pct(hold, Math.abs(hold) >= 10 ? 0 : 1)} over this period.`;
+  const mine = tradeCount === 0 ? 'No trades.' : `${tradeCount} ${tradeCount === 1 ? 'trade' : 'trades'}. The strategy held the ticker ${pct(share, share < 0.1 ? 1 : 0)} of the time.`;
+  return hold === null ? mine : `${mine} Buy and hold returned ${pct(hold, Math.abs(hold) >= 10 ? 0 : 1)} in this period.`;
 }

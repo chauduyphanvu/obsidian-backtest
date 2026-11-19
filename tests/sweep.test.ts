@@ -43,9 +43,9 @@ test('the grid steps through each range, adds a declared value that is off the s
 
 test('a sweep above the limit is refused with a clear message', async () => {
   assert.equal(sweepLimit(2000), null);
-  assert.match(sweepLimit(2001)!, /2,001 variants.*the most this runs at once is 2,000/);
+  assert.match(sweepLimit(2001)!, /2,001 variants\. The maximum for one sweep is 2,000/);
   const src = 'universe: A\nfast = 25 in 20..40 step 10\nslow = 5 in 4..6\nbuy when sma(fast) > sma(slow)';
-  await assert.rejects(runSweep(src, new Map([['A', bars([1, 2, 3])]]), { maxRuns: 10 }), /12 variants.*most this runs at once is 10/);
+  await assert.rejects(runSweep(src, new Map([['A', bars([1, 2, 3])]]), { maxRuns: 10 }), /12 variants\. The maximum for one sweep is 10/);
 });
 
 test('a variant that fails to parse is recorded with its error, and the others run', async () => {
@@ -53,7 +53,7 @@ test('a variant that fails to parse is recorded with its error, and the others r
   const progress: number[] = [];
   const r = await runSweep('universe: A\nn = 2 in 0..2\nbuy when close > sma(n)', new Map([['A', A]]), { onProgress: (done, total) => progress.push(done * 10 + total) });
   assert.deepEqual(r.points.map((p) => [p.values.n, p.error === null]), [[0, false], [1, true], [2, true]]);
-  assert.match(r.points[0].error!, /sma\(\): 0 is not a valid period/);
+  assert.match(r.points[0].error!, /sma\(\): 0 is not a permitted period/);
   assert.equal(r.points[0].stats, null);
   assert.ok(r.points[1].stats && r.points[2].trades === 1);
   assert.deepEqual(progress, [13, 23, 33]);

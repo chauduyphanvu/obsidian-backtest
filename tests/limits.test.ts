@@ -50,10 +50,10 @@ test('a run whose bars are mostly the smaller bars of magnify is told that a lon
   assert.deepEqual(size, { bars: 1_250_000, tickers: 1, ruleWork: 50_000, windowWork: 0, inside: 1_200_000 });
   assert.equal(
     sizeRefusal(size, 'worker'),
-    'This run has 1.3 million bars across 1 ticker; the limit is 1 million. Most of them are the smaller bars of "magnify", so a longer "magnify" size, a later "from" date or fewer tickers make it smaller.',
+    'This run has 1.3 million bars across 1 ticker. The limit is 1 million. Most of them are the smaller bars of "magnify". To make it smaller, use a longer "magnify" size, move the "from" date forward or use a smaller number of tickers.',
   );
   // When the smaller bars are the lesser part, the advice is as for any run.
-  assert.match(sizeRefusal({ ...size, bars: 2_500_000 }, 'worker')!, /\. A later "from" date, a longer "interval" or fewer tickers make it smaller\.$/);
+  assert.match(sizeRefusal({ ...size, bars: 2_500_000 }, 'worker')!, /\. To make it smaller, move the "from" date forward, use a longer "interval" or use a smaller number of tickers\.$/);
 });
 
 test('below every limit nothing is refused, in the worker or here', () => {
@@ -65,16 +65,16 @@ test('below every limit nothing is refused, in the worker or here', () => {
 test('too many bars is refused with the numbers and what makes the run smaller', () => {
   assert.equal(
     sizeRefusal(size({ bars: 2_134_567, tickers: 40 }), 'worker'),
-    'This run has 2.1 million bars across 40 tickers; the limit is 1 million. A later "from" date, a longer "interval" or fewer tickers make it smaller.',
+    'This run has 2.1 million bars across 40 tickers. The limit is 1 million. To make it smaller, move the "from" date forward, use a longer "interval" or use a smaller number of tickers.',
   );
   assert.equal(sizeRefusal(size({ bars: LIMITS.worker.bars }), 'worker'), null);
-  assert.match(sizeRefusal(size({ bars: LIMITS.worker.bars + 1 }), 'worker')!, /has 1,000,001 bars across 1 ticker; the limit is 1,000,000\./);
+  assert.match(sizeRefusal(size({ bars: LIMITS.worker.bars + 1 }), 'worker')!, /has 1,000,001 bars across 1 ticker\. The limit is 1,000,000\./);
 });
 
 test('long rules on many bars are refused with the values they would work out', () => {
   assert.equal(
     sizeRefusal(size({ bars: 300_000, ruleWork: 36_000_000 }), 'worker'),
-    'Its rules work out 36 million values, one for each part of a ticker\'s rules on each of its bars; the limit is 25 million. Shorter rules, a later "from" date, a longer "interval" or fewer tickers make it smaller.',
+    'Its rules calculate 36 million values: one for each part of the rules of a ticker on each of its bars. The limit is 25 million. To make it smaller, use shorter rules, move the "from" date forward, use a longer "interval" or use a smaller number of tickers.',
   );
 });
 
@@ -83,14 +83,14 @@ test('long periods are refused only on the main thread, where a run cannot be st
   assert.equal(sizeRefusal(heavy, 'worker'), null);
   assert.equal(
     sizeRefusal(heavy, 'here'),
-    'Backtests run in the foreground here, so Obsidian does not respond while one runs. Its functions read 1.5 billion prices, the period of each function on each bar; the limit here is 200 million. Shorter periods, a later "from" date or a longer "interval" make it smaller.',
+    'Backtests run in the foreground here. Obsidian cannot do other work while a backtest runs. Its functions read 1.5 billion prices: the period of each function on each bar. The limit here is 200 million. To make it smaller, use shorter periods, move the "from" date forward or use a longer "interval".',
   );
 });
 
 test('on the main thread every limit is stricter, and says why', () => {
   for (const key of ['bars', 'ruleWork', 'windowWork'] as const) assert.ok(LIMITS.here[key] < LIMITS.worker[key], key);
   const refusal = sizeRefusal(size({ bars: 300_000 }), 'here')!;
-  assert.equal(refusal, 'Backtests run in the foreground here, so Obsidian does not respond while one runs. This run has 300,000 bars across 1 ticker; the limit here is 200,000. A later "from" date, a longer "interval" or fewer tickers make it smaller.');
+  assert.equal(refusal, 'Backtests run in the foreground here. Obsidian cannot do other work while a backtest runs. This run has 300,000 bars across 1 ticker. The limit here is 200,000. To make it smaller, move the "from" date forward, use a longer "interval" or use a smaller number of tickers.');
   assert.equal(sizeRefusal(size({ bars: 300_000 }), 'worker'), null);
 });
 
@@ -114,17 +114,17 @@ test('durations are whole seconds or minutes', () => {
 test('a stopped run says how long it ran, how large it is, and what makes it faster', () => {
   assert.equal(
     timeMessage(10_000, size({ bars: 900_000, tickers: 3 })),
-    'This backtest was stopped after 10 seconds, the most one run may take. It has 900,000 bars across 3 tickers. A later "from" date, a longer "interval", fewer tickers or shorter periods make it faster.',
+    'The plugin stopped this backtest after 10 seconds, the maximum time for one run. It has 900,000 bars across 3 tickers. To make it faster, move the "from" date forward, use a longer "interval", use a smaller number of tickers or use shorter periods.',
   );
-  assert.equal(timeMessage(120_000, null), 'This was stopped after 2 minutes without finishing a backtest, the most one may take.');
+  assert.equal(timeMessage(120_000, null), 'The plugin stopped this after 2 minutes, the maximum time for one backtest, before a backtest was complete.');
 });
 
 test('a limit error says which limit, and whether it may be run anyway', () => {
   const e = new LimitError('time', 'stopped', true);
   assert.ok(e instanceof Error);
   assert.deepEqual([e.kind, e.anyway, e.message, e.name], ['time', true, 'stopped', 'LimitError']);
-  assert.equal(anywayLabel(e), 'Run it anyway, for up to 2 minutes');
-  assert.equal(anywayLabel(new LimitError('size', 'too large', true)), 'Run it anyway');
+  assert.equal(anywayLabel(e), 'Run it again for a maximum of 2 minutes');
+  assert.equal(anywayLabel(new LimitError('size', 'too large', true)), 'Run it with no size limit');
 });
 
 test('a result is weighed by its prices, steps, trades and fills', () => {

@@ -54,7 +54,7 @@ test('a plain rule: one column each for the rules, the two sides of each compari
     '',
     'Buy rule held: bought at the next open (2020-01-03) at 12.00.',
     'Bought at the open at 12.00.',
-    'Buy rule held but already long.',
+    'Buy rule held, but a long position was open.',
     'Sell rule held: sold at the next open (2020-01-06) at 9.00.',
     'Sold at the open at 9.00.',
     '',
@@ -79,7 +79,7 @@ test('and, or and not: a column for each part and one for the whole, and an unkn
     ['test', 2, false, 'close < 5'],
     ['join', 0, true, 'close > sma(3) and not close < 5'],
   ]);
-  assert.equal(cols[3].heading, 'Whole rule');
+  assert.equal(cols[3].heading, 'Full rule');
   const rows = rowsOf(bt);
   assert.deepEqual(outcomes(rows, 0), ['unknown', 'unknown', 'yes', 'yes', 'yes', 'no']);
   assert.deepEqual(outcomes(rows, 1), ['yes', 'yes', 'yes', 'yes', 'yes', 'no']);
@@ -87,9 +87,9 @@ test('and, or and not: a column for each part and one for the whole, and an unkn
   // and: unknown while one part is unknown and the other holds; false as soon as one part is false.
   assert.deepEqual(outcomes(rows, 3), ['unknown', 'unknown', 'yes', 'yes', 'yes', 'no']);
   assert.deepEqual(rows.map((r) => r.buy), ['unknown', 'unknown', 'yes', 'yes', 'yes', 'no']);
-  assert.deepEqual(rows[0].cells[0].note, 'still warming up');
+  assert.deepEqual(rows[0].cells[0].note, 'its warm-up is not complete');
   assert.equal(cellText(cols[0], rows[0].cells[0]).main, '10 > unknown');
-  assert.equal(cellText(cols[0], rows[0].cells[0]).detail, 'still warming up');
+  assert.equal(cellText(cols[0], rows[0].cells[0]).detail, 'its warm-up is not complete');
   // The chain a near miss is judged on is the top-level parts of the `and`.
   assert.deepEqual(rows.map((r) => r.buyChain), [['unknown', 'yes'], ['unknown', 'yes'], ['yes', 'yes'], ['yes', 'yes'], ['yes', 'yes'], ['no', 'no']]);
 
@@ -113,8 +113,8 @@ test('a cross shows the bar before as well, and is unknown while the bar before 
   const c = rows[4].cells[0];
   assert.ok(near(c.a, 10.5) && near(c.b, 10.333333333333334) && near(c.pa, 9.5) && near(c.pb, 9.666666666666666));
   assert.deepEqual(cellText(cols[0], c), { main: '10.50 vs 10.33', detail: 'before 9.50 vs 9.67' });
-  assert.equal(rows[0].cells[0].note, 'still warming up');
-  assert.equal(rows[2].cells[0].note, 'the bar before is unknown');
+  assert.equal(rows[0].cells[0].note, 'its warm-up is not complete');
+  assert.equal(rows[2].cells[0].note, 'the previous bar is unknown');
   assert.equal(rows[4].what, 'Buy rule held: bought at the next open (2020-01-06) at 12.00.');
   // crosses below
   const down = run('universe: A\nbuy when true\nsell when sma(2) crosses below sma(3)', { A: bars([10, 11, 12, 11, 9, 8]) });
@@ -132,7 +132,7 @@ test('of: another ticker on its own calendar is read at the bar that had ended, 
   const rows = rowsOf(bt);
   assert.deepEqual(rows.map((r) => r.cells[0].a), [NaN, 15, 15, 25, 25, 30, 30, 18, 18, 40]);
   assert.deepEqual(outcomes(rows, 0), ['unknown', 'no', 'no', 'yes', 'yes', 'yes', 'yes', 'no', 'no', 'yes']);
-  assert.equal(rows[0].cells[0].note, 'B had no finished bar yet');
+  assert.equal(rows[0].cells[0].note, 'B had no full bar at that time');
   assert.equal(cellText(cols[0], rows[0].cells[0]).main, 'unknown > 20');
   assert.equal(rows[3].what, 'Buy rule held: bought at the next open (2020-01-05) at 10.00.');
 });
@@ -209,7 +209,7 @@ test('each kind of exit appears at the bar it filled: sell rule, stop loss, trai
   const rule = run('universe: A\ncapital: 1000\nbuy when close > 10\nsell when close > 13', { A: bars([10, 12, 12, 14, 14, 14]) });
   const r = rowsOf(rule);
   assert.equal(r[3].what, 'Sell rule held: sold at the next open (2020-01-05) at 14.00.');
-  assert.equal(r[4].what, 'Sold at the open at 14.00. Buy rule held, but the sell rule held too, so no buy.');
+  assert.equal(r[4].what, 'Sold at the open at 14.00. Buy rule held, but the sell rule also held. Thus no buy.');
   assert.deepEqual(r[3].events.map((e) => [e.k, 'stage' in e ? e.stage : '']), [['sell', 'decided']]);
 });
 
@@ -220,8 +220,8 @@ test('after a stop the buy rule has to stop holding: each bar it held is explain
   const rows = rowsOf(bt);
   assert.deepEqual(bt.run.trades.map((t) => [t.entryT, t.exitT, t.reason]), [[day(2), day(3), 'stop loss'], [day(8), day(9), 'open']]);
   assert.deepEqual(bt.run.trades[1].why!.rearm, { exitT: day(3), heldT: day(5), clearedT: day(6) });
-  assert.equal(rows[3].what, 'Stopped out at 10.80. Buy rule held but waiting for the rule to stop holding after this stop loss.');
-  for (const i of [4, 5]) assert.equal(rows[i].what, 'Buy rule held but waiting for the rule to stop holding after the stop loss on 2020-01-04.');
+  assert.equal(rows[3].what, 'Stopped out at 10.80. Buy rule held, but after this stop loss, the rule must become false first.');
+  for (const i of [4, 5]) assert.equal(rows[i].what, 'Buy rule held, but after the stop loss on 2020-01-04, the rule must become false first.');
   assert.deepEqual(rows.map((r) => kinds(r).includes('rearm')), [false, false, false, true, true, true, false, false, false, false]);
   assert.equal(rows[6].what, '');
   assert.equal(rows[7].what, 'Buy rule held: bought at the next open (2020-01-09) at 12.00.');
@@ -230,14 +230,14 @@ test('after a stop the buy rule has to stop holding: each bar it held is explain
   assert.deepEqual(debugRows(bt, 'A', 4, 7), rows.slice(4, 7));
 });
 
-test('a buy that waited for an input still warming up: the bars it waited and the bar it was bought at', () => {
+test('a buy that waited for an input its warm-up is not complete: the bars it waited and the bar it was bought at', () => {
   // ATR(3) is first known on day 2, so the signals on days 0 and 1 are held back and the buy is signalled on day 2.
   const A = bars([10, 11, 12, 13, 12, 14, 15, 16]);
   const bt = run('universe: A\ncapital: 1000\nstop loss: 2 atr(3)\nbuy when close > 5', { A });
   assert.deepEqual(bt.run.skipped, [{ asset: 'A', input: 'stop loss', n: 3, count: 1 }]);
   assert.deepEqual(bt.run.trades[0].why!.warmup, { input: 'stop loss', n: 3, fromT: day(0) });
   const rows = rowsOf(bt);
-  const waited = 'Buy rule held, but the buy waited: the 3-bar ATR for the stop loss was still unknown.';
+  const waited = 'Buy rule held, but the buy waited: the 3-bar ATR for the stop loss was unknown.';
   assert.deepEqual(rows.slice(0, 3).map((r) => r.what), [waited, waited, 'Buy rule held: bought at the next open (2020-01-04) at 12.00.']);
   assert.deepEqual(rows[0].events, [{ k: 'warmup', input: 'stop loss', n: 3 }]);
 });
@@ -248,8 +248,8 @@ test('a buy that waited names the input the trade says it waited for', () => {
   const risk = run('universe: A\ncapital: 1000\nrisk per trade: 1% at 2 atr(3)\nbuy when close > 5', { A });
   assert.deepEqual(risk.run.trades[0].why!.warmup, { input: 'risk per trade', n: 3, fromT: day(0) });
   assert.deepEqual(rowsOf(risk).slice(0, 3).map((r) => r.what), [
-    'Buy rule held, but the buy waited: the 3-bar ATR for risk per trade was still unknown.',
-    'Buy rule held, but the buy waited: the 3-bar ATR for risk per trade was still unknown.',
+    'Buy rule held, but the buy waited: the 3-bar ATR for risk per trade was unknown.',
+    'Buy rule held, but the buy waited: the 3-bar ATR for risk per trade was unknown.',
     'Buy rule held: bought at the next open (2020-01-04) at 12.00.',
   ]);
   // The returns start on day 1, so a volatility over three of them is known from day 3.
@@ -258,7 +258,7 @@ test('a buy that waited names the input the trade says it waited for', () => {
     const rows = rowsOf(vol, name);
     assert.deepEqual(vol.run.trades.find((t) => t.asset === name)!.why!.warmup, { input: 'inverse volatility', n: 3, fromT: day(0) });
     assert.deepEqual(rows.slice(0, 3).map((r) => r.events), Array(3).fill([{ k: 'warmup', input: 'inverse volatility', n: 3 }]));
-    assert.equal(rows[0].what, 'Buy rule held, but the buy waited: the 3-bar volatility for inverse volatility weighting was still unknown.');
+    assert.equal(rows[0].what, 'Buy rule held, but the buy waited: the 3-bar volatility for inverse volatility weighting was unknown.');
     assert.equal(rows[3].what.startsWith('Buy rule held: bought at the next open (2020-01-05)'), true);
   }
 });
@@ -266,7 +266,7 @@ test('a buy that waited names the input the trade says it waited for', () => {
 test('an unknown value says why when that is cheap to tell', () => {
   const A = bars([10, 12, 14, 16, 18, 20, 22]);
   const back = rowsOf(run('universe: A\nbuy when close[3] > 10', { A }));
-  assert.deepEqual(back.slice(0, 4).map((r) => r.cells[0].note), Array(3).fill('looks back past the first bar').concat(['']));
+  assert.deepEqual(back.slice(0, 4).map((r) => r.cells[0].note), Array(3).fill('it reads a bar before the first bar').concat(['']));
   assert.deepEqual(back.map((r) => r.cells[0].outcome), ['unknown', 'unknown', 'unknown', 'no', 'yes', 'yes', 'yes']);
   const zero = rowsOf(run('universe: A\nbuy when 1 / (close - close) > 1', { A }));
   assert.equal(zero[2].cells[0].note, 'divides by 0');
@@ -291,7 +291,7 @@ test('a buy and a sell both signalled at one close: the buy is skipped, and the 
   const bt = run('universe: A\ncapital: 1000\nbuy when close > 10\nsell when close > 11', { A });
   assert.equal(bt.run.trades.length, 0);
   const rows = rowsOf(bt);
-  assert.deepEqual(rows.map((r) => r.what), ['', ...Array(3).fill('Buy rule held, but the sell rule held too, so no buy.')]);
+  assert.deepEqual(rows.map((r) => r.what), ['', ...Array(3).fill('Buy rule held, but the sell rule also held. Thus no buy.')]);
 });
 
 test('an order from the last bar is pending, and a buy rule that held with nothing in the way and no trade means no cash', () => {
@@ -299,15 +299,15 @@ test('an order from the last bar is pending, and a buy rule that held with nothi
   const bt = run('universe: A\ncapital: 1000\nbuy when close > 10', { A });
   assert.equal(bt.run.trades.length, 0);
   assert.equal(bt.run.states[0].pending, 'buy');
-  assert.equal(rowsOf(bt)[3].what, 'Order pending: buy at the next open.');
+  assert.equal(rowsOf(bt)[3].what, 'An order to buy waits for the next open.');
   // A sell signalled at the last bar of a position still held.
   const held = run('universe: A\ncapital: 1000\nbuy when close > 10\nsell when close > 13', { A: bars([10, 12, 12, 14]) });
   assert.equal(held.run.trades[0].reason, 'open');
-  assert.equal(rowsOf(held)[3].what, 'Order pending: sell at the next open.');
+  assert.equal(rowsOf(held)[3].what, 'An order to sell waits for the next open.');
   // The run records no buy at day 1, though the rule held; with no sell rule, no stop and no warm-up, only an empty purse is left.
   const filled = run('universe: A\ncapital: 1000\nbuy when close > 10', { A: bars([10, 12, 12, 12]) });
   const none = { ...filled, run: { ...filled.run, trades: [] } };
-  assert.equal(rowsOf(none)[1].what, 'Buy rule held, but no buy was made: no cash was free.');
+  assert.equal(rowsOf(none)[1].what, 'Buy rule held, but no buy was made: there was no free cash.');
 });
 
 test('a ranked strategy: the score at every bar, the place among the eligible at decision bars, and the ranking in the words', () => {
@@ -326,10 +326,10 @@ test('a ranked strategy: the score at every bar, the place among the eligible at
   assert.deepEqual(rowsOf(bt, 'B').map((r) => cellText(debugColumns(bt, 'B')[1], r.cells[1]).main), ['2nd of 3', '1st of 3', '3rd of 3', '1st of 3', '2nd of 3', '3rd of 3']);
   assert.deepEqual(rowsOf(bt, 'B').map((r) => r.what), [
     'Ranked 2nd of 3: only the best 1 is held.',
-    'Chosen by the ranking, 1st of 3: bought at the next open (2020-01-03) at 11.00.',
-    'Bought at the open at 11.00. The ranking no longer holds it: sold at the next open (2020-01-04) at 9.00.',
-    'Sold at the open at 9.00. Chosen by the ranking, 1st of 3: bought at the next open (2020-01-05) at 12.00.',
-    'Bought at the open at 12.00. The ranking no longer holds it: sold at the next open (2020-01-06) at 9.00.',
+    'Selected by the ranking, 1st of 3: bought at the next open (2020-01-03) at 11.00.',
+    'Bought at the open at 11.00. The ranking removed it: sold at the next open (2020-01-04) at 9.00.',
+    'Sold at the open at 9.00. Selected by the ranking, 1st of 3: bought at the next open (2020-01-05) at 12.00.',
+    'Bought at the open at 12.00. The ranking removed it: sold at the next open (2020-01-06) at 9.00.',
     'Sold at the open at 9.00. Ranked 3rd of 3: only the best 1 is held.',
   ]);
   // The place computed from the rules is the place the trades recorded.
@@ -764,7 +764,7 @@ for (const c of CASES) {
           assert.ok(named, `${asset} ${stamp(e.t, intraday)}: the fill row names entry ${k + 1}`);
           assert.ok(fill.what.includes(`entry ${k + 1} of ${n}`) && fill.what.includes(price(e.price)), fill.what);
           const moved = tr.why!.adds![k - 1];
-          assert.ok(fill.what.includes(`Average entry price now ${price(moved.average)}`), fill.what);
+          assert.ok(fill.what.includes(`Average entry price changed to ${price(moved.average)}`), fill.what);
           if (moved.stopLoss !== null) assert.ok(fill.what.includes(`stop loss moved to ${price(moved.stopLoss)}`), fill.what);
           const decision = at(e.signalT);
           assert.ok(decision.events.some((x) => x.k === 'add' && x.trade === tr && x.entry === k + 1 && x.stage !== 'filled'), `${asset} ${stamp(e.signalT, intraday)}: the decision row names entry ${k + 1}`);

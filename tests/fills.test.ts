@@ -34,7 +34,7 @@ test('a Schwab export with its title above and its totals below', () => {
   assert.deepEqual(r.left, { dividends: 1, reinvestments: 2, transfers: 1, other: 2 });
   // The short sale is read as a trade, of a ticker no strategy trades.
   assert.deepEqual(r.untraded, [{ ticker: 'AAPL', rows: 1 }, { ticker: 'GME', rows: 1 }]);
-  assert.deepEqual(r.unread, [{ line: 14, why: 'the action "Conversion" is not a purchase or a sale this reads' }]);
+  assert.deepEqual(r.unread, [{ line: 14, why: 'the plugin cannot read the action "Conversion" as a buy or a sell' }]);
   // The title and the totals line.
   assert.equal(r.ignored, 2);
 });
@@ -98,7 +98,7 @@ test('an Interactive Brokers Flex query with its header and trailer records', ()
   ]);
   assert.deepEqual(r.untraded, [{ ticker: 'SPY 260515C00520000', rows: 1 }]);
   // A cancelled trade is reported, not read as a purchase.
-  assert.deepEqual(r.unread, [{ line: 9, why: 'the action "BUY (Ca.)" is not a purchase or a sale this reads' }]);
+  assert.deepEqual(r.unread, [{ line: 9, why: 'the plugin cannot read the action "BUY (Ca.)" as a buy or a sell' }]);
   assert.equal(r.ignored, 6);
 });
 
@@ -178,7 +178,7 @@ test('rows that cannot be read are reported with their line, and a totals row is
   const r = read(text);
   assert.deepEqual(r.unread, [
     { line: 2, why: '"someday" is not a date' },
-    { line: 3, why: 'it names no ticker' },
+    { line: 3, why: 'it has no ticker' },
     { line: 4, why: '"" is not a price' },
     { line: 5, why: '"-" is not a price' },
   ]);
@@ -201,11 +201,11 @@ test('a fills columns setting reads back as written, and its mistakes are named'
   assert.deepEqual(c, { date: 'Run Date', ticker: 'Symbol', side: 'Action', quantity: 'Quantity', price: 'Price ($)', fees: ['Commission ($)', 'Fees ($)'] });
   assert.equal(fillColumnsText(c as object), text);
   assert.deepEqual(parseFillColumns(' PRICE=Px ;'), { price: 'Px' });
-  assert.match(parseFillColumns('cost = Fee') as string, /"cost = Fee" does not say which column holds what/);
+  assert.match(parseFillColumns('cost = Fee') as string, /"cost = Fee" does not give a part and its column/);
   assert.equal(parseFillColumns('price = Px; price = Py'), 'price is named twice');
   assert.equal(parseFillColumns('price ='), 'Write the header of the price column after "price ="');
   assert.equal(parseFillColumns('fees = A + '), 'Write each fees header between the + signs');
-  assert.match(parseFillColumns(' ; ') as string, /Name at least one column/);
+  assert.match(parseFillColumns(' ; ') as string, /Write one or more columns/);
 });
 
 // --- Matching ------------------------------------------------------------------------------------------------------
@@ -692,7 +692,7 @@ test("a short strategy's fills: its short sale and its cover matched on their si
   assert.deepEqual([cover.model!.side, cover.model!.action, cover.daysLate], ['buy', 'cover', 1]);
   assert.ok(near(cover.late, 10) && cover.slippage === 0);
   assert.ok(near(r.total, 5 + 2 + 10 + 0.03));
-  assert.equal(costHeadline(r, june(1)), 'Not following the rules cost $17.03 since 2026-06-01.');
+  assert.equal(costHeadline(r, june(1)), 'From 2026-06-01, the differences between your trades and the strategies cost $17.03.');
   assert.deepEqual(matchCells(short), ['2026-06-02', 'SPY', 'On time', 'Sell short 10 at 100.00', 'Sell short 10 at 99.50', '+50.0 bps', '$5.02']);
   assert.deepEqual(matchCells(cover).slice(2, 5), ['Late by 1 trading day', 'Buy to cover 10 at 90.00', 'Buy to cover 10 at 91.00']);
   assert.deepEqual(r.suggested.map((x) => x.line), ['slippage: 50 bps', 'slippage: 20 bps']);
@@ -710,7 +710,7 @@ test('slippage on the short side: selling short higher and covering lower than t
   ]);
   const worse = matchFills([S], [shortFill(june(2), 'SPY', 'sell', 10, 99.6, 0, 2), shortFill(june(4), 'SPY', 'buy', 10, 95.1, 0, 3)], SIZED);
   assert.deepEqual(worse.rows.map((x) => Number(x.slippage.toFixed(6))), [4, 1]);
-  assert.equal(costHeadline(better, june(1)), 'Not following the rules made $5.00 since 2026-06-01.');
+  assert.equal(costHeadline(better, june(1)), 'From 2026-06-01, the differences between your trades and the strategies made $5.00.');
 });
 
 test('a short sale not made: a rise since is a loss avoided, a fall a gain missed, and one still waiting costs nothing yet', () => {
@@ -718,7 +718,7 @@ test('a short sale not made: a rise since is a loss avoided, a fall a gain misse
   const S = ONE([[june(2), 'SPY', -10, 100]]);
   const rose = matchFills([S], [], SIZED);
   assert.deepEqual(rose.rows.map((x) => [x.class, x.model!.action, x.skipped, x.move]), [['skipped', 'short', -200, -0.2]]);
-  assert.deepEqual(matchCells(rose.rows[0]).slice(2, 4), ['Not made, would have lost 20.0%', 'Sell short 10 at 100.00']);
+  assert.deepEqual(matchCells(rose.rows[0]).slice(2, 4), ['Not made, loss of 20.0% if made', 'Sell short 10 at 100.00']);
   const fell = matchFills([S], [], { ...SIZED, last: { SPY: 90 } });
   assert.deepEqual(fell.rows.map((x) => [x.skipped, x.move]), [[100, 0.1]]);
   // Half made: the rest is partial, costed the same way.

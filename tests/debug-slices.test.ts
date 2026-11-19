@@ -202,10 +202,10 @@ test('a file that would pass about 20 MB is asked about, in the section, with it
   assert.equal(csvAsk({ bars: 0, bytes: 0 }, 0), null);
   const big = csvAsk({ bars: 300_000, bytes: 125_000_000 }, 60)!;
   assert.deepEqual(big, {
-    text: 'The file with every bar would be about 125 MB (300,000 bars). Save every bar, or only the 60 bars shown?',
+    text: 'The file with all bars is approximately 125 MB (300,000 bars). Save all bars, or only the 60 bars shown?',
     all: true,
   });
-  assert.equal(csvAsk({ bars: 40_000, bytes: CSV_ASK_BYTES + 1 }, 1)!.text, 'The file with every bar would be about 20 MB (40,000 bars). Save every bar, or only the 1 bar shown?');
+  assert.equal(csvAsk({ bars: 40_000, bytes: CSV_ASK_BYTES + 1 }, 1)!.text, 'The file with all bars is approximately 20 MB (40,000 bars). Save all bars, or only the 1 bar shown?');
   const huge = csvAsk({ bars: 1_000_000, bytes: CSV_MAX_BYTES + 1 }, 60)!;
-  assert.deepEqual(huge, { text: 'The file with every bar would be about 400 MB (1,000,000 bars), too large to save as one file. Save only the 60 bars shown?', all: false });
+  assert.deepEqual(huge, { text: 'The file with all bars is approximately 400 MB (1,000,000 bars). This is too large to save as one file. Save only the 60 bars shown?', all: false });
 });

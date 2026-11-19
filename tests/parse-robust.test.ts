@@ -67,7 +67,7 @@ test('long chains and loops of definitions are normal errors, and a long list of
   for (const backwards of [false, true]) {
     const out = attempt(chain(3000, backwards));
     assert.ok(!(out instanceof Error), `a chain of 3000 definitions, ${backwards ? 'last first' : 'in order'}: ${out instanceof Error ? out.message : ''}`);
-    assert.ok(out.errors.some((e) => /nests too deeply/.test(e.message)));
+    assert.ok(out.errors.some((e) => /has too many levels/.test(e.message)));
   }
   assert.deepEqual(attempt(chain(40, true)) instanceof Error ? ['threw'] : (attempt(chain(40, true)) as ReturnType<typeof parseSpec>).errors, []);
   const loop = attempt(['universe: SPY', ...Array.from({ length: 2000 }, (_, i) => `a${i} = a${(i + 1) % 2000} and close > 1`), 'buy when a0'].join('\n'));
@@ -80,7 +80,7 @@ test('long chains and loops of definitions are normal errors, and a long list of
 const deep = (rule: string) => `universe: SPY\nbuy when ${rule}`;
 
 test('parseSpec never throws on adversarial text, and nesting past 64 levels is a normal error', () => {
-  const tooDeep = /nests too deeply/;
+  const tooDeep = /has too many levels/;
   const cases: [string, RegExp | null][] = [
     [deep('('.repeat(100_000) + 'close > 1' + ')'.repeat(100_000)), tooDeep],
     [deep('('.repeat(100_000)), tooDeep],
@@ -92,7 +92,7 @@ test('parseSpec never throws on adversarial text, and nesting past 64 levels is 
     [deep('close' + ' of SPY'.repeat(100_000) + ' > 0'), tooDeep],
     [deep('sma('.repeat(10_000) + 'close, 2' + ', 2)'.repeat(10_000) + ' > 0'), tooDeep],
     [deep('close > ' + 'x'.repeat(1_000_000)), /Unknown name/],
-    ['universe: ' + 'SPY, '.repeat(100_000) + 'TLT\nbuy when true', /listed twice/],
+    ['universe: ' + 'SPY, '.repeat(100_000) + 'TLT\nbuy when true', /is in the list two times/],
     ['buy when close > 1\n'.repeat(50_000), null],
     [' '.repeat(1_000_000), null],
     ['\0\u0001\u0002\u001b[31m\r\n  ﻿', null],

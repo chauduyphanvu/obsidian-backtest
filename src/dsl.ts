@@ -351,7 +351,7 @@ const SETTING_LINE = new RegExp(SETTING_NAME.source + String.raw`\s*(.*)$`);
 const MAX_GROWN = 3000;
 /** Deepest an expression may nest: brackets, function calls and operators each add a level. */
 const MAX_DEPTH = 64;
-const TOO_DEEP = `This rule nests too deeply. Keep it to at most ${MAX_DEPTH} levels of brackets, functions and operators`;
+const TOO_DEEP = `This rule has too many levels. The maximum is ${MAX_DEPTH} levels of brackets, functions and operators`;
 
 /** Where a problem is: a line, and columns in it when they are known. */
 interface At {
@@ -370,7 +370,7 @@ class SpecError extends Error {
 
 /** A definition written where only a number or a parameter can go; `needs` says what that place takes. */
 function notADefinition(where: At, name: string, needs: string, example: string): SpecError {
-  return new SpecError(where, `"${name}" is a definition, and ${needs}. Declare it as a parameter instead, as in ${name} = ${example}`);
+  return new SpecError(where, `"${name}" is a definition, but ${needs}. Change it to a parameter, for example ${name} = ${example}`);
 }
 
 /** A position value read where no position can be: kept apart so a definition that reads one is blamed at its use. */
@@ -421,7 +421,7 @@ function lex(text: string, line: number, offset: number, out: Tok[]): void {
       if (word === 'of') {
         // A ticker can hold characters that are operators elsewhere (BTC-USD, BRK.B, ^VIX).
         const sym = text.slice(i).match(/^\s*([A-Za-z0-9^:/._=-]+)/);
-        if (!sym) throw new SpecError({ line, from: offset + start, to: offset + i }, 'Expected a ticker after "of"');
+        if (!sym) throw new SpecError({ line, from: offset + start, to: offset + i }, 'Write a ticker after "of"');
         push('op', 'of', start, i);
         push('sym', sym[1], i + sym[0].length - sym[1].length, i + sym[0].length);
         i += sym[0].length;
@@ -478,7 +478,7 @@ export function isBool(e: Expr): boolean {
   }
 }
 
-const COLUMN_USAGE = 'column needs the name of a column in brackets, as in column(score) of signals. A name is letters, digits and underscores; a header with spaces goes in quotes, as in column("News Sentiment")';
+const COLUMN_USAGE = 'Write the name of the column in brackets after column, for example column(score) of signals. A name can have letters, digits and underscores. Put a header with spaces in quotation marks, for example column("News Sentiment")';
 
 /**
  * The parts of a rule that stand for one thing the user wrote, so a table of its parts keeps them whole instead of opening
@@ -582,7 +582,7 @@ const COLUMN_EXAMPLE = 'column(score) of csv:Data/signals.csv';
 
 /** Why a column cannot be read from a ticker whose prices come from `source`. */
 function notCsv(name: string, asset: string, source: Source): string {
-  return `${asset} comes from ${SOURCE_NAME[source]}, not from a CSV file, so it has no column called ${name}. Name the file, as in ${COLUMN_EXAMPLE.replace('score', name)}`;
+  return `${asset} comes from ${SOURCE_NAME[source]}, not from a CSV file. Thus it has no column with the name ${name}. Write the file name, for example ${COLUMN_EXAMPLE.replace('score', name)}`;
 }
 
 /** A `name = expression` line: a name for a condition or a number, replaced by its expression wherever it is used. */
@@ -706,7 +706,7 @@ class ExprParser {
   parseCondition(): Expr {
     const e = this.or();
     this.expectEnd();
-    if (!isBool(e)) throw new SpecError(this.spanFrom(0), 'A rule needs a condition, such as close > sma(200)');
+    if (!isBool(e)) throw new SpecError(this.spanFrom(0), 'A rule must have a condition, for example close > sma(200)');
     return e;
   }
 
@@ -720,7 +720,7 @@ class ExprParser {
   parseNumber(what: string): Expr {
     const e = this.or();
     this.expectEnd();
-    if (isBool(e)) throw new SpecError(this.spanFrom(0), `${what} needs a number, such as roc(126), not a condition`);
+    if (isBool(e)) throw new SpecError(this.spanFrom(0), `${what} must be a number, for example roc(126), not a condition`);
     return e;
   }
 
@@ -747,14 +747,14 @@ class ExprParser {
   }
   private expect(s: string): void {
     const t = this.next();
-    if (t.t !== 'op' || t.s !== s) throw new SpecError(at(t), `Expected "${s}"${t.t === 'end' ? '' : ` but found "${t.s}"`}`);
+    if (t.t !== 'op' || t.s !== s) throw new SpecError(at(t), `Write "${s}" here${t.t === 'end' ? '' : `, not "${t.s}"`}`);
   }
   private needBool(e: Expr, t: Tok, word: string): Expr {
-    if (!isBool(e)) throw new SpecError(at(t), `"${word}" needs a condition on each side, such as close > sma(200)`);
+    if (!isBool(e)) throw new SpecError(at(t), `"${word}" must have a condition on each side, for example close > sma(200)`);
     return e;
   }
   private needNum(e: Expr, t: Tok, what: string): Expr {
-    if (isBool(e)) throw new SpecError(at(t), `${what} needs a number, not a condition`);
+    if (isBool(e)) throw new SpecError(at(t), `${what} must have a number, not a condition`);
     return e;
   }
   /** Runs `fn` one level deeper, refusing to go past MAX_DEPTH before the call stack runs out. */
@@ -873,7 +873,7 @@ class ExprParser {
     const t = this.next();
     const example = 'rsi(2) between 10 and 30';
     const lo = this.sum();
-    if (!this.isId('and')) throw new SpecError(at(this.peek()), `"between" takes two values joined by "and", as in ${example}`);
+    if (!this.isId('and')) throw new SpecError(at(this.peek()), `"between" must have two values with "and" between them, for example ${example}`);
     this.next();
     const hi = this.sum();
     this.needNum(a, t, '"between"');
@@ -901,7 +901,7 @@ class ExprParser {
       const t = this.next();
       const every = t.s === 'for';
       const example = every ? 'close > sma(200) for 3 bars' : 'close > sma(200) within 3 bars';
-      if (!isBool(e)) throw new SpecError(at(t), `"${t.s}" needs a condition before it, as in ${example}`);
+      if (!isBool(e)) throw new SpecError(at(t), `Write a condition before "${t.s}", for example ${example}`);
       const n = this.next();
       const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
       const v = n.t === 'num' ? n.v : p?.value;
@@ -909,15 +909,15 @@ class ExprParser {
         throw notADefinition(at(n), n.s, 'the number of bars must be a number or a parameter', '3');
       }
       if (v === undefined || !Number.isInteger(v) || v < 1 || v > MAX_PERIOD) {
-        throw new SpecError(at(n), `"${t.s}" needs a whole number of bars from 1 to ${MAX_PERIOD}, as in ${example}`);
+        throw new SpecError(at(n), `"${t.s}" must have a whole number of bars from 1 to ${MAX_PERIOD}, for example ${example}`);
       }
       const unit = this.next();
-      if (unit.t !== 'id' || (unit.s !== 'bars' && unit.s !== 'bar')) throw new SpecError(at(unit), `Write "bars" after the number, as in ${example}`);
+      if (unit.t !== 'id' || (unit.s !== 'bars' && unit.s !== 'bar')) throw new SpecError(at(unit), `Write "bars" after the number, for example ${example}`);
       const pos = findPos(e);
       if (pos) {
         throw new SpecError(
           this.spanFrom(start),
-          `"${POSITION[pos]}" can't be read over several bars: it only exists for the open position at this bar. Read it outside the window, as in sell when bars held > 5 and close < sma(20) for 3 bars`,
+          `A rule cannot read "${POSITION[pos]}" for more than one bar. It is a value of the open position at this bar only. Read it in a condition with no window, for example sell when bars held > 5 and close < sma(20) for 3 bars`,
         );
       }
       if (p) this.used.add(p.name);
@@ -974,19 +974,19 @@ class ExprParser {
         const p = n.t === 'id' ? this.ctx.params.get(n.s) : undefined;
         const v = n.t === 'num' ? n.v : p?.value;
         if (n.t === 'id' && this.ctx.defs.has(n.s)) {
-          throw notADefinition(at(n), n.s, 'bars ago must be a whole number or a parameter', '5');
+          throw notADefinition(at(n), n.s, 'the number in [n] must be a whole number or a parameter', '5');
         }
-        if (v === undefined || !Number.isInteger(v) || v < 0) throw new SpecError(at(n), 'Bars ago must be a whole number, as in close[1]');
+        if (v === undefined || !Number.isInteger(v) || v < 0) throw new SpecError(at(n), 'The number in [n] must be a whole number, for example close[1]');
         this.expect(']');
         const pos = findPos(e);
-        if (pos) throw new SpecError(span(open, this.toks[this.i - 1]), `"${POSITION[pos]}" can't be read for an earlier bar with [n]`);
+        if (pos) throw new SpecError(span(open, this.toks[this.i - 1]), `A rule cannot read "${POSITION[pos]}" for a previous bar with [n]`);
         if (p) this.used.add(p.name);
         e = this.mark(this.node(p ? { k: 'lag', a: e, n: v, param: p.name } : { k: 'lag', a: e, n: v }, open, e), start);
       } else if (this.isOp('of')) {
         const of = this.next();
         const sym = this.next();
         const pos = findPos(e);
-        if (pos) throw new SpecError(span(of, sym), `"${POSITION[pos]}" belongs to the open position, so it can't be read with "of"`);
+        if (pos) throw new SpecError(span(of, sym), `"${POSITION[pos]}" is a value of the open position. You cannot use it with "of"`);
         const asset = this.ctx.resolveAsset(sym);
         const source = this.ctx.sourceOf(asset);
         const read = ownColumns(e)[0];
@@ -1016,7 +1016,7 @@ class ExprParser {
       if (LATER_WORDS.has(t.s) && (this.ctx.defs.has(t.s) || this.ctx.params.has(t.s))) {
         if (this.isOp('(')) {
           const [kind, name] = this.ctx.defs.has(t.s) ? ['definition', this.ctx.defs.get(t.s)!.name] : ['parameter', this.ctx.params.get(t.s)!.name];
-          throw new SpecError(at(t), `"${name}" is your ${kind} in this block, so ${t.s}() can't be used here. Rename it, such as my_${t.s}, to use ${t.s}()`);
+          throw new SpecError(at(t), `"${name}" is a ${kind} in this block. Thus you cannot use ${t.s}() here. To use ${t.s}(), change the name, for example to my_${t.s}`);
         }
         return this.declared(t)!;
       }
@@ -1043,7 +1043,7 @@ class ExprParser {
       ];
       throw new SpecError(at(t), `Unknown name "${t.s}". ${known.join('. ')}`);
     }
-    throw new SpecError(at(t), t.t === 'end' ? 'The rule ends too early' : `Unexpected "${t.s}"`);
+    throw new SpecError(at(t), t.t === 'end' ? 'The rule is not complete' : `Unexpected "${t.s}"`);
   }
 
   /** The block's own definition or parameter of this name, as the rule reads it; null when it has none. */
@@ -1066,7 +1066,7 @@ class ExprParser {
     this.next();
     this.expect(')');
     const key = columnName(name.s);
-    if (!key) throw new SpecError(at(name), `A column's name needs a letter or a digit, and "${name.s}" has none`);
+    if (!key) throw new SpecError(at(name), `A column name must have a letter or a digit. "${name.s}" has none`);
     return { k: 'column', name: key };
   }
 
@@ -1083,7 +1083,7 @@ class ExprParser {
       name = t.s as PosName;
     } else if ((t.s === 'highest' || t.s === 'lowest') && this.isId('since')) {
       this.next();
-      if (!this.isId('entry')) throw new SpecError(at(this.peek()), `"${t.s} since" needs "entry" after it, as in ${t.s} since entry`);
+      if (!this.isId('entry')) throw new SpecError(at(this.peek()), `Write "entry" after "${t.s} since", for example ${t.s} since entry`);
       end = this.next();
       name = t.s === 'highest' ? 'highest_since_entry' : 'lowest_since_entry';
     } else if (t.s === 'position' && this.isId('return')) {
@@ -1092,7 +1092,7 @@ class ExprParser {
       name = 'position_return';
     } else if (Object.hasOwn(pairs, t.s)) {
       const [second, full] = pairs[t.s];
-      if (!this.isId(second)) throw new SpecError(at(t), `"${t.s}" on its own is not a name. Write "${t.s} ${second}"`);
+      if (!this.isId(second)) throw new SpecError(at(t), `"${t.s}" is not a complete name. Write "${t.s} ${second}"`);
       end = this.next();
       name = full;
     } else if (t.s === 'last' && this.isId('entry') && this.toks[this.i + 1].t === 'id' && this.toks[this.i + 1].s === 'price') {
@@ -1103,7 +1103,7 @@ class ExprParser {
     } else {
       return null;
     }
-    if (!this.ctx.positions) throw new PositionError(span(t, end), `"${POSITION[name]}" only makes sense in a sell, cover or add rule`, name);
+    if (!this.ctx.positions) throw new PositionError(span(t, end), `You can use "${POSITION[name]}" only in a sell, cover or add rule`, name);
     return { k: 'pos', name };
   }
 
@@ -1112,14 +1112,14 @@ class ExprParser {
     if (!this.ctx.checkDef(d, t)) throw new Quiet();
     if ((this.grown.tokens += d.toks.length) > MAX_GROWN) {
       // Met while checking a definition on its own as well as in a rule, so it names the definition rather than a rule.
-      throw new SpecError(at(t), `This grows too big once its definitions are filled in, at "${d.name}". Use fewer definitions inside definitions, or write them shorter`);
+      throw new SpecError(at(t), `This becomes too long when the plugin replaces each definition with its text, at "${d.name}". Use a smaller number of definitions in other definitions, or make them shorter`);
     }
     const sub = new ExprParser(d.toks, this.ctx, this);
     let root: Expr;
     try {
       root = sub.parseValue();
     } catch (e) {
-      if (e instanceof PositionError) throw new PositionError(at(t), `"${d.name}" reads "${POSITION[e.pos]}", which only makes sense in a sell, cover or add rule`, e.pos);
+      if (e instanceof PositionError) throw new PositionError(at(t), `"${d.name}" reads "${POSITION[e.pos]}". You can use "${POSITION[e.pos]}" only in a sell, cover or add rule`, e.pos);
       throw e;
     }
     if (!this.ctx.checking) d.used = true;
@@ -1157,7 +1157,7 @@ class ExprParser {
     const start = this.i - 1;
     const args = this.args();
     const want = fn === 'abs' ? 1 : 2;
-    if (args.length !== want) throw new SpecError(this.spanFrom(start), `${fn}() takes ${want} value${want > 1 ? 's' : ''}`);
+    if (args.length !== want) throw new SpecError(this.spanFrom(start), `${fn}() must have ${want} value${want > 1 ? 's' : ''}`);
     for (const a of args) this.needNum(a.e, t, `${fn}()`);
     return this.node({ k: 'math', fn, args: args.map((a) => a.e) }, t, ...args.map((a) => a.e));
   }
@@ -1169,14 +1169,14 @@ class ExprParser {
     const args = this.args();
     if (fn !== 'if') {
       const example = { sqrt: 'sqrt(stdev(20))', log: 'log(close)', exp: 'exp(slope(log(close), 90) * 252)' }[fn];
-      if (args.length !== 1) throw new SpecError(this.spanFrom(start), `${fn}() takes 1 value, as in ${example}`);
+      if (args.length !== 1) throw new SpecError(this.spanFrom(start), `${fn}() must have 1 value, for example ${example}`);
       this.needNum(args[0].e, t, `${fn}()`);
       return this.node({ k: 'math', fn, args: [args[0].e] }, t, args[0].e);
     }
     const example = 'if(close > sma(200), roc(126), 0)';
-    if (args.length !== 3) throw new SpecError(this.spanFrom(start), `if() takes a condition and two numbers, as in ${example}`);
-    if (!isBool(args[0].e)) throw new SpecError(args[0].at, `if() needs a condition first, not a number, as in ${example}`);
-    for (const a of args.slice(1)) if (isBool(a.e)) throw new SpecError(a.at, `if() chooses between two numbers, not conditions, as in ${example}`);
+    if (args.length !== 3) throw new SpecError(this.spanFrom(start), `if() must have a condition and two numbers, for example ${example}`);
+    if (!isBool(args[0].e)) throw new SpecError(args[0].at, `The first value of if() must be a condition, not a number, for example ${example}`);
+    for (const a of args.slice(1)) if (isBool(a.e)) throw new SpecError(a.at, `The second and third values of if() must be numbers, not conditions, for example ${example}`);
     return this.node({ k: 'math', fn, args: args.map((a) => a.e) }, t, ...args.map((a) => a.e));
   }
 
@@ -1185,7 +1185,7 @@ class ExprParser {
     const start = this.i - 1;
     const args = this.args();
     if (def.src && def.params.length === 0 && args[0]?.e.k === 'num') {
-      throw new SpecError(args[0].at, `${t.s}() takes no numbers, only a series, as in ${t.s}(close)`);
+      throw new SpecError(args[0].at, `${t.s}() must have only a series, not numbers, for example ${t.s}(close)`);
     }
     let src: Expr | null = def.src ? { k: 'series', name: def.src } : null;
     let rest = args;
@@ -1193,13 +1193,13 @@ class ExprParser {
       const counts = def.params.length > 0;
       const example = counts ? `${t.s}(close > close[1], 10)` : `${t.s}(close crosses above sma(50))`;
       if (args.length !== 1 + def.params.length) {
-        throw new SpecError(this.spanFrom(start), counts ? `${t.s}() takes a condition and a number of bars, as in ${example}` : `${t.s}() takes one condition, as in ${example}`);
+        throw new SpecError(this.spanFrom(start), counts ? `${t.s}() must have a condition and a number of bars, for example ${example}` : `${t.s}() must have one condition, for example ${example}`);
       }
-      if (!isBool(args[0].e)) throw new SpecError(args[0].at, `${t.s}() needs a condition, not a number, as in ${example}`);
+      if (!isBool(args[0].e)) throw new SpecError(args[0].at, `${t.s}() must have a condition, not a number, for example ${example}`);
       src = args[0].e;
       rest = args.slice(1);
     } else if (def.lead === 'series') {
-      if (args.length === 0 || args[0].e.k === 'num') throw new SpecError(this.spanFrom(start), `${t.s}() needs the other ticker's series first, as in ${t.s}(close of SPY, 60)`);
+      if (args.length === 0 || args[0].e.k === 'num') throw new SpecError(this.spanFrom(start), `The first value of ${t.s}() must be a series of the other ticker, for example ${t.s}(close of SPY, 60)`);
       src = this.needNum(args[0].e, t, `${t.s}()`);
       rest = args.slice(1);
     } else if (def.src && args.length > 0 && (args[0].e.k !== 'num' || args.length > def.params.length)) {
@@ -1208,10 +1208,10 @@ class ExprParser {
     }
     if (src) {
       const pos = findPos(src);
-      if (pos) throw new SpecError(args[0].at, `"${POSITION[pos]}" can't go inside ${t.s}(): it only exists while a position is open`);
+      if (pos) throw new SpecError(args[0].at, `You cannot use "${POSITION[pos]}" in ${t.s}(). It has a value only while a position is open`);
     }
     if (rest.length > def.params.length) {
-      throw new SpecError(this.spanFrom(start), def.params.length === 0 ? `${t.s}() takes no arguments` : `${t.s}() takes at most ${def.params.length} number${def.params.length > 1 ? 's' : ''}`);
+      throw new SpecError(this.spanFrom(start), def.params.length === 0 ? `${t.s}() cannot have arguments` : `${t.s}() can have a maximum of ${def.params.length} number${def.params.length > 1 ? 's' : ''}`);
     }
     const nums = def.params.map((dflt, i) => {
       const a = rest[i];
@@ -1219,24 +1219,24 @@ class ExprParser {
         // A definition written alone in the brackets is read as the series, so `len = 20 + 5` in sma(len) leaves no period.
         const lone = i === 0 && rest !== args ? this.defUse.get(args[0].e) : undefined;
         if (dflt === null && lone !== undefined) {
-          throw new SpecError(args[0].at, `"${lone}" is a definition, so ${t.s}() reads it as its series and still needs a period, as in ${t.s}(${lone}, 20). A period must be a number or a parameter, such as ${lone} = 20`);
+          throw new SpecError(args[0].at, `"${lone}" is a definition. Thus ${t.s}() reads it as its series, and a period is also necessary, for example ${t.s}(${lone}, 20). A period must be a number or a parameter, for example ${lone} = 20`);
         }
-        if (dflt === null) throw new SpecError(this.spanFrom(start), `${t.s}() needs a period, as in ${t.s}(${def.lead === 'series' ? 'close of SPY, 20' : '20'})`);
+        if (dflt === null) throw new SpecError(this.spanFrom(start), `${t.s}() must have a period, for example ${t.s}(${def.lead === 'series' ? 'close of SPY, 20' : '20'})`);
         return dflt;
       }
       const named = this.defUse.get(a.e);
-      if (named !== undefined) throw notADefinition(a.at, named, `${t.s}() needs a plain number for its period`, '20');
-      if (a.e.k !== 'num') throw new SpecError(a.at, `${t.s}() periods must be plain numbers`);
+      if (named !== undefined) throw notADefinition(a.at, named, `the period of ${t.s}() must be a number or a parameter`, '20');
+      if (a.e.k !== 'num') throw new SpecError(a.at, `The periods of ${t.s}() must be numbers or parameters`);
       const n = a.e.v;
       const noun = def.real?.[i];
       const shortest = i === 0 ? (def.min ?? 1) : 1;
       if (noun ? n <= 0 : !Number.isInteger(n) || n < shortest || n > MAX_PERIOD) {
-        throw new SpecError(a.at, `${t.s}(): ${n} is not a valid ${noun ?? 'period'}${noun ? '' : `. Use a whole number from ${shortest} to ${MAX_PERIOD}`}`);
+        throw new SpecError(a.at, `${t.s}(): ${n} is not a permitted ${noun ?? 'period'}${noun ? '' : `. Use a whole number from ${shortest} to ${MAX_PERIOD}`}`);
       }
       return n;
     });
     if (t.s === 'psar' && nums[0] > nums[1]) {
-      throw new SpecError(this.spanFrom(start), `psar(): the step ${nums[0]} is above the maximum ${nums[1]}. Use a step no larger than the maximum, as in psar(0.02, 0.2)`);
+      throw new SpecError(this.spanFrom(start), `psar(): the step ${nums[0]} is more than the maximum ${nums[1]}. Use a step that is not more than the maximum, for example psar(0.02, 0.2)`);
     }
     const params = def.params.map((_, i) => (rest[i] ? (this.paramOf.get(rest[i].e) ?? null) : null));
     const e: Expr = params.some((p) => p !== null) ? { k: 'ind', fn: t.s, src, args: nums, params } : { k: 'ind', fn: t.s, src, args: nums };
@@ -1259,16 +1259,16 @@ function parseRef(text: string, defaultSource: Source, where: At): AssetRef {
   return { name: id, source, id };
 }
 
-/** Why a FRED series cannot `role`: it holds values, not prices a position could be bought or held at. */
+/** Why a FRED series cannot be used where `role` says: it holds values, not prices a position could be bought or held at. */
 function notPrices(ref: AssetRef, role: string): string {
-  return `fred:${ref.id} is a series of values from FRED, not prices, so it cannot ${role}. A rule can read it instead, as in close of fred:${ref.id} > 0`;
+  return `fred:${ref.id} is a series of values from FRED, not prices. ${role}. Use it in a rule, for example close of fred:${ref.id} > 0`;
 }
 
 /** The error for a ref whose name is already taken by a different source or file; null when there is no clash. */
 function clash(ref: AssetRef, known: AssetRef[]): string | null {
   const other = known.find((a) => a.name.toLowerCase() === ref.name.toLowerCase());
   if (!other || (other.source === ref.source && other.id === ref.id)) return null;
-  return `${other.name} is used for two different things here: ${other.source}:${other.id} and ${ref.source}:${ref.id}. Rename the CSV file or use one of them.`;
+  return `${other.name} is the name of two different price sources here: ${other.source}:${other.id} and ${ref.source}:${ref.id}. Change the name of the CSV file or use only one of them.`;
 }
 
 /** The largest of the usual bar sizes that fits a whole number of times into `interval`; null when none is smaller. */
@@ -1283,24 +1283,27 @@ function magnifyProblem(size: string, interval: string, sources: Source[]): stri
   const big = intervalMs(interval);
   if (Number.isNaN(big)) return null;
   const example = sizeInside(interval);
-  const such = example ? `, such as ${example}` : '';
-  if (Number.isNaN(small)) return `magnify takes a bar size smaller than the strategy's ${interval} bars${such}`;
+  const such = example ? `, for example ${example}` : '';
+  if (Number.isNaN(small)) return `magnify must have a bar size smaller than the ${interval} bars of the strategy${such}`;
   if (small >= big) {
-    return example ? `magnify needs bars shorter than the strategy's ${interval} bars${such}` : `${interval} bars are the shortest there are, so magnify can't look inside them`;
+    return example ? `magnify must use bars shorter than the ${interval} bars of the strategy${such}` : `${interval} bars are the shortest bars. Thus magnify cannot examine them with smaller bars`;
   }
-  if (big % small !== 0) return `A ${interval} bar does not hold a whole number of ${size} bars. Use a size that divides it${such}`;
-  if (sources.every((s) => s === 'csv')) return 'magnify looks inside bars with smaller bars from Yahoo or Binance, and CSV files have none';
+  if (big % small !== 0) return `A ${interval} bar does not contain a whole number of ${size} bars. Use a size that divides it${such}`;
+  if (sources.every((s) => s === 'csv')) return 'magnify examines bars with smaller bars from Yahoo or Binance. CSV files do not have smaller bars';
   if (sources.every((s) => s === 'csv' || s === 'tiingo')) {
-    return `magnify looks inside bars with smaller bars from Yahoo or Binance, and ${sources.includes('csv') ? 'Tiingo and CSV files have' : 'Tiingo has'} none here`;
+    return `magnify examines bars with smaller bars from Yahoo or Binance. ${sources.includes('csv') ? 'Tiingo and CSV files do' : 'Tiingo does'} not have smaller bars`;
   }
   if (sources.includes('yahoo')) {
-    if (interval === '1w' && size !== '1d') return `Yahoo can look inside weekly bars with 1d bars only, not ${size}`;
+    if (interval === '1w' && size !== '1d') return `Yahoo can examine weekly bars only with 1d bars, not ${size}`;
     const offered = Object.keys(YAHOO_INSIDE_DAYS);
-    if (interval === '1d' && !offered.includes(size)) return `Yahoo can look inside daily bars with ${offered.join(', ')} bars, not ${size}`;
+    if (interval === '1d' && !offered.includes(size)) return `Yahoo can examine daily bars only with ${offered.join(', ')} bars, not ${size}`;
   }
-  if (sources.includes('binance') && !BINANCE_INTERVALS.includes(size)) return `Binance can look inside bars with ${BINANCE_INTERVALS.filter((s) => intervalMs(s) < big && big % intervalMs(s) === 0).join(', ')} bars, not ${size}`;
+  if (sources.includes('binance') && !BINANCE_INTERVALS.includes(size)) return `Binance can examine ${interval} bars only with ${BINANCE_INTERVALS.filter((s) => intervalMs(s) < big && big % intervalMs(s) === 0).join(', ')} bars, not ${size}`;
   return null;
 }
+
+/** `text` with its first letter in capitals, for a message that starts with it. */
+const cap = (text: string): string => text[0].toUpperCase() + text.slice(1);
 
 function parseDate(text: string, where: At): number {
   const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -1311,14 +1314,14 @@ function parseDate(text: string, where: At): number {
 
 function parsePercent(text: string, where: At, what: string, max: number): number {
   const m = text.match(/^(\d+(?:\.\d+)?)\s*%/);
-  if (!m || Number(m[1]) <= 0 || Number(m[1]) > max) throw new SpecError(where, `${what} must be a percentage, such as 10%`);
+  if (!m || Number(m[1]) <= 0 || Number(m[1]) > max) throw new SpecError(where, `${cap(what)} must be a percentage, for example 10%`);
   return Number(m[1]) / 100;
 }
 
 function parseCapital(text: string, where: At): number {
   const m = text.replace(/[$,_\s]/g, '').match(/^(\d+(?:\.\d+)?)([kKmM]?)$/);
   const mult = m && m[2] ? (m[2].toLowerCase() === 'k' ? 1e3 : 1e6) : 1;
-  if (!m || Number(m[1]) * mult <= 0) throw new SpecError(where, `"${text}" is not an amount. Write it as 10000 or 10k`);
+  if (!m || Number(m[1]) * mult <= 0) throw new SpecError(where, `"${text}" is not a number. Write it as 10000 or 10k`);
   return Number(m[1]) * mult;
 }
 
@@ -1327,12 +1330,12 @@ function parseBps(what: string) {
     const m = text.match(/^(\d+(?:\.\d+)?)\s*(bps?|%)?$/i);
     if (!m) throw new SpecError(where, `"${text}" is not ${what === 'Costs' ? 'a cost' : 'a slippage'}. Write it as 5 bps or 0.05%`);
     const bps = m[2] === '%' ? Number(m[1]) * 100 : Number(m[1]);
-    if (bps >= 1000) throw new SpecError(where, `${what} must be under 10% per trade`);
+    if (bps >= 1000) throw new SpecError(where, `${what} must be less than 10% per trade`);
     return bps;
   };
 }
 
-const COMMISSION_FORMS = 'Write it as 1 for a fixed amount per order, or as 0.005 per share, with min 1 or max 1% after it if you want them';
+const COMMISSION_FORMS = 'Write it as 1 for the same fee on each order, or as 0.005 per share. After a fee per share, you can add min 1 or max 1%';
 
 /** `1`, `1 per order`, `0.005 per share`, `0.005 per share, min 1, max 1%`; null for no commission (`0`). */
 function parseCommission(text: string, where: At): Commission | null {
@@ -1341,24 +1344,24 @@ function parseCommission(text: string, where: At): Commission | null {
   if (!head) throw new SpecError(where, `"${text}" is not a commission. ${COMMISSION_FORMS}`);
   const fee = Number(head[1]);
   if (head[2]?.toLowerCase() !== 'share') {
-    if (parts.length > 1) throw new SpecError(where, '"min" and "max" go with a commission per share, as in 0.005 per share, min 1, max 1%');
+    if (parts.length > 1) throw new SpecError(where, 'Use "min" and "max" only with a commission per share, for example 0.005 per share, min 1, max 1%');
     return fee === 0 ? null : { k: 'order', fee };
   }
-  if (fee === 0) throw new SpecError(where, 'The commission per share must be above 0');
+  if (fee === 0) throw new SpecError(where, 'The commission per share must be more than 0');
   let min: number | null = null;
   let max: number | null = null;
   for (const part of parts.slice(1)) {
     const m = part.match(/^(min|max)\s+(.*)$/i);
-    if (!m) throw new SpecError(where, `Can't read "${part}". After the amount per share, write min 1 or max 1%`);
+    if (!m) throw new SpecError(where, `Cannot read "${part}". After the fee per share, write min 1 or max 1%`);
     const which = m[1].toLowerCase();
-    if ((which === 'min' ? min : max) !== null) throw new SpecError(where, `"${which}" is written twice`);
+    if ((which === 'min' ? min : max) !== null) throw new SpecError(where, `"${which}" is written two times`);
     if (which === 'min') {
       const v = m[2].match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)$/);
-      if (!v || Number(v[1]) <= 0) throw new SpecError(where, 'The minimum must be an amount above 0, as in min 1');
+      if (!v || Number(v[1]) <= 0) throw new SpecError(where, 'The minimum must be more than 0, for example min 1');
       min = Number(v[1]);
     } else {
       const v = m[2].match(/^(\d+(?:\.\d+)?|\.\d+)\s*%$/);
-      if (!v || Number(v[1]) <= 0 || Number(v[1]) >= 10) throw new SpecError(where, 'The maximum must be a percentage of the order\'s value, above 0% and under 10%, as in max 1%');
+      if (!v || Number(v[1]) <= 0 || Number(v[1]) >= 10) throw new SpecError(where, 'The maximum must be a percentage of the order value, more than 0% and less than 10%, for example max 1%');
       max = Number(v[1]) / 100;
     }
   }
@@ -1384,7 +1387,7 @@ interface ParamLine {
 function parseParam(p: ParamLine): Param {
   const m = p.value.match(PARAM_VALUE);
   const whole: At = { line: p.line, from: p.valueFrom, to: p.valueFrom + p.value.length };
-  if (!m) throw new SpecError(whole, `Write a parameter as ${p.name} = 50, or with a range to try, as ${p.name} = 50 in 20..100 step 10`);
+  if (!m) throw new SpecError(whole, `Write a parameter as ${p.name} = 50. To try a range of values, write ${p.name} = 50 in 20..100 step 10`);
   const part = (g: number): At => {
     const [from, to] = m.indices![g]!;
     return { line: p.line, from: p.valueFrom + from, to: p.valueFrom + to };
@@ -1399,11 +1402,11 @@ function parseParam(p: ParamLine): Param {
     const hi = num(m[3]);
     const step = m[4] !== undefined ? num(m[4]) : percent ? 0.01 : 1;
     const bounds: At = { line: p.line, from: part(2).from, to: part(3).to };
-    if (m[4] !== undefined && step <= 0) throw new SpecError(part(4), 'The step must be above 0');
-    if (lo > hi) throw new SpecError(bounds, `The range starts above where it ends. Write the smaller number first, as ${m[3]}..${m[2]}`);
-    if (value < lo || value > hi) throw new SpecError(part(1), `${m[1]} is outside the range ${m[2]}..${m[3]}`);
+    if (m[4] !== undefined && step <= 0) throw new SpecError(part(4), 'The step must be more than 0');
+    if (lo > hi) throw new SpecError(bounds, `The first number of the range is larger than the second. Write the smaller number first, for example ${m[3]}..${m[2]}`);
+    if (value < lo || value > hi) throw new SpecError(part(1), `${m[1]} is not in the range ${m[2]}..${m[3]}`);
     const count = Math.floor((hi - lo) / step + 1e-9) + 1;
-    if (count > MAX_PARAM_VALUES) throw new SpecError(bounds, `This range has ${count} values. The most is ${MAX_PARAM_VALUES}: use a larger step`);
+    if (count > MAX_PARAM_VALUES) throw new SpecError(bounds, `This range has ${count} values. The maximum is ${MAX_PARAM_VALUES}. Use a larger step`);
     range = { lo, hi, step };
   }
   return { name: p.name, value, declared: value, percent, range, line: p.line };
@@ -1483,9 +1486,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const from = offset + piece.length - piece.trimStart().length;
       const where: At = { line, from, to: from + name.length };
       offset += piece.length + 1;
-      if (!name) errors.push(diag({ line, from: lead, to: lead + text.length }, 'Name a ticker between the commas, as in for SPY, QQQ:'));
-      else if (name.toLowerCase() === 'all') errors.push(diag(where, '"all" means every ticker, so it can\'t be listed with others. Write it alone, as in for all:'));
-      else if (list.some((x) => x.name.toLowerCase() === name.toLowerCase())) errors.push(diag(where, `${name} is listed twice. List each ticker once, as in for SPY, QQQ:`));
+      if (!name) errors.push(diag({ line, from: lead, to: lead + text.length }, 'Write a ticker between the commas: for SPY, QQQ:'));
+      else if (name.toLowerCase() === 'all') errors.push(diag(where, '"all" includes all tickers. Write it with no other tickers: for all:'));
+      else if (list.some((x) => x.name.toLowerCase() === name.toLowerCase())) errors.push(diag(where, `${name} is in the list two times. Write each ticker one time: for SPY, QQQ:`));
       else list.push({ name, at: where, label });
     }
     return list;
@@ -1525,8 +1528,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       if (!m[2]) errors.push(diag(keyAt, `"${key}" has no value`));
       else if (scope !== null) {
         if (STOP_SETTINGS.includes(key)) scoped.push({ scope, s });
-        else errors.push(diag(keyAt, `"${key}" applies to the whole strategy. Put it above the first "for" line or after "for all:"`));
-      } else if (settings.has(key)) errors.push(diag(keyAt, `"${key}" is set twice`));
+        else errors.push(diag(keyAt, `"${key}" is a setting for the full strategy. Put it above the first "for" line or after "for all:"`));
+      } else if (settings.has(key)) errors.push(diag(keyAt, `"${key}" is also set on line ${settings.get(key)!.line}`));
       else settings.set(key, s);
     } else if ((m = text.match(PARAM_LINE)) && !RESERVED.has(m[1].toLowerCase())) {
       const nameAt = { line, from: lead, to: lead + m[1].length };
@@ -1544,7 +1547,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const into: Open = open;
       if (!guard(() => lex(text, line, lead, into.toks)) && 'state' in into) (into as Definition).state = 'bad';
     } else if ((m = text.match(PARAM_LINE))) {
-      errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Choose another name, such as my_${m[1].toLowerCase()}`));
+      errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Use a different name, for example my_${m[1].toLowerCase()}`));
     } else if ((m = text.match(SETTING_NAME))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `Unknown setting "${m[1]}". Settings: ${SETTINGS.join(', ')}`));
     } else {
@@ -1558,7 +1561,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   for (const p of decls) {
     guard(() => {
       const key = p.name.toLowerCase();
-      if (params.has(key) || defs.has(key)) throw new SpecError(p.nameAt, `"${p.name}" is declared twice`);
+      if (params.has(key) || defs.has(key)) throw new SpecError(p.nameAt, `"${p.name}" is also set on line ${(params.get(key) ?? defs.get(key))!.line}`);
       if ('toks' in p) defs.set(key, p);
       else params.set(key, parseParam(p));
     });
@@ -1566,7 +1569,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   for (const [name, v] of Object.entries(opts.overrides ?? {})) {
     const p = params.get(name.toLowerCase());
     if (p) p.value = v;
-    else errors.push({ line: 1, message: `There is no parameter "${name}" to set. Declare it in the block first, such as ${name} = 50` });
+    else errors.push({ line: 1, message: `There is no parameter "${name}" to set. First, add it to the block, for example ${name} = 50` });
   }
 
   const get = <T>(key: string, parse: (value: string, where: At) => T, dflt: T): T => {
@@ -1587,26 +1590,26 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const plain = (text: string, where: At, what: string, example: string): number => {
     const p = params.get(text.toLowerCase());
     const d = defs.get(text.toLowerCase());
-    if (d) throw notADefinition(where, d.name, `${what} needs a number or a parameter`, '10');
+    if (d) throw notADefinition(where, d.name, `${what} must be a number or a parameter`, '10');
     if (p) {
-      if (p.percent) throw new SpecError(where, `${what} needs a plain number, and "${p.name}" is a percentage`);
+      if (p.percent) throw new SpecError(where, `${cap(what)} must be a number, but "${p.name}" is a percentage`);
       return p.value;
     }
-    if (!/^\d+(\.\d+)?$/.test(text)) throw new SpecError(where, `${what} needs a number, as in ${example}`);
+    if (!/^\d+(\.\d+)?$/.test(text)) throw new SpecError(where, `${cap(what)} must be a number, for example ${example}`);
     return Number(text);
   };
   const percentage = (text: string, where: At, what: string, max: number): number => {
     const p = params.get(text.toLowerCase());
     const d = defs.get(text.toLowerCase());
-    if (d) throw notADefinition(where, d.name, `${what} needs a percentage or a parameter`, '10%');
+    if (d) throw notADefinition(where, d.name, `${what} must be a percentage or a parameter`, '10%');
     if (!p) return parsePercent(text, where, what, max * 100);
-    if (!p.percent) throw new SpecError(where, `${what} needs a percentage, and "${p.name}" is a plain number. Declare it as ${p.name} = 10%`);
-    if (p.value <= 0 || p.value > max) throw new SpecError(where, `${what} is ${Number((p.value * 100).toPrecision(6))}% here, but must be above 0% and at most ${max * 100}%`);
+    if (!p.percent) throw new SpecError(where, `${cap(what)} must be a percentage, but "${p.name}" is a number. Write it as ${p.name} = 10%`);
+    if (p.value <= 0 || p.value > max) throw new SpecError(where, `${cap(what)} is ${Number((p.value * 100).toPrecision(6))}% here. It must be more than 0% and not more than ${max * 100}%`);
     return p.value;
   };
   const period = (text: string, where: At, what: string, min: number): number => {
-    const n = text === '' ? 14 : plain(text, where, what, `${what.replace(/\(\)$/, '')}(14)`);
-    if (!Number.isInteger(n) || n < min || n > MAX_PERIOD) throw new SpecError(where, `${what}: ${n} is not a valid period. Use a whole number from ${min} to ${MAX_PERIOD}`);
+    const n = text === '' ? 14 : plain(text, where, `the period of ${what}`, `${what.replace(/\(\)$/, '')}(14)`);
+    if (!Number.isInteger(n) || n < min || n > MAX_PERIOD) throw new SpecError(where, `${what}: ${n} is not a permitted period. Use a whole number from ${min} to ${MAX_PERIOD}`);
     return n;
   };
   /** `{ nParam }` when a period is written as a parameter's name, to spread into the setting's value. */
@@ -1618,11 +1621,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const m = text.match(ATR_DISTANCE);
     if (!m) {
       const p = params.get(text.toLowerCase());
-      if (!p && !defs.has(text.toLowerCase()) && !/^\d+(\.\d+)?\s*%/.test(text)) throw new SpecError(where, `${what} must be a percentage, such as 10%, or a multiple of the average true range, such as 2 atr(14)`);
+      if (!p && !defs.has(text.toLowerCase()) && !/^\d+(\.\d+)?\s*%/.test(text)) throw new SpecError(where, `${cap(what)} must be a percentage (for example 10%) or a multiple of the average true range (for example 2 atr(14))`);
       return { k: 'pct', v: percentage(text, where, what, max) };
     }
-    const mult = plain(m[1], where, `The ${what} distance`, '2 atr(14)');
-    if (!(mult > 0)) throw new SpecError(where, `The ${what} distance must be above 0`);
+    const mult = plain(m[1], where, `the ${what} distance`, '2 atr(14)');
+    if (!(mult > 0)) throw new SpecError(where, `The ${what} distance must be more than 0`);
     const n = m[2]?.trim() ?? '';
     return { k: 'atr', mult, n: period(n, where, 'atr()', 1), ...periodParam(n) };
   };
@@ -1637,9 +1640,9 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   if (hold) {
     guard(() => {
       const m = hold.value.match(/^top\s+(\S+)\s+by\s+(.+)$/i);
-      if (!m) throw new SpecError(hold.valueAt, 'Write it as top 3 by roc(126): how many tickers to hold, and the score that ranks them');
+      if (!m) throw new SpecError(hold.valueAt, 'Write it as top 3 by roc(126): the number of tickers to hold and the score that puts them in sequence');
       const top = plain(m[1], hold.valueAt, '"top"', 'top 3 by roc(126)');
-      if (!Number.isInteger(top) || top < 1) throw new SpecError(hold.valueAt, `"top" must be a whole number from 1, not ${top}`);
+      if (!Number.isInteger(top) || top < 1) throw new SpecError(hold.valueAt, `"top" must be a whole number, 1 or more, not ${top}`);
       rankTop = top;
       rankBy = { text: m[2], from: hold.valueAt.from! + hold.value.length - m[2].length, line: hold.line };
     });
@@ -1648,7 +1651,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const universe: Asset[] = [];
   const u = settings.get('universe');
   if (!u) {
-    errors.push({ line: 1, message: 'Add a universe, such as "universe: SPY" or "universe: SPY 60%, TLT 40%"' });
+    errors.push({ line: 1, message: 'Add a universe, for example "universe: SPY" or "universe: SPY 60%, TLT 40%"' });
   } else {
     guard(() => {
       const weights: (number | null)[] = [];
@@ -1658,27 +1661,27 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
         const from = u.valueAt.from! + pm.index! + pm[0].length - pm[0].trimStart().length;
         const partAt: At = { line: u.line, from, to: from + part.length };
         const m = part.match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)\s*%)?$/);
-        if (!m) throw new SpecError(partAt, `Can't read "${part}". Write a ticker and an optional weight, such as SPY 60%`);
+        if (!m) throw new SpecError(partAt, `Cannot read "${part}". Write a ticker and an optional weight, for example SPY 60%`);
         const ref = parseRef(m[1], defaultSource, partAt);
-        if (ref.source === 'fred') throw new SpecError(partAt, notPrices(ref, 'be traded'));
-        if (universe.some((a) => a.name.toLowerCase() === ref.name.toLowerCase())) throw new SpecError(partAt, `${ref.name} is listed twice`);
+        if (ref.source === 'fred') throw new SpecError(partAt, notPrices(ref, 'The strategy cannot trade it'));
+        if (universe.some((a) => a.name.toLowerCase() === ref.name.toLowerCase())) throw new SpecError(partAt, `${ref.name} is in the list two times`);
         universe.push({ ...ref, weight: 0 });
         weights.push(m[2] === undefined ? null : Number(m[2]) / 100);
       }
       if (universe.length === 0) throw new SpecError(u.valueAt, 'The universe is empty');
       const given = weights.filter((w) => w !== null).length;
       if (rankTop !== null) {
-        if (given !== 0) throw new SpecError(u.valueAt, 'Leave the weights out of the universe when "hold" ranks the tickers: each one held gets an equal share of size');
+        if (given !== 0) throw new SpecError(u.valueAt, 'Do not write weights in the universe when you use "hold". Each ticker that the strategy holds has an equal part of size');
         universe.forEach((a) => (a.weight = (size ?? 1) / rankTop!));
         return;
       }
-      if (given !== 0 && given !== weights.length) throw new SpecError(u.valueAt, 'Give every ticker a weight, or none');
-      if (given !== 0 && size !== null) throw new SpecError(settings.get('size')!.keyAt, 'Use either weights in the universe or "size", not both');
+      if (given !== 0 && given !== weights.length) throw new SpecError(u.valueAt, 'Give each ticker a weight, or give no weights');
+      if (given !== 0 && size !== null) throw new SpecError(settings.get('size')!.keyAt, 'Use weights in the universe or "size". You cannot use the two together');
       universe.forEach((a, i) => (a.weight = weights[i] ?? (size ?? 1) / universe.length));
-      if (universe.some((a) => a.weight <= 0)) throw new SpecError(u.valueAt, 'Weights must be above 0%');
+      if (universe.some((a) => a.weight <= 0)) throw new SpecError(u.valueAt, 'Weights must be more than 0%');
       const total = universe.reduce((s, a) => s + a.weight, 0);
       if (total > MAX_GROSS + 1e-9) {
-        throw new SpecError(u.valueAt, `Weights add up to ${(total * 100).toFixed(1)}%. The most is ${MAX_GROSS * 100}%: long and short positions together may be at most ${MAX_GROSS} times the equity`);
+        throw new SpecError(u.valueAt, `The total of the weights is ${(total * 100).toFixed(1)}%. It cannot be more than ${MAX_GROSS * 100}%: long and short positions together can be a maximum of ${MAX_GROSS} times the equity`);
       }
     });
   }
@@ -1731,8 +1734,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const loop = reading.slice(reading.findIndex((x) => x.d === d));
       loop.forEach((x, k) => {
         const next = loop[(k + 1) % loop.length].d;
-        const how = next === x.d ? 'uses itself' : `leads back to itself through ${next.name}`;
-        if (x.via) errors.push(diag(at(x.via), `"${x.d.name}" ${how}. A definition can only be built from other names, as in ${x.d.name} = close > sma(200)`));
+        const how = next === x.d ? 'uses its name in its expression' : `makes a loop through ${next.name}`;
+        if (x.via) errors.push(diag(at(x.via), `"${x.d.name}" ${how}. A definition can use only other names, for example ${x.d.name} = close > sma(200)`));
       });
       throw new Quiet();
     }
@@ -1770,13 +1773,13 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   /** Each ticker's own rules on `r.scope`'s line (or the shared ones), where nothing of this kind has been written yet. */
   const targetsOf = (r: RawRule, assets: Asset[] | null): Partial<Record<RuleSide, Expr>>[] => {
     if (assets === null) {
-      if (shared[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule. Join conditions with "and" or "or"`);
+      if (shared[r.side]) throw new SpecError(r.head, `There are two ${r.side} rules. Put the conditions in one rule with "and" or "or"`);
       return [shared];
     }
     return assets.map((asset, k) => {
       if (!own.has(asset.name)) own.set(asset.name, {});
       const target = own.get(asset.name)!;
-      if (target[r.side]) throw new SpecError(r.head, `There is already a ${r.side} rule for ${r.scope![k].name}. Join conditions with "and" or "or"`);
+      if (target[r.side]) throw new SpecError(r.head, `There are two ${r.side} rules for ${r.scope![k].name}. Put the conditions in one rule with "and" or "or"`);
       return target;
     });
   };
@@ -1822,7 +1825,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       lex(by.text, by.line, by.from, toks);
       toks.push(endTok(toks, hold!.valueAt));
       const parser = new ExprParser(toks, context(false, null));
-      rank = { top: rankTop!, by: parser.parseNumber('The ranking') };
+      rank = { top: rankTop!, by: parser.parseNumber('The score') };
       rankWritten = parser.written(rank.by);
       rankReads = parser.ownColumns(rank.by);
     });
@@ -1838,7 +1841,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     },
     null as number | null,
   );
-  if (!entriesLine && addHeads.length) errors.push(diag(addHeads[0], '"add when" needs an entries line that says how many entries a position is built in, such as entries: 3'));
+  if (!entriesLine && addHeads.length) errors.push(diag(addHeads[0], '"add when" must have an entries line that gives the number of entries for each position, for example entries: 3'));
 
   const checked = new Set<string>();
   const ownColumnsOf = (reads: { name: string; at: At }[], a: Asset): void => {
@@ -1847,7 +1850,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const key = `${r.at.line}:${r.at.from}:${r.at.to}`;
       if (checked.has(key)) continue;
       checked.add(key);
-      errors.push(diag(r.at, `column(${r.name}) reads a column of the ticker the rule belongs to, and ${a.name} comes from ${SOURCE_NAME[a.source]}, not from a CSV file. Name the file instead, as in ${COLUMN_EXAMPLE.replace('score', r.name)}`));
+      errors.push(diag(r.at, `column(${r.name}) reads a column of the ticker of the rule. ${a.name} comes from ${SOURCE_NAME[a.source]}, not from a CSV file. Write the file name, for example ${COLUMN_EXAMPLE.replace('score', r.name)}`));
     }
   };
   for (const a of universe) ownColumnsOf(rankReads, a);
@@ -1870,7 +1873,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const head = shortHeads.get(cover)!;
       if (!coverReported.has(head)) {
         coverReported.add(head);
-        errors.push(diag(head, `"cover when" closes a short, so it needs a short rule${universe.length > 1 ? ` for ${a.name}` : ''} that says when to go short, such as short when close < sma(200)`));
+        errors.push(diag(head, `"cover when" closes a short. Thus it must have a short rule${universe.length > 1 ? ` for ${a.name}` : ''} that tells when to go short, for example short when close < sma(200)`));
       }
     }
     if (buy) {
@@ -1885,18 +1888,18 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
           writtenRules[a.name].cover = writtenOf.get(cover) ?? null;
         }
       }
-    } else if (errors.length === 0) errors.push({ line: 1, message: `There is no buy rule${universe.length > 1 ? ` for ${a.name}` : ''}. Add one, such as "buy when close > sma(200)"` });
+    } else if (errors.length === 0) errors.push({ line: 1, message: `There is no buy rule${universe.length > 1 ? ` for ${a.name}` : ''}. Add one, for example "buy when close > sma(200)"` });
     if (!add) noAdd.push(a.name);
   }
   if (rankTop !== null && shortHead) {
-    errors.push(diag(shortHead, 'A ranking can\'t also go short yet; remove the short and cover rules, or the "hold" line to trade each ticker by its own rules'));
+    errors.push(diag(shortHead, 'A strategy with "hold" cannot go short. Remove the short and cover rules. Or remove the "hold" line to trade each ticker with its rules'));
   }
   if (entries !== null && entries > 1 && noAdd.length && universe.length) {
     const whom = noAdd.length === universe.length ? '' : ` for ${noAdd.join(', ')}`;
     errors.push(
       diag(
         entriesLine!.keyAt,
-        `"entries: ${entries}" builds each position in ${entries} entries, so it needs an add rule${whom} that says when to make the next one, such as add when close > last entry price * 1.03`,
+        `"entries: ${entries}" makes each position in ${entries} entries. Thus it must have an add rule${whom} that tells when to make the next entry, for example add when close > last entry price * 1.03`,
       ),
     );
   }
@@ -1906,7 +1909,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     'benchmark',
     (v, w) => {
       const ref = parseRef(v, defaultSource, w);
-      if (ref.source === 'fred') throw new SpecError(w, notPrices(ref, 'be the benchmark'));
+      if (ref.source === 'fred') throw new SpecError(w, notPrices(ref, 'It cannot be the benchmark'));
       const problem = clash(ref, [...universe, ...extras]);
       if (problem) throw new SpecError(w, problem);
       return ref;
@@ -1917,7 +1920,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const parseCash = (text: string, where: At): CashRate => {
     const m = text.match(/^(-?\d+(?:\.\d+)?)\s*(%)?$/);
     if (!m) return { k: 'ticker', ref: parseRef(text, defaultSource, where) };
-    if (!m[2]) throw new SpecError(where, 'Write the cash rate as a yearly percentage, such as 4%, or as a ticker that quotes a yield, such as ^IRX');
+    if (!m[2]) throw new SpecError(where, 'Write the cash rate as a yearly percentage (for example 4%) or as a ticker that gives a yield (for example ^IRX)');
     const rate = Number(m[1]) / 100;
     if (rate < 0 || rate > 0.5) throw new SpecError(where, 'The cash rate must be between 0% and 50% a year');
     return { k: 'fixed', rate };
@@ -1930,7 +1933,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       cash = parseCash(defaults.cashRate.trim(), { line: 1 });
     } catch (e) {
       if (!(e instanceof SpecError)) throw e;
-      errors.push({ line: 1, message: `The default cash rate "${defaults.cashRate}" in the plugin settings can't be read. Use a percentage, such as 4%, or a ticker, such as ^IRX` });
+      errors.push({ line: 1, message: `The plugin cannot read the default cash rate "${defaults.cashRate}" in the plugin settings. Use a percentage (for example 4%) or a ticker (for example ^IRX)` });
     }
   }
   const cashClash = cash.k === 'ticker' ? clash(cash.ref, [...universe, ...extras, ...(benchmark ? [benchmark] : [])]) : null;
@@ -1985,7 +1988,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       for (const asset of assets) {
         const mine = ownStops.get(asset.name) ?? {};
         ownStops.set(asset.name, mine);
-        if (mine[field] !== undefined) throw new SpecError(s.keyAt, `"${s.key}" is set twice for ${asset.name}`);
+        if (mine[field] !== undefined) throw new SpecError(s.keyAt, `"${s.key}" is set two times for ${asset.name}`);
         mine[field] = level;
       }
       if (field === 'takeProfit') targetAt.set(level, s.valueAt);
@@ -2001,14 +2004,14 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const where = targetAt.get(target)!;
     if (unreachable.has(where)) continue;
     unreachable.add(where);
-    warnings.push(diag(where, `A short can't reach a take profit of ${Number((target.v * 100).toPrecision(6))}%: the price would have to fall to 0 or below, so its shorts never take profit. Use one under 100%, or a multiple of the average true range`));
+    warnings.push(diag(where, `A take profit of ${Number((target.v * 100).toPrecision(6))}% cannot close a short. For that, the price must decrease to 0 or less. Use a take profit less than 100%, or a multiple of the average true range`));
   }
 
   const weighting = get(
     'weighting',
     (v, w): Sizing => {
       const m = v.match(/^inverse\s+volatility\s*\(([^)]*)\)$/i);
-      if (!m || !m[1].trim()) throw new SpecError(w, 'Write it as inverse volatility(60): the number of bars to measure volatility over');
+      if (!m || !m[1].trim()) throw new SpecError(w, 'Write it as inverse volatility(60): the number of bars to use to measure the volatility');
       return { k: 'invvol', n: period(m[1].trim(), w, 'inverse volatility()', 2), ...periodParam(m[1].trim()) };
     },
     null as Sizing | null,
@@ -2017,19 +2020,19 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     'risk per trade',
     (v, w): Sizing => {
       const m = v.match(new RegExp(String.raw`^(\S+?)\s+at\s+` + ATR_DISTANCE.source.slice(1), 'i'));
-      if (!m) throw new SpecError(w, 'Write it as 1% at 2 atr(14): the share of equity to lose if the price moves that many average true ranges against the position');
+      if (!m) throw new SpecError(w, 'Write it as 1% at 2 atr(14): the equity decreases by 1% if the price moves 2 average true ranges against the position');
       const share = percentage(m[1], w, 'risk per trade', 1);
-      const mult = plain(m[2], w, 'The risk distance', '1% at 2 atr(14)');
-      if (!(mult > 0)) throw new SpecError(w, 'The risk distance must be above 0');
+      const mult = plain(m[2], w, 'the risk distance', '1% at 2 atr(14)');
+      if (!(mult > 0)) throw new SpecError(w, 'The risk distance must be more than 0');
       const n = m[3]?.trim() ?? '';
       return { k: 'risk', risk: share, mult, n: period(n, w, 'atr()', 1), ...periodParam(n) };
     },
     null as Sizing | null,
   );
   const riskLine = settings.get('risk per trade');
-  if (weighting && risk) errors.push(diag(riskLine!.keyAt, 'Use either "weighting" or "risk per trade", not both'));
+  if (weighting && risk) errors.push(diag(riskLine!.keyAt, 'Use "weighting" or "risk per trade". You cannot use the two together'));
   else if (risk && rebalance !== 'never') {
-    errors.push(diag(riskLine!.keyAt, `"risk per trade" sizes each position once, when it is bought, so it can't be combined with "rebalance: ${rebalance}". Remove one of them`));
+    errors.push(diag(riskLine!.keyAt, `"risk per trade" sizes each position one time, when the strategy buys it. Thus you cannot use it with "rebalance: ${rebalance}". Remove one of them`));
   }
 
   // Yahoo and Tiingo adjust prices for dividends and splits, but Yahoo not index levels (tickers starting with ^).
@@ -2042,7 +2045,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     if (seen.has(key) || by.size === 0) continue;
     seen.add(key);
     const whose = by.has('yahoo') ? (by.has('tiingo') ? 'Yahoo and Tiingo' : 'Yahoo') : 'Tiingo';
-    warnings.push(diag(c.at, `This compares a price with a fixed number. ${whose} prices are adjusted for later dividends and splits, so old prices are lower than what actually traded.`));
+    warnings.push(diag(c.at, `This compares a price with a constant number. ${whose} prices include adjustments for subsequent dividends and splits. Thus previous prices are lower than the traded prices.`));
   }
 
   const spec: Spec = {
@@ -2072,7 +2075,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   // Only a block that can borrow carries the margin terms, so a long-only one within 100% runs as it always has.
   const yearly = (what: string, max: number) => (text: string, where: At): number => {
     const m = text.match(/^(\d+(?:\.\d+)?|\.\d+)\s*%$/);
-    if (!m) throw new SpecError(where, `Write the ${what} as a yearly percentage, such as ${what === 'borrow fee' ? '0.5%' : '6%'}`);
+    if (!m) throw new SpecError(where, `Write the ${what} as a yearly percentage, for example ${what === 'borrow fee' ? '0.5%' : '6%'}`);
     const rate = Number(m[1]) / 100;
     if (rate > max) throw new SpecError(where, `The ${what} must be between 0% and ${max * 100}% a year`);
     return rate;
@@ -2091,7 +2094,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   // With a problem elsewhere a rule may not have been read at all, so a name it would have used is not reported as unused.
   if (errors.length === 0) {
     for (const d of defs.values()) {
-      if (!d.used) warnings.push(diag(d.nameAt, `"${d.name}" is defined but no rule or score reads it. Use it, as in buy when ${d.name}${d.bool ? '' : ' > 0'}, or remove the line`));
+      if (!d.used) warnings.push(diag(d.nameAt, `No rule or score reads "${d.name}". Use it, for example buy when ${d.name}${d.bool ? '' : ' > 0'}, or remove the line`));
     }
   }
   // A problem inside a definition, or with an empty place in a `for` list, can be met once for each rule that reads it.

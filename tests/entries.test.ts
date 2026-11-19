@@ -39,17 +39,17 @@ test('entries and add when: how they are written, and what is wrong without one 
   assert.deepEqual([plain.entries, 'add' in plain.rules.SPY, 'add' in plain.written!.rules.SPY], [undefined, false, false]);
   // `entries: 1` with an add rule is allowed and adds nothing, so a parameter can sweep from 1.
   assert.equal(parseSpec('universe: SPY\nn = 1 in 1..4\nentries: n\nbuy when true\nadd when true').spec!.entries, 1);
-  const missing = errorOf('universe: SPY\nentries: 3\nbuy when true', /"entries: 3" builds each position in 3 entries, so it needs an add rule that says when to make the next one/);
+  const missing = errorOf('universe: SPY\nentries: 3\nbuy when true', /"entries: 3" makes each position in 3 entries\. Thus it must have an add rule that tells when to make the next entry/);
   assert.equal(missing.line, 2);
-  errorOf('universe: SPY, TLT\nentries: 2\nbuy when true\nfor SPY:\n  add when true', /needs an add rule for TLT/);
-  errorOf('universe: SPY\nbuy when true\nadd when true', /"add when" needs an entries line/);
+  errorOf('universe: SPY, TLT\nentries: 2\nbuy when true\nfor SPY:\n  add when true', /must have an add rule for TLT/);
+  errorOf('universe: SPY\nbuy when true\nadd when true', /"add when" must have an entries line/);
   errorOf('universe: SPY\nentries: 0\nbuy when true\nadd when true', /entries must be a whole number from 1 to 10, not 0/);
   errorOf('universe: SPY\nentries: 11\nbuy when true\nadd when true', /from 1 to 10, not 11/);
   errorOf('universe: SPY\nentries: 2.5\nbuy when true\nadd when true', /not 2.5/);
-  errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when true\nadd when false', /There is already a add rule|already an add rule|There is already/);
-  errorOf('universe: SPY\nentries: 2\nbuy when entries made > 0\nadd when true', /"entries made" only makes sense in a sell, cover or add rule/);
-  errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when entries > 1', /"entries" on its own is not a name. Write "entries made"/);
-  errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when true\nsell when last_entry_price[1] > 1', /can't be read for an earlier bar/);
+  errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when true\nadd when false', /There are two add rules/);
+  errorOf('universe: SPY\nentries: 2\nbuy when entries made > 0\nadd when true', /You can use "entries made" only in a sell, cover or add rule/);
+  errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when entries > 1', /"entries" is not a complete name\. Write "entries made"/);
+  errorOf('universe: SPY\nentries: 2\nbuy when true\nadd when true\nsell when last_entry_price[1] > 1', /for a previous bar with \[n\]/);
   // "last" stays free for a parameter, and the new values work in sell rules without entries.
   assert.ok(parseSpec('universe: SPY\nlast = 3\nbuy when close > close[last]\nsell when close < last entry price * 0.9 or entries made > 1').spec);
 });
@@ -111,7 +111,7 @@ test('an add cut to the cash there is, when another ticker holds the rest', () =
   assert.ok(near(add.wanted, 220));
   assert.ok(near(a.entryPrice, 400 / (20 + 200 / 9)));
   const ex = explainTrade(bt, a);
-  assert.ok(rows(ex, 'add').some(([l, v]) => l === 'Only $200.00 was in cash, so the add was cut to what that covers' && v === '$200.00'));
+  assert.ok(rows(ex, 'add').some(([l, v]) => l === 'Only $200.00 was in cash. Thus the add was cut to fit this cash' && v === '$200.00'));
 });
 
 test('a rebalance keeps a position at its entries\' part of the weight and never completes it', () => {
@@ -151,7 +151,7 @@ test('the stop loss moves to the average entry price after each entry', () => {
   assert.ok(near(t.exitPrice, avg * 0.9) && near(t.why!.stopLoss!, avg * 0.9));
   assert.ok(near(t.why!.adds![0].stopLoss!, avg * 0.9) && near(t.why!.adds![0].average, avg));
   const ex = explainTrade(bt, t);
-  assert.deepEqual(rows(ex, 'sold')[0].slice(0, 2), [`Stop loss at ${(avg * 0.9).toFixed(2)}`, `10% under the ${avg.toFixed(2)} average entry price of the 2 entries`]);
+  assert.deepEqual(rows(ex, 'sold')[0].slice(0, 2), [`Stop loss at ${(avg * 0.9).toFixed(2)}`, `10% below the ${avg.toFixed(2)} average entry price of the 2 entries`]);
   assert.ok(near(ex.facts.level!, avg * 0.9) && near(ex.facts.ret, t.ret, 1e-12));
 });
 
@@ -260,15 +260,15 @@ test('the trades file gains the entries at the end, and the explanation has a pa
   assert.equal(lines[0], 'ticker,bought,buy_price,sold,sell_price,return_pct,profit,bars,exit,entries,entry_dates,entry_prices,entry_shares');
   assert.match(lines[1], /^A,2020-01-02,10\.929163,,,.*,open,3,2020-01-02;2020-01-04;2020-01-05,10;11;12,30;28\.181818;24\.166667$/);
   const ex = explainTrade(bt, bt.run.trades[0]);
-  assert.equal(ex.title, 'A: bought in 3 entries from 2020-01-02, at 10.93 on average, still held');
-  assert.deepEqual(ex.sections.map((s) => s.title), ['Why it was bought', 'How much: entry 1 of 3', 'Entry 2 of 3', 'Entry 3 of 3', 'Why it is still held', 'Result']);
-  assert.deepEqual(rows(ex, 'size').find((r) => String(r[0]).startsWith('Each of')), ['Each of the 3 entries is 1/3 of a whole position, $900.00', '$300.00', null]);
+  assert.equal(ex.title, 'A: bought in 3 entries from 2020-01-02, at 10.93 on average, not closed');
+  assert.deepEqual(ex.sections.map((s) => s.title), ['Why it was bought', 'How much: entry 1 of 3', 'Entry 2 of 3', 'Entry 3 of 3', 'Why it is not closed', 'Result']);
+  assert.deepEqual(rows(ex, 'size').find((r) => String(r[0]).startsWith('Each of')), ['Each of the 3 entries is 1/3 of a full position, $900.00', '$300.00', null]);
   const second = rows(ex, 'add', 0);
-  assert.deepEqual(second.slice(0, 2), [['The add rule was read at the close of 2020-01-03.', '', null], ['add when close > last entry price', 'close 11 > last entry price 10', 'yes']]);
-  assert.ok(second.some(([l, v]) => l === 'The stop loss moved to' && v === '8.39, 20% under the average'));
+  assert.deepEqual(second.slice(0, 2), [['The run read the add rule at the close of 2020-01-03.', '', null], ['add when close > last entry price', 'close 11 > last entry price 10', 'yes']]);
+  assert.ok(second.some(([l, v]) => l === 'The stop loss moved to' && v === '8.39, 20% below the average'));
   const third = rows(ex, 'add', 1);
-  assert.ok(third.some(([l, v]) => l === 'The position was worth $698.18, so the entry was cut to what keeps it within a whole position' && v === '$290.00'));
-  assert.ok(rows(ex, 'result').some(([l, v]) => l === 'Bought in 3 entries of the 3 allowed' && v === 'at 10.93 on average'));
+  assert.ok(third.some(([l, v]) => l === 'The value of the position was $698.18. Thus the entry was cut to keep the position at or below a full position' && v === '$290.00'));
+  assert.ok(rows(ex, 'result').some(([l, v]) => l === 'Bought in 3 of the 3 entries' && v === 'at 10.93 on average'));
 });
 
 test('the luck checks run on a strategy built in steps', () => {

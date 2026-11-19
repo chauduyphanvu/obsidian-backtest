@@ -63,13 +63,13 @@ test('between does not chain, and its mistakes are reported at the word that is 
   assert.deepEqual(errorOf(chained), [2, from, from + 'between'.length, 'Unexpected "between"']);
 });
 
-const NO_AND = '"between" takes two values joined by "and", as in rsi(2) between 10 and 30';
+const NO_AND = '"between" must have two values with "and" between them, for example rsi(2) between 10 and 30';
 
 test('the words of between in a rule: what is missing or is not a number', () => {
   assert.equal(errorOf('rsi(2) between 10')[3], NO_AND);
   assert.deepEqual(errorOf('rsi(2) between 10 or 30'), [2, ...where('rsi(2) between 10 or 30', 'or'), NO_AND]);
-  assert.deepEqual(errorOf('rsi(2) between 10 and month_end'), [2, ...where('rsi(2) between 10 and month_end', 'between'), '"between" needs a number, not a condition']);
-  assert.equal(errorOf('month_end between 1 and 2')[3], '"between" needs a number, not a condition');
+  assert.deepEqual(errorOf('rsi(2) between 10 and month_end'), [2, ...where('rsi(2) between 10 and month_end', 'between'), '"between" must have a number, not a condition']);
+  assert.equal(errorOf('month_end between 1 and 2')[3], '"between" must have a number, not a condition');
   assert.match(errorOf('rsi(2) between and 30')[3], /^Unknown name "and"/);
 });
 
@@ -104,7 +104,7 @@ test('the explanation and the table keep a between whole, opening it into its tw
     ['close between 10 and 12', 'all of these must hold', 'yes', 1],
     ['close >= 10', 'close 11 ≥ 10', 'yes', 2],
     ['close <= 12', 'close 11 ≤ 12', 'yes', 2],
-    ['not close between 11.5 and 13', 'holds when the part below does not', 'yes', 1],
+    ['not close between 11.5 and 13', 'holds when the part below does not hold', 'yes', 1],
     ['close between 11.5 and 13', 'all of these must hold', 'no', 2],
     ['close >= 11.5', 'close 11 ≥ 11.5', 'no', 3],
     ['close <= 13', 'close 11 ≤ 13', 'yes', 3],
@@ -139,7 +139,7 @@ test('crosses with no direction holds where the value crosses above or below', (
   assert.deepEqual(values('close crosses sma(2)', [1, 3, 1, 3, 3]), [N, N, 1, 1, 0]);
 });
 
-test('crosses is unknown when the bar before is unknown, and needs a bar more history', () => {
+test('crosses is unknown when the previous bar is unknown, and needs a bar more history', () => {
   assert.deepEqual(values('close crosses sma(3)', [1, 2, 3, 4, 3, 2, 1]), [N, N, N, 0, 1, 0, 0]);
   const spec = (rule: string) => ruleOf(rule, 'from: 2020-01-01\n');
   const wide = lookbackBars(ruleOf('close crosses sma(500)', 'from: 2020-01-01\n'));
@@ -156,8 +156,8 @@ test('crosses in a rule that runs: the order is given at the bar it crosses, eit
   // Bought at day 2's open (11) and sold at day 3's (12); bought again after the cross down, at day 5's open (9).
   assert.deepEqual(bt.run.trades.map((t) => [t.entryT, t.entryPrice, t.exitPrice, t.reason]), [[A.t[2], 11, 12, 'signal'], [A.t[5], 9, 9, 'open']]);
   const [up, down] = bt.run.trades.map((t) => explainTrade(bt, t).sections.find((s) => s.id === 'bought')!.rows[1]);
-  assert.equal(up.value, 'close 11 is above 10; the bar before it was 9, below 10');
-  assert.equal(down.value, 'close 9 is below 10; the bar before it was 12, above 10');
+  assert.equal(up.value, 'close 11 is above 10. On the bar before: 9, below 10');
+  assert.equal(down.value, 'close 9 is below 10. On the bar before: 12, above 10');
   // The table says "crosses" and shows the bar before.
   const cols = debugColumns(bt, 'A');
   const col = cols.findIndex((c) => c.group === 'buy');
@@ -241,15 +241,15 @@ test('a window binds at the comparison and a not before it; brackets apply it to
 });
 
 test('a window\'s n is a whole number from 1 to 10000, or a parameter that is one', () => {
-  assert.equal(errorOf('close > 1 for 0 bars')[3], '"for" needs a whole number of bars from 1 to 10000, as in close > sma(200) for 3 bars');
-  assert.equal(errorOf('close > 1 within 2.5 bars')[3], '"within" needs a whole number of bars from 1 to 10000, as in close > sma(200) within 3 bars');
-  assert.equal(errorOf('close > 1 for 10001 bars')[3], '"for" needs a whole number of bars from 1 to 10000, as in close > sma(200) for 3 bars');
+  assert.equal(errorOf('close > 1 for 0 bars')[3], '"for" must have a whole number of bars from 1 to 10000, for example close > sma(200) for 3 bars');
+  assert.equal(errorOf('close > 1 within 2.5 bars')[3], '"within" must have a whole number of bars from 1 to 10000, for example close > sma(200) within 3 bars');
+  assert.equal(errorOf('close > 1 for 10001 bars')[3], '"for" must have a whole number of bars from 1 to 10000, for example close > sma(200) for 3 bars');
   assert.deepEqual(errorOf('close > 1 for -3 bars').slice(0, 1), [2]);
-  assert.equal(errorOf('close > 1 for rsi(2) bars')[3], '"for" needs a whole number of bars from 1 to 10000, as in close > sma(200) for 3 bars');
+  assert.equal(errorOf('close > 1 for rsi(2) bars')[3], '"for" must have a whole number of bars from 1 to 10000, for example close > sma(200) for 3 bars');
   assert.deepEqual(errorOf('close > 1 for 0 bars').slice(1, 3), where('close > 1 for 0 bars', '0'));
-  assert.equal(errorOf('close > 1 for 3')[3], 'Write "bars" after the number, as in close > sma(200) for 3 bars');
-  assert.equal(errorOf('close > 1 for 3 days')[3], 'Write "bars" after the number, as in close > sma(200) for 3 bars');
-  assert.equal(errorOf('close for 3 bars')[3], '"for" needs a condition before it, as in close > sma(200) for 3 bars');
+  assert.equal(errorOf('close > 1 for 3')[3], 'Write "bars" after the number, for example close > sma(200) for 3 bars');
+  assert.equal(errorOf('close > 1 for 3 days')[3], 'Write "bars" after the number, for example close > sma(200) for 3 bars');
+  assert.equal(errorOf('close for 3 bars')[3], 'Write a condition before "for", for example close > sma(200) for 3 bars');
 });
 
 test('a parameter can give the number of bars, and its range counts at its widest for the history', () => {
@@ -259,7 +259,7 @@ test('a parameter can give the number of bars, and its range counts at its wides
   assert.equal(lookbackBars(ruleOf('close > sma(50) for 399 bars', 'from: 2020-01-01\n')), 50 + 399);
   assert.equal(lookbackBars(ruleOf('count(close > sma(50), n) > 2', 'n = 3 in 3..399 step 3\nfrom: 2020-01-01\n')), 50 + 399);
   // A value of the parameter that is not whole is the same mistake as a number that is not.
-  assert.match(errorOf('close > 1 for n bars', 'n = 2.5\n')[3], /^"for" needs a whole number of bars/);
+  assert.match(errorOf('close > 1 for n bars', 'n = 2.5\n')[3], /^"for" must have a whole number of bars/);
   // A strategy trades the same with the parameter as with its number, so the ledger counts them as one.
   assert.equal(trialHash(ruleOf('close > sma(50) for n bars', 'n = 3\nfrom: 2020-01-01\n')), trialHash(ruleOf('close > sma(50) for 3 bars', 'from: 2020-01-01\n')));
   // Set from outside, it reaches the window.
@@ -268,12 +268,12 @@ test('a parameter can give the number of bars, and its range counts at its wides
 });
 
 test('count written out: a condition and a number of bars, in the places a function can stand', () => {
-  assert.equal(errorOf('count(close > 1)')[3], 'count() takes a condition and a number of bars, as in count(close > close[1], 10)');
-  assert.equal(errorOf('count(close > 1, 2, 3) > 1')[3], 'count() takes a condition and a number of bars, as in count(close > close[1], 10)');
-  assert.equal(errorOf('count(close, 3) > 1')[3], 'count() needs a condition, not a number, as in count(close > close[1], 10)');
-  assert.match(errorOf('count(close > 1, 0) > 1')[3], /^count\(\): 0 is not a valid period/);
-  assert.match(errorOf('count(close > 1, rsi(2)) > 1')[3], /^count\(\) periods must be plain numbers/);
-  assert.deepEqual(errorOf('count(close > 1, 3)'), [2, ...where('count(close > 1, 3)', 'count(close > 1, 3)'), 'A rule needs a condition, such as close > sma(200)']);
+  assert.equal(errorOf('count(close > 1)')[3], 'count() must have a condition and a number of bars, for example count(close > close[1], 10)');
+  assert.equal(errorOf('count(close > 1, 2, 3) > 1')[3], 'count() must have a condition and a number of bars, for example count(close > close[1], 10)');
+  assert.equal(errorOf('count(close, 3) > 1')[3], 'count() must have a condition, not a number, for example count(close > close[1], 10)');
+  assert.match(errorOf('count(close > 1, 0) > 1')[3], /^count\(\): 0 is not a permitted period/);
+  assert.match(errorOf('count(close > 1, rsi(2)) > 1')[3], /^The periods of count\(\) must be numbers or parameters/);
+  assert.deepEqual(errorOf('count(close > 1, 3)'), [2, ...where('count(close > 1, 3)', 'count(close > 1, 3)'), 'A rule must have a condition, for example close > sma(200)']);
   const e = exprOf('count(close > close[1], 10) >= 7') as Extract<Expr, { k: 'cmp' }>;
   assert.deepEqual(e.a, { k: 'ind', fn: 'count', src: { k: 'cmp', op: '>', a: { k: 'series', name: 'close' }, b: { k: 'lag', a: { k: 'series', name: 'close' }, n: 1 } }, args: [10] });
   // The score of a ranking can count too.
@@ -288,11 +288,11 @@ test('a position value cannot be read over a window, and the error says so at th
     return [errors[0].line, errors[0].from, errors[0].to, errors[0].message];
   })();
   assert.deepEqual([line, from, to], [3, 10, 34]);
-  assert.equal(message, '"bars held" can\'t be read over several bars: it only exists for the open position at this bar. Read it outside the window, as in sell when bars held > 5 and close < sma(20) for 3 bars');
+  assert.equal(message, 'A rule cannot read "bars held" for more than one bar. It is a value of the open position at this bar only. Read it in a condition with no window, for example sell when bars held > 5 and close < sma(20) for 3 bars');
   const inside = parseSpec('universe: A\nbuy when true\nsell when count(entry price > 1, 3) > 1').errors;
-  assert.deepEqual(inside.map((e) => e.message), ['"entry price" can\'t go inside count(): it only exists while a position is open']);
+  assert.deepEqual(inside.map((e) => e.message), ['You cannot use "entry price" in count(). It has a value only while a position is open']);
   assert.deepEqual(parseSpec('universe: A\nbuy when true\nsell when bars held > 3 and close > 1 for 2 bars').errors, []);
-  assert.match(parseSpec('universe: A\nbuy when true\nsell when (position return > 1) within 4 bars').errors[0].message, /"position return" can't be read over several bars/);
+  assert.match(parseSpec('universe: A\nbuy when true\nsell when (position return > 1) within 4 bars').errors[0].message, /A rule cannot read "position return" for more than one bar/);
 });
 
 test('words that open a window or a range, added after 0.7.0, can still be names, and still open one where they stand', () => {
@@ -346,5 +346,5 @@ test('the unknown start of a window says why in the table', () => {
   const bt = runBacktest(parseSpec('universe: A\nbuy when close > 10 for 3 bars').spec!, new Map([['A', A]]));
   const cols = debugColumns(bt, 'A');
   const rows = debugRows(bt, 'A', 0, 3);
-  assert.equal(cellText(cols[0], rows[1].cells[0]).detail, 'fewer than 3 bars so far');
+  assert.equal(cellText(cols[0], rows[1].cells[0]).detail, 'less than 3 bars to date');
 });

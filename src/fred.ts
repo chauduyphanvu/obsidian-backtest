@@ -60,7 +60,7 @@ const days = (n: number): string => `${n} day${n === 1 ? '' : 's'}`;
 /** "2008-01-02", or "5 days from 2008-01-02 to 2010-05-01". */
 function onDays(published: number[]): string {
   const known = [...new Set(published.filter((p) => Number.isFinite(p)))].sort((a, b) => a - b);
-  if (known.length === 0) return 'on a day FRED does not give';
+  if (known.length === 0) return 'on a day that FRED does not give';
   if (known.length === 1) return `on ${iso(known[0])}`;
   return `on ${known.length} days from ${iso(known[0])} to ${iso(known[known.length - 1])}`;
 }
@@ -80,7 +80,7 @@ function onDays(published: number[]): string {
  */
 export function parseFred(json: string, id: string): FredSeries {
   const body = JSON.parse(json) as { observations?: unknown };
-  if (!Array.isArray(body?.observations)) throw new Error('FRED sent no observations');
+  if (!Array.isArray(body?.observations)) throw new Error('FRED sent no values');
   const first = new Map<number, Observation>();
   for (const row of body.observations as Record<string, unknown>[]) {
     const date = dayOf(row?.date);
@@ -130,14 +130,14 @@ export function parseFred(json: string, id: string): FredSeries {
     const span = redated.length === 1 ? iso(redated[0].date) : `${iso(redated[0].date)} to ${iso(redated[redated.length - 1].date)}`;
     const how =
       delay === null
-        ? `${period.name} after its period ends, as no value published later shows the usual delay`
+        ? `${period.name} after the end of its period, because the subsequent values do not show a usual time to publication`
         : delay === 0
-          ? 'on the last day of its period, the usual delay of the values published later'
-          : `${days(delay / DAY)} after the last day of its period, the median delay of the values published later`;
+          ? 'of the last day of its period, which is the usual time to publication of the subsequent values'
+          : `${days(delay / DAY)} after the last day of its period, which is the median time to publication of the subsequent values`;
     note =
-      `FRED first published ${redated.length} ${redated.length === 1 ? 'value' : 'values'} of ${id} (dated ${span}) together ${onDays(redated.map((o) => o.published))}, ` +
-      `so each is dated ${how}, and never later than it was published. ` +
-      `${redated.length === 1 ? 'It is' : 'They are'} the figures of that first release, which may already include later revisions: only the dates are estimates.`;
+      `FRED first published ${redated.length} ${redated.length === 1 ? 'value' : 'values'} of ${id} (dated ${span}) together ${onDays(redated.map((o) => o.published))}. ` +
+      `Thus the plugin gives each value the date ${how}, but not a date after the day when FRED published it. ` +
+      `${redated.length === 1 ? 'This is the figure of that first release, and it can include' : 'These are the figures of that first release, and they can include'} subsequent revisions. Only the dates are estimates.`;
   }
   return { bars: { ...bars, values: true }, note };
 }

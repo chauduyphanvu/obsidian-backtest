@@ -23,7 +23,7 @@ export function watchText(report: TriggerReport, tickers: number): string | null
   const row = watchRows(report).find((r) => r.now || Math.abs(r.distance) <= WATCH_WITHIN);
   if (!row) return null;
   const who = tickers > 1 ? `${row.ticker} ` : '';
-  if (row.now) return `${who}${tickers > 1 ? VERB[row.side] : capital(VERB[row.side])} at an unchanged close`;
+  if (row.now) return `${who}${tickers > 1 ? VERB[row.side] : capital(VERB[row.side])} if the close does not change`;
   const d = Math.abs(row.distance);
   return `${who}${pct(d, d < 0.01 ? 2 : 1)} from ${NOUN[row.side]}`;
 }
@@ -54,14 +54,14 @@ export function renderNow(root: HTMLElement, input: NowInput): void {
   // What is already waiting for the next open or close, as the positions table says it.
   const waiting = one ? positionOrder(one, bt.spec.fill) : '';
   const plain = () => {
-    say.replaceChildren(waiting ? `${capital(waiting)}.` : one ? '' : 'Each ticker is in the table below.');
+    say.replaceChildren(waiting ? `${capital(waiting)}.` : one ? '' : 'Refer to the table below for each ticker.');
     say.hidden = !say.textContent;
   };
   if (!triggers) {
     plain();
     return;
   }
-  say.textContent = 'Working out the closes that would give an order…';
+  say.textContent = 'The plugin calculates the trigger prices…';
   say.classList.add('bt-now-waiting');
   say.setAttribute('aria-busy', 'true');
   const fill = (report: TriggerReport | null) => {
@@ -89,7 +89,7 @@ export function renderNow(root: HTMLElement, input: NowInput): void {
     const near = watchRows(report).find((r) => r.now || Math.abs(r.distance) <= WATCH_WITHIN);
     const t = near && report.triggers.find((x) => x.ticker === near.ticker && x.side === near.side);
     if (!near || !t) {
-      say.textContent = `No rule is within ${pct(WATCH_WITHIN, 0)} of giving an order at the next close.`;
+      say.textContent = `No rule is ${pct(WATCH_WITHIN, 0)} or less from an order at the next close.`;
       return;
     }
     say.textContent = `${near.ticker}: ${near.phrase}, ${fillPhrase(report.closeFill)}.`;

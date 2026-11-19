@@ -256,7 +256,7 @@ test('a worker that dies during a job fails that job with a message; the next jo
   const w = inProcess({ failFirstJob: true });
   const client = track(t, { makeWorker: w.make });
   const jobs = client.forBlock(input());
-  await assert.rejects(jobs.run({ kind: 'sweep' }).done, /^Error: The run stopped unexpectedly: Out of memory$/);
+  await assert.rejects(jobs.run({ kind: 'sweep' }).done, /^Error: The run stopped because of an error: Out of memory$/);
   assert.equal((await jobs.run({ kind: 'sweep' }).done)!.points.length, 15);
   assert.equal(w.made(), 2);
 });
@@ -265,7 +265,7 @@ test('a job that fails in the worker rejects with its message', async (t) => {
   const w = inProcess();
   const client = track(t, { makeWorker: w.make });
   const jobs = client.forBlock(input('universe: A\nn = 5\nbuy when close > sma(n)'));
-  await assert.rejects(jobs.run({ kind: 'walk' }).done, /needs a parameter with a range/);
+  await assert.rejects(jobs.run({ kind: 'walk' }).done, /must have a parameter with a range/);
 });
 
 test('without the parser defaults a block\'s text cannot be parsed in a worker, so its jobs run here', async (t) => {
@@ -468,7 +468,7 @@ test('a run past its time is stopped by ending its worker; the next run goes to 
   await assert.rejects(slow, (e: unknown) => {
     assert.ok(e instanceof LimitError);
     assert.deepEqual([e.kind, e.anyway], ['time', true]);
-    assert.equal(e.message, `This backtest was stopped after 10 seconds, the most one run may take. It has 1,600 bars across 2 tickers. A later "from" date, a longer "interval", fewer tickers or shorter periods make it faster.`);
+    assert.equal(e.message, `The plugin stopped this backtest after 10 seconds, the maximum time for one run. It has 1,600 bars across 2 tickers. To make it faster, move the "from" date forward, use a longer "interval", use a smaller number of tickers or use shorter periods.`);
     return true;
   });
   assert.equal(w.workers[0].alive, false);
@@ -494,7 +494,7 @@ test('a run asked for anyway has the longer time, and once that passes it offers
   await flush();
   assert.equal(w.workers[0].alive, true);
   t.mock.timers.tick(LIMITS.anywayMs - LIMITS.runMs);
-  await assert.rejects(slow, (e: unknown) => e instanceof LimitError && e.kind === 'time' && !e.anyway && /stopped after 2 minutes/.test(e.message));
+  await assert.rejects(slow, (e: unknown) => e instanceof LimitError && e.kind === 'time' && !e.anyway && /stopped this backtest after 2 minutes/.test(e.message));
 });
 
 test('a run too large for a worker is refused before anything starts, unless asked for anyway', async (t) => {
@@ -502,7 +502,7 @@ test('a run too large for a worker is refused before anything starts, unless ask
   const client = track(t, { makeWorker: w.make });
   const block = input();
   const huge = request(block, {}, { size: { bars: 2_000_000, tickers: 40, ruleWork: 0, windowWork: 0 } });
-  await assert.rejects(client.runs().run(huge), (e: unknown) => e instanceof LimitError && e.kind === 'size' && e.anyway && /^This run has 2 million bars across 40 tickers; the limit is 1 million\./.test(e.message));
+  await assert.rejects(client.runs().run(huge), (e: unknown) => e instanceof LimitError && e.kind === 'size' && e.anyway && /^This run has 2 million bars across 40 tickers\. The limit is 1 million\./.test(e.message));
   assert.equal(w.made(), 0);
   assert.deepStrictEqual(await ranOf(client.runs().run({ ...huge, anyway: true })), direct(huge));
 });
@@ -518,7 +518,7 @@ test('when no worker can be made, runs happen here with the stricter limits of t
   assert.ok(here.hereMs !== null && here.hereMs >= 0 && here.hereMs < 5000);
   assert.equal(client.foreground(), true);
   const big = request(block, {}, { size: { bars: 300_000, tickers: 1, ruleWork: 0, windowWork: 0 } });
-  await assert.rejects(runs.run(big), (e: unknown) => e instanceof LimitError && /^Backtests run in the foreground here.*the limit here is 200,000\./.test(e.message));
+  await assert.rejects(runs.run(big), (e: unknown) => e instanceof LimitError && /^Backtests run in the foreground here.*The limit here is 200,000\./.test(e.message));
   assert.deepStrictEqual(await ranOf(runs.run({ ...big, anyway: true })), direct(big));
 });
 
@@ -532,7 +532,7 @@ test('a worker that fails while starting sends its run here, which checks the ma
   const block = input();
   const size = { bars: 300_000, tickers: 1, ruleWork: 0, windowWork: 0 };
   // Fits a worker, so it is sent to one; that worker never starts, and here it is too large.
-  await assert.rejects(client.runs().run(request(block, {}, { size })), (e: unknown) => e instanceof LimitError && /the limit here is 200,000/.test(e.message));
+  await assert.rejects(client.runs().run(request(block, {}, { size })), (e: unknown) => e instanceof LimitError && /The limit here is 200,000/.test(e.message));
   assert.equal(client.foreground(), true);
   assert.deepStrictEqual(await ranOf(client.runs().run(request(block))), direct(request(block)));
 });
@@ -586,7 +586,7 @@ test('a sweep or a luck check that goes too long without finishing a step is sto
   await flush();
   assert.equal(w.workers[0].alive, true);
   t.mock.timers.tick(LIMITS.stepMs);
-  await assert.rejects(running.done, (e: unknown) => e instanceof LimitError && e.kind === 'time' && !e.anyway && e.message === 'This was stopped after 2 minutes without finishing a backtest, the most one may take.');
+  await assert.rejects(running.done, (e: unknown) => e instanceof LimitError && e.kind === 'time' && !e.anyway && e.message === 'The plugin stopped this after 2 minutes, the maximum time for one backtest, before a backtest was complete.');
   assert.equal(w.workers[0].alive, false);
 });
 

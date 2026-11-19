@@ -121,7 +121,7 @@ test('a buy rule on the close: the close above which it buys, in words, exact', 
   assert.equal(t.fires[0].hi, null);
   assert.ok(t.fires[0].lo! >= 9.5 && t.fires[0].lo! / 9.5 - 1 <= PRECISION, String(t.fires[0].lo));
   assert.equal(r.next, day(5));
-  assert.deepEqual(tickerText(r, 'A'), { text: 'Buys if it closes above 9.50 (+5.6%), at the following open.', note: null });
+  assert.deepEqual(tickerText(r, 'A'), { text: 'Buys if it closes above 9.50 (+5.6%), at the open after that close.', note: null });
   const close = report('universe: A\nfill: close\nbuy when close > sma(3)', { A }).report;
   assert.equal(tickerText(close, 'A').text, 'Buys if it closes above 9.50 (+5.6%), at that close.');
 });
@@ -142,13 +142,13 @@ test('the cent shown is where the order starts, wherever the change falls inside
   const text = (closes: number[], rules: string) => tickerText(report(`universe: A\n${rules}`, { A: bars(closes) }).report, 'A').text;
   const rising = [720, 722, 724, 726, 728];
   // 729.77 gives no order and 729.78 does, whether the change is just under 729.78 or just over 729.77.
-  assert.equal(text(rising, 'buy when close > 729.776'), 'Buys if it closes above 729.77 (+0.2%), at the following open.');
-  assert.equal(text(rising, 'buy when close > 729.7701'), 'Buys if it closes above 729.77 (+0.2%), at the following open.');
+  assert.equal(text(rising, 'buy when close > 729.776'), 'Buys if it closes above 729.77 (+0.2%), at the open after that close.');
+  assert.equal(text(rising, 'buy when close > 729.7701'), 'Buys if it closes above 729.77 (+0.2%), at the open after that close.');
   // 729.70 and below give the order, 729.71 does not.
-  assert.equal(text([735, 734, 733, 732, 731], 'buy when close < 729.7049'), 'Buys if it closes below 729.71 (−0.2%), at the following open.');
-  assert.equal(text([740, 738, 736, 734, 732], 'buy when true\nsell when close < 730.2249'), 'Sells if it closes below 730.23 (−0.2%), at the following open.');
+  assert.equal(text([735, 734, 733, 732, 731], 'buy when close < 729.7049'), 'Buys if it closes below 729.71 (−0.2%), at the open after that close.');
+  assert.equal(text([740, 738, 736, 734, 732], 'buy when true\nsell when close < 730.2249'), 'Sells if it closes below 730.23 (−0.2%), at the open after that close.');
   // close > sma(3) at the next bar is x > 10.5: it buys at an unchanged close, and 10.51 is the lowest close that still does.
-  assert.equal(text([12, 12, 10, 11], 'buy when close > sma(3)'), 'Buys unless it closes below 10.51 (−4.5%), at the following open.');
+  assert.equal(text([12, 12, 10, 11], 'buy when close > sma(3)'), 'Buys unless it closes below 10.51 (−4.5%), at the open after that close.');
 });
 
 test('a rule on another ticker is solved for that ticker\'s close, with the traded one held where it was', () => {
@@ -157,7 +157,7 @@ test('a rule on another ticker is solved for that ticker\'s close, with the trad
   const { report: r, data } = report('universe: T\nbuy when close of S > sma(3) of S', { S, T });
   const t = only(r);
   assert.deepEqual([t.driver, t.last, t.ownLast, t.exact], ['S', 9, 54, true]);
-  assert.equal(tickerText(r, 'T').text, 'Buys if S closes above 9.50 (+5.6%), at the following open.');
+  assert.equal(tickerText(r, 'T').text, 'Buys if S closes above 9.50 (+5.6%), at the open after that close.');
   // The traded ticker gets a bar where it was; the driver's closes at the price tried.
   const st = runBacktest(parsed('universe: T\nbuy when close of S > sma(3) of S'), data).run.states[0];
   const next = nextBarData(parsed('universe: T\nbuy when close of S > sma(3) of S'), data, st, 9.7);
@@ -176,7 +176,7 @@ test('a held position: the sell rule\'s closes stop at the stop, which acts insi
   assert.ok(t.fires[0].hi! < 11.5 && 11.5 / t.fires[0].hi! - 1 <= PRECISION);
   assert.equal(t.range.lo, 9.5 * (1 + 1e-9));
   // 11.49 still sells, 11.50 does not.
-  assert.equal(tickerText(r, 'A').text, 'Sells unless it closes above 11.49 (+4.5%), at the following open. The stop at 9.50 (−13.6%) sells during the bar if the price reaches it.');
+  assert.equal(tickerText(r, 'A').text, 'Sells unless it closes above 11.49 (+4.5%), at the open after that close. The stop at 9.50 (−13.6%) sells during the bar if the price touches it.');
   // Just below the stop the bar reaches it on its way to the close and sells there; just above, the sell rule does.
   const st = bt.run.states[0];
   const below = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 9.5 * (1 - 1e-6))).run;
@@ -191,7 +191,7 @@ test('a stop above the last close sells at the next open whatever the close, and
   const { report: r } = report('universe: A\ntrailing stop: 3%\nbuy when true\nsell when close < 5', { A });
   const t = only(r);
   assert.deepEqual(t.fires, []);
-  assert.equal(tickerText(r, 'A').text, 'The stop at 11.64 (+16.4%) is above the last close, so it sells at the next open unless the price opens above it.');
+  assert.equal(tickerText(r, 'A').text, 'The stop at 11.64 (+16.4%) is above the last close. Thus the strategy sells at the next open, unless the price opens above it.');
 });
 
 test('after a stop the buy rule must stop holding: the close below which it does', () => {
@@ -201,7 +201,7 @@ test('after a stop the buy rule must stop holding: the close below which it does
   assert.equal(t.side, 'rearm');
   assert.ok(t.fires[0].lo === null && t.fires[0].hi! <= 9.9 && 9.9 / t.fires[0].hi! - 1 <= PRECISION);
   // At 9.90 the rule close > 9.9 does not hold; at 9.91 it does.
-  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the buy rule must stop holding before A is bought again: it does if A closes below 9.91 (−0.9%).');
+  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit, the buy rule must become false before the strategy buys A again: it becomes false if A closes below 9.91 (−0.9%).');
   verify(parsed('universe: A\nstop loss: 10%\nbuy when close > 9.9'), new Map([['A', A]]), 'rearm', tally());
 });
 
@@ -209,13 +209,13 @@ test('a buy that has to wait for its sizing or stop input, or for its own rule, 
   const A = bars(Array.from({ length: 10 }, (_, i) => 10 + i));
   const { bt, report: input, data } = report('universe: A\nstop loss: 2 atr(20)\nbuy when close > 30', { A });
   assert.deepEqual([only(input).blocked, only(input).warmup], ['warmup', { input: 'stop loss', n: 20 }]);
-  assert.equal(tickerText(input, 'A').text, "Can't buy at the next close: the 20-bar ATR for the stop loss is still unknown there.");
+  assert.equal(tickerText(input, 'A').text, "The strategy cannot buy at the next close: the 20-bar ATR for the stop loss is unknown at that close.");
   // The engine agrees: a next close that holds the buy rule is held back, not bought.
   const after = runBacktest(bt.spec, nextBarData(bt.spec, data, bt.run.states[0], 40)).run;
   assert.deepEqual([after.states[0].pending, after.skipped], [null, [{ asset: 'A', input: 'stop loss', n: 20, count: 1 }]]);
   const rule = report('universe: A\nbuy when close > sma(50)', { A }).report;
   assert.deepEqual([only(rule).blocked, only(rule).warmup], ['warmup', null]);
-  assert.equal(tickerText(rule, 'A').text, "Can't buy at the next close: the buy rule is still unknown there.");
+  assert.equal(tickerText(rule, 'A').text, "The strategy cannot buy at the next close: the buy rule is unknown at that close.");
 });
 
 test('an order already waiting, a CSV file and a ticker only a ranking buys get no price', () => {
@@ -232,12 +232,12 @@ test('an order already waiting, a CSV file and a ticker only a ranking buys get 
   }).report;
   assert.equal(ranked.decision, Date.UTC(2026, 10, 30));
   const flat = ranked.triggers.find((t) => t.blocked === 'ranking')!;
-  assert.equal(tickerText(ranked, flat.ticker).text, 'Bought only when the ranking picks it, next at the close of 2026-11-30.');
+  assert.equal(tickerText(ranked, flat.ticker).text, 'The strategy buys it only when the ranking selects it. The next ranking is at the close of 2026-11-30.');
   const held = ranked.triggers.find((t) => !t.blocked)!;
-  assert.match(tickerText(ranked, held.ticker).text, / The ranking decides again at the close of 2026-11-30\.$/);
+  assert.match(tickerText(ranked, held.ticker).text, / The ranking selects again at the close of 2026-11-30\.$/);
   const never = report('universe: A, B\nhold: top 1 by roc(2)\nbuy when true', { A: at(0, walkBars(40, 1)), B: at(0, walkBars(40, 2)) }).report;
   assert.equal(never.decision, never.next);
-  assert.match(tickerText(never, never.triggers.find((t) => t.blocked === 'ranking')!.ticker).text, /next at the next close\.$/);
+  assert.match(tickerText(never, never.triggers.find((t) => t.blocked === 'ranking')!.ticker).text, /The next ranking is at the next close\.$/);
 });
 
 // ---------------------------------------------------------------- short positions
@@ -246,7 +246,7 @@ test('a short rule: the close below which it shorts, the shown cent next to thos
   const text = (rules: string, closes: number[]) => tickerText(report(`universe: A\n${rules}`, { A: bars(closes) }).report, 'A').text;
   const falling = [740, 738, 736, 734, 732];
   // 730.22 and below give the order, 730.23 does not.
-  assert.equal(text('short when close < 730.2249', falling), 'Shorts if it closes below 730.23 (−0.2%), at the following open.');
+  assert.equal(text('short when close < 730.2249', falling), 'Shorts if it closes below 730.23 (−0.2%), at the open after that close.');
   assert.equal(text('fill: close\nshort when close < 730.2249', falling), 'Shorts if it closes below 730.23 (−0.2%), at that close.');
   // The cover rule vetoes a short at the same close, as the sell rule vetoes a buy.
   const vetoed = only(report('universe: A\nshort when close < 731\ncover when close < 729', { A: bars(falling) }).report);
@@ -259,12 +259,12 @@ test('a held short: the close above which it covers, and a cover rule that holds
   const { report: r } = report('universe: A\nshort when true\ncover when close > 735.551', { A: bars([730, 730, 731, 732, 733]) });
   const t = only(r);
   assert.deepEqual([t.side, t.short, t.fires.length, t.fires[0].hi], ['cover', true, 1, null]);
-  assert.equal(tickerText(r, 'A').text, 'Covers if it closes above 735.55 (+0.3%), at the following open.');
+  assert.equal(tickerText(r, 'A').text, 'Covers if it closes above 735.55 (+0.3%), at the open after that close.');
   // Shorted at day 1's open (10), so the 5% stop is at 10.50, above. close > sma(3) at the next bar is x > 9.25: it covers at an unchanged close.
   const { bt, report: held, data } = report('universe: A\nstop loss: 5%\nshort when true\ncover when close > sma(3)', { A: bars([10, 10, 10, 9, 9.5]) });
   const c = only(held);
   assert.deepEqual([c.levels, c.range.hi], [{ stop: 10.5, target: null }, 10.5 * (1 - 1e-9)]);
-  assert.equal(tickerText(held, 'A').text, 'Covers unless it closes below 9.26 (−2.5%), at the following open. The stop at 10.50 (+10.5%) covers during the bar if the price reaches it.');
+  assert.equal(tickerText(held, 'A').text, 'Covers unless it closes below 9.26 (−2.5%), at the open after that close. The stop at 10.50 (+10.5%) covers during the bar if the price touches it.');
   // Just above the stop the bar reaches it on its way to the close and covers there; just below, the cover rule does.
   const st = bt.run.states[0];
   const above = runBacktest(bt.spec, nextBarData(bt.spec, data, st, 10.5 * (1 + 1e-6))).run;
@@ -277,7 +277,7 @@ test('a flip: held long, the close that sells also shorts; held short, the one t
   const trend = 'buy when close > sma(3)\nshort when close < sma(3)';
   const long = report(`universe: A\n${trend}`, { A: bars([10, 10, 11, 12, 13]) }).report;
   assert.deepEqual(long.triggers.map((t) => t.side), ['sell', 'short']);
-  assert.equal(tickerText(long, 'A').text, 'Sells if it closes below 12.50 (−3.8%), at the following open. Shorts if it closes below 12.50 (−3.8%), at the following open.');
+  assert.equal(tickerText(long, 'A').text, 'Sells if it closes below 12.50 (−3.8%), at the open after that close. Shorts if it closes below 12.50 (−3.8%), at the open after that close.');
   const short = report(`universe: A\nfill: close\n${trend}`, { A: bars([13, 13, 12, 11, 10]) }).report;
   assert.deepEqual(short.triggers.map((t) => t.side), ['cover', 'buy']);
   assert.equal(tickerText(short, 'A').text, 'Covers if it closes above 10.50 (+5.0%), at that close. Buys if it closes above 10.50 (+5.0%), at that close.');
@@ -286,19 +286,19 @@ test('a flip: held long, the close that sells also shorts; held short, the one t
   // With no sell rule a long is sold only by the short rule's signal: when that gives no order, the short rule says so for both.
   const quiet = report('universe: A\nbuy when close > sma(3)\nshort when close < 5', { A: bars([10, 10, 11, 12, 13]) }).report;
   assert.deepEqual(quiet.triggers.map((t) => t.side), ['short']);
-  assert.match(tickerText(quiet, 'A').text, /^The short rule gives no order at any close from /);
+  assert.match(tickerText(quiet, 'A').text, /^The short rule gives no order if the close is from /);
 });
 
 test('a short\'s stop below the last close covers at the next open, its stop and target are told the other way up, and with no cover rule it says what can cover it', () => {
   // The last bar fell to 8 before closing at 10, so the 3% trailing stop of the short is at 8.24 for the next bar.
   const { report: r } = report('universe: A\ntrailing stop: 3%\nshort when true\ncover when close > 50', { A: bars([10, 10, 10, 10], { lows: [10, 10, 10, 8] }) });
   assert.deepEqual(only(r).fires, []);
-  assert.equal(tickerText(r, 'A').text, 'The stop at 8.24 (−17.6%) is below the last close, so it covers at the next open unless the price opens below it.');
+  assert.equal(tickerText(r, 'A').text, 'The stop at 8.24 (−17.6%) is below the last close. Thus the strategy covers at the next open, unless the price opens below it.');
   const none = report('universe: A\ntrailing stop: 10%\nshort when true', { A: bars([10, 10, 9, 8]) }).report;
-  assert.equal(tickerText(none, 'A').text, 'No cover rule. The stop at 8.80 (+10.0%) covers during the bar if the price reaches it.');
-  assert.equal(levelsSentence({ levels: { stop: 105, target: 90 }, ownLast: 100, short: true }), 'The stop at 105.00 (+5.0%) and the target at 90.00 (−10.0%) cover during the bar if the price reaches them.');
-  assert.equal(levelsSentence({ levels: { stop: null, target: 101 }, ownLast: 100, short: true }), 'The target at 101.00 (+1.0%) is above the last close, so it covers at the next open unless the price opens above it.');
-  assert.equal(levelsSentence({ levels: { stop: 99, target: null }, ownLast: 100, short: true }), 'The stop at 99.00 (−1.0%) is below the last close, so it covers at the next open unless the price opens below it.');
+  assert.equal(tickerText(none, 'A').text, 'The strategy has no cover rule. The stop at 8.80 (+10.0%) covers during the bar if the price touches it.');
+  assert.equal(levelsSentence({ levels: { stop: 105, target: 90 }, ownLast: 100, short: true }), 'The stop at 105.00 (+5.0%) and the target at 90.00 (−10.0%) cover during the bar if the price touches them.');
+  assert.equal(levelsSentence({ levels: { stop: null, target: 101 }, ownLast: 100, short: true }), 'The target at 101.00 (+1.0%) is above the last close. Thus the strategy covers at the next open, unless the price opens above it.');
+  assert.equal(levelsSentence({ levels: { stop: 99, target: null }, ownLast: 100, short: true }), 'The stop at 99.00 (−1.0%) is below the last close. Thus the strategy covers at the next open, unless the price opens below it.');
   // A short's target above the last close acts at the open, so no close is searched and no rule is told.
   const t: Trigger = { ...only(r), last: 100, ownLast: 100, levels: { stop: 110, target: 101 }, fires: [{ lo: 102, hi: null }] };
   assert.equal(rulePhrase(t), null);
@@ -313,23 +313,23 @@ test('after a short\'s stop the short rule must stop holding: the close above wh
   assert.deepEqual([bt.run.trades[0].reason, bt.run.states[0].rearmingShort], ['stop loss', true]);
   const t = only(r);
   assert.equal(t.side, 'rearmShort');
-  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit or a margin call, the short rule must stop holding before A is shorted again: it does if A closes above 10.09 (+0.9%).');
+  assert.equal(tickerText(r, 'A').text, 'After a stop or target exit or a margin call, the short rule must become false before the strategy shorts A again: it becomes false if A closes above 10.09 (+0.9%).');
   verify(parsed(src), new Map([['A', A]]), 'short rearm', tally());
 });
 
 test('a short that has to wait for its sizing or stop input, or for its own rule, is said so instead of a price', () => {
   const A = bars(Array.from({ length: 10 }, (_, i) => 10 + i));
   const said = (rules: string) => tickerText(report(`universe: A\n${rules}`, { A }).report, 'A').text;
-  assert.equal(said('stop loss: 2 atr(20)\nshort when close < 3'), "Can't short at the next close: the 20-bar ATR for the stop loss is still unknown there.");
-  assert.equal(said('stop loss: 2 atr(20)\nbuy when close > 30\nshort when close < 3'), "Can't buy or short at the next close: the 20-bar ATR for the stop loss is still unknown there.");
-  assert.equal(said('short when close < sma(50)'), "Can't short at the next close: the short rule is still unknown there.");
+  assert.equal(said('stop loss: 2 atr(20)\nshort when close < 3'), "The strategy cannot short at the next close: the 20-bar ATR for the stop loss is unknown at that close.");
+  assert.equal(said('stop loss: 2 atr(20)\nbuy when close > 30\nshort when close < 3'), "The strategy cannot buy or short at the next close: the 20-bar ATR for the stop loss is unknown at that close.");
+  assert.equal(said('short when close < sma(50)'), "The strategy cannot short at the next close: the short rule is unknown at that close.");
   // The buy rule is known and the short rule is not: the buy's price, then why there is none for the short.
-  assert.match(said('buy when close > 30\nshort when close < sma(50)'), /^The buy rule gives no order at any close from .*\. Can't short at the next close: the short rule is still unknown there\.$/);
+  assert.match(said('buy when close > 30\nshort when close < sma(50)'), /^The buy rule gives no order if the close is from .*\. The strategy cannot short at the next close: the short rule is unknown at that close\.$/);
 });
 
 test('a held ticker with no sell rule says what can sell it', () => {
   const { report: r } = report('universe: A\ntrailing stop: 10%\nbuy when true', { A: bars([10, 10, 11, 12]) });
-  assert.equal(tickerText(r, 'A').text, 'No sell rule. The stop at 10.80 (−10.0%) sells during the bar if the price reaches it.');
+  assert.equal(tickerText(r, 'A').text, 'The strategy has no sell rule. The stop at 10.80 (−10.0%) sells during the bar if the price touches it.');
 });
 
 test('what the made-up bar assumes is listed: its open, high and low, volume, other tickers and the calendar; reading them a bar back assumes nothing', () => {
@@ -341,14 +341,14 @@ test('what the made-up bar assumes is listed: its open, high and low, volume, ot
   assert.deepEqual(only(report('universe: A\nbuy when close > open and close < 1', { A, V }).report).fires, []);
   assert.deepEqual(said('high > highest(20)[1]').assumptions, ['it trades only between its open and its close']);
   assert.deepEqual(said('close > highest(20)[1]').assumptions, []);
-  assert.deepEqual(said('close > vwap(10)').assumptions, ['it trades only between its open and its close', 'its volume is that of its last bar']);
+  assert.deepEqual(said('close > vwap(10)').assumptions, ['it trades only between its open and its close', 'its volume is the same as on its last bar']);
   assert.deepEqual(said('atr(14) > 0 and close > sma(5)').assumptions, ['it trades only between its open and its close']);
-  assert.deepEqual(said('close > sma(5) and close of V < sma(10) of V').assumptions, ['V is unchanged']);
+  assert.deepEqual(said('close > sma(5) and close of V < sma(10) of V').assumptions, ['V does not change']);
   assert.deepEqual(said('close > sma(5) and close[1] of V > 0').assumptions, []);
-  assert.deepEqual(said('close > sma(5) and weekday < 6').assumptions, ['the next bar is dated 2026-11-16']);
+  assert.deepEqual(said('close > sma(5) and weekday < 6').assumptions, ['the date of the next bar is 2026-11-16']);
   const t = said('close > open');
   assert.equal(t.exact, false);
-  assert.equal(tickerText(report('universe: A\nbuy when close > open and close < 1', { A, V }).report, 'A').note, 'Assumes it opens at its last close.');
+  assert.equal(tickerText(report('universe: A\nbuy when close > open and close < 1', { A, V }).report, 'A').note, 'These prices are correct only if it opens at its last close.');
 });
 
 test('a series given a bar keeps its own flags, which decide when its rows are known, and its columns their last values', () => {
@@ -356,7 +356,7 @@ test('a series given a bar keeps its own flags, which decide when its rows are k
   // A CSV file of prices and columns, with a flag of a kind the copy does not name.
   const signals: Bars & { marker: string } = { ...walkBars(80, 4), columns: [{ name: 'level', header: 'Level', v: Array.from({ length: 80 }, (_, i) => i) }], marker: 'kept' };
   const { bt, data, report: said } = report('universe: A\nbuy when close > sma(5) and column(level) of csv:Data/signals.csv > 0 and close < 1', { A, signals });
-  assert.deepEqual(only(said).assumptions, ['signals is unchanged']);
+  assert.deepEqual(only(said).assumptions, ['signals does not change']);
   const next = nextBarData(bt.spec, data, bt.run.states[0], 50).get('signals') as typeof signals;
   assert.equal(next.t.length, 81);
   assert.deepEqual([next.columns![0].v.at(-1), next.marker], [79, 'kept']);
@@ -371,7 +371,7 @@ test('a FRED series and a file of columns with no prices get no row at the next 
   const src = 'universe: A\nbuy when close > sma(5) and column(score) of csv:Data/signals.csv > column(score)[1] of signals and close of fred:U < close[1] of fred:U and close < 1';
   const { bt, data, report: said } = report(src, { A, signals, U });
   assert.equal(only(said).driver, 'A');
-  assert.deepEqual(only(said).assumptions, ['signals has no new row by that close', 'U publishes no new value by that close']);
+  assert.deepEqual(only(said).assumptions, ['signals has no new row by that close', 'U has no new value by that close']);
   const next = nextBarData(bt.spec, data, bt.run.states[0], 50);
   assert.deepEqual([next.get('A')!.t.length, next.get('signals'), next.get('U')], [81, signals, U]);
 });
@@ -384,7 +384,7 @@ test('solved for a FRED series, its next value is tried as one published in time
   for (const [fill, day] of [['', '2026-11-16'], ['fill: close\n', '2026-11-15']]) {
     const { bt, data, report: said } = report(`universe: A\n${fill}buy when close of fred:F > sma(5) of fred:F\nsell when close of fred:F < -1`, { A, F });
     const t = only(said);
-    assert.deepEqual([t.driver, t.values, t.assumptions], ['F', true, ['F publishes one new value by that close']]);
+    assert.deepEqual([t.driver, t.values, t.assumptions], ['F', true, ['F has one new value by that close']]);
     const next = nextBarData(bt.spec, data, bt.run.states[0], -0.5).get('F')!;
     assert.deepEqual([new Date(next.t.at(-1)!).toISOString().slice(0, 10), next.o.at(-1), next.h.at(-1), next.l.at(-1), next.c.at(-1), next.values], [day, -0.5, -0.5, -0.5, -0.5, true]);
   }
@@ -401,11 +401,11 @@ test('solved for a FRED series below zero, values are tried evenly around the la
   assert.ok(near(t.range.lo, -0.612, 1e-9) && near(t.range.hi, -0.582, 1e-9), JSON.stringify(t.range));
   assert.equal(t.fires.length, 1);
   assert.ok(Math.abs(t.fires[0].lo! - -0.5925) <= PRECISION * 0.03 && t.fires[0].hi === null, JSON.stringify(t.fires));
-  assert.equal(tickerText(said, 'A').text, 'Buys if F\'s next value is above −0.5925 (+0.0045), at the following open.');
-  assert.equal(tickerText(said, 'A').note, 'Assumes F publishes one new value by that close.');
+  assert.equal(tickerText(said, 'A').text, 'Buys if F\'s next value is above −0.5925 (+0.0045), at the open after that close.');
+  assert.equal(tickerText(said, 'A').note, 'These prices are correct only if F has one new value by that close.');
   const none = only(report('universe: A\nbuy when close of fred:F > 0\nsell when close of fred:F < -1', { A, F }).report);
-  assert.equal(rulePhrase(none), 'The sell rule gives no order at any next value of F from −0.612 (−0.015) to −0.582 (+0.015)');
-  assert.equal(condition({ fires: [{ lo: null, hi: null }], last: -0.597, values: true }, 'F'), "whatever F's next value is");
+  assert.equal(rulePhrase(none), 'The sell rule gives no order if the next value of F is from −0.612 (−0.015) to −0.582 (+0.015)');
+  assert.equal(condition({ fires: [{ lo: null, hi: null }], last: -0.597, values: true }, 'F'), "at all next values of F");
   assert.equal(condition({ fires: [{ lo: null, hi: -0.59 }], last: -0.597, values: true }, 'F'), "unless F's next value is above −0.59 (+0.007)");
   assert.deepEqual(nearest({ fires: [{ lo: -0.5925, hi: null }], last: -0.597, values: true }), { distance: -0.5925 - -0.597, now: false });
 });
@@ -428,7 +428,7 @@ test('another clock: a stock read by Bitcoin\'s close waits for Bitcoin\'s bar t
   // Ending on Friday, Bitcoin needs Saturday and Sunday too, which are taken as unchanged.
   const early = new Map([['SPY', SPY], ['BTCUSDT', walkBars(300, 7, { weekends: true, end: Date.UTC(2026, 10, 13) })]]);
   const t = only(verify(parsed(`universe: SPY\n${rule}`), early, 'Bitcoin ending on Friday', tally()));
-  assert.deepEqual([t.driver, t.assumptions], ['BTCUSDT', ['BTCUSDT is unchanged until that close']]);
+  assert.deepEqual([t.driver, t.assumptions], ['BTCUSDT', ['BTCUSDT does not change until that close']]);
 });
 
 test('month_end at the next bar: on the month\'s last weekday the rule can buy, the day before it cannot', () => {
@@ -436,10 +436,10 @@ test('month_end at the next bar: on the month\'s last weekday the rule can buy, 
   // Friday 27 November 2026: the next bar is Monday the 30th, the month's last.
   const last = verify(parsed(src), new Map([['A', walkBars(60, 7, { end: Date.UTC(2026, 10, 27) })]]), 'month end', tally());
   assert.ok(only(last).fires.length > 0);
-  assert.deepEqual(only(last).assumptions, ['the next bar is dated 2026-11-30']);
+  assert.deepEqual(only(last).assumptions, ['the date of the next bar is 2026-11-30']);
   const before = computeTriggers(parsed(src), new Map([['A', walkBars(60, 7, { end: Date.UTC(2026, 10, 26) })]]), triggerRun(run(src, { A: walkBars(60, 7, { end: Date.UTC(2026, 10, 26) }) }).run));
   assert.deepEqual(only(before).fires, []);
-  assert.match(tickerText(before, 'A').text, /^The buy rule gives no order at any close from /);
+  assert.match(tickerText(before, 'A').text, /^The buy rule gives no order if the close is from /);
 });
 
 test('positions built in entries: an add\'s close, and none once the entries are all made', () => {
@@ -448,7 +448,7 @@ test('positions built in entries: an add\'s close, and none once the entries are
   const r = verify(parsed(src), new Map([['A', A]]), 'entries', tally());
   const add = r.triggers.find((t) => t.side === 'add')!;
   assert.ok(add.fires[0].lo! >= 10.1 && add.fires[0].lo! / 10.1 - 1 <= PRECISION && add.fires[0].hi === null);
-  assert.match(tickerText(r, 'A').text, /^The sell rule gives no order at any close from .*\. Adds if it closes above 10\.10 \(\+1\.0%\), at the following open\.$/);
+  assert.match(tickerText(r, 'A').text, /^The sell rule gives no order if the close is from .*\. Adds if it closes above 10\.10 \(\+1\.0%\), at the open after that close\.$/);
   const full = report(src, { A: bars([10, 10, 10.5, 11, 11.5, 12]) }).report;
   assert.deepEqual(full.triggers.map((t) => t.side), ['sell']);
 });
@@ -529,10 +529,10 @@ test('a rule\'s closes in words: above, below, between, unless, either side, and
   assert.equal(condition(t([{ lo: null, hi: 94.999 }, { lo: 105.001, hi: null }]), 'it'), 'if it closes below 95.00 (−5.0%) or above 105.00 (+5.0%)');
   // Below 1, prices are shown to the millionth.
   assert.equal(condition({ fires: [{ lo: 0.5000004, hi: null }], last: 0.49 }, 'it'), 'if it closes above 0.50 (+2.0%)');
-  assert.equal(condition(t([{ lo: null, hi: null }]), 'it'), 'whatever the next close');
+  assert.equal(condition(t([{ lo: null, hi: null }]), 'it'), 'at all prices of the next close');
   assert.equal(condition(t([]), 'it'), null);
-  assert.equal(levelsSentence({ levels: { stop: 95, target: 110 }, ownLast: 100 }), 'The stop at 95.00 (−5.0%) and the target at 110.00 (+10.0%) sell during the bar if the price reaches them.');
-  assert.equal(levelsSentence({ levels: { stop: null, target: 99 }, ownLast: 100 }), 'The target at 99.00 (−1.0%) is below the last close, so it sells at the next open unless the price opens below it.');
+  assert.equal(levelsSentence({ levels: { stop: 95, target: 110 }, ownLast: 100 }), 'The stop at 95.00 (−5.0%) and the target at 110.00 (+10.0%) sell during the bar if the price touches them.');
+  assert.equal(levelsSentence({ levels: { stop: null, target: 99 }, ownLast: 100 }), 'The target at 99.00 (−1.0%) is below the last close. Thus the strategy sells at the next open, unless the price opens below it.');
 });
 
 test('how near a rule is: the nearest price where it changes, and whether an unchanged close gives the order', () => {

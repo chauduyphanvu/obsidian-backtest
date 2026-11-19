@@ -31,7 +31,7 @@ export function renderLoading(el: HTMLElement, text: string): void {
 export function renderErrors(el: HTMLElement, errors: Diagnostic[], src: string): void {
   el.replaceChildren();
   const root = h(el, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? "This strategy can't run yet" : `This strategy can't run yet: ${errors.length} problems`);
+  h(root, 'div', 'bt-error-title', errors.length === 1 ? 'This strategy cannot run' : `This strategy cannot run: ${errors.length} problems`);
   const lines = src.split('\n');
   const list = h(root, 'ul', 'bt-errors');
   for (const e of errors) {
@@ -49,9 +49,9 @@ export function renderErrors(el: HTMLElement, errors: Diagnostic[], src: string)
 export function renderFailure(el: HTMLElement, message: string, src: string, onRetry: () => void): void {
   el.replaceChildren();
   const root = h(el, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', "The backtest couldn't run");
+  h(root, 'div', 'bt-error-title', 'The backtest did not run');
   h(root, 'div', 'bt-note', message);
-  h(root, 'button', 'bt-button', 'Try again').addEventListener('click', onRetry);
+  h(root, 'button', 'bt-button', 'Run again').addEventListener('click', onRetry);
   source(root, src);
 }
 
@@ -59,7 +59,7 @@ export function renderFailure(el: HTMLElement, message: string, src: string, onR
 export function renderLimit(el: HTMLElement, error: LimitError, src: string, onAnyway: () => void): void {
   el.replaceChildren();
   const root = h(el, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', error.kind === 'size' ? 'This backtest is too large to run' : 'This backtest took too long');
+  h(root, 'div', 'bt-error-title', error.kind === 'size' ? 'This backtest is too large to run' : 'This backtest used too much time');
   h(root, 'div', 'bt-note', error.message);
   if (error.anyway) h(root, 'button', 'bt-button', anywayLabel(error)).addEventListener('click', onAnyway);
   source(root, src);
@@ -75,7 +75,7 @@ export function renderDefaultsChanged(el: HTMLElement, onRun: () => void): (chan
   const note = document.createElement('div');
   note.className = 'bt-defaults-changed';
   note.hidden = true;
-  h(note, 'span', 'bt-defaults-changed-text', 'The default settings were changed after this result was worked out. It still has the old ones.');
+  h(note, 'span', 'bt-defaults-changed-text', 'You changed the default settings after the plugin calculated this result. This result uses the previous settings.');
   h(note, 'button', 'bt-button', 'Run again').addEventListener('click', onRun);
   root.prepend(note);
   return (changed) => {
@@ -124,7 +124,7 @@ export function summary(spec: Spec, source = ''): string {
   };
   const stops = new Set(names.map(text));
   const spelt = stops.size === 1 && text(names[0]) !== '';
-  if (stops.size > 1) parts.push('stops set per ticker');
+  if (stops.size > 1) parts.push('stops per ticker');
   else if (spelt) parts.push(text(names[0]));
   const asStops = spelt ? stopParams(source) : new Set<string>();
   const listed = spec.params.filter((p) => !asStops.has(p.name.toLowerCase()));
@@ -132,10 +132,10 @@ export function summary(spec: Spec, source = ''): string {
   return parts.join(', ');
 }
 
-/** A commission as the summary names it: "commission 1 an order", "commission 0.005 a share, at least 1, at most 1% of the order". */
+/** A commission as the summary names it: "commission 1 an order", "commission 0.005 a share, minimum 1, maximum 1% of the order". */
 export function commissionText(c: Commission): string {
   if (c.k === 'order') return `commission ${c.fee} an order`;
-  const limits = [c.min > 0 ? `at least ${c.min}` : '', c.max !== null ? `at most ${formatParam({ percent: true }, c.max)} of the order` : ''].filter(Boolean);
+  const limits = [c.min > 0 ? `minimum ${c.min}` : '', c.max !== null ? `maximum ${formatParam({ percent: true }, c.max)} of the order` : ''].filter(Boolean);
   return `commission ${c.fee} a share${limits.length ? `, ${limits.join(', ')}` : ''}`;
 }
 
@@ -185,7 +185,7 @@ export interface CompactFacts {
 }
 
 /** When a rule's order fills, as the result's fine print says it. */
-export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill === 'close' ? 'A rule seen at a close fills at that close.' : 'A rule seen at a close fills at the next open.');
+export const fillSentence = (spec: Pick<Spec, 'fill'>): string => (spec.fill === 'close' ? 'An order fills at the close where its rule is true.' : 'An order fills at the next open after its rule is true.');
 
 /**
  * What a folded block shows besides its name, worded like the positions table. A flip is said as its two orders: "sells A
@@ -255,7 +255,7 @@ function notesOf(view: ResultView, out: RunOutput): string[] {
   const first = bt.run.t[0];
   const notes = [...warnings, ...(out.notes ?? []), ...bt.notes, ...view.notes.map((n) => `Line ${n.line}: ${n.message}`)];
   if (spec.from !== null && first - spec.from > 7 * DAY) {
-    notes.push(`The run starts on ${isoDate(first)}, the first day every ticker has prices, not ${isoDate(spec.from)}.`);
+    notes.push(`The run starts on ${isoDate(first)}, not ${isoDate(spec.from)}. This is the first day with prices for all tickers.`);
   }
   return notes;
 }
@@ -280,7 +280,7 @@ function segments(root: HTMLElement, bt: Backtest): void {
   row('Worst drawdown', (g) => pct(g.stats.maxDrawdown));
   row('Sharpe ratio', (g) => num(g.stats.sharpe));
   row('Trades', (g) => String(g.tradeStats.count));
-  h(wrap, 'div', 'bt-note', 'Rules chosen by looking at the first period are only tested by the second.');
+  h(wrap, 'div', 'bt-note', 'If you selected the rules with data from the first period, only the second period tests them.');
 }
 
 const PRICES_FROM: Record<Source, string> = { yahoo: 'Yahoo', binance: 'Binance', csv: 'your CSV files', tiingo: 'Tiingo', fred: 'FRED' };
@@ -291,9 +291,9 @@ function finePrint(root: HTMLElement, out: RunOutput): void {
   const { run } = bt;
   const intraday = isIntraday(run.t);
   const box = h(root, 'div', 'bt-fine');
-  const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}.`, fillSentence(spec)];
-  if (spec.magnify) facts.push(`A bar with a stop or target inside it is followed through its ${spec.magnify} bars, where it has them.`);
-  if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}${run.commission ? `, of which ${money(run.commission)} commission` : ''}.`);
+  const facts = [`${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}. Start capital: ${money(spec.capital)}.`, fillSentence(spec)];
+  if (spec.magnify) facts.push(`If a stop or target is in a bar, the run examines the ${spec.magnify} bars in that bar, where they are available.`);
+  if (run.costs > 0) facts.push(`Costs paid: ${money(run.costs)}${run.commission ? ` (${money(run.commission)} commission)` : ''}.`);
   // Under half a dollar would read as "$0".
   if (run.borrowFees && run.borrowFees >= 0.5) facts.push(`Borrow fees for shorts: ${money(run.borrowFees)}.`);
   if (run.marginInterest && run.marginInterest >= 0.5) facts.push(`Interest on borrowed money: ${money(run.marginInterest)}.`);
@@ -303,7 +303,7 @@ function finePrint(root: HTMLElement, out: RunOutput): void {
   if (traded.length) {
     const through = Math.min(...traded.map((p) => p.through));
     const sources = [...new Set(traded.map((p) => PRICES_FROM[p.source]))].join(' and ');
-    h(box, 'div', 'bt-note', `Prices through ${stamp(through, intraday)}, from ${sources}.`);
+    h(box, 'div', 'bt-note', `Prices until ${stamp(through, intraday)}, from ${sources}.`);
   }
 }
 
@@ -366,13 +366,13 @@ function sourcePanel(parent: HTMLElement, text: string): void {
   const folded = fold.filter(Boolean).length;
   if (folded === 0 || folded === lines.length) return;
   fold.forEach((f, i) => f && lines[i].classList.add('bt-src-setting'));
-  const toggle = h(box, 'button', 'bt-link-button bt-src-toggle', 'Show the whole block');
+  const toggle = h(box, 'button', 'bt-link-button bt-src-toggle', 'Show all of the block');
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', 'false');
   toggle.addEventListener('click', () => {
     const all = !box.classList.contains('bt-src-all');
     box.classList.toggle('bt-src-all', all);
-    toggle.textContent = all ? 'Fold the settings' : 'Show the whole block';
+    toggle.textContent = all ? 'Hide the settings' : 'Show all of the block';
     toggle.setAttribute('aria-expanded', String(all));
   });
 }
@@ -501,7 +501,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   const setOpen = (open: boolean) => {
     root.classList.toggle('bt-folded', !open);
     fold.setAttribute('aria-expanded', String(open));
-    fold.title = open ? 'Fold this result to one line' : 'Open this result';
+    fold.title = open ? 'Show this result as one line' : 'Open this result';
     body.hidden = refresh.hidden = !open;
     if (open && !built) {
       built = true;

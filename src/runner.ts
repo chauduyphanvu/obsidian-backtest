@@ -209,7 +209,7 @@ export class Runner {
         if (!(spec.cash.k === 'ticker' && spec.cash.ref.name === r.name)) throw e;
         // Without a cash rate line the ticker comes from the settings, so the block itself never names it.
         const why = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
-        throw new Error(`${why} It is the ticker the cash rate is read from: the block's "cash rate" line, or without one the plugin's "Interest on cash" setting.`);
+        throw new Error(`${why} The cash rate comes from this ticker. The ticker is in the "cash rate" line of the block. If the block has no such line, it is in the plugin setting "Interest on cash".`);
       }
     };
     const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, rows: r.source === 'csv' || r.source === 'fred', ...(await load(r)) })));
@@ -245,7 +245,7 @@ export class Runner {
             return { name: a.name, bars: barsFrom(l.bars, since), warning: l.warning };
           } catch (e) {
             const why = e instanceof Error ? e.message : String(e);
-            return { name: a.name, bars: null, warning: `${why.replace(/\.$/, '')}. ${a.name}'s bars were not looked inside.` };
+            return { name: a.name, bars: null, warning: `${why.replace(/\.$/, '')}. The run did not examine the bars of ${a.name} with smaller bars.` };
           }
         }),
     );
@@ -285,7 +285,7 @@ export class Runner {
           return { name: r.name, bars: l.bars, warning: l.warning };
         } catch (e) {
           const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
-          return { name: r.name, bars: null, warning: `${why}. ${r.name}'s fills are not compared on price.` };
+          return { name: r.name, bars: null, warning: `${why}. The plugin does not compare the fill prices of ${r.name}.` };
         }
       }),
     );

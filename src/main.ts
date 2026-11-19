@@ -177,7 +177,7 @@ export default class BacktestBlocks extends Plugin {
     this.addCommand({ id: 'use-csv-file', name: 'Use a CSV file in a strategy', callback: () => this.openCsv() });
     this.addCommand({
       id: 'draft-strategy',
-      name: 'Draft a strategy from a description',
+      name: 'Write a strategy from a description',
       callback: () => this.openDraft(),
     });
     this.addCommand({
@@ -197,15 +197,15 @@ export default class BacktestBlocks extends Plugin {
     });
     this.addCommand({
       id: 'clear-prices',
-      name: 'Clear saved prices',
+      name: 'Delete saved prices',
       callback: () => void this.clearPrices(),
     });
     this.addCommand({
       id: 'fix-at-cursor',
-      name: 'Fix the problem at the cursor',
+      name: 'Correct the problem at the cursor',
       editorCallback: (editor) => {
         const view = (editor as unknown as { cm?: EditorView }).cm;
-        if (!view || !applyFixAtCursor(view)) new Notice('There is no fix to offer at the cursor.');
+        if (!view || !applyFixAtCursor(view)) new Notice('There is no correction for the text at the cursor.');
       },
     });
     this.addCommand({ id: 'open-live', name: 'Open strategy preview', callback: () => void openLivePanel(this.app) });
@@ -258,7 +258,7 @@ export default class BacktestBlocks extends Plugin {
     this.prices.forget();
     this.results.clear();
     await this.prices.removeSaved();
-    new Notice('Saved prices cleared. Strategy blocks fetch again when they next render.');
+    new Notice('The saved prices are deleted. Each strategy block downloads its prices again when it shows next.');
   }
 
   /** The ticker lookup while its setting is on; null means nothing is ever requested. */
@@ -332,10 +332,10 @@ export default class BacktestBlocks extends Plugin {
       run: (source, force) => this.results.runSource(source, { force }),
       append: async (rows, through) => {
         const f = file();
-        if (!f) return { ok: false, message: 'This note can no longer be found, so nothing was written.' };
+        if (!f) return { ok: false, message: 'Cannot find this note. The plugin wrote nothing.' };
         // The block's line is asked for again now: the note may have moved it since it was drawn.
         const written = await writeLog((edit) => this.app.vault.process(f, edit), ctx.getSectionInfo(el)?.lineStart, rows, through, Date.now());
-        if (written.ok) new Notice(written.added > 0 ? `Added ${written.added} ${written.added === 1 ? 'bar' : 'bars'} to the log.` : 'The log is checked through the last bar.');
+        if (written.ok) new Notice(written.added > 0 ? `Added ${written.added} ${written.added === 1 ? 'bar' : 'bars'} to the log.` : 'The log contains the last bar. There is nothing to add.');
         return written;
       },
       open: (target) => void this.app.workspace.openLinkText(target, ctx.sourcePath, false),
@@ -356,7 +356,7 @@ export default class BacktestBlocks extends Plugin {
       new Notice(`Started a forward test in ${path}`);
       void this.app.workspace.openLinkText(path, '', true);
     } catch (e) {
-      new Notice(`Couldn't start the forward test: ${e instanceof Error ? e.message : String(e)}`);
+      new Notice(`Cannot start the forward test: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -394,7 +394,7 @@ export default class BacktestBlocks extends Plugin {
       run: (entries) => runAccount(entries, this.compareHost(ctx.sourcePath)),
       read: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(normalizePath(path)) ?? this.app.metadataCache.getFirstLinkpathDest(path, ctx.sourcePath);
-        if (!(file instanceof TFile)) throw new Error(`There is no file ${path} in this vault. Write its path from the vault's top folder, such as Broker/schwab.csv.`);
+        if (!(file instanceof TFile)) throw new Error(`There is no file ${path} in this vault. Write the path from the top folder of the vault, for example Broker/schwab.csv.`);
         return this.app.vault.cachedRead(file);
       },
       raw: (refs) => this.results.runner().loadRaw(refs),
@@ -409,7 +409,7 @@ export default class BacktestBlocks extends Plugin {
       renderCompareErrors(el, errors, source);
       return;
     }
-    renderCompareMessage(el, `Running ${entries.length} strategies…`);
+    renderCompareMessage(el, `The plugin runs ${entries.length} strategies…`);
     try {
       const curves = await compareCurves(entries, this.compareHost(ctx.sourcePath));
       el.replaceChildren();
@@ -502,7 +502,7 @@ export default class BacktestBlocks extends Plugin {
       insert: (block) => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (view) place(view.editor, block);
-        else new Notice('Open a note in editing mode first, then insert the draft.');
+        else new Notice('Open a note in the editor. Then insert the draft.');
       },
     }).open();
   }

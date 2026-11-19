@@ -105,7 +105,7 @@ test('more than 5 values first published on one day are a backfill, dated by the
   assert.equal(t.length, 19);
   assert.equal(
     s.note,
-    'FRED first published 16 values of UNRATE (dated 2009-01-01 to 2010-04-01) together on 2010-05-03, so each is dated 13 days after the last day of its period, the median delay of the values published later, and never later than it was published. They are the figures of that first release, which may already include later revisions: only the dates are estimates.',
+    'FRED first published 16 values of UNRATE (dated 2009-01-01 to 2010-04-01) together on 2010-05-03. Thus the plugin gives each value the date 13 days after the last day of its period, which is the median time to publication of the subsequent values, but not a date after the day when FRED published it. These are the figures of that first release, and they can include subsequent revisions. Only the dates are estimates.',
   );
 });
 
@@ -125,7 +125,7 @@ test('only the first day a series was published on can be a backfill: values pub
   assert.deepEqual(t.slice(after), Array.from({ length: weeks }, (_, w) => iso(Date.UTC(2015, 0, 12 + 7 * w))));
   assert.deepEqual(s.bars.c.slice(after), Array.from({ length: weeks }, (_, w) => 2 + w));
   assert.ok(t.slice(0, after).every((d) => d <= '2015-01-05'));
-  assert.equal(s.note?.startsWith('FRED first published 31 values of DFF (dated 2014-12-01 to 2014-12-31) together on 2015-01-05,'), true, s.note!);
+  assert.equal(s.note?.startsWith('FRED first published 31 values of DFF (dated 2014-12-01 to 2014-12-31) together on 2015-01-05.'), true, s.note!);
 });
 
 test('exactly 5 values published on one day are taken as published', () => {
@@ -141,11 +141,11 @@ test('with no value published on its own, a backfill is dated a whole period aft
   const quarters = Array.from({ length: 8 }, (_, i): [string, string, string] => [iso(Date.UTC(2000, 3 * i, 1)), '2002-03-01', String(i)]);
   const s = parseFred(fredJson(quarters), 'GDP');
   assert.deepEqual(s.bars.t.map(iso), ['2000-06-30', '2000-09-30', '2000-12-31', '2001-03-31', '2001-06-30', '2001-09-30', '2001-12-31', '2002-03-01']);
-  assert.match(s.note!, /dated 2000-01-01 to 2001-10-01\) together on 2002-03-01, so each is dated a quarter after its period ends, as no value published later shows the usual delay/);
+  assert.match(s.note!, /dated 2000-01-01 to 2001-10-01\) together on 2002-03-01\. Thus the plugin gives each value the date a quarter after the end of its period, because the subsequent values do not show a usual time to publication/);
   // A daily series' default is a day after, a weekly one's a week after the day its week ends.
   const daily = parseFred(fredJson(Array.from({ length: 6 }, (_, i): [string, string, string] => [iso(Date.UTC(2024, 0, 1 + i)), '2024-03-01', '1'])), 'D');
   assert.equal(iso(daily.bars.t[0]), '2024-01-02');
-  assert.match(daily.note!, /a day after its period ends/);
+  assert.match(daily.note!, /the date a day after the end of its period/);
 });
 
 test('a weekly series is dated by the day its week ends', () => {
@@ -170,11 +170,11 @@ test('a row without a publication day it can be read from has no date of its own
   );
   // The other two are known a day after their date, so the first is too.
   assert.deepEqual(s.bars.t.map(iso), ['2024-01-03', '2024-01-04', '2024-01-05']);
-  assert.match(s.note!, /FRED first published 1 value of X \(dated 2024-01-02\) together on a day FRED does not give/);
+  assert.match(s.note!, /FRED first published 1 value of X \(dated 2024-01-02\) together on a day that FRED does not give/);
 });
 
 test('an answer with no observations is an error', () => {
-  assert.throws(() => parseFred(JSON.stringify({ error_code: 400, error_message: 'Bad Request.  The series does not exist.' }), 'X'), /FRED sent no observations/);
+  assert.throws(() => parseFred(JSON.stringify({ error_code: 400, error_message: 'Bad Request.  The series does not exist.' }), 'X'), /FRED sent no values/);
 });
 
 test('cutting a series keeps it a series of values', () => {
@@ -190,13 +190,13 @@ const errorsOf = (src: string) => parseSpec(src).errors.map((e) => e.message);
 
 test('a FRED series can be read and be the cash rate, but cannot be traded or be the benchmark', () => {
   assert.deepEqual(errorsOf('universe: SPY, fred:T10Y2Y\nbuy when true'), [
-    'fred:T10Y2Y is a series of values from FRED, not prices, so it cannot be traded. A rule can read it instead, as in close of fred:T10Y2Y > 0',
+    'fred:T10Y2Y is a series of values from FRED, not prices. The strategy cannot trade it. Use it in a rule, for example close of fred:T10Y2Y > 0',
   ]);
   assert.deepEqual(errorsOf('symbol: fred:UNRATE\nbuy when true').slice(0, 1), [
-    'fred:UNRATE is a series of values from FRED, not prices, so it cannot be traded. A rule can read it instead, as in close of fred:UNRATE > 0',
+    'fred:UNRATE is a series of values from FRED, not prices. The strategy cannot trade it. Use it in a rule, for example close of fred:UNRATE > 0',
   ]);
   assert.deepEqual(errorsOf('universe: SPY\nbenchmark: fred:T10Y2Y\nbuy when true'), [
-    'fred:T10Y2Y is a series of values from FRED, not prices, so it cannot be the benchmark. A rule can read it instead, as in close of fred:T10Y2Y > 0',
+    'fred:T10Y2Y is a series of values from FRED, not prices. It cannot be the benchmark. Use it in a rule, for example close of fred:T10Y2Y > 0',
   ]);
   const { spec, errors, warnings } = parseSpec('universe: SPY\ncash rate: FRED:dgs3mo\nbuy when close of fred:T10Y2Y > 0 and sma(close, 3) of fred:T10Y2Y < 1');
   assert.deepEqual(errors, []);
@@ -213,7 +213,7 @@ test('a FRED series has rows of its own spacing, like a CSV file, so no interval
 
 test('a FRED series has no columns, and names its source when one is asked for', () => {
   assert.deepEqual(errorsOf('universe: SPY\nbuy when column(score) of fred:T10Y2Y > 0'), [
-    'T10Y2Y comes from FRED, not from a CSV file, so it has no column called score. Name the file, as in column(score) of csv:Data/signals.csv',
+    'T10Y2Y comes from FRED, not from a CSV file. Thus it has no column with the name score. Write the file name, for example column(score) of csv:Data/signals.csv',
   ]);
 });
 
@@ -221,7 +221,7 @@ test('a bare name reads the FRED series the block names, and the same name from 
   const { spec, errors } = parseSpec('universe: SPY\nbuy when close of fred:T10Y2Y > 0\nsell when close of t10y2y < 0');
   assert.deepEqual(errors, []);
   assert.equal(spec!.extras.length, 1);
-  assert.match(errorsOf('universe: SPY\nbuy when close of fred:DGS10 > 0 and close of DGS10 > 0 and close of yahoo:DGS10 > 0')[0], /^DGS10 is used for two different things here: fred:DGS10 and yahoo:DGS10/);
+  assert.match(errorsOf('universe: SPY\nbuy when close of fred:DGS10 > 0 and close of DGS10 > 0 and close of yahoo:DGS10 > 0')[0], /^DGS10 is the name of two different price sources here: fred:DGS10 and yahoo:DGS10/);
 });
 
 // ------------------------------------------------------------------------------------------------ the engine
@@ -243,18 +243,18 @@ test('with fill: close, a FRED value published on a day is read from the next da
   const r = run('universe: A\nfill: close\nbuy when close of fred:F > 0', { A, F });
   assert.equal(r.run.trades[0].entryT, day(36));
   assert.equal(r.run.trades[0].entryPrice, 10);
-  assert.ok(r.notes.some((n) => /a rule reads the previous bar of a ticker that keeps other hours/.test(n) && n.includes('F for A')));
+  assert.ok(r.notes.some((n) => /a rule reads the previous bar of a ticker with different hours/.test(n) && n.includes('F for A')));
 });
 
 test('a FRED yield as the cash rate pays from the day after it was published, not a month later', () => {
   const A = bars(Array.from({ length: 70 }, () => 10));
   const R = values([day(10), day(40)], [36.5, 73]);
   const r = run('universe: A\ncapital: 1000\ncash rate: fred:R\nbuy when false', { A, R });
-  // Cash earns nothing until the end of day 10, then 36.5% a year until the end of day 40, then 73%.
+  // Cash receives no interest until the end of day 10, then 36.5% a year until the end of day 40, then 73%.
   assert.equal(r.run.cashReturn[10], 0);
   assert.ok(near(r.run.cashReturn[11], 0.365 / 365) && near(r.run.cashReturn[40], 0.365 / 365));
   assert.ok(near(r.run.cashReturn[41], 0.73 / 365));
-  assert.equal(r.cashRateNote, 'Cash earns the R rate');
+  assert.equal(r.cashRateNote, 'Cash receives the R rate');
   // The rows as bars of prices: the first is known when its 30-day bar ends, a month on.
   const bars30 = run('universe: A\ncapital: 1000\ncash rate: R\nbuy when false', { A, R: { ...R, values: undefined } });
   assert.equal(bars30.run.cashReturn[11], 0);
@@ -273,7 +273,7 @@ test('functions that weigh by volume say a FRED series has none', () => {
   const A = bars(Array.from({ length: 30 }, () => 10));
   const F = values(Array.from({ length: 30 }, (_, i) => day(i)), Array.from({ length: 30 }, (_, i) => i));
   const { spec } = parseSpec('universe: A\nbuy when obv of fred:F > 0');
-  assert.throws(() => runBacktest(spec!, new Map([['A', A], ['F', F]])), /^Error: F has no volume, which obv\(\) needs\. A FRED series and some indexes have none, and a CSV file needs a volume column\.$/);
+  assert.throws(() => runBacktest(spec!, new Map([['A', A], ['F', F]])), /^Error: F has no volume, but obv\(\) must have volume\. A FRED series and some indexes have no volume\. A CSV file must have a volume column\.$/);
   // Its values can be read through any function that reads a series.
   const r = run('universe: A\nbuy when sma(close, 5) of fred:F > 20 and highest(3) of fred:F > 21', { A, F });
   // Both first hold at the close of day 23, so the buy fills at the next open.

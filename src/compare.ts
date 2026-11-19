@@ -30,7 +30,7 @@ const EPS = 1e-9;
 /** Below this the returns do not vary, apart from rounding noise. */
 const FLAT = 1e-12;
 
-const HOW_TO_WRITE = 'Write a note as [[Note name]] or [[Note name#Strategy name]], or as a vault path ending in .md';
+const HOW_TO_WRITE = 'Write a note as [[Note name]] or [[Note name#Strategy name]], or as a vault path that ends in .md';
 
 function span(raw: string, token: string): { from: number; to: number } {
   const from = raw.lastIndexOf(token);
@@ -40,10 +40,10 @@ function span(raw: string, token: string): { from: number; to: number } {
 /** A weight such as `40%` as a fraction, or the problem with it. 0% lists a strategy without giving it any of the money. */
 function weightOf(raw: string, line: number, token: string): number | Diagnostic {
   const m = token.match(WEIGHT);
-  if (!m) return { line, message: 'After the note, only a weight such as 40% can follow', ...span(raw, token) };
+  if (!m) return { line, message: 'After the note, write only a weight, for example 40%', ...span(raw, token) };
   // Adding 0 turns the -0 of "-0%" into 0.
   const w = Number(m[1]) / 100 + 0;
-  if (!(w >= 0)) return { line, message: "A weight can't be below 0%", ...span(raw, token) };
+  if (!(w >= 0)) return { line, message: 'A weight cannot be below 0%', ...span(raw, token) };
   return w;
 }
 
@@ -82,8 +82,8 @@ export function parseLine(raw: string, line: number): CompareEntry | Diagnostic 
   const hash = target.indexOf('#');
   const link = (hash < 0 ? target : target.slice(0, hash)).trim();
   const block = hash < 0 ? null : target.slice(hash + 1).trim();
-  if (!link) return { line, message: "This link doesn't name a note" };
-  if (block === '') return { line, message: 'Nothing follows # in this link: name the strategy, or remove the #' };
+  if (!link) return { line, message: 'This link does not name a note' };
+  if (block === '') return { line, message: 'This link has no text after #. Write the name of the strategy, or remove the #' };
   return { link, block, label, weight, line };
 }
 
@@ -97,7 +97,7 @@ export function duplicateEntries(entries: CompareEntry[]): Diagnostic[] {
     const key = duplicateKey(e);
     const first = seen.get(key);
     if (first === undefined) seen.set(key, e.line);
-    else errors.push({ line: e.line, message: `This strategy is already listed on line ${first}` });
+    else errors.push({ line: e.line, message: `This strategy is also listed on line ${first}` });
   }
   return errors;
 }
@@ -107,12 +107,12 @@ export function weightProblems(entries: CompareEntry[]): Diagnostic[] {
   const weighted = entries.filter((e) => e.weight !== null);
   if (weighted.length > 0 && weighted.length < entries.length) {
     const odd = entries.find((e) => (e.weight === null) !== (entries[0].weight === null))!;
-    return [{ line: odd.line, message: 'Give every strategy a weight, or none of them' }];
+    return [{ line: odd.line, message: 'Give a weight to all strategies, or to none of them' }];
   }
   const sum = weighted.reduce((s, e) => s + e.weight!, 0);
-  if (weighted.length > 0 && sum === 0) return [{ line: entries[entries.length - 1].line, message: 'Give at least one strategy a weight above 0%' }];
+  if (weighted.length > 0 && sum === 0) return [{ line: entries[entries.length - 1].line, message: 'Give one or more strategies a weight above 0%' }];
   if (sum > 1 + EPS) {
-    return [{ line: entries[entries.length - 1].line, message: `The weights add up to ${Number((sum * 100).toFixed(2))}%, and they can't add up to more than 100%` }];
+    return [{ line: entries[entries.length - 1].line, message: `The total of the weights is ${Number((sum * 100).toFixed(2))}%. It cannot be more than 100%` }];
   }
   return [];
 }
@@ -130,10 +130,10 @@ export function parseCompare(source: string): { entries: CompareEntry[]; errors:
   });
 
   errors.push(...duplicateEntries(entries));
-  if (entries.length > MAX_ENTRIES) errors.push({ line: entries[MAX_ENTRIES].line, message: `A comparison holds at most ${MAX_ENTRIES} strategies` });
+  if (entries.length > MAX_ENTRIES) errors.push({ line: entries[MAX_ENTRIES].line, message: `A comparison can hold a maximum of ${MAX_ENTRIES} strategies` });
   // A line that failed to parse would make these checks report problems that are not there.
   if (entries.length < MIN_ENTRIES && errors.length === 0) {
-    errors.push({ line: entries.length ? entries[entries.length - 1].line : 1, message: `Add at least ${MIN_ENTRIES} strategies to compare` });
+    errors.push({ line: entries.length ? entries[entries.length - 1].line : 1, message: `Add a minimum of ${MIN_ENTRIES} strategies to compare` });
   }
   errors.push(...weightProblems(entries));
   return { entries, errors: errors.sort((a, b) => a.line - b.line) };
@@ -170,7 +170,7 @@ export interface EntryRun {
  */
 export async function runEntry<F extends { basename: string }>(entry: CompareEntry, host: CompareHost<F>): Promise<EntryRun> {
   const file = host.note(entry.link.replace(/\.md$/i, ''));
-  if (!file) throw new Error(`Line ${entry.line}: there is no note called "${entry.link}".`);
+  if (!file) throw new Error(`Line ${entry.line}: there is no note with the name "${entry.link}".`);
   const blocks = extractBlocks(await host.read(file));
   const block = entry.block === null ? blocks[0] : blocks.find((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
   if (!block) {
@@ -180,7 +180,7 @@ export async function runEntry<F extends { basename: string }>(entry: CompareEnt
   try {
     out = await host.run(block.source);
   } catch (e) {
-    throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" couldn't run. ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" did not run. ${e instanceof Error ? e.message : String(e)}`);
   }
   return { label: entry.label ?? block.name ?? file.basename, out };
 }
@@ -224,11 +224,11 @@ export function alignCurves(curves: Curve[]): Aligned {
   const start = latestStart.t[0];
   const end = last(earliestEnd);
   if (start > end) {
-    throw new Error(`These strategies never overlap in time: ${latestStart.label} starts on ${isoDate(start)}, after ${earliestEnd.label} ends on ${isoDate(end)}`);
+    throw new Error(`These strategies do not overlap in time: ${latestStart.label} starts on ${isoDate(start)}, after ${earliestEnd.label} ends on ${isoDate(end)}`);
   }
 
   const times = [...new Set(curves.flatMap((c) => c.t.filter((t) => t >= start && t <= end)))].sort((a, b) => a - b);
-  if (times.length < 2) throw new Error(`These strategies overlap on a single date, ${isoDate(start)}, which is too little to compare`);
+  if (times.length < 2) throw new Error(`These strategies overlap on only one date, ${isoDate(start)}. This is not sufficient to compare them`);
 
   const carry = (c: Curve, values: number[]) => {
     let j = 0;
@@ -270,9 +270,9 @@ export function monthStarts(t: number[]): number[] {
 /** What weights add up to, once they are known to be one for each curve, none negative and not above 100% in all. */
 function checkWeights(weights: number[], curves: number): number {
   if (weights.length !== curves) throw new Error('There must be one weight for each curve');
-  if (weights.some((w) => !(w >= 0))) throw new Error('Weights cannot be negative');
+  if (weights.some((w) => !(w >= 0))) throw new Error('Weights cannot be below 0');
   const invested = weights.reduce((s, w) => s + w, 0);
-  if (invested > 1 + EPS) throw new Error(`Weights add up to ${Number((invested * 100).toFixed(2))}%; they cannot add up to more than 100%`);
+  if (invested > 1 + EPS) throw new Error(`The total of the weights is ${Number((invested * 100).toFixed(2))}%. It cannot be more than 100%`);
   return invested;
 }
 

@@ -146,7 +146,7 @@ export class Results {
       const key = await this.resultKey(spec, source, drawing.defaults);
       if (opts.cachedOnly) {
         const hit = this.kept(key, drawing.freshForMs);
-        if (!hit) throw new Error('This strategy has not run yet.');
+        if (!hit) throw new Error('This strategy did not run at this time.');
         return hit;
       }
       const out = await this.runSpec(drawing, spec, key, opts.force);

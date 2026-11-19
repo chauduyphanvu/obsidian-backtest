@@ -115,9 +115,9 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
 
   sections.push(['---', 'tags: [backtest/snapshot]', `created: ${day}`, '---'].join('\n'));
   sections.push(
-    `# ${input.name.trim() || 'Backtest'}\n\nSnapshot taken on ${day}. The run covers ${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}, starting with ${money(spec.capital)}, and is compared with ${benchmark.label}.`,
+    `# ${input.name.trim() || 'Backtest'}\n\nSnapshot made on ${day}. The run is from ${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}. Start capital: ${money(spec.capital)}. The run is compared with ${benchmark.label}.`,
   );
-  sections.push(`## Strategy\n\nKept as plain text, so it does not run again.\n\n${fenced(input.source.replace(/^\s*\n/, '').trimEnd(), 'text')}`);
+  sections.push(`## Strategy\n\nThis copy is text, not a strategy block. Thus it does not run again.\n\n${fenced(input.source.replace(/^\s*\n/, '').trimEnd(), 'text')}`);
 
   const b = benchmark.stats;
   sections.push(
@@ -131,8 +131,8 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
           ['Sharpe ratio', ratio(stats.sharpe), ratio(b.sharpe)],
           spec.margin ? ['Exposure', `${pct(stats.exposure, 0)} gross, net ${pct(stats.netExposure ?? NaN, 0)}`, pct(b.exposure, 0)] : ['Time invested', pct(stats.exposure, 0), pct(b.exposure, 0)],
           ['Trades', tradesText(tradeStats), '–'],
-          ['Share won', pct(tradeStats.winRate, 0), '–'],
-          ...(run.commission === undefined ? [] : [['Costs paid', `${money(run.costs)}, of which ${money(run.commission)} commission`, '–']]),
+          ['Trades won', pct(tradeStats.winRate, 0), '–'],
+          ...(run.commission === undefined ? [] : [['Costs paid', `${money(run.costs)} (${money(run.commission)} commission)`, '–']]),
         ],
         'lrr',
       ),
@@ -156,7 +156,7 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
   }
 
   sections.push(
-    '## Positions now\n\n' +
+    '## Positions\n\n' +
       table(
         ['Ticker', 'Weight', 'Now'],
         run.states.map((st) => {
@@ -183,10 +183,10 @@ export function snapshotMarkdown(input: { name: string; source: string; backtest
     ];
   });
   sections.push(
-    '## Latest trades\n\n' +
+    '## Last trades\n\n' +
       (latest.length === 0
         ? 'No trades.'
-        : (latest.length < run.trades.length ? `Showing the latest ${latest.length} of ${run.trades.length}.\n\n` : '') +
+        : (latest.length < run.trades.length ? `The last ${latest.length} of ${run.trades.length} trades.\n\n` : '') +
           (sides
             ? table(['Ticker', 'Side', 'Opened', 'At', 'Closed', 'At', 'Return', 'Exit'], tradeRows, 'lllrlrrl')
             : table(['Ticker', 'Bought', 'At', 'Sold', 'At', 'Return', 'Exit'], tradeRows, 'llrlrrl'))),

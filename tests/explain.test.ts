@@ -29,17 +29,17 @@ test('a plain rule: when it was read, both sides of the comparison, the size, th
   const ex = explainTrade(bt, bt.run.trades[0]);
   assert.equal(ex.title, 'A: bought 2020-01-03 at 12.00, sold 2020-01-06 at 9.00');
   assert.deepEqual(table(ex, 'bought'), [
-    ['The buy rule was read at the close of 2020-01-02.', '', null, 0],
+    ['The run read the buy rule at the close of 2020-01-02.', '', null, 0],
     ['buy when close > 10', 'close 12 > 10', 'yes', 0],
   ]);
   assert.deepEqual(table(ex, 'size'), [
     ['Portfolio value at the open of 2020-01-03', '$1,000.00', null, 0],
     ['Weight', '100% of that: $1,000.00', null, 0],
     ['Money put in', '$1,000.00, for 83.3333 shares', null, 0],
-    ['Filled at the open of 2020-01-03', '12.00; the close the rule read was 12.00', null, 0],
+    ['Filled at the open of 2020-01-03', '12.00. The rule read a close of 12.00', null, 0],
   ]);
   assert.deepEqual(table(ex, 'sold'), [
-    ['The sell rule was read at the close of 2020-01-05.', '', null, 0],
+    ['The run read the sell rule at the close of 2020-01-05.', '', null, 0],
     ['sell when close < 10', 'close 9 < 10', 'yes', 0],
     ['Sold at the open of 2020-01-06', '9.00', null, 0],
   ]);
@@ -57,7 +57,7 @@ test('a cross shows the bar before as well', () => {
   const A = bars([10, 10, 10, 9, 12, 13]);
   const bt = run('universe: A\nbuy when sma(2) crosses above sma(3)', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
-  assert.deepEqual(find(ex, 'bought', 'buy when sma(2) crosses above sma(3)').value, 'sma(2) 10.50 is above sma(3) 10.33; the bar before it was 9.50, at or below 9.67');
+  assert.deepEqual(find(ex, 'bought', 'buy when sma(2) crosses above sma(3)').value, 'sma(2) 10.50 is above sma(3) 10.33. On the bar before: 9.50, at or below 9.67');
   assert.equal(ex.facts.buyT, day(4));
 });
 
@@ -69,9 +69,9 @@ test('and, or and not show each part, with an unknown part marked as unknown', (
   assert.deepEqual(table(ex, 'bought').slice(1), [
     ['buy when close > 5 and (close > sma(10) or not close < 1)', 'all of these must hold', 'yes', 0],
     ['close > 5', 'close 10 > 5', 'yes', 1],
-    ['(close > sma(10) or not close < 1)', 'one of these is enough', 'yes', 1],
+    ['(close > sma(10) or not close < 1)', 'one or more of these must hold', 'yes', 1],
     ['close > sma(10)', 'close 10 > sma(10) unknown', 'unknown', 2],
-    ['not close < 1', 'holds when the part below does not', 'yes', 2],
+    ['not close < 1', 'holds when the part below does not hold', 'yes', 2],
     ['close < 1', 'close 10 < 1', 'no', 3],
   ]);
 });
@@ -91,7 +91,7 @@ test('"of" names the other ticker and the bar of it that was read, on its own ca
   const bt = run('universe: A\nbuy when close of W > 10', { A, W });
   const ex = explainTrade(bt, bt.run.trades[0]);
   assert.equal(ex.facts.buyT, Date.UTC(2020, 0, 12));
-  assert.equal(find(ex, 'bought', 'buy when close of W > 10').value, "close of W 20 > 10; read from W's bar of 2020-01-06");
+  assert.equal(find(ex, 'bought', 'buy when close of W > 10').value, "close of W 20 > 10 (read from the W bar of 2020-01-06)");
 });
 
 test('parameters are named with their values, and percentages read as percentages', () => {
@@ -113,42 +113,42 @@ test('a ranking: the place, the cut-off and the whole table, at the buy and at t
   const ex = explainTrade(bt, bt.run.trades[0]);
   assert.equal(ex.asset, 'B');
   assert.deepEqual(table(ex, 'bought'), [
-    ['Chosen at the ranking made at the close of 2020-01-01.', '', null, 0],
-    ['There is no buy rule, so every ticker with a known score could be chosen.', '', null, 0],
-    ['Ranked 1st of 3 by close. Only the best is held.', 'close 20', null, 0],
+    ['The ranking at the close of 2020-01-01 selected it.', '', null, 0],
+    ['There is no buy rule. Thus the ranking can select each ticker that has a known score.', '', null, 0],
+    ['It ranked 1st of 3 by close. The strategy holds only the best.', 'close 20', null, 0],
     ['The ranking at the close of 2020-01-01, by close:', '', null, 0],
-    ['1. B (this one)', '20', 'yes', 1],
+    ['1. B (this ticker)', '20', 'yes', 1],
     ['2. C', '15', 'no', 1],
     ['3. A', '10', 'no', 1],
   ]);
   assert.equal(ex.facts.buyRule, null);
   assert.deepEqual(table(ex, 'sold'), [
-    ['At the ranking made at the close of 2020-01-03:', '', null, 0],
-    ['Ranked 3rd of 3 by close. Only the best is held, so it was sold.', 'close 5', null, 0],
+    ['The ranking at the close of 2020-01-03:', '', null, 0],
+    ['It ranked 3rd of 3 by close. The strategy holds only the best. Thus the strategy sold it.', 'close 5', null, 0],
     ['The ranking at the close of 2020-01-03, by close:', '', null, 0],
     ['1. C', '15', 'yes', 1],
     ['2. A', '10', 'no', 1],
-    ['3. B (this one)', '5', 'no', 1],
+    ['3. B (this ticker)', '5', 'no', 1],
     ['Sold at the open of 2020-01-04', '5.00', null, 0],
   ]);
   // A ticker that could not be chosen says why; a ranking with weights shares size between the held.
   const rule = run('universe: A, B, C\ncapital: 1000\nhold: top 2 by close\nbuy when close < 18', RANKED);
   const first = explainTrade(rule, rule.run.trades[0]);
-  assert.equal(find(first, 'bought', 'B').value, 'could not be chosen: its buy rule did not hold');
-  assert.equal(find(first, 'size', /^Weight/).label, 'Weight: each of the 2 held gets the same share');
+  assert.equal(find(first, 'bought', 'B').value, 'not included: its buy rule did not hold');
+  assert.equal(find(first, 'size', /^Weight/).label, 'Weight: each of the 2 tickers held has the same share');
 });
 
 test('a ranking table prints scores that differ with enough decimals to tell them apart, and says when they are equal', () => {
   const close = (x: number) => bars([x, x, x]);
   const bt = run('universe: A, B, C\ncapital: 1000\nhold: top 1 by close', { A: close(0.012341), B: close(0.012344), C: close(0.012341) });
   const ex = explainTrade(bt, bt.run.trades[0]);
-  const tie = 'the ticker listed first in the universe ranks higher';
+  const tie = 'the ticker that is first in the universe ranks higher';
   assert.deepEqual(table(ex, 'bought').slice(2), [
-    ['Ranked 1st of 3 by close. Only the best is held.', 'close 0.012344', null, 0],
+    ['It ranked 1st of 3 by close. The strategy holds only the best.', 'close 0.012344', null, 0],
     ['The ranking at the close of 2020-01-01, by close:', '', null, 0],
-    ['1. B (this one)', '0.012344', 'yes', 1],
-    ['2. A', `0.012341, tied with C: ${tie}`, 'no', 1],
-    ['3. C', `0.012341, tied with A: ${tie}`, 'no', 1],
+    ['1. B (this ticker)', '0.012344', 'yes', 1],
+    ['2. A', `0.012341, the same score as C: ${tie}`, 'no', 1],
+    ['3. C', `0.012341, the same score as A: ${tie}`, 'no', 1],
   ]);
 });
 
@@ -157,15 +157,15 @@ test('a stop loss inside the bar and through a gapped open', () => {
   const inside = run(spec, { A: bars([100, 100, 88, 88], { opens: [100, 100, 100, 88], lows: [100, 100, 85, 88] }) });
   let ex = explainTrade(inside, inside.run.trades[0]);
   assert.deepEqual(table(ex, 'sold'), [
-    ['Stop loss at 90.00', '10% under the 100.00 fill', null, 0],
-    ['On 2020-01-03 the bar fell to 85.00, through the stop, so it sold at the stop.', '', null, 0],
+    ['Stop loss at 90.00', '10% below the 100.00 fill', null, 0],
+    ['On 2020-01-03, the price decreased to 85.00, through the stop. Thus it sold at the stop.', '', null, 0],
     ['Sold at the stop', '90.00', null, 0],
   ]);
   assert.deepEqual([ex.facts.level, ex.facts.exitPrice], [90, 90]);
   const gap = run(spec, { A: bars([100, 100, 82, 82], { opens: [100, 100, 80, 82], lows: [100, 100, 79, 82] }) });
   ex = explainTrade(gap, gap.run.trades[0]);
   assert.deepEqual(table(ex, 'sold').slice(1), [
-    ['On 2020-01-03 the bar opened at 80.00, below the stop, so it sold at the open.', '', null, 0],
+    ['On 2020-01-03, the bar opened at 80.00, below the stop. Thus it sold at the open.', '', null, 0],
     ['Sold at the open', '80.00', null, 0],
   ]);
   assert.equal(ex.facts.exitPrice, 80);
@@ -177,15 +177,15 @@ test('a stop and a target in one bar: the stop first, or the target when the bar
   });
   let ex = explainTrade(both, both.run.trades[0]);
   assert.equal(ex.facts.reason, 'stop loss');
-  find(ex, 'sold', 'The take profit at 120.00 was inside this bar too. When both are, the stop is taken first.');
+  find(ex, 'sold', 'The take profit at 120.00 was also in this bar. When the two levels are in one bar, the stop comes first.');
   const gapUp = run('universe: A\ncapital: 1000\ntake profit: 10%\nstop loss: 10%\nbuy when true', {
     A: bars([100, 100, 95, 95], { opens: [100, 100, 115, 95], highs: [100, 100, 118, 95], lows: [100, 100, 85, 95] }),
   });
   ex = explainTrade(gapUp, gapUp.run.trades[0]);
   assert.deepEqual(table(ex, 'sold'), [
-    ['Take profit at 110.00', '10% over the 100.00 fill', null, 0],
-    ['On 2020-01-03 the bar opened at 115.00, above the target, so it sold at the open.', '', null, 0],
-    ['The bar later fell through the stop at 90.00 too, but the open came first.', '', null, 0],
+    ['Take profit at 110.00', '10% above the 100.00 fill', null, 0],
+    ['On 2020-01-03, the bar opened at 115.00, above the target. Thus it sold at the open.', '', null, 0],
+    ['Then the price also decreased through the stop at 90.00, but the open came first.', '', null, 0],
     ['Sold at the open', '115.00', null, 0],
   ]);
 });
@@ -196,9 +196,9 @@ test('a trailing stop names the high it trailed from', () => {
   const bt = run('universe: A\ncapital: 1000\ntrailing stop: 10%\nstop loss: 20%\nbuy when true', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
   assert.deepEqual(table(ex, 'sold').slice(0, 3), [
-    ['Trailing stop at 108.00', '10% under 120.00, the highest price from the buy to the bar before', null, 0],
+    ['Trailing stop at 108.00', '10% below 120.00, the highest price from the buy to the previous bar', null, 0],
     ['The stop loss, at 80.00, was lower.', '', null, 0],
-    ['On 2020-01-04 the bar fell to 105.00, through the stop, so it sold at the stop.', '', null, 0],
+    ['On 2020-01-04, the price decreased to 105.00, through the stop. Thus it sold at the stop.', '', null, 0],
   ]);
   assert.equal(ex.facts.level, 108);
 });
@@ -208,7 +208,7 @@ test('an ATR stop gives the multiple and the ATR at the bar it was read at', () 
   const A = bars([100, 100, 100, 97, 97], { opens: [100, 100, 100, 100, 97], highs: [101, 101, 101, 101, 97], lows: [99, 99, 99, 95, 97] });
   const bt = run('universe: A\nstop loss: 2 atr(2)\nbuy when atr(2) > 0', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
-  assert.equal(find(ex, 'sold', 'Stop loss at 96.00').value, '2 × ATR(2) 2 (at the close of 2020-01-02) = 4 under the 100.00 fill');
+  assert.equal(find(ex, 'sold', 'Stop loss at 96.00').value, '2 × ATR(2) 2 (at the close of 2020-01-02) = 4 below the 100.00 fill');
   assert.equal(ex.facts.level, 96);
 });
 
@@ -220,13 +220,13 @@ test('risk per trade: the sum at risk, the ATR distance, the shares, and the cap
     ['Portfolio value at the open of 2020-01-03', '$1,000.00', null, 0],
     ['Risk per trade', '1% of that: $10.00', null, 0],
     ['Distance: 2 × ATR(2) at the close of 2020-01-02', '2 × 2 = 4 a share', null, 0],
-    ['Shares that lose $10.00 over that distance', '2.5, worth $252.50 at the fill', null, 0],
+    ['Shares with a loss of $10.00 if the price moves that distance', '2.5, worth $252.50 at the fill', null, 0],
     ['Money put in', '$252.50, for 2.5 shares', null, 0],
-    ['Filled at the open of 2020-01-03', '100.00, plus 100 bps slippage: 101.00; the close the rule read was 100.00', null, 0],
+    ['Filled at the open of 2020-01-03', '100.00, plus 100 bps slippage: 101.00. The rule read a close of 100.00', null, 0],
   ]);
   bt = run('universe: A\ncapital: 1000\nrisk per trade: 10% at 2 atr(2)\nbuy when atr(2) > 0', { A });
   ex = explainTrade(bt, bt.run.trades[0]);
-  assert.equal(find(ex, 'size', 'That is more than its weight, so the buy is capped at the weight').value, '100% of that: $1,000.00');
+  assert.equal(find(ex, 'size', 'That is more than its weight. Thus the buy is cut to the weight').value, '100% of that: $1,000.00');
 });
 
 test('a buy cut to the cash there was', () => {
@@ -239,30 +239,30 @@ test('a buy cut to the cash there was', () => {
   assert.deepEqual(table(ex, 'size').slice(0, 4), [
     ['Portfolio value at the open of 2020-01-05', '$1,500.00', null, 0],
     ['Weight', '50% of that: $750.00', null, 0],
-    ['Only $500.00 was in cash, so the buy was cut to what that covers', '$500.00', null, 0],
+    ['Only $500.00 was in cash. Thus the buy was cut to fit this cash', '$500.00', null, 0],
     ['Money put in', '$500.00, for 10 shares', null, 0],
   ]);
   // With costs, a buy of the whole portfolio leaves room for them.
   const all = run('universe: W\ncapital: 1000\ncosts: 100 bps\nbuy when true', { W });
-  assert.equal(find(explainTrade(all, all.run.trades[0]), 'size', /^The costs are paid on top/).label, 'The costs are paid on top, so the $1,000.00 in cash covered');
+  assert.equal(find(explainTrade(all, all.run.trades[0]), 'size', /^The costs are added to the money put in/).label, 'The costs are added to the money put in. Thus the $1,000.00 in cash was sufficient for');
 });
 
 test('a position still held: valued at the last close, its sell rule there, and the order waiting', () => {
   const A = bars([10, 12, 13, 14]);
   const bt = run('universe: A\ncapital: 1000\ncosts: 10 bps\nbuy when close > 11\nsell when close > 13.5', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
-  assert.equal(ex.title, 'A: bought 2020-01-03 at 12.00, still held');
-  assert.equal(ex.sections[2].title, 'Why it is still held');
+  assert.equal(ex.title, 'A: bought 2020-01-03 at 12.00, not closed');
+  assert.equal(ex.sections[2].title, 'Why it is not closed');
   assert.deepEqual(table(ex, 'sold'), [
-    ['Still held at the end of the run. It is valued at the last close, 2020-01-04.', '14.00', null, 0],
+    ['The position is open at the end of the run. Its value uses the last close, 2020-01-04.', '14.00', null, 0],
     ['The sell rule at the close of 2020-01-04:', '', null, 0],
     ['sell when close > 13.5', 'close 14 > 13.5', 'yes', 0],
-    ['An order to sell it is waiting for the next open.', '', null, 0],
+    ['An order to sell it waits for the next open.', '', null, 0],
   ]);
   const spent = 1000 / 1.001;
   assert.deepEqual(table(ex, 'result').slice(3), [
-    ['Costs paid so far', `$${(spent * 0.001).toFixed(2)}; selling at the last close would cost $${((spent / 12) * 14 * 0.001).toFixed(2)} more`, null, 0],
-    ['A position still held counts the cost of selling at the last close in its return, without slippage.', '', null, 0],
+    ['Costs paid to date', `$${(spent * 0.001).toFixed(2)}. To sell at the last close costs $${((spent / 12) * 14 * 0.001).toFixed(2)} more`, null, 0],
+    ['The return of an open position includes the cost to sell at the last close, without slippage.', '', null, 0],
   ]);
 });
 
@@ -270,33 +270,33 @@ test('intraday bars give the time of day, in UTC', () => {
   const A = bars([10, 12, 12, 12], { step: 3_600_000 });
   const bt = run('universe: A\nbuy when close > 10', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
-  assert.equal(section(ex, 'bought')[0].label, 'The buy rule was read at the close of the bar starting 2020-01-01 01:00 UTC.');
-  assert.equal(find(ex, 'size', /^Filled/).label, 'Filled at the open of the bar starting 2020-01-01 02:00 UTC');
-  assert.equal(ex.title, 'A: bought 2020-01-01 02:00 UTC at 12.00, still held');
+  assert.equal(section(ex, 'bought')[0].label, 'The run read the buy rule at the close of the bar that starts at 2020-01-01 01:00 UTC.');
+  assert.equal(find(ex, 'size', /^Filled/).label, 'Filled at the open of the bar that starts at 2020-01-01 02:00 UTC');
+  assert.equal(ex.title, 'A: bought 2020-01-01 02:00 UTC at 12.00, not closed');
 });
 
 test('with fill: close the explanation says the fill was at the close the rule read', () => {
   const A = bars([10, 12, 12, 15, 9, 9, 9], { opens: [10, 10, 12, 12, 15, 9, 9] });
   const bt = run('universe: A\ncapital: 1000\nfill: close\nstop loss: 30%\nbuy when close > 10\nsell when close < 10', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
-  assert.equal(section(ex, 'bought')[0].label, 'The buy rule was read at the close of 2020-01-02.');
+  assert.equal(section(ex, 'bought')[0].label, 'The run read the buy rule at the close of 2020-01-02.');
   assert.equal(section(ex, 'size')[0].label, 'Portfolio value at the close of 2020-01-02');
   assert.deepEqual(find(ex, 'size', /^Filled/).label, 'Filled at the close of 2020-01-02, the close the rule read');
   assert.deepEqual(table(ex, 'sold').slice(2), [['Sold at the close of 2020-01-05, the close the rule read', '9.00', null, 0]]);
   assert.deepEqual([ex.facts.entryPrice, ex.facts.exitPrice], [12, 9]);
   // A stop the bar after a close buy says the stop watched from that bar.
   const stop = run('universe: A\ncapital: 1000\nfill: close\nstop loss: 10%\nbuy when close >= 100', { A: bars([99, 100, 95, 95], { opens: [99, 99, 100, 95], lows: [99, 80, 85, 95] }) });
-  find(explainTrade(stop, stop.run.trades[0]), 'sold', 'Bought at a close, the position was watched by its stops from the next bar on.');
+  find(explainTrade(stop, stop.run.trades[0]), 'sold', 'The buy filled at a close. Thus its stops applied from the next bar.');
 });
 
 test('what held a buy back: an input warming up, the re-arm after a stop, a ranking\'s sells', () => {
   const flat = bars([100, 100, 100, 100], { opens: [100, 100, 100, 100], highs: [101, 101, 101, 101], lows: [99, 99, 99, 99] });
   let bt = run('universe: A\ncapital: 1000\nrisk per trade: 1% at 2 atr(2)\nbuy when true', { A: flat });
-  find(explainTrade(bt, bt.run.trades[0]), 'bought', 'The buy rule held from 2020-01-01 on, but the 2-bar ATR for risk per trade was still unknown. A buy waits until the inputs it needs are known, so this was the first close it could buy at.');
+  find(explainTrade(bt, bt.run.trades[0]), 'bought', 'The buy rule held from 2020-01-01. But the 2-bar ATR for risk per trade was unknown at that time. A buy waits until all its inputs are known. This close was the first close where the buy had all its inputs.');
   // Stopped on day 1; the rule still holds at days 1 and 2, fails on day 3 and holds again on day 4.
   const B = bars([100, 100, 100, 85, 100, 100], { opens: [100, 100, 100, 100, 85, 100], lows: [100, 85, 100, 85, 85, 100] });
   bt = run('universe: B\nfill: close\nstop loss: 10%\nbuy when close >= 100', { B });
-  find(explainTrade(bt, bt.run.trades[1]), 'bought', 'After the stop loss on 2020-01-02 the buy rule still held, last on 2020-01-03. After a stop or target exit the rule has to stop holding before it can buy again: it did not hold on 2020-01-04, and held again at the next close.');
+  find(explainTrade(bt, bt.run.trades[1]), 'bought', 'After the stop loss on 2020-01-02, the buy rule continued to hold. The last close where it held was 2020-01-03. After a stop or target exit, the rule must become false before it can buy again. The rule did not hold on 2020-01-04, and it held again at the next close.');
   assert.ok(!section(explainTrade(bt, bt.run.trades[0]), 'bought').some((r) => /After the stop/.test(r.label)));
   // A ranking buy that waited for its decision's sell, on mixed calendars (see the engine's test).
   const jan = (d: number) => Date.UTC(2020, 0, d);
@@ -310,7 +310,7 @@ test('what held a buy back: an input warming up, the re-arm after a stop, a rank
   const STK = bars(stkT.map(() => 100), { times: stkT });
   const CRY = bars(cryT.map((t) => (t < jan(31) ? 50 : t < Date.UTC(2020, 1, 4) ? 150 : 300)), { times: cryT });
   bt = run('universe: STK, CRY\ncapital: 1000\nrebalance: monthly\nhold: top 1 by close', { STK, CRY });
-  find(explainTrade(bt, bt.run.trades[1]), 'bought', 'The buy waited until the sells of the same ranking had filled (STK), so their cash was there.');
+  find(explainTrade(bt, bt.run.trades[1]), 'bought', 'The buy waited until the sells of the same ranking filled (STK). Thus the cash from these sells was available.');
 });
 
 test('rebalancing during the position\'s life is counted, and costs are stated', () => {
@@ -319,12 +319,12 @@ test('rebalancing during the position\'s life is counted, and costs are stated',
   const B = bars([10, 10, 10, 10], { start });
   const bt = run('universe: A 50%, B 50%\ncapital: 1000\ncosts: 10 bps\nfill: close\nrebalance: monthly\nbuy when true', { A, B });
   const [a, b] = bt.run.trades.map((t) => explainTrade(bt, t));
-  find(a, 'result', 'Rebalancing trimmed it once.');
-  find(b, 'result', 'Rebalancing topped it up once.');
+  find(a, 'result', 'The rebalances sold part of it 1 time.');
+  find(b, 'result', 'The rebalances added to it 1 time.');
   // A paid the costs of its buy and of its trim.
   const why = bt.run.trades[0].why!;
   assert.ok(why.fees > why.spent * 0.001 * 1.1);
-  assert.ok(find(a, 'result', 'Costs paid so far').value.startsWith(`$${why.fees.toFixed(2)};`));
+  assert.ok(find(a, 'result', 'Costs paid to date').value.startsWith(`$${why.fees.toFixed(2)}.`));
 });
 
 // ---------------------------------------------------------------- the explanation agrees with the trade
@@ -375,11 +375,11 @@ function checkDates(bt: Backtest, t: Trade, ex: Explanation): number {
   let later = 0;
   const first = section(ex, 'bought')[0].label;
   if (why.rank) {
-    assert.ok(first.includes(`made at the close of ${iso(why.rank.decision.t)}`), first);
-    if (why.rank.decision.t === why.buyT) assert.ok(!first.includes('which read'), first);
-    else assert.ok(first.includes(`which read its bar of ${iso(why.buyT)}`), first);
+    assert.ok(first.includes(`The ranking at the close of ${iso(why.rank.decision.t)} selected it.`), first);
+    if (why.rank.decision.t === why.buyT) assert.ok(!first.includes('For this ticker'), first);
+    else assert.ok(first.includes(`For this ticker, the ranking read the bar of ${iso(why.buyT)}.`), first);
   } else {
-    assert.equal(first, `The buy rule was read at the close of ${iso(why.buyT)}.`);
+    assert.equal(first, `The run read the buy rule at the close of ${iso(why.buyT)}.`);
   }
   const by = why.rank ? 'ranking' : 'rule';
   const filled = find(ex, 'size', /^Filled at the/).label;
@@ -388,7 +388,7 @@ function checkDates(bt: Backtest, t: Trade, ex: Explanation): number {
     if (why.buyT === t.entryT) assert.ok(filled.endsWith(`, the close the ${by} read`), filled);
     else {
       later++;
-      assert.ok(filled.endsWith(`; the ${by} read the close of ${iso(why.buyT)}`), filled);
+      assert.ok(filled.endsWith(` (the ${by} read the close of ${iso(why.buyT)})`), filled);
     }
   }
   const exit = why.exit;
@@ -402,7 +402,7 @@ function checkDates(bt: Backtest, t: Trade, ex: Explanation): number {
       if (exit.t === t.exitT) assert.ok(sold.endsWith(`, the close the ${said} read`), sold);
       else {
         later++;
-        assert.ok(sold.endsWith(`; the ${said} read the close of ${iso(exit.t)}`), sold);
+        assert.ok(sold.endsWith(` (the ${said} read the close of ${iso(exit.t)})`), sold);
       }
     }
   }

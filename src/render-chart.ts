@@ -144,7 +144,7 @@ function drawChart({ chart, legend, width, bt, span, id, read }: DrawInput): voi
   const ta = t[from];
   const tb = t[n - 1];
 
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `Value of the strategy and of ${benchmark.label} over time, with the time held and drawdowns below` });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `Value of the strategy and of ${benchmark.label} with the time held and the drawdowns below` });
 
   // The benchmark has no value (NaN) before its first bar when its prices start later. A ruined run's equity is 0 from
   // the ruin on, which a log scale can't show: its line ends at the last close before.
@@ -433,9 +433,9 @@ function drawChart({ chart, legend, width, bt, span, id, read }: DrawInput): voi
     h(k, 'span', `bt-chart-swatch ${cls}`);
     h(k, 'span', undefined, text);
   };
-  if (ahead) item('bt-chart-swatch-ahead', 'Strategy ahead');
-  if (behind) item('bt-chart-swatch-behind', `${benchmark.label} ahead`);
-  if (falls.length) item('bt-chart-swatch-fall', 'Market falls');
+  if (ahead) item('bt-chart-swatch-ahead', 'Strategy better');
+  if (behind) item('bt-chart-swatch-behind', `${benchmark.label} better`);
+  if (falls.length) item('bt-chart-swatch-fall', 'Market drawdowns');
   if (strip.full || strip.part) item('bt-chart-swatch-held', strip.short ? 'Held long' : 'Held');
   if (strip.short) item('bt-chart-swatch-short', 'Held short');
   h(legend, 'span', 'bt-chart-note', 'Value on a log scale');

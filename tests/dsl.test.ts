@@ -119,19 +119,19 @@ buy when true  # comment`);
 
 test('errors carry the line they are on', () => {
   fails('universe: SPY\nbuy when close > smaa(200)', /Unknown name "smaa"/, 2);
-  fails('universe: SPY\nbuy when close > sma(200)\n  and (rsi(14) < 30', /Expected "\)"/, 3);
-  fails('universe: SPY\nbuy when sma(200)', /needs a condition/);
-  fails('universe: SPY\nbuy when close > sma()', /needs a period/);
-  fails('universe: SPY\nbuy when close > 1 and 5', /"and" needs a condition/);
+  fails('universe: SPY\nbuy when close > sma(200)\n  and (rsi(14) < 30', /Write "\)" here/, 3);
+  fails('universe: SPY\nbuy when sma(200)', /must have a condition/);
+  fails('universe: SPY\nbuy when close > sma()', /must have a period/);
+  fails('universe: SPY\nbuy when close > 1 and 5', /"and" must have a condition/);
   fails('universe: SPY\nleverage: 2\nbuy when true', /Unknown setting "leverage"/, 2);
-  fails('universe: SPY 150%, TLT 60%\nbuy when true', /210\.0%. The most is 200%: long and short positions together may be at most 2 times the equity/, 1);
-  fails('universe: SPY 80%, TLT\nbuy when true', /every ticker a weight/);
+  fails('universe: SPY 150%, TLT 60%\nbuy when true', /210\.0%\. It cannot be more than 200%: long and short positions together can be a maximum of 2 times the equity/, 1);
+  fails('universe: SPY 80%, TLT\nbuy when true', /each ticker a weight/);
   fails('universe: SPY\nsell when close < 1', /no buy rule/);
   fails('buy when true', /Add a universe/);
   fails('universe: SPY\nfrom: 1/2/2020\nbuy when true', /not a date/, 2);
   fails('universe: SPY\ninterval: 1h\nbuy when true', /Yahoo data comes as 1d or 1w/, 2);
   fails('universe: SPY\nfor TLT:\nbuy when true', /not in the universe/, 2);
-  fails('universe: SPY\nbuy when true\nbuy when false', /already a buy rule/, 3);
+  fails('universe: SPY\nbuy when true\nbuy when false', /There are two buy rules/, 3);
   fails('universe: SPY\nhello there', /Not a setting or a rule/, 2);
 });
 
@@ -182,7 +182,7 @@ test('built-in defaults, defaults from options, and a data line over the default
   assert.deepEqual([spec.capital, spec.universe[0].source, spec.cash], [1000, 'yahoo', { k: 'ticker', ref: { name: '^IRX', source: 'yahoo', id: '^IRX' } }]);
   assert.deepEqual(errorOf('universe: SPY\nbuy when true', /default cash rate/, { defaults: { cashRate: '4' } }), {
     line: 1,
-    message: 'The default cash rate "4" in the plugin settings can\'t be read. Use a percentage, such as 4%, or a ticker, such as ^IRX',
+    message: 'The plugin cannot read the default cash rate "4" in the plugin settings. Use a percentage (for example 4%) or a ticker (for example ^IRX)',
   });
 });
 
@@ -192,13 +192,13 @@ test('errors point at columns, on continuation lines too', () => {
   const cont = errorOf('universe: SPY\nbuy when close > 1\n   and foo > 2', /Unknown name "foo"/);
   assert.deepEqual([cont.line, cont.from, cont.to], [3, 7, 10]);
   // A rule that stops early points at its last token.
-  const early = errorOf('universe: SPY\nbuy when close > sma(200)\n  and (rsi(14) < 30', /Expected "\)"/);
+  const early = errorOf('universe: SPY\nbuy when close > sma(200)\n  and (rsi(14) < 30', /Write "\)" here/);
   assert.deepEqual([early.line, early.from, early.to], [3, 17, 19]);
   const value = errorOf('universe: SPY\ncosts: lots\nbuy when true', /not a cost/);
   assert.deepEqual([value.line, value.from, value.to], [2, 7, 11]);
   const key = errorOf('universe: SPY\n  leverage: 2\nbuy when true', /Unknown setting "leverage"/);
   assert.deepEqual([key.line, key.from, key.to], [2, 2, 10]);
-  const twice = errorOf('universe: SPY, SPY\nbuy when true', /listed twice/);
+  const twice = errorOf('universe: SPY, SPY\nbuy when true', /is in the list two times/);
   assert.deepEqual([twice.from, twice.to], [15, 18]);
   const char = errorOf('universe: SPY\nbuy when close > 1 $', /Unexpected character "\$"/);
   assert.deepEqual([char.from, char.to], [19, 20]);
@@ -213,7 +213,7 @@ test('a price compared with a fixed number warns when the prices come from Yahoo
     warnings.map((w) => [w.line, w.from, w.to]),
     [[2, 9, 20], [3, 10, 22]],
   );
-  assert.match(warnings[0].message, /^This compares a price with a fixed number\. Yahoo prices are adjusted/);
+  assert.match(warnings[0].message, /^This compares a price with a constant number\. Yahoo prices include adjustments/);
   assert.deepEqual(parse('universe: binance:BTCUSDT\nbuy when close > 100').warnings, []);
   // The ticker read with "of" decides, and arithmetic on numbers is still a fixed number.
   assert.deepEqual(parse('universe: binance:BTCUSDT\nbuy when close of SPY > 3 * 100').warnings.map((w) => [w.from, w.to]), [[9, 31]]);
@@ -239,7 +239,7 @@ test('slippage, cash rate and test from', () => {
   assert.equal(ok('universe: SPY\nslippage: 3 bps\nbuy when true').slippageBps, 3);
   assert.deepEqual(ok('universe: SPY\ncash rate: yahoo:^irx\nbuy when true').cash, { k: 'ticker', ref: { name: '^IRX', source: 'yahoo', id: '^IRX' } });
   errorOf('universe: SPY\ncash rate: 60%\nbuy when true', /between 0% and 50%/);
-  errorOf('universe: SPY\ncash rate: 4\nbuy when true', /yearly percentage, such as 4%/);
+  errorOf('universe: SPY\ncash rate: 4\nbuy when true', /yearly percentage \(for example 4%\)/);
   errorOf('universe: SPY\nfrom: 2010-01-01\ntest from: 2010-01-01\nbuy when true', /must be after "from"/);
   errorOf('universe: SPY\nto: 2010-01-01\ntest from: 2010-01-01\nbuy when true', /must be before "to"/);
 });
@@ -255,13 +255,13 @@ for TLT:
   take profit: 30%`);
   assert.deepEqual(spec.stops.SPY, { stopLoss: { k: 'pct', v: 0.1 }, trailingStop: { k: 'atr', mult: 2.5, n: 14 }, takeProfit: { k: 'atr', mult: 4, n: 10 } });
   assert.deepEqual(spec.stops.TLT, { stopLoss: { k: 'atr', mult: 2, n: 14 }, trailingStop: { k: 'atr', mult: 2.5, n: 14 }, takeProfit: { k: 'pct', v: 0.3 } });
-  const other = errorOf('universe: SPY 50%, TLT 50%\nbuy when true\nfor TLT:\n  costs: 5 bps', /"costs" applies to the whole strategy/);
+  const other = errorOf('universe: SPY 50%, TLT 50%\nbuy when true\nfor TLT:\n  costs: 5 bps', /"costs" is a setting for the full strategy/);
   assert.deepEqual([other.line, other.from, other.to], [4, 2, 7]);
   errorOf('universe: SPY\nbuy when true\nfor QQQ:\n  stop loss: 5%', /not in the universe/);
-  errorOf('universe: SPY\nbuy when true\nfor SPY:\n  stop loss: 5%\n  stop loss: 6%', /set twice for SPY/);
-  errorOf('universe: SPY\nstop loss: two atr\nbuy when true', /needs a number/);
-  errorOf('universe: SPY\nstop loss: 2 atr(0)\nbuy when true', /atr\(\): 0 is not a valid period/);
-  errorOf('universe: SPY\nstop loss: tight\nbuy when true', /percentage, such as 10%, or a multiple of the average true range/);
+  errorOf('universe: SPY\nbuy when true\nfor SPY:\n  stop loss: 5%\n  stop loss: 6%', /set two times for SPY/);
+  errorOf('universe: SPY\nstop loss: two atr\nbuy when true', /must be a number/);
+  errorOf('universe: SPY\nstop loss: 2 atr(0)\nbuy when true', /atr\(\): 0 is not a permitted period/);
+  errorOf('universe: SPY\nstop loss: tight\nbuy when true', /percentage \(for example 10%\) or a multiple of the average true range/);
 });
 
 test('ranking with hold: equal shares of size, optional buy rule', () => {
@@ -270,11 +270,11 @@ test('ranking with hold: equal shares of size, optional buy rule', () => {
   assert.deepEqual(spec.universe.map((a) => a.weight), [0.4, 0.4, 0.4]);
   assert.deepEqual(spec.rules.QQQ, { buy: { k: 'bool', v: true }, sell: null });
   assert.equal(ok('universe: SPY, QQQ\nhold: top 1 by close\nbuy when close > sma(200)').rules.SPY.buy.k, 'cmp');
-  errorOf('universe: SPY 50%, QQQ 50%\nhold: top 1 by close', /Leave the weights out/);
+  errorOf('universe: SPY 50%, QQQ 50%\nhold: top 1 by close', /Do not write weights in the universe/);
   errorOf('universe: SPY, QQQ\nhold: top 3 by close', /"top 3" is more tickers than the universe has \(2\)/);
   errorOf('universe: SPY, QQQ\nhold: best 1', /Write it as top 3 by roc\(126\)/);
-  errorOf('universe: SPY, QQQ\nhold: top 1 by close > 1', /The ranking needs a number/);
-  const pos = errorOf('universe: SPY, QQQ\nhold: top 1 by bars held', /"bars held" only makes sense in a sell, cover or add rule/);
+  errorOf('universe: SPY, QQQ\nhold: top 1 by close > 1', /The score must be a number/);
+  const pos = errorOf('universe: SPY, QQQ\nhold: top 1 by bars held', /You can use "bars held" only in a sell, cover or add rule/);
   assert.deepEqual([pos.line, pos.from, pos.to], [2, 15, 24]);
 });
 
@@ -283,11 +283,11 @@ test('sizing: inverse volatility, risk per trade, and what does not mix', () => 
   assert.deepEqual(ok('universe: SPY\nrisk per trade: 1% at 2 atr(14)\nbuy when true').sizing, { k: 'risk', risk: 0.01, mult: 2, n: 14 });
   assert.deepEqual(ok('universe: SPY\nrisk per trade: 0.5% at 1.5 atr\nbuy when true').sizing, { k: 'risk', risk: 0.005, mult: 1.5, n: 14 });
   assert.deepEqual(ok('universe: SPY\nbuy when true').sizing, { k: 'fixed' });
-  errorOf('universe: SPY\nweighting: inverse volatility(60)\nrisk per trade: 1% at 2 atr(14)\nbuy when true', /either "weighting" or "risk per trade"/);
-  errorOf('universe: SPY\nrebalance: monthly\nrisk per trade: 1% at 2 atr(14)\nbuy when true', /can't be combined with "rebalance: monthly"/);
+  errorOf('universe: SPY\nweighting: inverse volatility(60)\nrisk per trade: 1% at 2 atr(14)\nbuy when true', /Use "weighting" or "risk per trade"\. You cannot use the two together/);
+  errorOf('universe: SPY\nrebalance: monthly\nrisk per trade: 1% at 2 atr(14)\nbuy when true', /you cannot use it with "rebalance: monthly"/);
   errorOf('universe: SPY\nweighting: inverse volatility\nbuy when true', /inverse volatility\(60\)/);
-  errorOf('universe: SPY\nweighting: inverse volatility(1)\nbuy when true', /1 is not a valid period/);
-  errorOf('universe: SPY\nrisk per trade: 1 at 2 atr\nbuy when true', /risk per trade must be a percentage/);
+  errorOf('universe: SPY\nweighting: inverse volatility(1)\nbuy when true', /1 is not a permitted period/);
+  errorOf('universe: SPY\nrisk per trade: 1 at 2 atr\nbuy when true', /Risk per trade must be a percentage/);
 });
 
 test('position values only in sell rules, and never lagged or read with "of"', () => {
@@ -295,11 +295,11 @@ test('position values only in sell rules, and never lagged or read with "of"', (
   const json = JSON.stringify(spec.rules.SPY.sell);
   assert.equal(json.match(/"k":"pos","name":"bars_held"/g)!.length, 2);
   assert.equal(json.match(/"k":"pos","name":"entry_price"/g)!.length, 2);
-  const buy = errorOf('universe: SPY\nbuy when bars held > 1', /"bars held" only makes sense in a sell, cover or add rule/);
+  const buy = errorOf('universe: SPY\nbuy when bars held > 1', /You can use "bars held" only in a sell, cover or add rule/);
   assert.deepEqual([buy.line, buy.from, buy.to], [2, 9, 18]);
-  errorOf('universe: SPY\nbuy when true\nsell when bars_held[1] > 2', /"bars held" can't be read for an earlier bar/);
-  errorOf('universe: SPY\nbuy when true\nsell when (close - entry price) of QQQ > 1', /"entry price" belongs to the open position/);
-  errorOf('universe: SPY\nbuy when true\nsell when sma(bars held, 2) > 1', /can't go inside sma\(\)/);
+  errorOf('universe: SPY\nbuy when true\nsell when bars_held[1] > 2', /A rule cannot read "bars held" for a previous bar/);
+  errorOf('universe: SPY\nbuy when true\nsell when (close - entry price) of QQQ > 1', /"entry price" is a value of the open position/);
+  errorOf('universe: SPY\nbuy when true\nsell when sma(bars held, 2) > 1', /You cannot use "bars held" in sma\(\)/);
   errorOf('universe: SPY\nbuy when true\nsell when bars > 1', /Write "bars held"/);
 });
 
@@ -307,12 +307,12 @@ test('calendar values', () => {
   const buy = ok('universe: SPY\nbuy when month == 12 and weekday <= 2 and day > 20 and year >= 2020 or month_end\nsell when month_start').rules.SPY;
   const json = JSON.stringify(buy);
   for (const name of ['month', 'weekday', 'day', 'year', 'month_end', 'month_start']) assert.match(json, new RegExp(`"k":"cal","name":"${name}"`));
-  errorOf('universe: SPY\nbuy when month', /needs a condition/);
+  errorOf('universe: SPY\nbuy when month', /must have a condition/);
 });
 
 test('one name for two different price sources is an error, wherever the second one is named', () => {
   const said = (src: string) => parseSpec(src).errors.map((e) => [e.line, e.message]);
-  const twice = (a: string, b: string, name = 'SPY') => `${name} is used for two different things here: ${a} and ${b}. Rename the CSV file or use one of them.`;
+  const twice = (a: string, b: string, name = 'SPY') => `${name} is the name of two different price sources here: ${a} and ${b}. Change the name of the CSV file or use only one of them.`;
   assert.deepEqual(said('universe: SPY\nbenchmark: csv:Benchmarks/SPY.csv\nbuy when close of csv:Alt/SPY.csv > 0'), [
     [2, twice('yahoo:SPY', 'csv:Benchmarks/SPY.csv')],
     [3, twice('yahoo:SPY', 'csv:Alt/SPY.csv')],

@@ -154,16 +154,16 @@ test('the whole random-entries check runs on a strategy with entries and commiss
 test('the section says what random tries keep, naming commission and entries only when the strategy has them', () => {
   assert.equal(
     randomTimingWorks({}),
-    'each try keeps how many trades each ticker made and how long each was held, with the same weights, costs, slippage and cash rate, and places those holdings at random dates. Stops are off: the holding lengths already include their exits.',
+    'Each try keeps the number of trades of each ticker and how long each trade was held, with the same weights, costs, slippage and cash rate. It puts those holdings at random dates. Stops are off, because the holding lengths include their exits.',
   );
   assert.equal(
     randomPicksWorks({}, '12 trades', 14),
-    'each try runs the same rules, dates, number held, stops and costs, but ranks the tickers the rules allow at random instead of by the score. A random pick is kept for a while, so the tries trade about as often as the strategy (12 trades on average, against 14).',
+    'Each try uses the same rules, dates, number held, stops and costs. But it ranks the tickers that the rules let it hold in a random sequence, not by the score. Each random pick stays for some time. Thus the tries trade approximately as frequently as the strategy (12 trades on average, compared with 14).',
   );
   const both = { commission: { k: 'order' as const, fee: 1 }, entries: 3 };
-  assert.match(randomTimingWorks(both), /with the same weights, costs, commission, slippage, entries and cash rate, and places those holdings at random dates\. A position built in entries keeps how many it made and puts the later ones the same number of bars after its first\. Stops are off/);
-  assert.match(randomTimingWorks({ commission: both.commission }), /same weights, costs, commission, slippage and cash rate, and places those holdings at random dates\. Stops are off/);
-  assert.match(randomPicksWorks(both, '1 trade', 1), /^each try runs the same rules, dates, number held, stops, costs, commission and entries, but ranks/);
+  assert.match(randomTimingWorks(both), /with the same weights, costs, commission, slippage, entries and cash rate\. It puts those holdings at random dates\. A position with more than one entry keeps its number of entries\. Its subsequent entries are the same number of bars after its first entry\. Stops are off/);
+  assert.match(randomTimingWorks({ commission: both.commission }), /same weights, costs, commission, slippage and cash rate\. It puts those holdings at random dates\. Stops are off/);
+  assert.match(randomPicksWorks(both, '1 trade', 1), /^Each try uses the same rules, dates, number held, stops, costs, commission and entries\. But it ranks/);
 });
 
 // ---------------------------------------------------------------- the worker's copy of the block

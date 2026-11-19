@@ -40,11 +40,11 @@ test('the new calendar values are in the language, and the conditions among them
   for (const name of conditions) {
     assert.deepEqual(parseSpec(`universe: A\nbuy when ${name}\nsell when not ${name}`).errors, [], name);
     assert.deepEqual(parseSpec(`universe: A\nbuy when ${name} and close > sma(5) or month_end`).errors, [], name);
-    assert.match(parseSpec(`universe: A\nbuy when ${name} > 0`).errors[0].message, /A comparison needs a number, not a condition/, name);
+    assert.match(parseSpec(`universe: A\nbuy when ${name} > 0`).errors[0].message, /A comparison must have a number, not a condition/, name);
   }
   for (const name of ['quarter', 'trading_day', 'trading_days_left']) {
     assert.deepEqual(parseSpec(`universe: A\nbuy when ${name} == 3 and close > sma(5)`).errors, [], name);
-    assert.match(parseSpec(`universe: A\nbuy when ${name}`).errors[0].message, /A rule needs a condition/, name);
+    assert.match(parseSpec(`universe: A\nbuy when ${name}`).errors[0].message, /A rule must have a condition/, name);
   }
   // They came after 0.7.0, so a block that already named a parameter so keeps working, the name meaning the parameter there.
   for (const name of names) {
@@ -397,7 +397,7 @@ test('the calendar values are coloured and completed like the ones before them, 
     assert.equal(kindOf(word), kindOf('month_start'), word);
     assert.ok(complete([], [], `buy when ${word.slice(0, 4)}`)!.items.some((i) => i.label === word), word);
     assert.equal(docFor(word)!.kind, 'calendar', word);
-    assert.match(docFor(word)!.text, /read from each bar’s date in UTC/, word);
+    assert.match(docFor(word)!.text, /reads it from the date of each bar, in UTC/, word);
   }
   assert.equal(docFor('trading_days_left')!.signature, 'trading_days_left');
   assert.match(docFor('trading_day')!.text, /1 on the month’s first such day/);
@@ -438,8 +438,8 @@ test('an explanation gives the number of the day and the days left, and the bar-
     return Object.fromEntries(debugColumns(b, 'A').map((c, n) => [c.text, cellText(c, row.cells[n]).detail]));
   };
   const first = run('universe: A\nbuy when week_start and trading_day == 3\nsell when close < 0', { A: bars(closes, { times: t }) });
-  assert.equal(details(first, 0)['week_start'], "it is the data's first bar");
-  assert.equal(details(first, 0)['trading_day == 3'], "its month began before the data's first bar");
+  assert.equal(details(first, 0)['week_start'], "it is the first bar of the data");
+  assert.equal(details(first, 0)['trading_day == 3'], "its month started before the first bar of the data");
   assert.equal(details(first, 100)['trading_day == 3'], '');
 });
 

@@ -325,15 +325,15 @@ test('random entries of a short strategy: the same trades by side, and the secti
   const r = await randomEntries(bt, { seed: 2, runs: 10 });
   assert.deepEqual([r.mode, r.skip, r.runs], ['timing', null, 10]);
   assert.ok(r.random.trades.every((n) => n === r.strategy.trades) && r.random.cagr.every(Number.isFinite));
-  assert.match(randomVerdict({ ...r, invested: 0.95 }, false, true, 10), / The strategy is in its tickers, long or short, 95% of the time, so random timing is close to holding throughout/);
-  assert.match(randomVerdict({ ...r, invested: 0.95 }, false, false, 10), / The strategy is invested 95% of the time, so random timing/);
-  assert.equal(randomVerdict({ ...r, skip: 'always-invested' }, false, true, 10), 'The strategy holds its tickers, long or short, the whole time, so there is no timing to vary.');
-  assert.equal(randomVerdict({ ...r, skip: 'always-invested' }, false, false, 10), 'The strategy holds its tickers the whole time, so there is no timing to vary.');
+  assert.match(randomVerdict({ ...r, invested: 0.95 }, false, true, 10), / The strategy is in its tickers, long or short, 95% of the time\. Thus random timing is almost the same as holding all the time/);
+  assert.match(randomVerdict({ ...r, invested: 0.95 }, false, false, 10), / The strategy is invested 95% of the time\. Thus random timing/);
+  assert.equal(randomVerdict({ ...r, skip: 'always-invested' }, false, true, 10), 'The strategy holds its tickers, long or short, all the time. Thus there is no timing to change.');
+  assert.equal(randomVerdict({ ...r, skip: 'always-invested' }, false, false, 10), 'The strategy holds its tickers all the time. Thus there is no timing to change.');
   assert.equal(
     randomTimingWorks(bt.spec, true),
-    'each try keeps how many trades each ticker made, whether each was long or short, and how long each was held, with the same weights, costs, slippage, cash rate, borrow fee and margin rate, and places those holdings at random dates. Stops are off: the holding lengths already include their exits.',
+    'Each try keeps the number of trades of each ticker, the side of each trade (long or short), and how long each trade was held, with the same weights, costs, slippage, cash rate, borrow fee and margin rate. It puts those holdings at random dates. Stops are off, because the holding lengths include their exits.',
   );
-  assert.match(randomTimingWorks(backtest('universe: A 150%\nbuy when true', { A: walk(rng, 50) }).spec), /with the same weights, costs, slippage, cash rate and margin rate, and places/);
+  assert.match(randomTimingWorks(backtest('universe: A 150%\nbuy when true', { A: walk(rng, 50) }).spec), /with the same weights, costs, slippage, cash rate and margin rate\. It puts/);
 });
 
 test('random entries can be stopped, and the same seed gives the same answer', async () => {
@@ -376,8 +376,8 @@ test('walk-forward lengths come from the history, and too little history is refu
   assert.deepEqual(walkPlan(years(6)), { trainMonths: 36, testMonths: 12 });
   assert.deepEqual(walkPlan(years(5)), { trainMonths: 24, testMonths: 12 });
   assert.deepEqual(walkPlan(years(2)), { trainMonths: 12, testMonths: 3 });
-  assert.throws(() => walkPlan(daily('2010-01-01', '2011-03-31', () => 1).t), /needs about two years of prices or more.*This run covers 1\.2 years/);
-  assert.throws(() => walkPlan(years(4), 4, 1), /needs at least 5 years of prices\. This run covers 4\.0 years/);
+  assert.throws(() => walkPlan(daily('2010-01-01', '2011-03-31', () => 1).t), /must have approximately two years of prices or more.*This run is 1\.2 years long/);
+  assert.throws(() => walkPlan(years(4), 4, 1), /must have 5 years of prices or more\. This run is 4\.0 years long/);
 });
 
 test('walk-forward picks each window on its training stretch only, then follows that pick through the test stretch', async () => {
@@ -437,9 +437,9 @@ test('walk-forward measures each stretch from the last close before it, so the s
 
 test('walk-forward refuses without a range, with too little history, and can be stopped', async () => {
   const A = daily('2015-01-01', '2019-12-31', () => 1);
-  await assert.rejects(walkForward('universe: A\nn = 5\nbuy when close > sma(n)', new Map([['A', A]])), /needs a parameter with a range/);
+  await assert.rejects(walkForward('universe: A\nn = 5\nbuy when close > sma(n)', new Map([['A', A]])), /must have a parameter with a range/);
   const short = daily('2015-01-01', '2016-02-28', () => 1);
-  await assert.rejects(walkForward(MONTHLY, new Map([['A', short]])), /about two years/);
+  await assert.rejects(walkForward(MONTHLY, new Map([['A', short]])), /approximately two years/);
   let done = 0;
   assert.equal(await walkForward(MONTHLY, new Map([['A', A]]), { onProgress: (d) => (done = d), shouldStop: () => done >= 3 }), null);
 });

@@ -40,26 +40,26 @@ export function renderYears(parent: HTMLElement, input: PeriodInput): () => void
   const ahead = yearsAhead(input.t, input.strategy, input.benchmark);
   const details = h(parent, 'details', 'bt-details bt-years');
   h(details, 'summary', undefined, 'Years');
-  tabInfo(details, 'Years', ahead.years > 0 ? `ahead in ${ahead.ahead.length} of ${ahead.years}` : plural(mine.length, 'year'));
+  tabInfo(details, 'Years', ahead.years > 0 ? `better in ${ahead.ahead.length} of ${ahead.years}` : plural(mine.length, 'year'));
   return lazy(details, (body) => {
     const bench = benchProse(input.benchmarkLabel);
     const theirs = new Map(periodReturns(input.t, input.benchmark, 'year').map((p) => [p.key, p]));
     if (ahead.years > 0) {
       const behind = ahead.years - ahead.ahead.length - ahead.level;
-      const all = `Ahead of ${bench} in ${ahead.ahead.length} of ${plural(ahead.years, 'whole year')}, level in ${ahead.level}, behind in ${behind}.`;
-      h(body, 'p', 'bt-tab-lead', ahead.onlyFalling && ahead.ahead.length < ahead.years ? `${all} Every year it was ahead, ${bench} fell.` : all);
+      const all = `In ${plural(ahead.years, 'full year')}, the strategy did better than ${bench} in ${ahead.ahead.length}, the same in ${ahead.level} and worse in ${behind}.`;
+      h(body, 'p', 'bt-tab-lead', ahead.onlyFalling && ahead.ahead.length < ahead.years ? `${all} In each year that the strategy did better, ${bench} decreased.` : all);
     }
     const read = h(body, 'div', 'bt-tab-read');
-    const idle = `Each bar is the strategy’s return less ${bench}’s that calendar year. Point at a year to compare them.`;
+    const idle = `Each bar shows the strategy return minus the ${bench} return for one calendar year. Move the pointer to a year to compare.`;
     read.textContent = idle;
     const key = h(body, 'div', 'bt-chart-legend');
-    for (const [cls, text] of [['bt-chart-swatch-gap-ahead', 'Strategy ahead'], ['bt-chart-swatch-gap-behind', `${input.benchmarkLabel} ahead`]]) {
+    for (const [cls, text] of [['bt-chart-swatch-gap-ahead', 'Strategy better'], ['bt-chart-swatch-gap-behind', `${input.benchmarkLabel} better`]]) {
       const k = h(key, 'span', 'bt-chart-key');
       h(k, 'span', `bt-chart-swatch ${cls}`);
       h(k, 'span', undefined, text);
     }
     const chart = h(body, 'div', 'bt-chart');
-    if (mine.some((p) => p.partial)) h(body, 'div', 'bt-note', 'Faded bars are years the data only partly covers.');
+    if (mine.some((p) => p.partial)) h(body, 'div', 'bt-note', 'A light bar shows a year that the data does not fully cover.');
     return onWidth(chart, (width) => drawGaps(chart, read, idle, width, mine, theirs, bench));
   });
 }
@@ -86,7 +86,7 @@ function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: nu
   const span = hi - lo || 0.01;
   const y = (v: number) => top + ((hi - v) / span) * plotH;
   const y0 = y(0);
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `The strategy's return less ${bench}'s in each calendar year` });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `The strategy return minus the ${bench} return in each calendar year` });
   const hl = s(svg, 'rect', { y: 0, width: groupW, height: top + plotH + 4, class: 'bt-stats-hl', visibility: 'hidden' });
   s(svg, 'line', { x1: left, x2: left + plotW, y1: y0, y2: y0, class: 'bt-baseline' });
   const barW = Math.max(1, Math.min(26, groupW * 0.7));
@@ -118,7 +118,7 @@ function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: nu
     const p = mine[i];
     const b = theirs.get(p.key);
     const g = gaps[i];
-    const apart = !Number.isFinite(g) ? `${bench} has no return for it` : Math.abs(g) <= LEVEL ? 'level' : `${pts(g)} ${g > 0 ? 'ahead' : 'behind'}`;
+    const apart = !Number.isFinite(g) ? `no ${bench} return` : Math.abs(g) <= LEVEL ? 'the same' : `${pts(g)} ${g > 0 ? 'better' : 'worse'}`;
     read.textContent = `${p.key}${p.partial ? ', part of the year' : ''} · strategy ${signedPct(p.ret)}, ${bench} ${b ? signedPct(b.ret) : '–'} · ${apart}`;
   };
   hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
@@ -147,9 +147,9 @@ export function renderMonths(parent: HTMLElement, input: Pick<PeriodInput, 't' |
     const best = months.reduce((a, m) => (m.ret > a.ret ? m : a));
     const worst = months.reduce((a, m) => (m.ret < a.ret ? m : a));
     const flat = months.some((m) => m.ret === 0);
-    h(body, 'p', 'bt-tab-lead', `Up in ${pct(up, 0)} of ${plural(months.length, 'month')}. The best was ${periodName(best)} at ${signedPct(best.ret)}, the worst ${periodName(worst)} at ${signedPct(worst.ret)}.${flat ? ' Outlined months had no change, most often from being in cash.' : ''}`);
+    h(body, 'p', 'bt-tab-lead', `Up in ${pct(up, 0)} of ${plural(months.length, 'month')}. The best month was ${periodName(best)} (${signedPct(best.ret)}). The worst month was ${periodName(worst)} (${signedPct(worst.ret)}).${flat ? ' A month with a border had no change. Usually the strategy was in cash.' : ''}`);
     const read = h(body, 'div', 'bt-tab-read');
-    const idle = 'Point at a month to read its return.';
+    const idle = 'Move the pointer to a month to see its return.';
     read.textContent = idle;
     const byKey = new Map(months.map((m) => [m.key, m]));
     const peak = Math.max(...months.map((m) => Math.abs(m.ret)), 1e-9);

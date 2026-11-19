@@ -19,7 +19,7 @@ test('a return says whether it is per year, and an unknown one is a dash', () =>
 test('the rows of a regime are its states in order, then the steps where it was not known, and only those with a step in them', () => {
   const run = { t: [t(0), t(1), t(2), t(3), t(4)], equity: [100, 110, 99, 108.9, 98.01], exposure: [0, 1, 1, 0.5, 0.25], benchmark: [NaN, NaN, 100, 102, 101] };
   const rows = regimeRows(bucketStats(run, [-1, 0, 1, 1, 1], 2), ['Above', 'Below']);
-  assert.deepEqual(rows.map((r) => r.label), ['Above', 'Below', 'Not known yet']);
+  assert.deepEqual(rows.map((r) => r.label), ['Above', 'Below', 'Not known']);
   // One step of four in "above": a quarter of the time, -10% from 110 to 99, no benchmark value (unknown at that step), fully invested.
   assert.deepEqual(rows[0].cells, [['25%', null], ['−10.0%', 'in all'], ['–', null], ['100%', null], ['−10.0%', null]]);
   // A state with no step is left out, and so is the unknown one when everything was known.
@@ -39,7 +39,7 @@ test('the day the strategy was back at its high is a date, with the time of day 
   const at = Date.UTC(2020, 2, 29, 15, 0);
   assert.equal(recoveryText({ kind: 'back', t: at }, false), '2020-03-29');
   assert.equal(recoveryText({ kind: 'back', t: at }, true), '2020-03-29 15:00');
-  assert.equal(recoveryText({ kind: 'held' }, false), 'Never below it');
+  assert.equal(recoveryText({ kind: 'held' }, false), 'Always at or above it');
   assert.equal(recoveryText({ kind: 'not' }, false), 'Not by the end');
 });
 

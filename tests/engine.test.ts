@@ -237,7 +237,7 @@ test('cash earns the cash rate for the calendar days of each step, and so does t
   assert.ok(near(r.run.equity[2], 1001 * 1.004));
   assert.ok(near(r.interest, 1001 * 1.004 - 1000));
   assert.ok(near(r.run.cashReturn[2], 0.004));
-  assert.equal(r.cashRateNote, 'Cash earns 36.5% a year');
+  assert.equal(r.cashRateNote, 'Cash receives 36.5% a year');
   // The benchmark earns a day of interest, then buys at the open with all of it.
   assert.ok(near(r.benchmark.equity[1], 1001) && near(r.benchmark.equity[2], 1001));
 });
@@ -251,7 +251,7 @@ test('a cash rate ticker pays its close at the previous bar, as a yearly percent
   assert.ok(near(r.run.equity[2], 1001));
   assert.ok(near(r.run.equity[3], 1001 * 1.002));
   assert.ok(near(r.interest, 1001 * 1.002 - 1000));
-  assert.equal(r.cashRateNote, 'Cash earns the R rate');
+  assert.equal(r.cashRateNote, 'Cash receives the R rate');
 });
 
 test('on an hourly run, a daily benchmark and a daily cash rate count only once their day has ended', () => {
@@ -265,7 +265,7 @@ test('on an hourly run, a daily benchmark and a daily cash rate count only once 
   const bench = r.benchmark.equity;
   // 2 January's close is known when its 23:00 bar ends at midnight, not at 00:00.
   assert.deepEqual([bench[24], bench[46], bench[47], bench[70], bench[71]], [1000, 1000, 2002, 2002, 4004]);
-  // Cash earns nothing until the 1 January rate is known at the end of that day; it then pays
+  // Cash receives no interest until the 1 January rate is known at the end of that day; it then pays
   // 36.5% for each hour until the 2 January rate of 73% is known.
   const hourly = (rate: number) => rate / 365 / 24;
   assert.equal(r.run.cashReturn[23], 0);
@@ -333,7 +333,7 @@ test('an entry whose ATR stop distance is still unknown at the signal waits for 
   const r = run('universe: A\nstop loss: 2 atr(2)\nbuy when true', { A: atrBars({ o: 100, h: 101, l: 50, c: 97 }) });
   assert.deepEqual(r.run.trades.map((t) => [t.entryT, t.exitPrice, t.reason]), [[day(2), 96, 'stop loss']]);
   assert.deepEqual(r.run.skipped, [{ asset: 'A', input: 'stop loss', n: 2, count: 1 }]);
-  assert.ok(r.notes.includes('1 buy signal for A was not acted on while the 2-bar ATR for the stop loss was still unknown.'));
+  assert.ok(r.notes.includes('The run ignored 1 buy signal for A, because the 2-bar ATR for the stop loss was unknown at that time.'));
   // In rank mode the chosen ticker is skipped until the next decision, here the next bar.
   const ranked = run('universe: A\nhold: top 1 by close\ntake profit: 2 atr(2)', { A: atrBars({ o: 100, h: 101, l: 99, c: 100 }) });
   assert.deepEqual(ranked.run.trades.map((t) => t.entryT), [day(2)]);
@@ -343,10 +343,10 @@ test('an entry whose ATR stop distance is still unknown at the signal waits for 
 test('a buy rule still warming up at the start of the run gets a note with the day it became known', () => {
   const A = bars(Array.from({ length: 20 }, () => 10));
   assert.deepEqual(run('universe: A\nbuy when close > sma(10)', { A }).notes, [
-    'The buy rule for A was unknown until 2020-01-10 while its indicators warmed up, so A could not be bought before then.',
+    'The buy rule for A was unknown until 2020-01-10, when its indicators had sufficient bars. Thus the strategy did not buy A before then.',
   ]);
   assert.deepEqual(run('universe: A\nbuy when close > sma(50)', { A }).notes, [
-    'The buy rule for A was unknown for the whole run: its indicators need more bars than the prices have.',
+    'The buy rule for A was unknown for the full run: its indicators must have more bars than the prices have.',
   ]);
   // A few bars, or a "from" after the warm-up, are not worth a note.
   assert.deepEqual(run('universe: A\nbuy when close > sma(5)', { A }).notes, []);

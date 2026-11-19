@@ -63,7 +63,7 @@ test('an unbalanced parenthesis on a continuation line is reported on that line'
   const [d, ...rest] = checked(lines);
   assert.deepEqual(rest, []);
   assert.deepEqual(at(lines, d), [2, 17, 19, 'error', '30']);
-  assert.equal(d.message, 'Expected ")"');
+  assert.equal(d.message, 'Write ")" here');
 });
 
 test('a mistake inside a continuation line points past the indent', () => {
@@ -111,7 +111,7 @@ test('the adjusted-price warning covers the comparison and is not an error', () 
   const [d, ...rest] = checked(lines);
   assert.deepEqual(rest, []);
   assert.deepEqual(at(lines, d), [1, 9, 20, 'warning', 'close > 100']);
-  assert.match(d.message, /adjusted for later dividends and splits/);
+  assert.match(d.message, /adjustments for subsequent dividends and splits/);
   const other = ['universe: SPY, TLT', 'buy when close > sma(200)', '  and close of TLT > 50'];
   assert.deepEqual(checked(other).map((x) => at(other, x)), [[2, 6, 23, 'warning', 'close of TLT > 50']]);
 });
@@ -137,7 +137,7 @@ test('a parameter used as the wrong kind of value is underlined where it is used
   const lines = ['universe: SPY', 'stop = 8', 'stop loss: stop', 'buy when close > sma(2)'];
   const [d] = checked(lines);
   assert.deepEqual(at(lines, d), [2, 11, 15, 'error', 'stop']);
-  assert.match(d.message, /needs a percentage/);
+  assert.match(d.message, /must be a percentage/);
 });
 
 test('a bad parameter also leaves its uses unknown, each underlined once', () => {
@@ -332,17 +332,17 @@ test('unknownTickers: a note for each ticker the lookup knows its source does no
   assert.deepEqual(
     notes.map((d) => [d.line, lines[d.line].slice(d.from, d.to), d.severity, d.message]),
     [
-      [0, 'SPYY', 'warning', 'Yahoo has no ticker called SPYY.'],
-      [0, 'binance:BTCUSDTT', 'warning', 'Binance has no market called BTCUSDTT.'],
-      [2, '^VXI', 'warning', 'Yahoo has no ticker called ^VXI.'],
+      [0, 'SPYY', 'warning', 'Yahoo has no ticker with the name SPYY.'],
+      [0, 'binance:BTCUSDTT', 'warning', 'Binance has no market with the name BTCUSDTT.'],
+      [2, '^VXI', 'warning', 'Yahoo has no ticker with the name ^VXI.'],
     ],
   );
   // Not yet asked about (QQQ) and not known (unsure) give nothing, and the caller can leave one out, such as a ticker being typed.
   assert.deepEqual(unknownTickers(refs.filter((r) => r.ticker !== 'SPYY'), lookup).map((d) => d.ticker!.ticker), ['BTCUSDTT', '^VXI']);
   assert.deepEqual(unknownTickers(refs, known({})), []);
-  // Where plain tickers come from decides which source is asked.
+  // Price source for tickers without a prefix decides which source is asked.
   const binance = unknownTickers(blockTickers(['data: binance', 'universe: ABCUSDT']), known({ 'binance|ABCUSDT': 'unknown' }));
-  assert.equal(binance[0].message, 'Binance has no market called ABCUSDT.');
+  assert.equal(binance[0].message, 'Binance has no market with the name ABCUSDT.');
 });
 
 test('fixForDiagnostic: an unknown ticker is changed to a known one, the block’s own first', () => {

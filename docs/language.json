@@ -5,329 +5,329 @@
       "name": "sma",
       "signature": "sma(n)",
       "summary": "simple average of the last n closes",
-      "text": "Simple average of the last n closes. Without a series it reads close; write another first, as in sma(volume, 20).",
+      "text": "Simple average of the last n closes. It reads close, or the series you write first, as in sma(volume, 20).",
       "example": "buy when close > sma(200)"
     },
     {
       "name": "ema",
       "signature": "ema(n)",
       "summary": "exponential average",
-      "text": "Exponential average, started from the simple average of the first n values. Without a series it reads close; write another first, as in ema(volume, 20).",
+      "text": "Exponential average that starts from the simple average of the first n values. It reads close, or the series you write first, as in ema(volume, 20).",
       "example": "buy when close > ema(50)"
     },
     {
       "name": "rsi",
       "signature": "rsi(n = 14)",
       "summary": "relative strength index, 0 to 100",
-      "text": "Relative strength index, from 0 to 100, with Wilder’s smoothing. Without a series it reads close; write another first, as in rsi(volume, 14).",
+      "text": "Relative strength index, 0 to 100, from Wilder averages of the up and down changes. It reads close, or the series you write first, as in rsi(volume, 14).",
       "example": "buy when rsi(14) < 30"
     },
     {
       "name": "roc",
       "signature": "roc(n)",
-      "summary": "change over n bars, as a fraction",
-      "text": "Change over n bars, as a fraction, so compare it with a percentage: roc(20) > 5%. Without a series it reads close; write another first, as in roc(volume, 20).",
+      "summary": "change in n bars, as a fraction",
+      "text": "Change in n bars, as a fraction: compare it with a percentage, as in roc(20) > 5%. It reads close, or the series you write first, as in roc(volume, 20).",
       "example": "buy when roc(20) > 5%"
     },
     {
       "name": "stdev",
       "signature": "stdev(n)",
       "summary": "standard deviation of the last n closes",
-      "text": "Standard deviation of the last n closes, dividing by n. Without a series it reads close; write another first, as in stdev(volume, 20).",
+      "text": "Standard deviation of the last n closes, with division by n. It reads close, or the series you write first, as in stdev(volume, 20).",
       "example": "buy when close > sma(20) + stdev(20)"
     },
     {
       "name": "highest",
       "signature": "highest(n)",
-      "summary": "highest high of the last n bars; add [1] to leave out this bar",
-      "text": "Highest high of the last n bars, this bar included; add [1] to leave out this bar. Without a series it reads high; write another first, as in highest(volume, 20).",
+      "summary": "highest high of the last n bars (add [1] to remove this bar)",
+      "text": "Highest high of the last n bars, this bar included (add [1] to remove this bar). It reads high, or the series you write first, as in highest(volume, 20).",
       "example": "buy when close > highest(20)[1]"
     },
     {
       "name": "lowest",
       "signature": "lowest(n)",
       "summary": "lowest low of the last n bars",
-      "text": "Lowest low of the last n bars, this bar included. Without a series it reads low; write another first, as in lowest(volume, 20).",
+      "text": "Lowest low of the last n bars, this bar included. It reads low, or the series you write first, as in lowest(volume, 20).",
       "example": "sell when close < lowest(20)[1]"
     },
     {
       "name": "atr",
       "signature": "atr(n = 14)",
       "summary": "average true range",
-      "text": "Average true range, with Wilder’s smoothing. It takes no series.",
+      "text": "Average true range, as a Wilder average. It has no series argument.",
       "example": "buy when close > close[1] + atr(14)"
     },
     {
       "name": "macd",
       "signature": "macd(fast = 12, slow = 26)",
       "summary": "fast average minus slow average",
-      "text": "The fast exponential average minus the slow one. Without a series it reads close; write another first, as in macd(volume, 12, 26).",
+      "text": "The fast exponential average minus the slow one. It reads close, or the series you write first, as in macd(volume, 12, 26).",
       "example": "buy when macd() > 0"
     },
     {
       "name": "macd_signal",
       "signature": "macd_signal(fast = 12, slow = 26, signal = 9)",
       "summary": "average of the macd line",
-      "text": "Exponential average of the macd line over signal bars. Without a series it reads close; write another first, as in macd_signal(volume, 12, 26, 9).",
+      "text": "Exponential average of the macd line, with a period of signal bars. It reads close, or the series you write first, as in macd_signal(volume, 12, 26, 9).",
       "example": "buy when macd() crosses above macd_signal()"
     },
     {
       "name": "bb_upper",
       "signature": "bb_upper(n = 20, width = 2)",
       "summary": "upper Bollinger band",
-      "text": "Upper Bollinger band: the average plus width standard deviations. Without a series it reads close; write another first, as in bb_upper(volume, 20, 2).",
+      "text": "Upper Bollinger band: the average plus width standard deviations. It reads close, or the series you write first, as in bb_upper(volume, 20, 2).",
       "example": "buy when close > bb_upper(20, 2)"
     },
     {
       "name": "bb_lower",
       "signature": "bb_lower(n = 20, width = 2)",
       "summary": "lower Bollinger band",
-      "text": "Lower Bollinger band: the average minus width standard deviations. Without a series it reads close; write another first, as in bb_lower(volume, 20, 2).",
+      "text": "Lower Bollinger band: the average minus width standard deviations. It reads close, or the series you write first, as in bb_lower(volume, 20, 2).",
       "example": "buy when close < bb_lower(20, 2)"
     },
     {
       "name": "stoch_k",
       "signature": "stoch_k(n = 14, smooth = 3)",
       "summary": "stochastic %K, 0 to 100",
-      "text": "Stochastic %K, from 0 to 100: where the close sits between the lowest low and the highest high of the last n bars, averaged over smooth bars (1 for no averaging). It takes no series.",
+      "text": "Stochastic %K, 0 to 100: where the close is in the high-low range of the last n bars, averaged across smooth bars (1 for none). It has no series argument.",
       "example": "buy when stoch_k(14, 3) < 20"
     },
     {
       "name": "stoch_d",
       "signature": "stoch_d(n = 14, smooth = 3, d = 3)",
-      "summary": "stochastic %D: stoch_k averaged over d bars",
-      "text": "Stochastic %D: stoch_k, with the same n and smooth, averaged over d more bars. It takes no series.",
+      "summary": "stochastic %D: the d-bar average of stoch_k",
+      "text": "Stochastic %D: the d-bar average of stoch_k, with the same n and smooth. It has no series argument.",
       "example": "buy when stoch_k() crosses above stoch_d()"
     },
     {
       "name": "adx",
       "signature": "adx(n = 14)",
       "summary": "average directional index, 0 to 100",
-      "text": "Wilder’s average directional index, from 0 to 100: how strong the trend is, whichever way, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di). It takes no series.",
+      "text": "Average directional index, 0 to 100: the strength of the trend, up or down, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di). It has no series argument.",
       "example": "buy when adx(14) > 25 and plus_di(14) > minus_di(14)"
     },
     {
       "name": "plus_di",
       "signature": "plus_di(n = 14)",
       "summary": "plus directional indicator, 0 to 100",
-      "text": "Wilder’s plus directional indicator, from 0 to 100: the Wilder average over n bars of upward movement, divided by that of the true range, times 100. It takes no series.",
+      "text": "Plus directional indicator, 0 to 100: 100 times the n-bar Wilder average of the up movement, divided by that of the true range. It has no series argument.",
       "example": "buy when plus_di(14) > minus_di(14)"
     },
     {
       "name": "minus_di",
       "signature": "minus_di(n = 14)",
       "summary": "minus directional indicator, 0 to 100",
-      "text": "Wilder’s minus directional indicator, from 0 to 100: the Wilder average over n bars of downward movement, divided by that of the true range, times 100. It takes no series.",
+      "text": "Minus directional indicator, 0 to 100: 100 times the n-bar Wilder average of the down movement, divided by that of the true range. It has no series argument.",
       "example": "sell when minus_di(14) > plus_di(14)"
     },
     {
       "name": "cci",
       "signature": "cci(n = 20)",
       "summary": "commodity channel index of the typical price",
-      "text": "Commodity channel index: the typical price (high + low + close) / 3 minus its n-bar average, divided by 0.015 times its mean absolute deviation from that average. It takes no series.",
+      "text": "Commodity channel index: the typical price (high + low + close) / 3 minus its n-bar average, divided by 0.015 times its mean absolute deviation from that average. It has no series argument.",
       "example": "buy when cci(20) < -100"
     },
     {
       "name": "williams_r",
       "signature": "williams_r(n = 14)",
       "summary": "Williams %R, -100 to 0",
-      "text": "Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) over the last n bars. It takes no series.",
+      "text": "Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) of the last n bars. It has no series argument.",
       "example": "buy when williams_r(14) < -80"
     },
     {
       "name": "mfi",
       "signature": "mfi(n = 14)",
       "summary": "money flow index, 0 to 100",
-      "text": "Money flow index, from 0 to 100: 100 - 100 / (1 + money flowing in / money flowing out) over the last n bars, where a bar’s flow is its typical price times its volume, counted in when the typical price rose and out when it fell. It takes no series and needs volume.",
+      "text": "Money flow index, 0 to 100: 100 - 100 / (1 + up flow / down flow) of the last n bars, with flow = typical price * volume. It has no series argument, the ticker must have volume, and the flow of a bar is up when its typical price increased.",
       "example": "buy when mfi(14) < 20"
     },
     {
       "name": "obv",
       "signature": "obv()",
-      "summary": "on-balance volume, a running total",
-      "text": "On-balance volume: a running total that adds a bar’s volume when the close rose and takes it off when it fell, starting at 0 on the first bar. It takes no series and needs volume.",
+      "summary": "on-balance volume, a total of volume",
+      "text": "On-balance volume: a total, 0 on the first bar, that adds the bar volume when the close increases and subtracts it when the close decreases. It has no series argument, and the ticker must have volume.",
       "example": "buy when obv() > sma(obv(), 20)"
     },
     {
       "name": "vwap",
       "signature": "vwap(n = 20)",
       "summary": "volume-weighted average price of the last n bars",
-      "text": "Volume-weighted average of the typical price (high + low + close) / 3 over the last n bars. It takes no series and needs volume.",
+      "text": "Volume-weighted average of the typical price (high + low + close) / 3 of the last n bars. It has no series argument, and the ticker must have volume.",
       "example": "buy when close > vwap(20)"
     },
     {
       "name": "keltner_upper",
       "signature": "keltner_upper(n = 20, width = 2, atr = 10)",
       "summary": "upper Keltner channel",
-      "text": "Upper Keltner channel: the n-bar exponential average plus width times the average true range over atr bars, which is read from the ticker’s own bars. Without a series it reads close; write another first, as in keltner_upper(volume, 20, 2, 10).",
+      "text": "Upper Keltner channel: the n-bar exponential average plus width times the average true range of the last atr bars of the ticker. It reads close, or the series you write first, as in keltner_upper(volume, 20, 2, 10).",
       "example": "buy when close > keltner_upper(20, 2, 10)"
     },
     {
       "name": "keltner_lower",
       "signature": "keltner_lower(n = 20, width = 2, atr = 10)",
       "summary": "lower Keltner channel",
-      "text": "Lower Keltner channel: the n-bar exponential average minus width times the average true range over atr bars, which is read from the ticker’s own bars. Without a series it reads close; write another first, as in keltner_lower(volume, 20, 2, 10).",
+      "text": "Lower Keltner channel: the n-bar exponential average minus width times the average true range of the last atr bars of the ticker. It reads close, or the series you write first, as in keltner_lower(volume, 20, 2, 10).",
       "example": "buy when close < keltner_lower(20, 2, 10)"
     },
     {
       "name": "supertrend",
       "signature": "supertrend(n = 10, mult = 3)",
-      "summary": "supertrend line, under the price in an uptrend",
-      "text": "Supertrend line: bands at (high + low) / 2 plus and minus mult average true ranges over n bars, each moving only towards the price until the close crosses it, the lower band in an uptrend and the upper in a downtrend. It takes no series.",
+      "summary": "supertrend line, below the price in an uptrend",
+      "text": "Supertrend line: the lower band in an uptrend, the upper in a downtrend, at (high + low) / 2 minus or plus mult n-bar average true ranges. It has no series argument, and a band only moves nearer to the price until the close crosses it.",
       "example": "buy when close > supertrend(10, 3)"
     },
     {
       "name": "supertrend_up",
       "signature": "supertrend_up(n = 10, mult = 3)",
       "summary": "condition: the supertrend is in an uptrend",
-      "text": "A condition that is true while the supertrend is in an uptrend, with its line under the price, and false in a downtrend. It takes no series.",
+      "text": "A condition: true when the supertrend is in an uptrend (its line is below the price), and false in a downtrend. It has no series argument.",
       "example": "buy when supertrend_up(10, 3)"
     },
     {
       "name": "wma",
       "signature": "wma(n)",
       "summary": "weighted average of the last n values",
-      "text": "Linearly weighted average of the last n values, the newest weighing n and the oldest 1. Without a series it reads close; write another first, as in wma(volume, 20).",
+      "text": "Linear weighted average of the last n values: the newest value has the weight n, and each bar before it has 1 less. It reads close, or the series you write first, as in wma(volume, 20).",
       "example": "buy when close > wma(20)"
     },
     {
       "name": "hma",
       "signature": "hma(n)",
       "summary": "Hull moving average",
-      "text": "Hull moving average: the weighted average over sqrt(n) bars of twice the weighted average over n / 2 bars minus the one over n bars, with n / 2 and sqrt(n) rounded down. Without a series it reads close; write another first, as in hma(volume, 20).",
+      "text": "Hull moving average: the sqrt(n)-bar weighted average of twice the (n / 2)-bar weighted average minus the n-bar one, with n / 2 and sqrt(n) rounded down. It reads close, or the series you write first, as in hma(volume, 20).",
       "example": "buy when close > hma(21)"
     },
     {
       "name": "median",
       "signature": "median(n)",
       "summary": "median of the last n values",
-      "text": "Median of the last n values, the mean of the two middle ones when n is even. Without a series it reads close; write another first, as in median(volume, 20).",
+      "text": "Median of the last n values: for an even n, the average of the two middle values. It reads close, or the series you write first, as in median(volume, 20).",
       "example": "buy when close > median(20)"
     },
     {
       "name": "zscore",
       "signature": "zscore(n)",
       "summary": "standard deviations from the n-bar average",
-      "text": "How many standard deviations the value is from its average over the last n values, dividing by n as stdev does, and unknown when they are all equal. Without a series it reads close; write another first, as in zscore(volume, 20).",
+      "text": "How many standard deviations the value is from the average of the last n values, with stdev (division by n), unknown when all are equal. It reads close, or the series you write first, as in zscore(volume, 20).",
       "example": "buy when zscore(20) < -2"
     },
     {
       "name": "percent_rank",
       "signature": "percent_rank(n)",
-      "summary": "share of the previous n values below this one",
-      "text": "The share of the previous n values that are below this one, from 0 to 100. Without a series it reads close; write another first, as in percent_rank(volume, 20).",
+      "summary": "percentage of the previous n values less than this one",
+      "text": "The percentage of the previous n values that are less than this value, from 0 to 100. It reads close, or the series you write first, as in percent_rank(volume, 20).",
       "example": "buy when percent_rank(100) > 95"
     },
     {
       "name": "slope",
       "signature": "slope(n)",
-      "summary": "least-squares slope over n bars, per bar",
-      "text": "Slope of the least-squares line through the last n values, in the series’ units per bar. Without a series it reads close; write another first, as in slope(volume, 20).",
+      "summary": "least-squares slope of n bars, per bar",
+      "text": "Slope of the least-squares line through the last n values, in the units of the series per bar. It reads close, or the series you write first, as in slope(volume, 20).",
       "example": "buy when slope(90) / close > 0.1%"
     },
     {
       "name": "correl",
       "signature": "correl(other, n)",
-      "summary": "correlation with another ticker, -1 to 1",
-      "text": "Correlation, from -1 to 1, of the one-bar changes of this ticker’s close and of the series written first, over the last n bars, unknown when either one is constant. It reads close for this ticker; the series written first is read as of reads it, so it lines up with this ticker’s bars.",
+      "summary": "correlation with a different ticker, -1 to 1",
+      "text": "Correlation (-1 to 1) of the last n one-bar changes of the first series and this ticker’s close, unknown if one is constant. It reads close for this ticker, and the series you write first as of reads it, aligned with the bars of this ticker.",
       "example": "buy when correl(close of SPY, 60) < 0.5"
     },
     {
       "name": "count",
       "signature": "count(condition, n)",
       "summary": "how many of the last n bars a condition held",
-      "text": "How many of the last n bars the condition held, this one included, and unknown while any of them is unknown. It takes no series, only a condition.",
+      "text": "How many of the last n bars the condition held on, this bar included, unknown while one of them is unknown. It has no series argument, only a condition.",
       "example": "buy when count(close > close[1], 10) >= 7"
     },
     {
       "name": "bars_since",
       "signature": "bars_since(condition)",
       "summary": "bars since a condition was last true",
-      "text": "Bars since the condition was last true: 0 on a bar where it is, and unknown until it has been true. It takes no series, only a condition.",
+      "text": "Bars since the condition was last true: 0 on a bar where it is true, and unknown until it is true for the first time. It has no series argument, only a condition.",
       "example": "buy when bars_since(close crosses above sma(50)) < 10"
     },
     {
       "name": "sum",
       "signature": "sum(n)",
       "summary": "sum of the last n values",
-      "text": "Sum of the last n values. Without a series it reads close; write another first, as in sum(volume, 20).",
+      "text": "Sum of the last n values. It reads close, or the series you write first, as in sum(volume, 20).",
       "example": "buy when sum(volume, 5) > 5 * sma(volume, 50)"
     },
     {
       "name": "dema",
       "signature": "dema(n)",
       "summary": "double exponential average, less lag than ema",
-      "text": "Double exponential average, 2 * e1 - e2 with e1 = ema(n) and e2 the ema of e1 over n bars, which follows the price with less lag than ema. Without a series it reads close; write another first, as in dema(volume, 20).",
+      "text": "Double exponential average, 2 * e1 - e2, with e1 = ema(n) and e2 the n-bar ema of e1: it has less lag than ema. It reads close, or the series you write first, as in dema(volume, 20).",
       "example": "buy when close > dema(50)"
     },
     {
       "name": "tema",
       "signature": "tema(n)",
       "summary": "triple exponential average, less lag than ema",
-      "text": "Triple exponential average, 3 * e1 - 3 * e2 + e3 with e1 = ema(n) and each next one the ema of the one before, which follows the price with less lag than dema. Without a series it reads close; write another first, as in tema(volume, 20).",
+      "text": "Triple exponential average, 3 * e1 - 3 * e2 + e3, with e1 = ema(n), e2 = ema of e1 and e3 = ema of e2 (n bars each): less lag than dema. It reads close, or the series you write first, as in tema(volume, 20).",
       "example": "buy when close > tema(30)"
     },
     {
       "name": "kama",
       "signature": "kama(n = 10, fast = 2, slow = 30)",
-      "summary": "Kaufman adaptive average",
-      "text": "Kaufman’s adaptive average, which follows the price closely while it runs and slowly while it chops: each bar it moves the share sc = (ER * (2 / (fast + 1) - 2 / (slow + 1)) + 2 / (slow + 1)) squared of the way to the price, ER being the efficiency ratio over n bars, and it starts from the price of the bar before the first bar where ER is known. Without a series it reads close; write another first, as in kama(volume, 10, 2, 30).",
+      "summary": "Kaufman adaptive average: fast in a trend, slow in a range",
+      "text": "Kaufman adaptive average: on each bar it moves sc = (ER * (2 / (fast + 1) - 2 / (slow + 1)) + 2 / (slow + 1)) squared of the distance to the price, with ER the n-bar efficiency ratio. It reads close, or the series you write first, and starts from the value of the bar before the first known ER.",
       "example": "buy when close > kama(10, 2, 30)"
     },
     {
       "name": "aroon_up",
       "signature": "aroon_up(n = 25)",
-      "summary": "aroon up, 0 to 100: how recent the high is",
-      "text": "Aroon up, from 0 to 100: 100 * (n - bars since the highest high of the last n + 1 bars) / n, so 100 on a bar that makes the high and 0 when it was n bars ago, a tie going to the most recent bar. It takes no series and reads the ticker’s own highs.",
+      "summary": "aroon up, 0 to 100: 100 on the bar of the high",
+      "text": "Aroon up, 0 to 100: 100 * (n - bars since the highest high of the last n + 1 bars) / n, with the newest of equal highs. It has no series argument and reads the highs of the ticker.",
       "example": "buy when aroon_up(25) > 70 and aroon_down(25) < 30"
     },
     {
       "name": "aroon_down",
       "signature": "aroon_down(n = 25)",
-      "summary": "aroon down, 0 to 100: how recent the low is",
-      "text": "Aroon down, from 0 to 100: 100 * (n - bars since the lowest low of the last n + 1 bars) / n, so 100 on a bar that makes the low and 0 when it was n bars ago, a tie going to the most recent bar. It takes no series and reads the ticker’s own lows.",
+      "summary": "aroon down, 0 to 100: 100 on the bar of the low",
+      "text": "Aroon down, 0 to 100: 100 * (n - bars since the lowest low of the last n + 1 bars) / n, with the newest of equal lows. It has no series argument and reads the lows of the ticker.",
       "example": "sell when aroon_down(25) > 70"
     },
     {
       "name": "psar",
       "signature": "psar(step = 0.02, max = 0.2)",
-      "summary": "parabolic SAR, a stop that trails the price",
-      "text": "Wilder’s parabolic SAR, a stop that trails the price, under the lows in an uptrend and over the highs in a downtrend: its pace starts at step, grows by step with each new extreme and stops at max, a bar that crosses it reverses the trend, and the first trend is up when the second close is above the first. It takes no series, and step may not be above max.",
+      "summary": "parabolic SAR, a stop below the price in an uptrend",
+      "text": "Parabolic SAR, a stop below the lows in an uptrend and above the highs in a downtrend: a bar across it changes the trend, and the first trend is up if the second close is higher. It has no series argument, and its speed increases by step at each new high or low, from step to max (step cannot be more than max).",
       "example": "buy when close crosses above psar()"
     },
     {
       "name": "cmf",
       "signature": "cmf(n = 20)",
       "summary": "Chaikin money flow, -1 to 1",
-      "text": "Chaikin money flow, from -1 to 1: the sum over the last n bars of ((close - low) - (high - close)) / (high - low) * volume, over the sum of their volume, a bar with no range adding 0. It takes no series and needs volume.",
+      "text": "Chaikin money flow, -1 to 1: the sum of ((close - low) - (high - close)) / (high - low) * volume of the last n bars, divided by their volume. It has no series argument, the ticker must have volume, and a bar with no range adds 0.",
       "example": "buy when cmf(20) > 0.1"
     },
     {
       "name": "linreg",
       "signature": "linreg(n)",
       "summary": "least-squares line, at this bar",
-      "text": "The value at this bar of the least-squares straight line through the last n values, against the bar number, whose slope per bar is slope(n). Without a series it reads close; write another first, as in linreg(volume, 20).",
+      "text": "The value at this bar of the least-squares line through the last n values, with slope(n) as its slope per bar. It reads close, or the series you write first, as in linreg(volume, 20).",
       "example": "buy when close > linreg(50)"
     },
     {
       "name": "rsquared",
       "signature": "rsquared(n)",
-      "summary": "how well a line fits the last n values, 0 to 1",
-      "text": "How well the least-squares straight line through the last n values fits them, from 0 to 1 (1 when they lie on a line), and unknown when they are all equal. Without a series it reads close; write another first, as in rsquared(volume, 20).",
+      "summary": "fit of a line to the last n values, 0 to 1",
+      "text": "R squared of the least-squares line through the last n values, 0 to 1 (1 when all are on a line), unknown for equal values. It reads close, or the series you write first, as in rsquared(volume, 20).",
       "example": "buy when slope(90) > 0 and rsquared(90) > 0.8"
     },
     {
       "name": "efficiency",
       "signature": "efficiency(n)",
-      "summary": "Kaufman efficiency ratio, 0 to 1",
-      "text": "Kaufman’s efficiency ratio, from 0 to 1: how far the value moved over n bars, |x - x[n]|, over how far it travelled, the sum of |x - x[1]| over those bars, so 1 is a straight run, and unknown when it did not move. Without a series it reads close; write another first, as in efficiency(volume, 20).",
+      "summary": "Kaufman efficiency ratio, 0 to 1 (1 for a straight move)",
+      "text": "Kaufman efficiency ratio, 0 to 1: |x - x[n]| divided by the sum of |x - x[1]| in the last n bars, unknown with no move. It reads close, or the series you write first, as in efficiency(volume, 20).",
       "example": "buy when efficiency(20) > 0.3 and close > sma(50)"
     },
     {
       "name": "streak",
       "signature": "streak()",
       "summary": "bars in a row up (1, 2, ...) or down (-1, -2, ...)",
-      "text": "Consecutive bars the value rose (1, 2, 3, ...) or fell (-1, -2, ...), 0 on a bar equal to the one before, and unknown on the first bar and where a value is unknown, counting again from the next known change. Without a series it reads close; write another first, as in streak(volume).",
+      "text": "Bars in a row the value increased (1, 2, 3, ...) or decreased (-1, -2, ...), 0 if it did not change, unknown on the first bar. It reads close, or the series you write first, as in streak(volume), and after an unknown value it is unknown until the next known change.",
       "example": "buy when streak() <= -3"
     },
     {
@@ -355,35 +355,35 @@
       "name": "sqrt",
       "signature": "sqrt(x)",
       "summary": "square root",
-      "text": "The square root of the value, unknown below 0.",
+      "text": "The square root of the value, unknown for a value less than 0.",
       "example": "buy when stdev(roc(1), 20) * sqrt(252) < 20%"
     },
     {
       "name": "log",
       "signature": "log(x)",
       "summary": "natural logarithm",
-      "text": "The natural logarithm of the value, unknown at 0 and below.",
+      "text": "The natural logarithm of the value, unknown for 0 or less.",
       "example": "buy when slope(log(close), 90) > 0.1%"
     },
     {
       "name": "exp",
       "signature": "exp(x)",
       "summary": "e to the power x",
-      "text": "e raised to the power of the value, unknown when too large to hold.",
+      "text": "e to the power of the value, unknown when the result is too large.",
       "example": "buy when exp(slope(log(close), 90) * 252) - 1 > 20%"
     },
     {
       "name": "if",
       "signature": "if(condition, a, b)",
-      "summary": "a where the condition holds, otherwise b",
-      "text": "The number a where the condition holds and b where it does not, and unknown where the condition is unknown; a and b are numbers, not conditions.",
+      "summary": "a where the condition holds, b where it does not",
+      "text": "The number a where the condition holds and b where it does not, or unknown where the condition is unknown. a and b are numbers, not conditions.",
       "example": "buy when if(close > sma(200), roc(126), 0) > 5%"
     },
     {
       "name": "column",
       "signature": "column(name) of file",
       "summary": "a column of a CSV file: column(score) of signals",
-      "text": "Reads a numeric column of a CSV file by its header, in lower case with underscores for spaces, such as column(score) of signals. A row counts as known at the close of the day it is dated.",
+      "text": "Reads a numeric column of a CSV file by its header in lowercase, with underscores for spaces, for example column(score) of signals. A row counts as known at the close of its date.",
       "example": "buy when column(score) of csv:Data/signals.csv > 0.7"
     }
   ],
@@ -392,35 +392,35 @@
       "name": "open",
       "signature": "open",
       "summary": "the bar's open",
-      "text": "The open price of each bar of the ticker the rule belongs to. With Yahoo data prices are adjusted for splits and dividends, so compare them with an average, not a fixed number.",
+      "text": "The open price of each bar of the ticker of the rule. Yahoo adjusts prices for splits and dividends: compare them with an average, not with a constant number.",
       "example": "buy when open > close[1]"
     },
     {
       "name": "high",
       "signature": "high",
       "summary": "the bar's high",
-      "text": "The highest price of each bar of the ticker the rule belongs to. With Yahoo data prices are adjusted for splits and dividends, so compare them with an average, not a fixed number.",
+      "text": "The highest price of each bar of the ticker of the rule. Yahoo adjusts prices for splits and dividends: compare them with an average, not with a constant number.",
       "example": "buy when high > high[1]"
     },
     {
       "name": "low",
       "signature": "low",
       "summary": "the bar's low",
-      "text": "The lowest price of each bar of the ticker the rule belongs to. With Yahoo data prices are adjusted for splits and dividends, so compare them with an average, not a fixed number.",
+      "text": "The lowest price of each bar of the ticker of the rule. Yahoo adjusts prices for splits and dividends: compare them with an average, not with a constant number.",
       "example": "buy when low < low[1]"
     },
     {
       "name": "close",
       "signature": "close",
       "summary": "the bar's close",
-      "text": "The close price of each bar of the ticker the rule belongs to. With Yahoo data prices are adjusted for splits and dividends, so compare them with an average, not a fixed number.",
+      "text": "The close price of each bar of the ticker of the rule. Yahoo adjusts prices for splits and dividends: compare them with an average, not with a constant number.",
       "example": "buy when close > sma(200)"
     },
     {
       "name": "volume",
       "signature": "volume",
       "summary": "the bar's volume",
-      "text": "The traded volume of each bar of the ticker the rule belongs to.",
+      "text": "The traded volume of each bar of the ticker of the rule.",
       "example": "buy when volume > sma(volume, 20)"
     }
   ],
@@ -429,105 +429,105 @@
       "name": "month",
       "signature": "month",
       "summary": "month of the bar, 1 to 12",
-      "text": "The month of the bar, 1 to 12. It is read from each bar’s date in UTC.",
+      "text": "The month of the bar, 1 to 12. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when month == 11"
     },
     {
       "name": "day",
       "signature": "day",
       "summary": "day of the month, 1 to 31",
-      "text": "The day of the month, 1 to 31. It is read from each bar’s date in UTC.",
+      "text": "The day of the month, 1 to 31. The plugin reads it from the date of each bar, in UTC.",
       "example": "sell when month == 5 and day > 20"
     },
     {
       "name": "weekday",
       "signature": "weekday",
       "summary": "1 = Monday to 7 = Sunday",
-      "text": "The day of the week: 1 for Monday to 7 for Sunday. It is read from each bar’s date in UTC.",
+      "text": "The day of the week: 1 for Monday to 7 for Sunday. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when weekday == 1"
     },
     {
       "name": "year",
       "signature": "year",
       "summary": "the year, as 2024",
-      "text": "The year, such as 2024. It is read from each bar’s date in UTC.",
+      "text": "The year, for example 2024. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when year >= 2010"
     },
     {
       "name": "month_start",
       "signature": "month_start",
       "summary": "first bar of a month",
-      "text": "A condition: the first bar of a month. It is read from each bar’s date in UTC.",
+      "text": "A condition: the first bar of a month. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when month_start"
     },
     {
       "name": "month_end",
       "signature": "month_end",
       "summary": "last bar of a month",
-      "text": "A condition: the last bar of a month. It is read from each bar’s date in UTC.",
+      "text": "A condition: the last bar of a month. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when month_end"
     },
     {
       "name": "quarter",
       "signature": "quarter",
       "summary": "quarter of the bar, 1 to 4",
-      "text": "The quarter of the year of the bar, 1 to 4. It is read from each bar’s date in UTC.",
+      "text": "The quarter of the year of the bar, 1 to 4. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when quarter == 4"
     },
     {
       "name": "week_start",
       "signature": "week_start",
       "summary": "first bar of a week",
-      "text": "A condition: the first bar of a week, which starts on Monday. It is read from each bar’s date in UTC.",
+      "text": "A condition: the first bar of a week, which starts on Monday. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when week_start"
     },
     {
       "name": "week_end",
       "signature": "week_end",
       "summary": "last bar of a week",
-      "text": "A condition: the last bar of a week, which starts on Monday. It is read from each bar’s date in UTC.",
+      "text": "A condition: the last bar of a week, which starts on Monday. The plugin reads it from the date of each bar, in UTC.",
       "example": "sell when week_end"
     },
     {
       "name": "quarter_start",
       "signature": "quarter_start",
       "summary": "first bar of a quarter",
-      "text": "A condition: the first bar of a quarter. It is read from each bar’s date in UTC.",
+      "text": "A condition: the first bar of a quarter. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when quarter_start"
     },
     {
       "name": "quarter_end",
       "signature": "quarter_end",
       "summary": "last bar of a quarter",
-      "text": "A condition: the last bar of a quarter. It is read from each bar’s date in UTC.",
+      "text": "A condition: the last bar of a quarter. The plugin reads it from the date of each bar, in UTC.",
       "example": "sell when quarter_end"
     },
     {
       "name": "year_start",
       "signature": "year_start",
       "summary": "first bar of a year",
-      "text": "A condition: the first bar of a year. It is read from each bar’s date in UTC.",
+      "text": "A condition: the first bar of a year. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when year_start"
     },
     {
       "name": "year_end",
       "signature": "year_end",
       "summary": "last bar of a year",
-      "text": "A condition: the last bar of a year. It is read from each bar’s date in UTC.",
+      "text": "A condition: the last bar of a year. The plugin reads it from the date of each bar, in UTC.",
       "example": "sell when year_end"
     },
     {
       "name": "trading_day",
       "signature": "trading_day",
-      "summary": "number of the day in its month, counting days with a bar",
-      "text": "The number of the bar’s day within its month, counting the days that have a bar: 1 on the month’s first such day, the same for every bar of a day, and unknown in the data’s first month, which may have begun before it. It is read from each bar’s date in UTC.",
+      "summary": "number of the day in its month, of the days with a bar",
+      "text": "The day number in the month, of days with a bar: 1 on the month’s first such day, unknown in the data’s first month. The plugin reads it from the date of each bar, in UTC.",
       "example": "sell when trading_day == 3"
     },
     {
       "name": "trading_days_left",
       "signature": "trading_days_left",
-      "summary": "days with a bar left in the month",
-      "text": "The days with a bar left in the month after the bar’s day, 0 on the month’s last such day, counting past the last bar the days it would go on to have, so a holiday it does not know of is counted. It is read from each bar’s date in UTC.",
+      "summary": "remaining days with a bar in the month",
+      "text": "Days with a bar after this day in its month, 0 on the month’s last such day: after the last bar, holidays also count. The plugin reads it from the date of each bar, in UTC.",
       "example": "buy when trading_days_left == 3"
     }
   ],
@@ -536,49 +536,49 @@
       "name": "bars held",
       "signature": "bars held",
       "summary": "completed bars since the entry filled, 0 on that bar",
-      "text": "The number of completed bars since the buy filled (for a short, the short sale), or with several entries the first; it is 0 on the bar of the fill. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "text": "Completed bars since the buy filled, or the short sale (the first of more entries): it is 0 on the bar of the fill. Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "sell when bars held >= 20"
     },
     {
       "name": "entry price",
       "signature": "entry price",
       "summary": "the price the position was bought or sold short at",
-      "text": "The price the position was bought at, slippage included, or for a short the price it was sold at; with several entries, their average price. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "text": "The price the position was bought at, slippage included, or for a short the price it was sold at (for more entries, the average). Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "sell when close < entry price * 0.9"
     },
     {
       "name": "last entry price",
       "signature": "last entry price",
-      "summary": "the price of the latest entry",
-      "text": "The price the latest entry of the position filled at, slippage included; with one entry it is the entry price. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "summary": "the price of the last entry",
+      "text": "The fill price of the last entry of the position, slippage included, and with one entry, the same as entry price. Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "sell when close < last entry price * 0.95"
     },
     {
       "name": "entries made",
       "signature": "entries made",
       "summary": "how many entries the position has",
-      "text": "How many entries the open position has made: 1 after the buy or short sale, then one more for each add. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "text": "The number of entries of the open position: 1 after the buy or short sale, plus 1 for each add. Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "sell when entries made == 1 and bars held >= 10"
     },
     {
       "name": "highest since entry",
       "signature": "highest since entry",
-      "summary": "the highest price since the position was entered",
-      "text": "The highest price since the position's first entry: its fill price before slippage, then the high of each later bar, and of the fill bar too when it filled at that bar's open. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "summary": "the highest price since the first entry",
+      "text": "The maximum of the first fill price before slippage and each next high (and the fill bar high for a fill at its open). Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "sell when close < highest since entry - 3 * atr(22)"
     },
     {
       "name": "lowest since entry",
       "signature": "lowest since entry",
-      "summary": "the lowest price since the position was entered",
-      "text": "The lowest price since the position's first entry: its fill price before slippage, then the low of each later bar, and of the fill bar too when it filled at that bar's open. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "summary": "the lowest price since the first entry",
+      "text": "The minimum of the first fill price before slippage and each next low (and the fill bar low for a fill at its open). Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "short when close < sma(200)\ncover when close > lowest since entry + 3 * atr(22)"
     },
     {
       "name": "position return",
       "signature": "position return",
       "summary": "the open position’s return at this close, before costs",
-      "text": "The open position's return at this close before costs: close / entry price - 1 for a long, 1 - close / entry price for a short. Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.",
+      "text": "The open position's return at this close before costs: close / entry price - 1 for a long, 1 - close / entry price for a short. Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.",
       "example": "sell when position return > 20% or bars held > 30"
     }
   ],
@@ -587,58 +587,58 @@
       "name": "name",
       "signature": "name: text",
       "summary": "title shown above the result",
-      "text": "The title shown above the result. Without it the title is Backtest.",
+      "text": "The title shown above the result. Without it, the title is Backtest.",
       "example": "name: Trend following"
     },
     {
       "name": "universe",
       "signature": "universe: SPY 60%, TLT 40%",
       "summary": "tickers and weights: SPY 60%, TLT 40%",
-      "text": "The tickers to trade, each with an optional weight: give every ticker one, or none. Weights add up to at most 200%: what is left under 100% stays in cash, and above 100% the strategy borrows.",
+      "text": "The tickers to trade, each with an optional weight: give a weight to all tickers or to none. The maximum total weight is 200%: below 100%, the remaining weight stays in cash, and above 100%, the strategy borrows.",
       "example": "universe: SPY 60%, TLT 40%"
     },
     {
       "name": "symbol",
       "signature": "symbol: SPY",
       "summary": "one ticker (same as universe)",
-      "text": "Another way to write universe.",
+      "text": "The same as universe.",
       "example": "symbol: SPY"
     },
     {
       "name": "from",
       "signature": "from: 2015-01-31",
       "summary": "first day, as 2015-01-31",
-      "text": "The first day of the run. Without it the run starts on the first day every ticker has prices.",
+      "text": "The first day of the run. Without it, the run starts on the first day that all tickers have prices.",
       "example": "from: 2015-01-31"
     },
     {
       "name": "to",
       "signature": "to: 2024-12-31",
       "summary": "last day, as 2024-12-31",
-      "text": "The last day of the run, whole day included, and it must come after from. Without it the run ends on the last day with prices.",
+      "text": "The last day of the run, all of that day included, and it must be after from. Without it, the run ends on the last day with prices.",
       "example": "to: 2024-12-31"
     },
     {
       "name": "data",
       "signature": "data: yahoo | binance | tiingo",
-      "summary": "where plain tickers come from: yahoo, binance or tiingo",
-      "text": "Where tickers written without a prefix come from, the plugin setting deciding without it, though a plain ticker that starts with ^, such as ^VIX or ^IRX, comes from Yahoo whatever data says. yahoo:, binance:, tiingo:, fred: or csv: in front of a ticker picks that ticker’s own source.",
+      "summary": "where tickers without a prefix come from: yahoo, binance or tiingo",
+      "text": "The source of tickers without a prefix (if there is no data line, the plugin setting is the source). A ticker that starts with ^ always comes from Yahoo, and a prefix (yahoo:, binance:, tiingo:, fred: or csv:) sets the source of one ticker.",
       "example": "data: binance",
       "values": [
         {
           "value": "yahoo",
           "summary": "Yahoo prices, adjusted for splits and dividends",
-          "text": "Plain tickers come from Yahoo, spelt the way Yahoo spells them, such as SPY, BRK-B, BTC-USD or ^GSPC. Yahoo gives 1d and 1w bars."
+          "text": "Tickers without a prefix come from Yahoo: write them as Yahoo does, for example SPY, BRK-B, BTC-USD or ^GSPC. Yahoo gives 1d and 1w bars."
         },
         {
           "value": "binance",
-          "summary": "Binance market symbols, such as BTCUSDT",
-          "text": "Plain tickers are Binance market symbols, such as BTCUSDT, though one that starts with ^, such as ^VIX, still comes from Yahoo. Binance gives bars from 1m up to 1w."
+          "summary": "Binance market symbols, for example BTCUSDT",
+          "text": "Tickers without a prefix are Binance market symbols, for example BTCUSDT, but a ticker that starts with ^ (for example ^VIX) comes from Yahoo. Binance gives bars from 1m to 1w."
         },
         {
           "value": "tiingo",
           "summary": "Tiingo prices, adjusted for splits and dividends",
-          "text": "Plain tickers come from Tiingo, with the key chosen under Tiingo API key in the plugin settings, though one that starts with ^, such as ^VIX or the cash rate ^IRX, still comes from Yahoo, which alone has them. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds."
+          "text": "Tickers without a prefix come from Tiingo, with the key from the Tiingo API key setting, but tickers that start with ^ come from Yahoo. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds."
         }
       ]
     },
@@ -646,63 +646,63 @@
       "name": "interval",
       "signature": "interval: 1d | 1w | …",
       "summary": "bar size: 1d, 1w, or 1h and others on Binance",
-      "text": "The bar size, 1d unless you say otherwise. Yahoo and Tiingo give 1d and 1w, Binance gives 1m up to 1w, and one interval applies to every ticker.",
+      "text": "The bar size for all tickers, 1d if you do not write it. Yahoo and Tiingo give 1d and 1w bars, and Binance gives bars from 1m to 1w.",
       "example": "interval: 1w",
       "values": [
         {
           "value": "1m",
           "summary": "1-minute bars, Binance only",
-          "text": "1-minute bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "1-minute bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "3m",
           "summary": "3-minute bars, Binance only",
-          "text": "3-minute bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "3-minute bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "5m",
           "summary": "5-minute bars, Binance only",
-          "text": "5-minute bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "5-minute bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "15m",
           "summary": "15-minute bars, Binance only",
-          "text": "15-minute bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "15-minute bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "30m",
           "summary": "30-minute bars, Binance only",
-          "text": "30-minute bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "30-minute bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "1h",
           "summary": "1-hour bars, Binance only",
-          "text": "1-hour bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "1-hour bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "2h",
           "summary": "2-hour bars, Binance only",
-          "text": "2-hour bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "2-hour bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "4h",
           "summary": "4-hour bars, Binance only",
-          "text": "4-hour bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "4-hour bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "6h",
           "summary": "6-hour bars, Binance only",
-          "text": "6-hour bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "6-hour bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "8h",
           "summary": "8-hour bars, Binance only",
-          "text": "8-hour bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "8-hour bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "12h",
           "summary": "12-hour bars, Binance only",
-          "text": "12-hour bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "12-hour bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "1d",
@@ -712,74 +712,74 @@
         {
           "value": "3d",
           "summary": "3-day bars, Binance only",
-          "text": "3-day bars. Only Binance gives them, so the block needs data: binance or a binance: ticker."
+          "text": "3-day bars, only from Binance. The block must have data: binance or a binance: ticker."
         },
         {
           "value": "1w",
           "summary": "weekly bars",
-          "text": "Weekly bars, from Yahoo, Tiingo or Binance. A weekly bar is used once its week is over."
+          "text": "Weekly bars, from Yahoo, Tiingo or Binance. The plugin uses a weekly bar only after its week ends."
         }
       ]
     },
     {
       "name": "capital",
       "signature": "capital: 10000",
-      "summary": "starting money, as 10000 or 10k",
-      "text": "The starting money, written 10000 or 10k (m is millions). Without it the plugin’s Starting money setting is used.",
+      "summary": "capital at the start, as 10000 or 10k",
+      "text": "The capital at the start of the run, as 10000 or 10k (m is millions). Without it, the plugin uses its Start capital setting.",
       "example": "capital: 10k"
     },
     {
       "name": "costs",
       "signature": "costs: 5 bps",
-      "summary": "per trade, as 5 bps or 0.05%",
-      "text": "The cost of each trade, written 5 bps or 0.05%. A plain number counts as bps, and the cost must be under 10%.",
+      "summary": "cost of each trade, as 5 bps or 0.05%",
+      "text": "The cost of each trade, as 5 bps or 0.05%. A number without a unit counts as bps, and the cost must be less than 10%.",
       "example": "costs: 5 bps"
     },
     {
       "name": "slippage",
       "signature": "slippage: 5 bps",
       "summary": "how much worse each fill is than the price, as 5 bps",
-      "text": "How much worse each fill is than the price: a buy or a cover fills higher, and a sell or a short sale lower. It is written like costs.",
+      "text": "How much worse each fill is than the price: a buy or a cover fills higher, and a sell or a short sale fills lower. Write it as you write costs.",
       "example": "slippage: 5 bps"
     },
     {
       "name": "size",
       "signature": "size: 80%",
       "summary": "share of equity to use when tickers have no weights",
-      "text": "The share of equity to use when the tickers have no weights, up to 200%, borrowing above 100%. You cannot give weights and size together.",
+      "text": "The share of equity to use when the tickers have no weights, a maximum of 200%: above 100%, the strategy borrows. You cannot use weights and size together.",
       "example": "size: 80%"
     },
     {
       "name": "rebalance",
       "signature": "rebalance: never | weekly | monthly | quarterly | yearly",
       "summary": "never, weekly, monthly, quarterly or yearly",
-      "text": "How often held tickers go back to their weights. Without it, never.",
+      "text": "How frequently the strategy sets the held tickers back to their weights. Without it, the value is never.",
       "example": "rebalance: monthly",
       "values": [
         {
           "value": "never",
-          "summary": "positions are never put back to their weights",
-          "text": "Held positions are never put back to their weights. This is the default."
+          "summary": "no rebalance of held positions",
+          "text": "The strategy does not set held positions back to their weights. This is the default."
         },
         {
           "value": "weekly",
           "summary": "back to the weights at the start of each week",
-          "text": "Each held ticker goes back to its target weight at the open of its first bar in each new week. Weeks start on Monday."
+          "text": "The strategy sets each held ticker back to its target weight at the open of its first bar in each new week. Weeks start on Monday."
         },
         {
           "value": "monthly",
           "summary": "back to the weights at the start of each month",
-          "text": "Each held ticker goes back to its target weight at the open of its first bar in each new month. A rebalance never opens a position."
+          "text": "The strategy sets each held ticker back to its target weight at the open of its first bar in each new month. A rebalance does not open a position."
         },
         {
           "value": "quarterly",
           "summary": "back to the weights at the start of each quarter",
-          "text": "Each held ticker goes back to its target weight at the open of its first bar in each new quarter. A rebalance never opens a position."
+          "text": "The strategy sets each held ticker back to its target weight at the open of its first bar in each new quarter. A rebalance does not open a position."
         },
         {
           "value": "yearly",
           "summary": "back to the weights at the start of each year",
-          "text": "Each held ticker goes back to its target weight at the open of its first bar in each new year. A rebalance never opens a position."
+          "text": "The strategy sets each held ticker back to its target weight at the open of its first bar in each new year. A rebalance does not open a position."
         }
       ]
     },
@@ -787,117 +787,117 @@
       "name": "benchmark",
       "signature": "benchmark: QQQ",
       "summary": "ticker to compare with, bought and held",
-      "text": "The ticker to compare the result with, bought and held. Without it the benchmark is your own tickers at their weights.",
+      "text": "The ticker to compare the result with, bought and held. Without it, the benchmark is the tickers of the block at their weights.",
       "example": "benchmark: QQQ"
     },
     {
       "name": "stop loss",
       "signature": "stop loss: 10% | 2 atr(14)",
       "summary": "sell this far below the entry price (above it for a short), as 10% or 2 atr(14)",
-      "text": "Sells when the price falls this far below the entry price, or buys a short back when it rises this far above it, as a percentage or as a number of average true ranges. A percentage must be above 0% and at most 99%.",
+      "text": "Sells when the price moves this far below the entry price, or covers a short when the price moves this far above it. Write a percentage, more than 0% and a maximum of 99%, or a number of average true ranges.",
       "example": "stop loss: 10%"
     },
     {
       "name": "trailing stop",
       "signature": "trailing stop: 15% | 3 atr(14)",
       "summary": "sell this far below the highest price since entry (above the lowest for a short)",
-      "text": "Sells when the price falls this far below the highest price since entry, or buys a short back when it rises this far above the lowest. A percentage must be above 0% and at most 99%.",
+      "text": "Sells when the price moves this far below the highest price since entry, or covers a short when it moves this far above the lowest. A percentage must be more than 0% and a maximum of 99%.",
       "example": "trailing stop: 15%"
     },
     {
       "name": "take profit",
       "signature": "take profit: 20% | 4 atr(14)",
       "summary": "sell this far above the entry price (below it for a short)",
-      "text": "Sells when the price rises this far above the entry price, or buys a short back when it falls this far below it. A percentage must be above 0% and at most 1000%, and a short can never reach one of 100% or more.",
+      "text": "Sells when the price moves this far above the entry price, or covers a short when it moves this far below it. A percentage must be more than 0% and a maximum of 1000%, and for a short, a take profit of 100% or more cannot occur.",
       "example": "take profit: 20%"
     },
     {
       "name": "cash rate",
       "signature": "cash rate: 4% | ^IRX",
-      "summary": "what cash earns: 4% a year, or a yield ticker such as ^IRX",
-      "text": "What cash earns a year, written 4%, or a ticker whose close is a yearly yield, such as ^IRX or fred:DGS3MO. A rate needs its percent sign and must be at most 50%.",
+      "summary": "interest on cash: 4% a year, or a yield ticker, for example ^IRX",
+      "text": "The yearly interest on cash: a rate, as 4%, or a ticker with a yearly yield as its close, for example ^IRX or fred:DGS3MO. A rate must have its percent sign, and the maximum is 50%.",
       "example": "cash rate: 4%"
     },
     {
       "name": "borrow fee",
       "signature": "borrow fee: 0.5%",
-      "summary": "yearly fee on the value of short positions, 0.5% unless set",
-      "text": "A yearly fee on the value of each short position at the close, paid for every day it is held and counted in the trade’s return. Without it the plugin’s Borrow fee for shorts setting is used, 0.5% at first, and it must be between 0% and 100%.",
+      "summary": "yearly fee on the value of short positions, default 0.5%",
+      "text": "A yearly fee on the value of each short position at the close, for each day of the position, included in the trade’s return. Without it, the plugin uses its Borrow fee for shorts setting (default 0.5%), and the fee must be between 0% and 100%.",
       "example": "borrow fee: 1%"
     },
     {
       "name": "margin rate",
       "signature": "margin rate: 6%",
-      "summary": "yearly interest on money borrowed, 6% unless set",
-      "text": "Yearly interest on money borrowed, paid between two bars when cash less the value of the shorts is below 0, as it is when the strategy holds more than its equity. Without it the plugin’s Interest on borrowed money setting is used, 6% at first, and it must be between 0% and 50%.",
+      "summary": "yearly interest on borrowed money, default 6%",
+      "text": "Yearly interest on borrowed money: the strategy pays it between two bars when cash minus the shorts is less than 0, for example with leverage. Without it, the plugin uses its Interest on borrowed money setting (default 6%), and the rate must be between 0% and 50%.",
       "example": "margin rate: 7%"
     },
     {
       "name": "test from",
       "signature": "test from: 2019-01-01",
-      "summary": "report results before and from this day apart",
-      "text": "Reports the results before this day and from it apart. It is one run split in two with nothing re-fitted, and the day must lie after from and before to.",
+      "summary": "show results before this day and from this day apart",
+      "text": "Shows the results before this day and from this day apart. It is one run, divided in two with no new fit, and the day must be after from and before to.",
       "example": "test from: 2019-01-01"
     },
     {
       "name": "hold",
       "signature": "hold: top 3 by roc(126)",
-      "summary": "hold only the best-ranked tickers: top 3 by roc(126)",
-      "text": "Holds only the tickers with the highest score, such as the top 3 by roc(126). The score is a number written like a value in a rule, and the universe takes no weights.",
+      "summary": "hold only the tickers with the highest score: top 3 by roc(126)",
+      "text": "Holds only the tickers with the highest score, for example the top 3 by roc(126). Write the score as a value in a rule, and give no weights in the universe.",
       "example": "hold: top 3 by roc(126)"
     },
     {
       "name": "weighting",
       "signature": "weighting: inverse volatility(60)",
-      "summary": "inverse volatility(60): calmer tickers get more weight",
-      "text": "Calmer tickers get more weight: each share is in proportion to 1 divided by the volatility over the last n one-bar returns. The period must be at least 2.",
+      "summary": "inverse volatility(60): less volatility, more weight",
+      "text": "Tickers with less volatility receive more weight: each weight is in proportion to 1 divided by the volatility of the last n one-bar returns. The minimum period is 2.",
       "example": "weighting: inverse volatility(60)"
     },
     {
       "name": "risk per trade",
       "signature": "risk per trade: 1% at 2 atr(14)",
-      "summary": "size each buy or short sale by what it risks: 1% at 2 atr(14)",
-      "text": "Sizes each buy so that a fall of that many average true ranges loses that share of equity, and each short sale so that a rise does, up to the ticker’s weight. It cannot be used with weighting, or with a rebalance other than never.",
+      "summary": "size each buy or short sale by its risk: 1% at 2 atr(14)",
+      "text": "Sizes each buy or short sale: a move of that many average true ranges against it costs that share of equity (maximum: the ticker’s weight). You cannot use it with weighting, or with a rebalance other than never.",
       "example": "risk per trade: 1% at 2 atr(14)"
     },
     {
       "name": "fill",
       "signature": "fill: next open | close",
-      "summary": "when rules fill: at the next open, or at the same close",
-      "text": "When a rule fills. With next open, the default, a rule read at a bar’s close fills at the next open; with close it fills at that same close.",
+      "summary": "when orders fill: at the next open, or at the same close",
+      "text": "When the orders from the rules fill. With next open (the default), an order at the close of a bar fills at the next open, and with close, at that close.",
       "example": "fill: close",
       "values": [
         {
           "value": "next open",
-          "summary": "a rule read at a close fills at the next open",
-          "text": "A rule read at a bar’s close fills at that ticker’s next open. This is the default."
+          "summary": "an order at a close fills at the next open",
+          "text": "An order at the close of a bar fills at the next open of that ticker. This is the default."
         },
         {
           "value": "close",
-          "summary": "a rule read at a close fills at that same close",
-          "text": "A rule read at a bar’s close fills at that same close."
+          "summary": "an order at a close fills at that same close",
+          "text": "An order at the close of a bar fills at that same close."
         }
       ]
     },
     {
       "name": "commission",
       "signature": "commission: 1 | 0.005 per share, min 1, max 1%",
-      "summary": "charge per order: 1, or 0.005 per share, min 1, max 1%",
-      "text": "A charge on every order in the account’s money, added to costs: a fixed amount per order, or an amount per share with an optional minimum and a cap as a share of the order’s value. Without it the plugin setting applies, which is none at first.",
+      "summary": "charge for each order: 1, or 0.005 per share, min 1, max 1%",
+      "text": "A charge in the account currency: a constant value for each order, or a value per share with an optional minimum and maximum. The plugin adds it to costs, the maximum is a percentage of the order value, and without it, the plugin setting (default none) applies.",
       "example": "commission: 0.005 per share, min 1"
     },
     {
       "name": "entries",
       "signature": "entries: 3",
-      "summary": "build each position in up to 3 entries, each a third",
-      "text": "Builds each position in up to that many entries, each a step of its whole size: the buy rule makes the first and the add rule each later one. It needs an add rule, and the entries together never go above the ticker’s weight.",
+      "summary": "open each position in a maximum of 3 entries, one third each",
+      "text": "Opens each position in a maximum of that many equal entries: the buy rule makes the first, and the add rule makes the others. It must have an add rule, and the entries together are not more than the ticker’s weight.",
       "example": "entries: 3\nadd when close > last entry price * 1.03"
     },
     {
       "name": "magnify",
       "signature": "magnify: 1h",
-      "summary": "look inside each bar with 1h bars, for stops and targets",
-      "text": "Follows a bar that holds a stop or target through smaller bars inside it, such as 1h bars inside daily ones, so the order in which the stop and the target are reached is read, not assumed. Rules stay on the strategy’s own bars, and Yahoo gives 2m to 1h bars inside daily bars for recent days only and 1d bars inside weekly ones.",
+      "summary": "read stops and targets on 1h bars in each bar",
+      "text": "Reads stops and targets on smaller bars in each bar to find which one the price touches first, but rules use the strategy bars. Yahoo gives 2m to 1h bars in daily bars for the last 60 days (730 for 1h), and 1d bars in weekly bars.",
       "example": "magnify: 1h"
     }
   ],
@@ -905,112 +905,112 @@
     {
       "name": "between",
       "signature": "a between lo and hi",
-      "summary": "inside a range, both ends included",
-      "text": "True when a is at least lo and at most hi, so rsi(2) between 10 and 30 means rsi(2) >= 10 and rsi(2) <= 30. It does not chain, and it is read as one comparison, so not rsi(2) between 10 and 30 holds outside the range.",
+      "summary": "in a range, the two ends included",
+      "text": "True when a is lo or more and hi or less: rsi(2) between 10 and 30 is rsi(2) >= 10 and rsi(2) <= 30. It is one comparison that does not chain: not rsi(2) between 10 and 30 is true when rsi(2) is not in the range.",
       "example": "buy when rsi(2) between 10 and 30"
     },
     {
       "name": "for … bars",
       "signature": "condition for n bars",
       "summary": "held on each of the last n bars",
-      "text": "True when the condition held on each of the last n bars, this one included, and unknown until all n are known. It applies to the comparison before it and a not in front of it, so a and b for 3 bars means a and (b for 3 bars), and not up for 3 bars means (not up) for 3 bars: use brackets for more.",
+      "text": "True when the condition held on each of the last n bars, this bar included, and unknown until all n are known. It applies to the comparison before it and to a not in front of that (not up for 3 bars is (not up) for 3 bars): use brackets for more.",
       "example": "buy when close > sma(200) for 3 bars"
     },
     {
       "name": "within",
       "signature": "condition within n bars",
-      "summary": "held on at least one of the last n bars",
-      "text": "True when the condition held on at least one of the last n bars, this one included, and unknown until all n are known. n is a whole number from 1 to 10000 or a parameter, and bar is also accepted.",
+      "summary": "held on one or more of the last n bars",
+      "text": "True when the condition held on one or more of the last n bars, this bar included, and unknown until all n are known. n is an integer from 1 to 10000 or a parameter, and you can also write bar.",
       "example": "sell when rsi(2) > 90 within 3 bars"
     },
     {
       "name": "buy when",
       "signature": "buy when condition",
       "summary": "condition that opens a long position",
-      "text": "Opens a long position in a ticker you do not hold when the condition is true at a close. It fills at that ticker’s next open, unless the fill setting says close.",
+      "text": "Opens a long position in a ticker that the strategy does not hold when the condition is true at a close. It fills at the next open of that ticker, unless fill is close.",
       "example": "buy when close > sma(200)"
     },
     {
       "name": "sell when",
       "signature": "sell when condition",
       "summary": "condition that closes a long position",
-      "text": "Closes a long position when the condition is true at a close. Without a sell rule a position is held until a stop or a short rule closes it, or the run ends.",
+      "text": "Closes a long position when the condition is true at a close. Without a sell rule, the strategy holds a position until a stop or a short rule closes it, or until the run ends.",
       "example": "sell when close < sma(200)"
     },
     {
       "name": "add when",
       "signature": "add when condition",
       "summary": "condition that adds the next entry",
-      "text": "Adds the next entry to the position held, long or short, when the condition is true at a close, until the entries setting’s count is made. It needs an entries line, and it is skipped at a close where the sell rule, or for a short the cover rule, holds.",
+      "text": "Adds the next entry to the open position, long or short, when the condition is true at a close, up to the number in entries. It must have an entries line, and the plugin ignores it at a close where the sell rule (for a short, the cover rule) holds.",
       "example": "entries: 3\nadd when close > last entry price * 1.03"
     },
     {
       "name": "short when",
       "signature": "short when condition",
       "summary": "condition that opens a short position",
-      "text": "Sells short a ticker you do not hold when the condition is true at a close, so the position gains as the price falls; it fills as a buy would. A ticker held long is closed by it, and turns short at the same fill when the buy rule does not hold there too.",
+      "text": "Sells short a ticker that the strategy does not hold when the condition is true at a close, and fills as a buy does. It also closes a long position in the ticker, and opens the short at the same fill if the buy rule does not hold there.",
       "example": "short when close < sma(200)"
     },
     {
       "name": "cover when",
       "signature": "cover when condition",
       "summary": "condition that closes a short position",
-      "text": "Buys a short position back when the condition is true at a close; it needs a short rule. Without a cover rule a short is held until a stop or the buy rule closes it, or the run ends.",
+      "text": "Buys a short position back when the condition is true at a close, and it must have a short rule. Without a cover rule, the strategy holds a short until a stop or the buy rule closes it, or until the run ends.",
       "example": "short when close < sma(200)\ncover when close > sma(200)"
     },
     {
       "name": "for",
       "signature": "for TICKER:",
-      "summary": "rules and stops for one ticker or several: for TLT:",
-      "text": "Starts rules for one ticker, or for several separated by commas, as in for SPY, TLT:; each must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for those tickers only.",
+      "summary": "rules and stops for one or more tickers: for TLT:",
+      "text": "Starts rules for one ticker, or for more tickers with commas between them (for SPY, TLT:), and each must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit below it replaces the shared one for those tickers only.",
       "example": "for SPY, TLT:"
     },
     {
       "name": "for all",
       "signature": "for all:",
-      "summary": "back to the rules every ticker shares",
-      "text": "Goes back to the rules every ticker shares. What you write after it applies to every ticker that has no rule of its own.",
+      "summary": "back to the rules that all tickers share",
+      "text": "Goes back to the rules that all tickers share. The lines after it apply to all tickers, but a rule in a for section replaces the shared rule for its tickers.",
       "example": "for all:"
     },
     {
       "name": "and",
       "signature": "a and b",
-      "summary": "both conditions hold",
-      "text": "True when both conditions are true. A rule can continue on the next line: indent it and start it with and or or.",
+      "summary": "the two conditions hold",
+      "text": "True when the two conditions are true. A rule can continue on the next line: indent the line and start it with and or or.",
       "example": "buy when close > sma(200) and rsi(14) < 70"
     },
     {
       "name": "or",
       "signature": "a or b",
-      "summary": "either condition holds",
-      "text": "True when either condition is true. It binds loosest, so a and b or c reads as (a and b) or c.",
+      "summary": "one or more of the conditions hold",
+      "text": "True when one or more of the conditions are true. The plugin applies it last: a and b or c is (a and b) or c.",
       "example": "sell when close < sma(200) or rsi(14) > 85"
     },
     {
       "name": "not",
       "signature": "not a",
       "summary": "the condition does not hold",
-      "text": "True when the condition after it is not true. It binds tighter than and but looser than a comparison, so not close > 1 reads as not (close > 1), and a window after it covers it: not up for 3 bars is (not up) for 3 bars.",
+      "text": "True when the condition after it is not true. The plugin applies it after a comparison and before and: not close > 1 is not (close > 1), and not up for 3 bars is (not up) for 3 bars.",
       "example": "buy when not close < sma(200)"
     },
     {
       "name": "crosses",
       "signature": "a crosses b",
-      "summary": "changed sides: crossed above or below",
-      "text": "True on a bar where a crosses above or below b: it is on the other side of b than it was on the previous bar. Write crosses above or crosses below for one direction only.",
+      "summary": "crossed above or below",
+      "text": "True on a bar where a crosses b: a is not on the same side of b as on the previous bar. Write crosses above or crosses below for one direction only.",
       "example": "buy when close crosses sma(50)"
     },
     {
       "name": "crosses above",
       "signature": "a crosses above b",
-      "summary": "was at or below, is now above",
+      "summary": "was at or below, then above",
       "text": "True on a bar where a is above b and was at or below b on the previous bar.",
       "example": "buy when sma(50) crosses above sma(200)"
     },
     {
       "name": "crosses below",
       "signature": "a crosses below b",
-      "summary": "was at or above, is now below",
+      "summary": "was at or above, then below",
       "text": "True on a bar where a is below b and was at or above b on the previous bar.",
       "example": "sell when sma(50) crosses below sma(200)"
     },
@@ -1031,64 +1031,64 @@
     {
       "name": "of",
       "signature": "value of TICKER",
-      "summary": "another ticker's value: sma(200) of SPY",
-      "text": "Reads a value from another ticker, which does not have to be in the universe. For each bar you get that ticker’s latest bar that had ended by the time this bar ended.",
+      "summary": "a value of a different ticker: sma(200) of SPY",
+      "text": "Reads a value from a different ticker, in the universe or not. For each bar, it reads the ticker’s last bar that ended at or before the end of this bar.",
       "example": "buy when close > sma(200) and close of ^VIX < 25"
     },
     {
       "name": "tiingo:",
       "signature": "tiingo:TICKER",
-      "summary": "a ticker from Tiingo, such as tiingo:SPY",
-      "text": "Takes this ticker’s daily prices from Tiingo, adjusted for splits and dividends, with the key chosen under Tiingo API key in the plugin settings. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.",
+      "summary": "a ticker from Tiingo, for example tiingo:SPY",
+      "text": "Downloads the daily prices of this ticker from Tiingo, adjusted for splits and dividends, with the key from the Tiingo API key setting. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.",
       "example": "universe: tiingo:SPY"
     },
     {
       "name": "fred:",
       "signature": "fred:SERIES",
-      "summary": "an economic series from FRED, such as fred:T10Y2Y",
-      "text": "A series from FRED, each value counted from the day it was first published, with the key chosen under FRED API key in the plugin settings. Rules read it with of, as in close of fred:T10Y2Y, and cash rate takes a yield such as fred:DGS3MO, but it cannot be traded or be the benchmark.",
+      "summary": "a FRED data series, for example fred:T10Y2Y",
+      "text": "A series from FRED, with each value from the day FRED first published it and the key from the FRED API key setting. Rules read it with of, and cash rate can use it as a yield (fred:DGS3MO), but you cannot trade it or make it the benchmark.",
       "example": "buy when close of fred:T10Y2Y > 0"
     },
     {
       "name": "[n]",
       "signature": "value[n]",
-      "summary": "the value n bars earlier: close[5]",
-      "text": "The value n bars earlier, so close[5] is the close five bars back. It works on any value, and n must be a whole number or a parameter that is one.",
+      "summary": "the value n bars before: close[5]",
+      "text": "The value n bars before this bar: close[5] is the close five bars before. It works on all values, and n must be an integer or a parameter with an integer value.",
       "example": "buy when close > close[5]"
     },
     {
       "name": "in … step",
       "signature": "name = 50 in 20..100 step 10",
-      "summary": "a range to try: 50 in 20..100 step 10",
-      "text": "Gives a parameter a range of values worth trying; the block still runs with the value before in, which must lie inside the range. The step is optional and is 1 unless you write it, or 1% for a percentage.",
+      "summary": "a range for a sweep: 50 in 20..100 step 10",
+      "text": "Gives a parameter a range of values for a sweep, but the block runs with the value before in, which must be in the range. The step is optional: without it, the step is 1, or 1% for a percentage.",
       "example": "fast = 50 in 20..100 step 10"
     },
     {
       "name": "top … by",
       "signature": "hold: top 3 by score",
       "summary": "hold the 3 tickers with the highest score",
-      "text": "Inside hold: how many tickers to hold, and the score that ranks them, written like a value in a rule. The universe must have at least that many tickers.",
+      "text": "In hold: the number of tickers to hold, and the score that sets their sequence, written as a value in a rule. The universe must have that number of tickers or more.",
       "example": "hold: top 3 by roc(126)"
     },
     {
       "name": "at",
       "signature": "risk per trade: 1% at 2 atr(14)",
-      "summary": "share of equity risked at a stop distance",
-      "text": "Inside risk per trade: it joins the share of equity at risk to the distance, in average true ranges, that the price is assumed to move against the position.",
+      "summary": "share of equity at risk for a stop distance",
+      "text": "In risk per trade: the word between the share of equity at risk and the move against the position, in average true ranges.",
       "example": "risk per trade: 1% at 2 atr(14)"
     },
     {
       "name": "true",
       "signature": "true",
       "summary": "always holds",
-      "text": "A condition that always holds. always means the same.",
+      "text": "A condition that always holds. You can also write always.",
       "example": "buy when true"
     },
     {
       "name": "false",
       "signature": "false",
-      "summary": "never holds",
-      "text": "A condition that never holds. never means the same.",
+      "summary": "does not hold",
+      "text": "A condition that does not hold. You can also write never.",
       "example": "sell when false"
     }
   ],
@@ -1097,14 +1097,14 @@
       "name": "%",
       "signature": "5%",
       "summary": "a percentage: 5% counts as 0.05",
-      "text": "A percentage. It counts as the number 0.05 wherever a number is expected, so roc(20) > 5% means roc(20) > 0.05.",
+      "text": "A percentage. It counts as the number 0.05 where you can write a number: roc(20) > 5% is roc(20) > 0.05.",
       "example": "buy when roc(20) > 5%"
     },
     {
       "name": "bps",
       "signature": "5 bps",
       "summary": "basis points: 100 bps is 1%",
-      "text": "Basis points: hundredths of a percent, so 100 bps is 1%. In costs and slippage a plain number counts as bps too.",
+      "text": "Basis points: hundredths of a percent, thus 100 bps is 1%. In costs and slippage, a number without a unit also counts as bps.",
       "example": "costs: 5 bps"
     }
   ],

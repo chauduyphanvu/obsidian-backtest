@@ -48,16 +48,16 @@ test('magnify: a bar size smaller than the interval that divides it and that the
   assert.equal(spec('data: binance\nuniverse: BTCUSDT\ninterval: 4h\nmagnify: 15m').spec!.magnify, '15m');
   assert.equal(spec('universe: SPY, binance:BTCUSDT, csv:Data/gold.csv\nmagnify: 5m').spec!.magnify, '5m');
   const error = (text: string) => spec(text).errors.map((e) => e.message);
-  assert.deepEqual(error('universe: SPY\nmagnify: 1d'), ["magnify needs bars shorter than the strategy's 1d bars, such as 1h"]);
-  assert.deepEqual(error('universe: SPY\nmagnify: soon'), ["magnify takes a bar size smaller than the strategy's 1d bars, such as 1h"]);
-  assert.deepEqual(error('data: binance\nuniverse: BTCUSDT\ninterval: 5m\nmagnify: 3m'), ['A 5m bar does not hold a whole number of 3m bars. Use a size that divides it, such as 1m']);
-  assert.deepEqual(error('data: binance\nuniverse: BTCUSDT\ninterval: 1m\nmagnify: 1m'), ["1m bars are the shortest there are, so magnify can't look inside them"]);
-  assert.deepEqual(error('universe: SPY\nmagnify: 1m'), ['Yahoo can look inside daily bars with 2m, 5m, 15m, 30m, 1h bars, not 1m']);
-  assert.deepEqual(error('universe: SPY\ninterval: 1w\nmagnify: 1h'), ['Yahoo can look inside weekly bars with 1d bars only, not 1h']);
-  assert.deepEqual(error('universe: SPY, binance:BTCUSDT\nmagnify: 2m'), ['Binance can look inside bars with 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h bars, not 2m']);
-  assert.deepEqual(error('universe: csv:Data/gold.csv\nmagnify: 1h'), ['magnify looks inside bars with smaller bars from Yahoo or Binance, and CSV files have none']);
+  assert.deepEqual(error('universe: SPY\nmagnify: 1d'), ['magnify must use bars shorter than the 1d bars of the strategy, for example 1h']);
+  assert.deepEqual(error('universe: SPY\nmagnify: soon'), ['magnify must have a bar size smaller than the 1d bars of the strategy, for example 1h']);
+  assert.deepEqual(error('data: binance\nuniverse: BTCUSDT\ninterval: 5m\nmagnify: 3m'), ['A 5m bar does not contain a whole number of 3m bars. Use a size that divides it, for example 1m']);
+  assert.deepEqual(error('data: binance\nuniverse: BTCUSDT\ninterval: 1m\nmagnify: 1m'), ['1m bars are the shortest bars. Thus magnify cannot examine them with smaller bars']);
+  assert.deepEqual(error('universe: SPY\nmagnify: 1m'), ['Yahoo can examine daily bars only with 2m, 5m, 15m, 30m, 1h bars, not 1m']);
+  assert.deepEqual(error('universe: SPY\ninterval: 1w\nmagnify: 1h'), ['Yahoo can examine weekly bars only with 1d bars, not 1h']);
+  assert.deepEqual(error('universe: SPY, binance:BTCUSDT\nmagnify: 2m'), ['Binance can examine 1d bars only with 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h bars, not 2m']);
+  assert.deepEqual(error('universe: csv:Data/gold.csv\nmagnify: 1h'), ['magnify examines bars with smaller bars from Yahoo or Binance. CSV files do not have smaller bars']);
   // A whole-strategy setting, so not inside a for section, and a word a parameter can't take.
-  assert.match(error('universe: SPY, QQQ\nfor SPY:\n  magnify: 1h')[0], /applies to the whole strategy/);
+  assert.match(error('universe: SPY, QQQ\nfor SPY:\n  magnify: 1h')[0], /is a setting for the full strategy/);
   assert.ok(RESERVED.has('magnify'));
 });
 
@@ -133,7 +133,7 @@ test('a bar without smaller bars, or without all of them, is read whole, and cou
   const t = one(yahoo);
   assert.deepEqual([t.reason, t.exitPrice, t.why!.exit], ['stop loss', 90, { k: 'level', level: 90, high: null, atOpen: false, inside: { k: 'whole', why: 'none' } }]);
   assert.deepEqual(yahoo.run.inside, [{ asset: 'A', from: day(1), looked: 0, whole: 1 }]);
-  assert.ok(yahoo.notes.includes('In that time 1 bar of A with a stop or target inside it was read whole, because its 1h bars were missing or did not match it.'), yahoo.notes.join('\n'));
+  assert.ok(yahoo.notes.includes('In that period, the run did not examine 1 bar of A with a stop or target in it, because its 1h bars were missing or did not agree with it.'), yahoo.notes.join('\n'));
   // On Binance a 4h bar must hold all four of its 1h bars.
   const at = (n: number) => T0 + n * 4 * HOUR;
   const B = ohlc([FLAT, FLAT, [100, 125, 85, 100], FLAT], [0, 1, 2, 3].map(at));
@@ -248,9 +248,9 @@ test('stocks and crypto in one universe are each looked inside with their own ba
     [['CRY', 'take profit', 120, day(2)], ['STK', 'take profit', 120, day(4)]],
   );
   assert.deepEqual(bt.run.inside, [{ asset: 'STK', from: day(3), looked: 1, whole: 0 }, { asset: 'CRY', from: day(0), looked: 1, whole: 0 }]);
-  assert.deepEqual(bt.notes.filter((n) => /looked inside|Looked inside/.test(n)), [
-    'Looked inside the bars of STK from 2020-01-04 on, using its 1h bars (Yahoo gives 1h bars for the last 730 days): 1 bar held a stop or target and was followed through them. Before that, bars are read whole, and when a bar holds both a stop and a target the stop is taken first.',
-    'Looked inside every bar of CRY using its 1h bars: 1 bar held a stop or target and was followed through them.',
+  assert.deepEqual(bt.notes.filter((n) => /^The run examined/.test(n)), [
+    'The run examined the bars of STK from 2020-01-04 with its 1h bars (Yahoo gives 1h bars for the last 730 days): 1 bar held a stop or target, and the run examined it with the smaller bars. Before that date, the run did not examine the bars with smaller bars, and when a bar holds a stop and a target, the run uses the stop first.',
+    'The run examined each bar of CRY with its 1h bars: 1 bar held a stop or target, and the run examined it with the smaller bars.',
   ]);
 });
 
@@ -264,21 +264,21 @@ test('a run looked inside only from a later day: the note, and each trade\'s wor
   assert.deepEqual(bt.run.inside, [{ asset: 'A', from: day(3), looked: 1, whole: 0 }]);
   assert.ok(
     bt.notes.includes(
-      'Looked inside the bars of A from 2020-01-04 on, using its 1h bars (Yahoo gives 1h bars for the last 730 days): 1 bar held a stop or target and was followed through them. Before that, bars are read whole, and when a bar holds both a stop and a target the stop is taken first.',
+      'The run examined the bars of A from 2020-01-04 with its 1h bars (Yahoo gives 1h bars for the last 730 days): 1 bar held a stop or target, and the run examined it with the smaller bars. Before that date, the run did not examine the bars with smaller bars, and when a bar holds a stop and a target, the run uses the stop first.',
     ),
     bt.notes.join('\n'),
   );
   assert.deepEqual(sold(explainTrade(bt, bt.run.trades[0])), [
     'Stop loss at 90.00',
-    'On 2020-01-03 the bar fell to 85.00, through the stop, so it sold at the stop.',
-    'The take profit at 120.00 was inside this bar too. There are no 1h bars for this bar, so the stop is taken first, as for any bar read whole.',
+    'On 2020-01-03, the price decreased to 85.00, through the stop. Thus it sold at the stop.',
+    'The take profit at 120.00 was also in this bar. There are no 1h bars for this bar. Thus the run did not examine this bar with smaller bars, and the stop comes first.',
     'Sold at the stop',
   ]);
   const ex = explainTrade(bt, bt.run.trades[1]);
   assert.deepEqual(sold(ex), [
     'Take profit at 120.00',
-    'On 2020-01-05, in the 1h bar starting 2020-01-05 09:30 (exchange time), the price reached 125.00, through the target, so it sold at the target.',
-    'The stop at 90.00 was inside this bar too. Its 1h bars show the target was reached first.',
+    'On 2020-01-05, in the 1h bar that starts at 2020-01-05 09:30 (exchange time), the price increased to 125.00, through the target. Thus it sold at the target.',
+    'The stop at 90.00 was also in this bar. Its 1h bars show that the price touched the target first.',
     'Sold at the target',
   ]);
   assert.deepEqual([ex.facts.level, ex.facts.exitPrice], [120, 120]);
@@ -291,8 +291,8 @@ test('the words for a stop inside a bar: the smaller bar, its time, a gap at its
   let ex = explainTrade(bt, one(bt));
   assert.deepEqual(sold(ex), [
     'Stop loss at 90.00',
-    'On 2020-01-03, the 1h bar starting 2020-01-03 10:30 (exchange time) opened at 88.00, below the stop, so it sold at that open.',
-    'The take profit at 120.00 was inside this bar too. Its 1h bars show the stop was reached first.',
+    'On 2020-01-03, the 1h bar that starts at 2020-01-03 10:30 (exchange time) opened at 88.00, below the stop. Thus it sold at that open.',
+    'The take profit at 120.00 was also in this bar. Its 1h bars show that the price touched the stop first.',
     'Sold at the open of that 1h bar',
   ]);
   assert.deepEqual([ex.facts.level, ex.facts.exitPrice], [90, 88]);
@@ -300,8 +300,8 @@ test('the words for a stop inside a bar: the smaller bar, its time, a gap at its
   bt = run(`${LEVELS}\nmagnify: 1h`, { A: daily([FLAT, FLAT, [100, 104, 86, 91], [91, 91, 91, 91]]), [insideKey('A', '1h')]: hours(1, [FLAT]) });
   assert.deepEqual(sold(explainTrade(bt, one(bt))), [
     'Stop loss at 90.00',
-    'On 2020-01-03 the bar fell to 86.00, through the stop, so it sold at the stop.',
-    'There are no 1h bars for this bar, so it was read whole.',
+    'On 2020-01-03, the price decreased to 86.00, through the stop. Thus it sold at the stop.',
+    'There are no 1h bars for this bar. Thus the run did not examine this bar with smaller bars.',
     'Sold at the stop',
   ]);
   // A trailing stop names the high inside the bar it trailed from; Binance's hours are in UTC.
@@ -310,8 +310,8 @@ test('the words for a stop inside a bar: the smaller bar, its time, a gap at its
   bt = run('universe: binance:A\ncapital: 1000\ntrailing stop: 10%\nbuy when true\nmagnify: 1h', { A, [insideKey('A', '1h')]: hoursUtc });
   ex = explainTrade(bt, one(bt));
   assert.deepEqual(ex.sections.find((s) => s.id === 'sold')!.rows.map((r) => [r.label, r.value]), [
-    ['Trailing stop at 108.00', '10% under 120.00, the highest price from the buy to the 1h bar before'],
-    ['On 2020-01-03, in the 1h bar starting 2020-01-03 01:00 UTC, the price fell to 107.00, through the stop, so it sold at the stop.', ''],
+    ['Trailing stop at 108.00', '10% below 120.00, the highest price from the buy to the previous 1h bar'],
+    ['On 2020-01-03, in the 1h bar that starts at 2020-01-03 01:00 UTC, the price decreased to 107.00, through the stop. Thus it sold at the stop.', ''],
     ['Sold at the stop', '108.00'],
   ]);
 });
@@ -320,8 +320,8 @@ test('notes: a ticker whose smaller bars do not reach into the run, a CSV file, 
   const bt = run('universe: A, csv:Data/gold.csv\ncapital: 1000\nstop loss: 10%\nbuy when true\nmagnify: 1h', { A: BOTH, gold: BOTH, [insideKey('A', '1h')]: { t: [], o: [], h: [], l: [], c: [], v: [] } });
   assert.deepEqual(bt.run.inside, [{ asset: 'A', from: null, looked: 0, whole: 0 }]);
   assert.deepEqual(bt.notes, [
-    'No 1h bars of A reach into this run (Yahoo gives 1h bars for the last 730 days), so its bars are read whole, and when a bar holds both a stop and a target the stop is taken first.',
-    'gold is a CSV file, which has no smaller bars, so its bars are read whole.',
+    'No 1h bars of A are in the period of this run (Yahoo gives 1h bars for the last 730 days). Thus the run did not examine its bars with smaller bars, and when a bar holds a stop and a target, the run uses the stop first.',
+    'gold is a CSV file, which has no smaller bars. Thus the run did not examine its bars with smaller bars.',
   ]);
   const plain = run(LEVELS, { A: BOTH });
   assert.equal(plain.run.inside, undefined);

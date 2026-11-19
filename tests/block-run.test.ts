@@ -101,7 +101,7 @@ function recording(): { runs: BlockRuns; asked: RunRequest[] } {
   return { asked, runs: { run: (req) => (asked.push(req), Promise.resolve(null)), triggers: () => Promise.resolve(null), close: () => {}, isClosed: () => false } };
 }
 
-test('a result run with "Run it anyway" keeps that with it: the sliders of a block drawn again from the kept result are not refused', async (t) => {
+test('a result run with "Run it with no size limit" keeps that with it: the sliders of a block drawn again from the kept result are not refused', async (t) => {
   const settings = normalizeSettings(null);
   const files = deps({ 'a.csv': prices() });
   const make = (anyway: boolean, runs: BlockRuns) => new BlockDrawing({ source: SRC, defaults: defaultsFrom(settings), deps: files, freshForMs: 1, runs, anyway });

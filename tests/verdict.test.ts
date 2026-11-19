@@ -26,18 +26,18 @@ const marked = (bt: Backtest, mark: 'strategy' | 'benchmark') => verdict(bt).lea
 
 test('the opening sentence weighs return per year against the worst fall, with each figure marked as whose it is', () => {
   const tradeOff = result({ cagr: 0.0723548, maxDrawdown: -0.2444594 }, { cagr: 0.10585, maxDrawdown: -0.5518943 });
-  assert.equal(said(tradeOff), '7.2% a year against 10.6% for buy and hold — but its worst fall was 24%, not 55%.');
+  assert.equal(said(tradeOff), '7.2% a year, compared with 10.6% for buy and hold. But its worst drawdown was smaller: 24%, compared with 55%.');
   assert.deepEqual(marked(tradeOff, 'strategy'), ['7.2% a year', '24%']);
   assert.deepEqual(marked(tradeOff, 'benchmark'), ['10.6%', '55%']);
-  assert.equal(said(result({ cagr: 0.12, maxDrawdown: -0.24 }, { cagr: 0.106, maxDrawdown: -0.55 })), '12.0% a year against 10.6% for buy and hold, and its worst fall was 24%, not 55%.');
-  assert.equal(said(result({ cagr: 0.12, maxDrawdown: -0.6 }, { cagr: 0.106, maxDrawdown: -0.55 })), '12.0% a year against 10.6% for buy and hold — but its worst fall was 60%, against 55%.');
-  assert.equal(said(result({ cagr: -0.031, maxDrawdown: -0.6 }, { cagr: 0.106, maxDrawdown: -0.55 })), '−3.1% a year against 10.6% for buy and hold, and its worst fall was deeper: 60% against 55%.');
+  assert.equal(said(result({ cagr: 0.12, maxDrawdown: -0.24 }, { cagr: 0.106, maxDrawdown: -0.55 })), '12.0% a year, compared with 10.6% for buy and hold. Its worst drawdown was also smaller: 24%, compared with 55%.');
+  assert.equal(said(result({ cagr: 0.12, maxDrawdown: -0.6 }, { cagr: 0.106, maxDrawdown: -0.55 })), '12.0% a year, compared with 10.6% for buy and hold. But its worst drawdown was larger: 60%, compared with 55%.');
+  assert.equal(said(result({ cagr: -0.031, maxDrawdown: -0.6 }, { cagr: 0.106, maxDrawdown: -0.55 })), '−3.1% a year, compared with 10.6% for buy and hold. Its worst drawdown was also larger: 60%, compared with 55%.');
   // Figures that read the same are the same.
-  assert.equal(said(result({ cagr: 0.10601, maxDrawdown: -0.24 }, { cagr: 0.106, maxDrawdown: -0.55 })), '10.6% a year, the same as buy and hold, and its worst fall was 24%, not 55%.');
-  assert.equal(said(result({ cagr: 0.12, maxDrawdown: -0.551 }, { cagr: 0.106, maxDrawdown: -0.549 })), '12.0% a year against 10.6% for buy and hold, with the same worst fall, 55%.');
+  assert.equal(said(result({ cagr: 0.10601, maxDrawdown: -0.24 }, { cagr: 0.106, maxDrawdown: -0.55 })), '10.6% a year, the same as buy and hold. Its worst drawdown was smaller: 24%, compared with 55%.');
+  assert.equal(said(result({ cagr: 0.12, maxDrawdown: -0.551 }, { cagr: 0.106, maxDrawdown: -0.549 })), '12.0% a year, compared with 10.6% for buy and hold. Its worst drawdown was the same: 55%.');
   // A fall under 10% keeps a decimal.
   assert.equal(fallText(-0.0534), '5.3%');
-  assert.equal(said(result({ cagr: 0.05, maxDrawdown: -0.0534 }, { cagr: 0.1, maxDrawdown: -0.3 }, { label: 'SPY buy & hold' })), '5.0% a year against 10.0% for SPY buy and hold — but its worst fall was 5.3%, not 30%.');
+  assert.equal(said(result({ cagr: 0.05, maxDrawdown: -0.0534 }, { cagr: 0.1, maxDrawdown: -0.3 }, { label: 'SPY buy & hold' })), '5.0% a year, compared with 10.0% for SPY buy and hold. But its worst drawdown was smaller: 5.3%, compared with 30%.');
 });
 
 test('the benchmark is named as a sentence reads it', () => {
@@ -48,19 +48,19 @@ test('the benchmark is named as a sentence reads it', () => {
 
 test('after the opening sentence: the Sharpe ratios, the time in the market or the exposure, and the years ahead', () => {
   const v = verdict(result({ sharpe: 0.6575677, exposure: 0.8048692 }, { sharpe: 0.6278347 }));
-  assert.equal(v.more, 'A slightly higher Sharpe ratio, 0.66 against 0.63, while in the market 80% of the time.');
-  assert.equal(verdict(result({ sharpe: 0.3, exposure: 1 }, { sharpe: 0.62 })).more, 'A lower Sharpe ratio, 0.30 against 0.62, while in the market all the time.');
-  assert.equal(verdict(result({ sharpe: 0.6, exposure: 1.2, netExposure: 0.4 }, { sharpe: 0.6 }, { margin: true })).more, 'The same Sharpe ratio, 0.60 against 0.60, with 120% gross exposure and 40% net on average.');
+  assert.equal(v.more, 'The Sharpe ratio was 0.03 higher: 0.66, compared with 0.63. The strategy was in the market 80% of the time.');
+  assert.equal(verdict(result({ sharpe: 0.3, exposure: 1 }, { sharpe: 0.62 })).more, 'The Sharpe ratio was 0.32 lower: 0.30, compared with 0.62. The strategy was in the market all the time.');
+  assert.equal(verdict(result({ sharpe: 0.6, exposure: 1.2, netExposure: 0.4 }, { sharpe: 0.6 }, { margin: true })).more, 'The Sharpe ratio was the same: 0.60. The average exposure was 120% gross and 40% net.');
 });
 
 test('a run that never opened a position, and a ruined run, say so instead', () => {
   const none = verdict(result({}, { cagr: 0.106 }, { count: 0, open: 0 }));
-  assert.equal(none.lead.map((p) => p.text).join(''), 'No rule opened a position, so the money stayed in cash.');
-  assert.equal(none.more, 'Buy and hold made 10.6% a year over the same time.');
+  assert.equal(none.lead.map((p) => p.text).join(''), 'No rule opened a position. All the money stayed in cash.');
+  assert.equal(none.more, 'Buy and hold made 10.6% a year in the same period.');
   // Only open positions: it did trade.
-  assert.notEqual(said(result({}, {}, { count: 0, open: 1 })), 'No rule opened a position, so the money stayed in cash.');
+  assert.notEqual(said(result({}, {}, { count: 0, open: 1 })), 'No rule opened a position. All the money stayed in cash.');
   const ruined = verdict(result({ cagr: -1 }, {}, { ruin: T0 + 3 * DAY }));
-  assert.equal(ruined.lead.map((p) => p.text).join(''), 'Ruined on 2020-01-04: its equity fell to zero and the run stopped there.');
+  assert.equal(ruined.lead.map((p) => p.text).join(''), 'The equity decreased to zero on 2020-01-04, and the run stopped.');
   assert.equal(ruined.more, '');
 });
 
@@ -75,12 +75,12 @@ test('the years ahead, level and behind, and whether every year ahead was a fall
   assert.deepEqual(y.ahead.map((p) => p.key), ['2001']);
   assert.equal(y.level, 1);
   assert.ok(y.onlyFalling);
-  assert.equal(yearsSentence(y, 'buy and hold'), 'It beat buy and hold only in falling years: 2001.');
-  assert.equal(yearsSentence({ ...y, ahead: [], onlyFalling: false }, 'buy and hold'), 'It did not beat buy and hold in any whole calendar year.');
-  assert.equal(yearsSentence({ ...y, onlyFalling: false }, 'buy and hold'), 'It beat buy and hold in 1 of 3 whole years.');
+  assert.equal(yearsSentence(y, 'buy and hold'), 'It did better than buy and hold only in down years: 2001.');
+  assert.equal(yearsSentence({ ...y, ahead: [], onlyFalling: false }, 'buy and hold'), 'It did better than buy and hold in 0 of 3 full years.');
+  assert.equal(yearsSentence({ ...y, onlyFalling: false }, 'buy and hold'), 'It did better than buy and hold in 1 of 3 full years.');
   // Under two whole years is too few to count.
   assert.equal(yearsSentence({ ...y, years: 1 }, 'buy and hold'), '');
-  assert.match(verdict(result({}, {}, { t: YEARS, equity: MINE, bench: THEIRS })).more, / It beat buy and hold only in falling years: 2001\.$/);
+  assert.match(verdict(result({}, {}, { t: YEARS, equity: MINE, bench: THEIRS })).more, / It did better than buy and hold only in down years: 2001\.$/);
 });
 
 test('each figure beside the benchmark’s, with how far apart they are in words', () => {
@@ -90,7 +90,7 @@ test('each figure beside the benchmark’s, with how far apart they are in words
     [
       ['Return per year', '7.2%', '10.6%', '3.3 pts lower'],
       ['Total return', '360.8%', '802.9%', '442 pts lower'],
-      ['Worst drawdown', '−24.4%', '−55.2%', '30.7 pts shallower'],
+      ['Worst drawdown', '−24.4%', '−55.2%', '30.7 pts smaller'],
       ['Sharpe ratio', '0.66', '0.63', '0.03 higher'],
       ['Volatility', '11.7%', '18.9%', '7.2 pts lower'],
       ['Time invested', '80%', '100%', '19.5 pts lower'],
@@ -98,7 +98,7 @@ test('each figure beside the benchmark’s, with how far apart they are in words
     ],
   );
   assert.equal(figures(result({ cagr: 0.1 }, { cagr: 0.1 }))[0].delta, 'the same');
-  assert.equal(figures(result({}, {}, { count: 0, open: 2 })).at(-1)!.delta, 'none closed yet');
+  assert.equal(figures(result({}, {}, { count: 0, open: 2 })).at(-1)!.delta, 'no closed trades');
   assert.equal(figures(result({}, {}, { count: 0, open: 0 })).at(-1)!.delta, 'no rule opened a position');
 });
 
@@ -106,7 +106,7 @@ test('the trades in a sentence: how many won, what winners and losers made, and 
   const trade = (ret: number, pnl: number, reason = 'signal'): Trade => ({ asset: 'A', entryT: 0, entryPrice: 1, exitT: 1, exitPrice: 1, ret, reason, bars: 1, pnl }) as Trade;
   // Ten closed: three big winners, seven small losers, and one still open that does not count.
   const trades = [trade(0.4, 4000), trade(0.3, 3000), trade(0.2, 2000), ...Array.from({ length: 7 }, () => trade(-0.02, -200)), trade(0.5, 5000, 'open')];
-  assert.equal(tradesSentence({ run: { trades } } as unknown as Backtest), '3 of 10 closed trades won. Winners made +30.0% on average, losers −2.0%. The five best made $8,600, more than the $7,600 all closed trades made together.');
+  assert.equal(tradesSentence({ run: { trades } } as unknown as Backtest), '3 of 10 closed trades won. The average trade with a profit made +30.0%. The average trade with a loss made −2.0%. The five best trades made $8,600. This is more than the $7,600 that all closed trades made together.');
   assert.equal(tradesSentence({ run: { trades: [trade(0.1, 100)] } } as unknown as Backtest), '1 of 1 closed trade won.');
   assert.equal(tradesSentence({ run: { trades: [trade(0.1, 100, 'open')] } } as unknown as Backtest), '');
 });

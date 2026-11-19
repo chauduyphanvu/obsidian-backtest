@@ -85,18 +85,18 @@ test('a long list of orders is cut after five', () => {
 test('no orders says so and offers the holdings', () => {
   const v = ready([status('Trend'), status('Pullback')]);
   assert.deepEqual([v.text, v.mark, v.orders], ['No orders today', 'none', 0]);
-  assert.equal(v.tooltip, 'No strategy has an order.\nClick to see what each one holds.');
+  assert.equal(v.tooltip, 'No strategy has an order.\nClick to see the holdings of each strategy.');
 });
 
 test('the three nearest closes to watch follow the orders in the tooltip, and are not counted as orders', () => {
-  const watch = (ticker: string, distance: number, now = false): WatchRow => ({ ticker, side: 'buy', phrase: `Buys if it closes above ${ticker}`, when: 'at the following open', driver: ticker, lastClose: 10, distance, now });
+  const watch = (ticker: string, distance: number, now = false): WatchRow => ({ ticker, side: 'buy', phrase: `Buys if it closes above ${ticker}`, when: 'at the open after that close', driver: ticker, lastClose: 10, distance, now });
   const v = ready([
     status('Trend', [['sell', 'SPY']], { watch: [watch('QQQ', 0.015), watch('IWM', -0.019)] }),
     status('Dip', [], { watch: [watch('TLT', 0.004), watch('GLD', 0.05, true)] }),
   ]);
   assert.deepEqual(v.tooltip.split('\n'), [
     'Sell SPY at the next open, Trend',
-    'Watch at the next close:',
+    'Monitor at the next close:',
     'GLD buys if it closes above GLD, Dip',
     'TLT buys if it closes above TLT, Dip',
     'QQQ buys if it closes above QQQ, Trend',
@@ -105,9 +105,9 @@ test('the three nearest closes to watch follow the orders in the tooltip, and ar
   assert.deepEqual([v.text, v.orders], ['1 order today', 1]);
   assert.deepEqual(ready([status('Dip', [], { watch: [watch('TLT', 0.004)] })]).tooltip.split('\n'), [
     'No strategy has an order.',
-    'Watch at the next close:',
+    'Monitor at the next close:',
     'TLT buys if it closes above TLT, Dip',
-    'Click to see what each one holds.',
+    'Click to see the holdings of each strategy.',
   ]);
 });
 
@@ -124,13 +124,13 @@ test('strategies that could not run or have old prices mark the count and are na
   ]);
   assert.equal(v.text, '2 orders today');
   assert.equal(v.mark, 'warning');
-  assert.equal(v.tooltip, ['Sell GLD at the next open, Stale two', 'Buy TLT at the next open, Trend', "1 strategy couldn't be checked.", '2 strategies have old prices.', 'Click to open the orders window.'].join('\n'));
+  assert.equal(v.tooltip, ['Sell GLD at the next open, Stale two', 'Buy TLT at the next open, Trend', "1 strategy did not run.", '2 strategies have prices that are out of date.', 'Click to open the orders window.'].join('\n'));
 });
 
 test('one strategy with old prices is named in the singular', () => {
   const v = ready([status('A', [], { stale: true }), status('B')]);
   assert.deepEqual([v.text, v.mark], ['No orders today', 'warning']);
-  assert.match(v.tooltip, /^No strategy has an order\.\n1 strategy has old prices\.\n/);
+  assert.match(v.tooltip, /^No strategy has an order\.\n1 strategy has prices that are out of date\.\n/);
 });
 
 test('a warning about the prices marks the count too', () => {
@@ -142,22 +142,22 @@ test('a warning about the prices marks the count too', () => {
 
 test('a strategy that failed and has old prices is counted once, as a failure', () => {
   const v = ready([status('A'), { ...failedStatus('b.md', 'B', 'x'), stale: true }]);
-  assert.match(v.tooltip, /1 strategy couldn't be checked\./);
+  assert.match(v.tooltip, /1 strategy did not run\./);
   assert.doesNotMatch(v.tooltip, /old prices/);
 });
 
 test('when no strategy could be checked the badge says so and is marked as an error', () => {
   const v = ready([failedStatus('a.md', 'A', 'x'), failedStatus('b.md', 'B', 'y')]);
-  assert.deepEqual([v.text, v.mark, v.orders], ["Couldn't check orders", 'error', 0]);
-  assert.equal(v.tooltip, "2 strategies couldn't be checked.\nClick to see why.");
+  assert.deepEqual([v.text, v.mark, v.orders], ["Cannot calculate orders", 'error', 0]);
+  assert.equal(v.tooltip, "2 strategies did not run.\nClick to see the problems.");
 });
 
 test('while checking, and when the check itself failed', () => {
-  assert.deepEqual(badgeView({ kind: 'checking' }), { text: 'Checking orders…', tooltip: "Working out today's orders.", mark: 'none', orders: 0 });
+  assert.deepEqual(badgeView({ kind: 'checking' }), { text: "Today's orders…", tooltip: "The plugin calculates today's orders.", mark: 'none', orders: 0 });
   const failed = badgeView({ kind: 'failed', message: 'The vault could not be read' });
-  assert.deepEqual([failed.text, failed.mark], ["Couldn't check orders", 'error']);
-  assert.equal(failed.tooltip, "Couldn't check the strategies.\nThe vault could not be read\nClick to open the orders window.");
-  assert.equal(badgeView({ kind: 'failed', message: '' }).tooltip, "Couldn't check the strategies.\nClick to open the orders window.");
+  assert.deepEqual([failed.text, failed.mark], ["Cannot calculate orders", 'error']);
+  assert.equal(failed.tooltip, "Cannot run the strategies.\nThe vault could not be read\nClick to open the orders window.");
+  assert.equal(badgeView({ kind: 'failed', message: '' }).tooltip, "Cannot run the strategies.\nClick to open the orders window.");
 });
 
 test('the count is always the number of orders the orders window lists', () => {
@@ -290,7 +290,7 @@ test('while the first check runs the badge says it is checking', async () => {
   const { badge, el } = setup({ scan: () => new Promise((resolve) => (finish = resolve)) });
   badge.start();
   await advance(START_DELAY_MS);
-  assert.equal(el!.textContent, 'Checking orders…');
+  assert.equal(el!.textContent, "Today's orders…");
   assert.equal(el!.hidden, false);
   finish([status('A')]);
   await flush();
@@ -443,7 +443,7 @@ test('stopping while a check runs drops its answer and sets no timer', async () 
   badge.stop();
   finish([status('A', [['buy', 'X']])]);
   await flush();
-  assert.equal(el!.textContent, 'Checking orders…');
+  assert.equal(el!.textContent, "Today's orders…");
   assert.equal(pending(), 0);
   await advance(100 * HOUR);
   assert.equal(log.scans, 1);
@@ -457,7 +457,7 @@ test('a check that fails shows it, never throws out of the timer, and is tried a
   const { badge, el, log } = setup({ scan: () => (fail ? Promise.reject(new Error('The vault could not be read')) : Promise.resolve([status('A', [['buy', 'X']])])) });
   badge.start();
   await advance(START_DELAY_MS);
-  assert.equal(el!.textContent, "Couldn't check orders");
+  assert.equal(el!.textContent, "Cannot calculate orders");
   assert.equal(el!.classes.has('bt-badge-error'), true);
   assert.match(el!.attrs.get('aria-label')!, /The vault could not be read/);
   fail = false;
@@ -478,7 +478,7 @@ test('when every strategy failed it says so and tries again as soon as after a f
   const { badge, el, log } = setup({ scan: async () => (fail ? [failedStatus('a.md', 'A', 'offline'), failedStatus('b.md', 'B', 'offline')] : [status('A', [['buy', 'X']])]) });
   badge.start();
   await advance(START_DELAY_MS);
-  assert.equal(el!.textContent, "Couldn't check orders");
+  assert.equal(el!.textContent, "Cannot calculate orders");
   assert.equal(el!.classes.has('bt-badge-error'), true);
   fail = false;
   await advance(5 * MINUTE);
@@ -497,7 +497,7 @@ test('a scan that throws at once, or with something that is not an Error, is han
   });
   thrown.badge.start();
   await advance(START_DELAY_MS);
-  assert.equal(thrown.el!.textContent, "Couldn't check orders");
+  assert.equal(thrown.el!.textContent, "Cannot calculate orders");
   thrown.badge.stop();
 
   const text = setup({ scan: () => Promise.reject('plain text') });
@@ -524,7 +524,7 @@ test('turning the badge off hides it, stops its timers and drops an answer still
   const { badge, el, log } = setup({ scan: () => new Promise((resolve) => (finish = resolve)) });
   badge.start();
   await advance(START_DELAY_MS);
-  assert.equal(el!.textContent, 'Checking orders…');
+  assert.equal(el!.textContent, "Today's orders…");
   badge.turnOff();
   assert.equal(el!.hidden, true);
   assert.equal(el!.textContent, '');

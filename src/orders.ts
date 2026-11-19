@@ -35,10 +35,10 @@ export function actionWord(o: Pick<OrderRow, 'action' | 'when'> & Pick<Partial<O
 
 /** What a strategy that fills at the close needs the reader to know, said once. */
 export const CLOSE_FILL_NOTE =
-  'A strategy with fill: close decides and fills an order at the same close, so the order has to be placed just before a close. What is listed for it is what its rules said at the last close.';
+  'A strategy with fill: close gives an order and fills it at the same close. Thus you must send the order immediately before the close. Its orders here are from its rules at the last close.';
 
 /** Said under the orders its backtest has already made. */
-export const LAST_CLOSE_NOTE = 'The backtest made these at the last close. To match it, they had to be placed before that close.';
+export const LAST_CLOSE_NOTE = 'The backtest made these orders at the last close. To make the same trades, you had to send them before that close.';
 
 const DOES = { buy: 'buys', sell: 'sells', add: 'adds', short: 'sells short', cover: 'buys to cover' };
 const DID = { buy: 'bought', sell: 'sold', add: 'added', short: 'sold short', cover: 'bought to cover' };
@@ -151,8 +151,8 @@ export function barTime(s: Pick<StrategyStatus, 'interval'>, t: number): string 
 
 /** Which bar a decision rests on, such as "close of 2026-11-13". */
 export function barLabel(s: Pick<StrategyStatus, 'asOf' | 'interval'>): string {
-  if (isIntraday(s.interval)) return `${s.interval} bar starting ${barTime(s, s.asOf)}`;
-  return s.interval.endsWith('w') ? `weekly bar starting ${barTime(s, s.asOf)}` : `close of ${barTime(s, s.asOf)}`;
+  if (isIntraday(s.interval)) return `${s.interval} bar from ${barTime(s, s.asOf)}`;
+  return s.interval.endsWith('w') ? `weekly bar from ${barTime(s, s.asOf)}` : `close of ${barTime(s, s.asOf)}`;
 }
 
 const compare = (a: string, b: string) => a.localeCompare(b, 'en');
@@ -201,10 +201,10 @@ export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row
     .sort((a, b) => nearness(a.row) - nearness(b.row) || compare(a.status.note, b.status.note) || compare(a.row.ticker, b.row.ticker));
 }
 
-export const WATCH_HEADING = 'Watch at the next close';
+export const WATCH_HEADING = 'Monitor at the next close';
 
 /** Said under the closes to watch. */
-export const WATCH_NOTE = `Closes at the next bar that would make a rule give an order, worked out from the rules as they stand: those within ${WATCH_WITHIN * 100}% of the last close or that give one at an unchanged close, and every one of a strategy with fill: close, whose order has to be placed before that close.`;
+export const WATCH_NOTE = `The closes at the next bar that make a rule give an order. The plugin calculates them from the rules as they are written. The list shows each close that is ${WATCH_WITHIN * 100}% or less from the last close. It also shows each rule that gives an order if the close does not change, and all closes of a strategy with fill: close. You must send the orders of that strategy before the close.`;
 
 export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS, triggers: TriggerReport | null = null): StrategyStatus {
   const { run } = out.backtest;
@@ -331,7 +331,7 @@ export function basisOf(list: StrategyStatus[]): Basis | null {
   const differ = pool.some((s) => s.asOf !== oldest.asOf);
   return {
     text: `Based on the ${barLabel(oldest)}`,
-    note: differ ? (withOrders.length > 0 ? 'This is the oldest among the orders. Each order shows its own.' : 'This is the oldest among the strategies checked.') : null,
+    note: differ ? (withOrders.length > 0 ? 'This bar is before the bars of the other orders. Each order shows its bar.' : 'This bar is before the last bars of the other strategies.') : null,
   };
 }
 
@@ -343,7 +343,7 @@ export function share(weight: number): string {
 /** The size of an order as a share of the strategy's own money, then in dollars at the backtest's equity; for an entry of several, which one. */
 export function orderSize(o: OrderRow): string {
   const dollars = `about ${money(o.value)}`;
-  if (closes(o)) return `Whole position, ${dollars}`;
+  if (closes(o)) return `Full position, ${dollars}`;
   const size = `${share(o.weight)} of the strategy, ${dollars}`;
   return o.step ? `Step ${o.step.k} of ${o.step.n}: ${size}` : size;
 }
@@ -351,8 +351,8 @@ export function orderSize(o: OrderRow): string {
 /** What is wrong with a strategy's result, one message each: a failed run, stale prices, price warnings. */
 export function problemsOf(s: StrategyStatus): string[] {
   const out: string[] = [];
-  if (s.error !== null) out.push(`Couldn't run. ${s.error}`);
-  if (s.stale) out.push(`Prices end ${isIntraday(s.interval) ? 'at' : 'on'} ${barTime(s, s.asOf)}, so this may be out of date.`);
+  if (s.error !== null) out.push(`The strategy did not run. ${s.error}`);
+  if (s.stale) out.push(`Prices end ${isIntraday(s.interval) ? 'at' : 'on'} ${barTime(s, s.asOf)}. Thus this result is possibly out of date.`);
   out.push(...s.warnings);
   return out;
 }
@@ -380,7 +380,7 @@ export function ordersSavePlan(existing: string | null): 'create' | 'replace' | 
   return ours ? 'replace' : 'refuse';
 }
 
-export const notOurNoteMessage = (path: string): string => `${path} already exists and was not made by Backtest Blocks. Choose another note in settings.`;
+export const notOurNoteMessage = (path: string): string => `The note ${path} is in the vault, but Backtest Blocks did not make it. Select a different note in the settings.`;
 
 /** What saving did: wrote the note, left an existing note of the reader's alone, or had no note to write. */
 export type SaveOutcome = { kind: 'saved' | 'refused'; path: string } | { kind: 'none' };
@@ -463,7 +463,7 @@ export interface AccountScanHost {
 
 export const ACCOUNTS_HEADING = 'Accounts';
 export const ACCOUNTS_NOTE =
-  "What each account block trades at the next open, in shares: its strategies' orders netted together at the account's size, with each holding brought to their positions. The block shows where each order comes from.";
+  'What each account block trades at the next open, in shares. The plugin adds the orders of its strategies together at the size of the account. Each holding changes to the positions of the strategies. The block shows the source of each order.';
 
 /** Every account block in the vault, its strategies run (from the kept results where the strategies were just run) and netted into orders. */
 export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus[]> {
@@ -510,11 +510,11 @@ export const sortAccounts = (list: AccountStatus[]): AccountStatus[] => [...list
 /** A note body for today's orders; the date is the reader's today. */
 export function ordersMarkdown(list: StrategyStatus[], now: number, accounts: AccountStatus[] = []): string {
   const lines = ['---', `${ORDERS_MARKER}: true`, '---', '', `# Today's orders, ${localDate(now)}`, ''];
-  if (list.length === 0) return [...lines, 'No strategy blocks found.', ''].join('\n');
+  if (list.length === 0) return [...lines, 'The vault has no strategy blocks.', ''].join('\n');
 
   const sorted = sortStatuses(list);
   const basis = basisOf(sorted);
-  if (basis !== null) lines.push(`${basis.text}. ${basis.note ? `${basis.note} ` : ''}From backtests of your rules on the latest prices. Nothing here places an order.`, '');
+  if (basis !== null) lines.push(`${basis.text}. ${basis.note ? `${basis.note} ` : ''}From backtests of your rules on the last prices. The plugin does not send orders.`, '');
 
   const groups = todoGroups(todoRows(sorted));
   if (groups.length === 0) lines.push('## To do', '', 'No strategy has an order.', '');
@@ -539,13 +539,13 @@ export function ordersMarkdown(list: StrategyStatus[], now: number, accounts: Ac
       lines.push('');
     }
     const rest = sortedAccounts.filter((a) => !a.orders.length);
-    for (const a of rest) lines.push(`- ${link({ note: a.note, strategy: a.name }, false)}: ${a.error === null ? 'nothing to trade' : `couldn't be worked out. ${a.error}`}`);
+    for (const a of rest) lines.push(`- ${link({ note: a.note, strategy: a.name }, false)}: ${a.error === null ? 'no orders' : `the plugin cannot calculate the orders. ${a.error}`}`);
     if (rest.length) lines.push('');
   }
 
   const watching = watchList(sorted);
   if (watching.length) {
-    lines.push(`## ${WATCH_HEADING}`, '', WATCH_NOTE, '', '| Strategy | Ticker | Watch for | Last close | Based on |', '| --- | --- | --- | ---: | --- |');
+    lines.push(`## ${WATCH_HEADING}`, '', WATCH_NOTE, '', '| Strategy | Ticker | Trigger | Last close | Based on |', '| --- | --- | --- | ---: | --- |');
     for (const { status, row } of watching) {
       const basisCell = barLabel(status).replace(/^./, (c) => c.toUpperCase());
       lines.push(`| ${link(status, true)} | ${row.ticker} | ${row.phrase}, ${row.when} | ${watchClose(row)} | ${basisCell} |`);
@@ -555,8 +555,8 @@ export function ordersMarkdown(list: StrategyStatus[], now: number, accounts: Ac
 
   const quiet = sorted.filter((s) => s.error === null && s.orders.length === 0);
   if (quiet.length) {
-    lines.push('## Nothing to do', '');
-    for (const s of quiet) lines.push(`- ${link(s, false)}: ${s.holdings.length ? `Holding ${s.holdings.map(heldText).join(', ')}` : 'In cash'}`);
+    lines.push('## No orders', '');
+    for (const s of quiet) lines.push(`- ${link(s, false)}: ${s.holdings.length ? `Holds ${s.holdings.map(heldText).join(', ')}` : 'In cash'}`);
     lines.push('');
   }
 

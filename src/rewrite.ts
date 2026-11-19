@@ -95,7 +95,7 @@ export function replaceBlockInNote(note: string, line: number, source: string, t
   return lines.join('\n');
 }
 
-export const NOTE_CHANGED = 'The note has changed since this result was drawn, so nothing was written. Try again.';
+export const NOTE_CHANGED = 'The note changed after the plugin showed this result. The plugin did not write to the note. Do the step again.';
 
 /**
  * Changes the block that opens on `line` of a note with `change`, through `process`, which edits the note's text in place

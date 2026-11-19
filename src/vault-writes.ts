@@ -66,13 +66,13 @@ export class NoteProperties<F extends { path: string }> {
       }
     }
     if (ran === 0) {
-      if (announce) this.host.notice('This note has no strategy that runs, so there is nothing to save.');
+      if (announce) this.host.notice('This note has no strategy that runs. There is nothing to save.');
       return;
     }
     const complete = ran === blocks.length;
     const none = (plan: ReturnType<typeof planProperties>) => Object.keys(plan.set).length === 0 && plan.remove.length === 0;
     if (none(planProperties(this.host.frontmatter(file), produced, complete))) {
-      if (announce) this.host.notice("This note's properties are already up to date.");
+      if (announce) this.host.notice('The properties of this note agree with the results. There is nothing to save.');
       return;
     }
     await this.host.processFrontMatter(file, (fm: Record<string, unknown>) => {
@@ -82,7 +82,7 @@ export class NoteProperties<F extends { path: string }> {
     });
     if (announce) {
       const missed = blocks.length - ran;
-      this.host.notice(`Saved ${Object.keys(produced).length} figures to this note's properties.${missed > 0 ? ` ${missed} of ${blocks.length} strategies couldn't run, so figures from earlier runs were kept.` : ''}`);
+      this.host.notice(`Saved ${Object.keys(produced).length} figures to the properties of this note.${missed > 0 ? ` ${missed} of ${blocks.length} strategies did not run. The plugin kept the figures from their previous runs.` : ''}`);
     }
   }
 }
@@ -108,7 +108,7 @@ export async function saveDatedFile(files: NewFiles, folder: string, title: stri
     await files.create(path, text);
     notice(`Saved to ${path}`);
   } catch (e) {
-    notice(`Couldn't save the file: ${e instanceof Error ? e.message : String(e)}`);
+    notice(`Cannot save the file: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

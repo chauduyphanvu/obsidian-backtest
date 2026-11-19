@@ -33,7 +33,7 @@ export interface Draft {
 
 /** What the reader is told about what leaves the vault when a strategy is drafted. */
 export const DRAFT_PRIVACY =
-  'Nothing from your notes or vault is sent. What is sent to the service you chose is your description, the plugin’s built-in guide to the language and, when a draft has problems, that draft and the problems found.';
+  'The plugin sends nothing from your notes or vault. It sends these items to the service that you selected: your description and the plugin instructions for the strategy language. If a draft has problems, the plugin also sends that draft and its problems.';
 
 const FENCE = '```';
 
@@ -151,9 +151,9 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_TOKENS = 16000;
 
 function checkConfig(config: LlmConfig): void {
-  if (config.provider === 'anthropic' && !config.apiKey.trim()) throw new Error('Enter your Anthropic API key in the plugin settings.');
-  if (config.provider === 'openai' && !config.baseUrl.trim()) throw new Error('Enter the address of your model server in the plugin settings, such as http://localhost:8000/v1.');
-  if (!(config.model.trim() || DEFAULT_MODEL[config.provider])) throw new Error('Enter the model name your server uses in the plugin settings.');
+  if (config.provider === 'anthropic' && !config.apiKey.trim()) throw new Error('Set your Anthropic API key in the plugin settings.');
+  if (config.provider === 'openai' && !config.baseUrl.trim()) throw new Error('Type the address of your model server in the plugin settings, for example http://localhost:8000/v1.');
+  if (!(config.model.trim() || DEFAULT_MODEL[config.provider])) throw new Error('Type the model name of your server in the plugin settings.');
 }
 
 function buildRequest(config: LlmConfig, turns: Turn[]): { url: string; headers: Record<string, string>; body: string } {
@@ -187,12 +187,12 @@ function serviceMessage(text: string): string {
 
 function httpError(res: HttpResponse): Error {
   const { status } = res;
-  if (status === 401 || status === 403) return new Error('The service rejected the API key. Check it in the plugin settings.');
-  if (status === 404) return new Error('The service could not find that model or address. Check the model name and the server address in the plugin settings.');
-  if (status === 429) return new Error('The service is busy or over its limit. Try again in a minute.');
-  if (status >= 500) return new Error(`The service had a problem (HTTP ${status}). Try again in a minute.`);
+  if (status === 401 || status === 403) return new Error('The service rejected the API key. Make sure that the key in the plugin settings is correct.');
+  if (status === 404) return new Error('The service cannot find that model or address. Make sure that the model name and the server address in the plugin settings are correct.');
+  if (status === 429) return new Error('The service cannot accept more requests at this time. Send again after one minute.');
+  if (status >= 500) return new Error(`The service had a problem (HTTP ${status}). Send again after one minute.`);
   const detail = serviceMessage(res.text);
-  return new Error(`The service refused the request (HTTP ${status})${detail ? `: ${detail}` : '.'}`);
+  return new Error(`The service rejected the request (HTTP ${status})${detail ? `: ${detail}` : '.'}`);
 }
 
 function replyText(config: LlmConfig, raw: string): string {
@@ -200,11 +200,11 @@ function replyText(config: LlmConfig, raw: string): string {
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error('The service sent a reply the plugin could not read. Check the server address in the plugin settings.');
+    throw new Error('The plugin cannot read the reply from the service. Make sure that the server address in the plugin settings is correct.');
   }
   if (config.provider === 'anthropic') {
     const reply = data as { stop_reason?: string; content?: { type?: string; text?: unknown }[] };
-    if (reply.stop_reason === 'refusal') throw new Error('The model declined to write this strategy. Try describing it differently.');
+    if (reply.stop_reason === 'refusal') throw new Error('The model did not write this strategy. Use different words for the description and send again.');
     return (reply.content ?? []).flatMap((b) => (b.type === 'text' && typeof b.text === 'string' ? [b.text] : [])).join('\n');
   }
   const content = (data as { choices?: { message?: { content?: unknown } }[] }).choices?.[0]?.message?.content;
@@ -217,7 +217,7 @@ async function ask(config: LlmConfig, post: HttpPost, turns: Turn[]): Promise<st
   try {
     res = await post(url, headers, body);
   } catch (e) {
-    throw new Error(`Could not reach the model service (${e instanceof Error ? e.message : String(e)}). Check your connection and the server address in the plugin settings.`);
+    throw new Error(`Cannot connect to the model service (${e instanceof Error ? e.message : String(e)}). Make sure that your network connection and the server address in the plugin settings are correct.`);
   }
   if (res.status < 200 || res.status >= 300) throw httpError(res);
   return replyText(config, res.text);
@@ -242,7 +242,7 @@ export async function draftStrategy(
   const maxRepairs = opts.maxRepairs ?? 2;
   const turns: Turn[] = [{ role: 'user', content: userMessage(description) }];
   let draft: Draft | null = null;
-  opts.onStatus?.('Writing a draft…');
+  opts.onStatus?.('The model writes a draft…');
   for (let attempts = 1; ; attempts++) {
     const reply = await ask(config, post, turns);
     const parsed = parseReply(reply);
@@ -255,7 +255,7 @@ export async function draftStrategy(
     const earlier: string[] = draft?.notes ?? [];
     draft = { source: parsed.source, notes: [...earlier, ...parsed.notes.filter((n) => !earlier.includes(n))], errors, warnings, attempts };
     if (errors.length === 0 || attempts > maxRepairs) return draft;
-    opts.onStatus?.(`Fixing ${errors.length} problem${errors.length === 1 ? '' : 's'}…`);
+    opts.onStatus?.(`The model corrects ${errors.length} problem${errors.length === 1 ? '' : 's'}…`);
     turns.push({ role: 'assistant', content: reply }, { role: 'user', content: repairMessage(parsed.source, errors) });
   }
 }

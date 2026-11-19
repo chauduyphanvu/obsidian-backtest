@@ -99,7 +99,7 @@ test('a trade\'s exit: the cover rule for a short, a flip when the other side op
   const close = run(`${FLIP}\nfill: close`, { A: bars([101, 99, 101, 102]) }).backtest.run.trades;
   assert.deepEqual(
     close.map((t) => [t.side ?? 'long', tradeExit(t, close)]),
-    [['long', 'flipped to short'], ['short', 'flipped to long'], ['long', 'still held']],
+    [['long', 'flipped to short'], ['short', 'flipped to long'], ['long', 'not closed']],
   );
   const covered = run(SHORT_COVER, { A: bars([100, 90, 80, 80]) }).backtest.run.trades;
   assert.equal(tradeExit(covered[0], covered), 'cover rule');
@@ -139,7 +139,7 @@ test('the snapshot note: a short held, the trades with their side, and the expos
   const md = snapshotMarkdown({ name: 'Flip', source: FLIP, backtest: out.backtest, now: day(9) });
   assert.ok(md.includes(`| A | 100% | Short since ${date(3)}, sold, then sold short at the last close |`), md);
   assert.ok(md.includes('| Ticker | Side | Opened | At | Closed | At | Return | Exit |'), md);
-  assert.ok(md.includes(`| A | Short | ${date(3)} | 98.00 | – | – | 0.0% | still held |`), md);
+  assert.ok(md.includes(`| A | Short | ${date(3)} | 98.00 | – | – | 0.0% | not closed |`), md);
   assert.ok(md.includes(`| A | Long | ${date(2)} | 101.00 | ${date(3)} | 98.00 | −3.0% | flipped to short |`), md);
   assert.ok(md.includes(`| A | Short | ${date(1)} | 99.00 | ${date(2)} | 101.00 | −2.0% | flipped to long |`), md);
   const { stats, run: r } = out.backtest;

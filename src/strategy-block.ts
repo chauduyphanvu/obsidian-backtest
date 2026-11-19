@@ -115,7 +115,7 @@ export class StrategyBlocks {
       }
       const key = await this.host.results.resultKey(spec, source, drawing.defaults);
       if (this.disposers.get(child) !== stop) return;
-      if (force || this.host.results.kept(key, drawing.freshForMs) === undefined) renderLoading(el, `Loading prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
+      if (force || this.host.results.kept(key, drawing.freshForMs) === undefined) renderLoading(el, `The plugin loads the prices for ${[...spec.universe, ...spec.extras].map((a) => a.name).join(', ')}…`);
       const out = await this.host.results.runSpec(drawing, spec, key, force);
       // Stopped, or a kept result came back after the block was drawn again or went away.
       if (!out || this.disposers.get(child) !== stop) return;

@@ -53,8 +53,8 @@ test('an account that holds what its strategies hold has nothing to trade, and o
     ]),
   );
   assert.deepEqual([done.orders, done.error], [[], null]);
-  assert.match(wrong.error!, /^Line 1: "lots" is not an amount of cash/);
-  assert.equal(missing.error, 'Line 2: there is no note called "Nowhere".');
+  assert.match(wrong.error!, /^Line 1: "lots" is not a cash value/);
+  assert.equal(missing.error, 'Line 2: there is no note with the name "Nowhere".');
   assert.equal(missing.asOf, null);
 });
 
@@ -79,21 +79,21 @@ test("the saved note lists each account's orders in a table, and the others in a
   assert.ok(!md.includes('## Accounts'));
   const status = { note: 'Trend.md', strategy: 'Trend', asOf: DATA.get('A')!.t[2], interval: '1d', orders: [], holdings: [], equity: 1000, warnings: [], error: null, closeFill: false, stale: false };
   const full = ordersMarkdown([status], Date.UTC(2026, 10, 17), accounts);
-  const section = full.slice(full.indexOf('## Accounts'), full.indexOf('## Nothing to do'));
+  const section = full.slice(full.indexOf('## Accounts'), full.indexOf('## No orders'));
   assert.equal(
     section,
     [
       '## Accounts',
       '',
-      "What each account block trades at the next open, in shares: its strategies' orders netted together at the account's size, with each holding brought to their positions. The block shows where each order comes from.",
+      "What each account block trades at the next open, in shares. The plugin adds the orders of its strategies together at the size of the account. Each holding changes to the positions of the strategies. The block shows the source of each order.",
       '',
       '| Account | Order | Ticker | Last close |',
       '| --- | --- | --- | ---: |',
       '| [[Accounts/Main\\|Main]] | Buy 83 shares | A | 12.00 |',
       '| [[Accounts/Main\\|Main]] | Buy 50 shares | B | 20.00 |',
       '',
-      '- [[Done|Done]]: nothing to trade',
-      `- [[Wrong|Wrong]]: couldn't be worked out. Line 2: there is no note called "Nowhere".`,
+      '- [[Done|Done]]: no orders',
+      `- [[Wrong|Wrong]]: the plugin cannot calculate the orders. Line 2: there is no note with the name "Nowhere".`,
       '',
       '',
     ].join('\n'),

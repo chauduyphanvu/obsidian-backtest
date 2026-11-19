@@ -39,163 +39,163 @@ function add(kind: DocKind, id: string, signature: string, short: string, text: 
 const setting = (id: string, signature: string, short: string, text: string, example: string) => add('setting', id, signature, short, text, example);
 const word = (id: string, signature: string, short: string, text: string, example: string) => add('word', id, signature, short, text, example);
 
-setting('name', 'name: text', 'title shown above the result', 'The title shown above the result. Without it the title is Backtest.', 'name: Trend following');
+setting('name', 'name: text', 'title shown above the result', 'The title shown above the result. Without it, the title is Backtest.', 'name: Trend following');
 setting(
   'universe',
   'universe: SPY 60%, TLT 40%',
   'tickers and weights: SPY 60%, TLT 40%',
-  'The tickers to trade, each with an optional weight: give every ticker one, or none. Weights add up to at most 200%: what is left under 100% stays in cash, and above 100% the strategy borrows.',
+  'The tickers to trade, each with an optional weight: give a weight to all tickers or to none. The maximum total weight is 200%: below 100%, the remaining weight stays in cash, and above 100%, the strategy borrows.',
   'universe: SPY 60%, TLT 40%',
 );
-setting('symbol', 'symbol: SPY', 'one ticker (same as universe)', 'Another way to write universe.', 'symbol: SPY');
-setting('from', 'from: 2015-01-31', 'first day, as 2015-01-31', 'The first day of the run. Without it the run starts on the first day every ticker has prices.', 'from: 2015-01-31');
-setting('to', 'to: 2024-12-31', 'last day, as 2024-12-31', 'The last day of the run, whole day included, and it must come after from. Without it the run ends on the last day with prices.', 'to: 2024-12-31');
+setting('symbol', 'symbol: SPY', 'one ticker (same as universe)', 'The same as universe.', 'symbol: SPY');
+setting('from', 'from: 2015-01-31', 'first day, as 2015-01-31', 'The first day of the run. Without it, the run starts on the first day that all tickers have prices.', 'from: 2015-01-31');
+setting('to', 'to: 2024-12-31', 'last day, as 2024-12-31', 'The last day of the run, all of that day included, and it must be after from. Without it, the run ends on the last day with prices.', 'to: 2024-12-31');
 setting(
   'data',
   'data: yahoo | binance | tiingo',
-  'where plain tickers come from: yahoo, binance or tiingo',
-  'Where tickers written without a prefix come from, the plugin setting deciding without it, though a plain ticker that starts with ^, such as ^VIX or ^IRX, comes from Yahoo whatever data says. yahoo:, binance:, tiingo:, fred: or csv: in front of a ticker picks that ticker’s own source.',
+  'where tickers without a prefix come from: yahoo, binance or tiingo',
+  'The source of tickers without a prefix (if there is no data line, the plugin setting is the source). A ticker that starts with ^ always comes from Yahoo, and a prefix (yahoo:, binance:, tiingo:, fred: or csv:) sets the source of one ticker.',
   'data: binance',
 );
 setting(
   'interval',
   'interval: 1d | 1w | …',
   'bar size: 1d, 1w, or 1h and others on Binance',
-  'The bar size, 1d unless you say otherwise. Yahoo and Tiingo give 1d and 1w, Binance gives 1m up to 1w, and one interval applies to every ticker.',
+  'The bar size for all tickers, 1d if you do not write it. Yahoo and Tiingo give 1d and 1w bars, and Binance gives bars from 1m to 1w.',
   'interval: 1w',
 );
-setting('capital', 'capital: 10000', 'starting money, as 10000 or 10k', 'The starting money, written 10000 or 10k (m is millions). Without it the plugin’s Starting money setting is used.', 'capital: 10k');
+setting('capital', 'capital: 10000', 'capital at the start, as 10000 or 10k', 'The capital at the start of the run, as 10000 or 10k (m is millions). Without it, the plugin uses its Start capital setting.', 'capital: 10k');
 setting(
   'costs',
   'costs: 5 bps',
-  'per trade, as 5 bps or 0.05%',
-  'The cost of each trade, written 5 bps or 0.05%. A plain number counts as bps, and the cost must be under 10%.',
+  'cost of each trade, as 5 bps or 0.05%',
+  'The cost of each trade, as 5 bps or 0.05%. A number without a unit counts as bps, and the cost must be less than 10%.',
   'costs: 5 bps',
 );
 setting(
   'slippage',
   'slippage: 5 bps',
   'how much worse each fill is than the price, as 5 bps',
-  'How much worse each fill is than the price: a buy or a cover fills higher, and a sell or a short sale lower. It is written like costs.',
+  'How much worse each fill is than the price: a buy or a cover fills higher, and a sell or a short sale fills lower. Write it as you write costs.',
   'slippage: 5 bps',
 );
 setting(
   'size',
   'size: 80%',
   'share of equity to use when tickers have no weights',
-  'The share of equity to use when the tickers have no weights, up to 200%, borrowing above 100%. You cannot give weights and size together.',
+  'The share of equity to use when the tickers have no weights, a maximum of 200%: above 100%, the strategy borrows. You cannot use weights and size together.',
   'size: 80%',
 );
 setting(
   'rebalance',
   'rebalance: never | weekly | monthly | quarterly | yearly',
   'never, weekly, monthly, quarterly or yearly',
-  'How often held tickers go back to their weights. Without it, never.',
+  'How frequently the strategy sets the held tickers back to their weights. Without it, the value is never.',
   'rebalance: monthly',
 );
 setting(
   'benchmark',
   'benchmark: QQQ',
   'ticker to compare with, bought and held',
-  'The ticker to compare the result with, bought and held. Without it the benchmark is your own tickers at their weights.',
+  'The ticker to compare the result with, bought and held. Without it, the benchmark is the tickers of the block at their weights.',
   'benchmark: QQQ',
 );
 setting(
   'stop loss',
   'stop loss: 10% | 2 atr(14)',
   'sell this far below the entry price (above it for a short), as 10% or 2 atr(14)',
-  'Sells when the price falls this far below the entry price, or buys a short back when it rises this far above it, as a percentage or as a number of average true ranges. A percentage must be above 0% and at most 99%.',
+  'Sells when the price moves this far below the entry price, or covers a short when the price moves this far above it. Write a percentage, more than 0% and a maximum of 99%, or a number of average true ranges.',
   'stop loss: 10%',
 );
 setting(
   'trailing stop',
   'trailing stop: 15% | 3 atr(14)',
   'sell this far below the highest price since entry (above the lowest for a short)',
-  'Sells when the price falls this far below the highest price since entry, or buys a short back when it rises this far above the lowest. A percentage must be above 0% and at most 99%.',
+  'Sells when the price moves this far below the highest price since entry, or covers a short when it moves this far above the lowest. A percentage must be more than 0% and a maximum of 99%.',
   'trailing stop: 15%',
 );
 setting(
   'take profit',
   'take profit: 20% | 4 atr(14)',
   'sell this far above the entry price (below it for a short)',
-  'Sells when the price rises this far above the entry price, or buys a short back when it falls this far below it. A percentage must be above 0% and at most 1000%, and a short can never reach one of 100% or more.',
+  'Sells when the price moves this far above the entry price, or covers a short when it moves this far below it. A percentage must be more than 0% and a maximum of 1000%, and for a short, a take profit of 100% or more cannot occur.',
   'take profit: 20%',
 );
 setting(
   'cash rate',
   'cash rate: 4% | ^IRX',
-  'what cash earns: 4% a year, or a yield ticker such as ^IRX',
-  'What cash earns a year, written 4%, or a ticker whose close is a yearly yield, such as ^IRX or fred:DGS3MO. A rate needs its percent sign and must be at most 50%.',
+  'interest on cash: 4% a year, or a yield ticker, for example ^IRX',
+  'The yearly interest on cash: a rate, as 4%, or a ticker with a yearly yield as its close, for example ^IRX or fred:DGS3MO. A rate must have its percent sign, and the maximum is 50%.',
   'cash rate: 4%',
 );
 setting(
   'borrow fee',
   'borrow fee: 0.5%',
-  'yearly fee on the value of short positions, 0.5% unless set',
-  'A yearly fee on the value of each short position at the close, paid for every day it is held and counted in the trade’s return. Without it the plugin’s Borrow fee for shorts setting is used, 0.5% at first, and it must be between 0% and 100%.',
+  'yearly fee on the value of short positions, default 0.5%',
+  'A yearly fee on the value of each short position at the close, for each day of the position, included in the trade’s return. Without it, the plugin uses its Borrow fee for shorts setting (default 0.5%), and the fee must be between 0% and 100%.',
   'borrow fee: 1%',
 );
 setting(
   'margin rate',
   'margin rate: 6%',
-  'yearly interest on money borrowed, 6% unless set',
-  'Yearly interest on money borrowed, paid between two bars when cash less the value of the shorts is below 0, as it is when the strategy holds more than its equity. Without it the plugin’s Interest on borrowed money setting is used, 6% at first, and it must be between 0% and 50%.',
+  'yearly interest on borrowed money, default 6%',
+  'Yearly interest on borrowed money: the strategy pays it between two bars when cash minus the shorts is less than 0, for example with leverage. Without it, the plugin uses its Interest on borrowed money setting (default 6%), and the rate must be between 0% and 50%.',
   'margin rate: 7%',
 );
 setting(
   'test from',
   'test from: 2019-01-01',
-  'report results before and from this day apart',
-  'Reports the results before this day and from it apart. It is one run split in two with nothing re-fitted, and the day must lie after from and before to.',
+  'show results before this day and from this day apart',
+  'Shows the results before this day and from this day apart. It is one run, divided in two with no new fit, and the day must be after from and before to.',
   'test from: 2019-01-01',
 );
 setting(
   'hold',
   'hold: top 3 by roc(126)',
-  'hold only the best-ranked tickers: top 3 by roc(126)',
-  'Holds only the tickers with the highest score, such as the top 3 by roc(126). The score is a number written like a value in a rule, and the universe takes no weights.',
+  'hold only the tickers with the highest score: top 3 by roc(126)',
+  'Holds only the tickers with the highest score, for example the top 3 by roc(126). Write the score as a value in a rule, and give no weights in the universe.',
   'hold: top 3 by roc(126)',
 );
 setting(
   'weighting',
   'weighting: inverse volatility(60)',
-  'inverse volatility(60): calmer tickers get more weight',
-  'Calmer tickers get more weight: each share is in proportion to 1 divided by the volatility over the last n one-bar returns. The period must be at least 2.',
+  'inverse volatility(60): less volatility, more weight',
+  'Tickers with less volatility receive more weight: each weight is in proportion to 1 divided by the volatility of the last n one-bar returns. The minimum period is 2.',
   'weighting: inverse volatility(60)',
 );
 setting(
   'risk per trade',
   'risk per trade: 1% at 2 atr(14)',
-  'size each buy or short sale by what it risks: 1% at 2 atr(14)',
-  'Sizes each buy so that a fall of that many average true ranges loses that share of equity, and each short sale so that a rise does, up to the ticker’s weight. It cannot be used with weighting, or with a rebalance other than never.',
+  'size each buy or short sale by its risk: 1% at 2 atr(14)',
+  'Sizes each buy or short sale: a move of that many average true ranges against it costs that share of equity (maximum: the ticker’s weight). You cannot use it with weighting, or with a rebalance other than never.',
   'risk per trade: 1% at 2 atr(14)',
 );
 setting(
   'fill',
   'fill: next open | close',
-  'when rules fill: at the next open, or at the same close',
-  'When a rule fills. With next open, the default, a rule read at a bar’s close fills at the next open; with close it fills at that same close.',
+  'when orders fill: at the next open, or at the same close',
+  'When the orders from the rules fill. With next open (the default), an order at the close of a bar fills at the next open, and with close, at that close.',
   'fill: close',
 );
 setting(
   'commission',
   'commission: 1 | 0.005 per share, min 1, max 1%',
-  'charge per order: 1, or 0.005 per share, min 1, max 1%',
-  'A charge on every order in the account’s money, added to costs: a fixed amount per order, or an amount per share with an optional minimum and a cap as a share of the order’s value. Without it the plugin setting applies, which is none at first.',
+  'charge for each order: 1, or 0.005 per share, min 1, max 1%',
+  'A charge in the account currency: a constant value for each order, or a value per share with an optional minimum and maximum. The plugin adds it to costs, the maximum is a percentage of the order value, and without it, the plugin setting (default none) applies.',
   'commission: 0.005 per share, min 1',
 );
 setting(
   'entries',
   'entries: 3',
-  'build each position in up to 3 entries, each a third',
-  'Builds each position in up to that many entries, each a step of its whole size: the buy rule makes the first and the add rule each later one. It needs an add rule, and the entries together never go above the ticker’s weight.',
+  'open each position in a maximum of 3 entries, one third each',
+  'Opens each position in a maximum of that many equal entries: the buy rule makes the first, and the add rule makes the others. It must have an add rule, and the entries together are not more than the ticker’s weight.',
   'entries: 3\nadd when close > last entry price * 1.03',
 );
 setting(
   'magnify',
   'magnify: 1h',
-  'look inside each bar with 1h bars, for stops and targets',
-  'Follows a bar that holds a stop or target through smaller bars inside it, such as 1h bars inside daily ones, so the order in which the stop and the target are reached is read, not assumed. Rules stay on the strategy’s own bars, and Yahoo gives 2m to 1h bars inside daily bars for recent days only and 1d bars inside weekly ones.',
+  'read stops and targets on 1h bars in each bar',
+  'Reads stops and targets on smaller bars in each bar to find which one the price touches first, but rules use the strategy bars. Yahoo gives 2m to 1h bars in daily bars for the last 60 days (730 for 1h), and 1d bars in weekly bars.',
   'magnify: 1h',
 );
 
@@ -221,31 +221,31 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   ema: {
     args: ['n'],
     short: 'exponential average',
-    text: 'Exponential average, started from the simple average of the first n values.',
+    text: 'Exponential average that starts from the simple average of the first n values.',
     example: 'buy when close > ema(50)',
   },
   rsi: {
     args: ['n'],
     short: 'relative strength index, 0 to 100',
-    text: 'Relative strength index, from 0 to 100, with Wilder’s smoothing.',
+    text: 'Relative strength index, 0 to 100, from Wilder averages of the up and down changes.',
     example: 'buy when rsi(14) < 30',
   },
   roc: {
     args: ['n'],
-    short: 'change over n bars, as a fraction',
-    text: 'Change over n bars, as a fraction, so compare it with a percentage: roc(20) > 5%.',
+    short: 'change in n bars, as a fraction',
+    text: 'Change in n bars, as a fraction: compare it with a percentage, as in roc(20) > 5%.',
     example: 'buy when roc(20) > 5%',
   },
   stdev: {
     args: ['n'],
     short: 'standard deviation of the last n closes',
-    text: 'Standard deviation of the last n closes, dividing by n.',
+    text: 'Standard deviation of the last n closes, with division by n.',
     example: 'buy when close > sma(20) + stdev(20)',
   },
   highest: {
     args: ['n'],
-    short: 'highest high of the last n bars; add [1] to leave out this bar',
-    text: 'Highest high of the last n bars, this bar included; add [1] to leave out this bar.',
+    short: 'highest high of the last n bars (add [1] to remove this bar)',
+    text: 'Highest high of the last n bars, this bar included (add [1] to remove this bar).',
     example: 'buy when close > highest(20)[1]',
   },
   lowest: {
@@ -257,7 +257,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   atr: {
     args: ['n'],
     short: 'average true range',
-    text: 'Average true range, with Wilder’s smoothing.',
+    text: 'Average true range, as a Wilder average.',
     example: 'buy when close > close[1] + atr(14)',
   },
   macd: {
@@ -269,7 +269,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   macd_signal: {
     args: ['fast', 'slow', 'signal'],
     short: 'average of the macd line',
-    text: 'Exponential average of the macd line over signal bars.',
+    text: 'Exponential average of the macd line, with a period of signal bars.',
     example: 'buy when macd() crosses above macd_signal()',
   },
   bb_upper: {
@@ -287,31 +287,31 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   stoch_k: {
     args: ['n', 'smooth'],
     short: 'stochastic %K, 0 to 100',
-    text: 'Stochastic %K, from 0 to 100: where the close sits between the lowest low and the highest high of the last n bars, averaged over smooth bars (1 for no averaging).',
+    text: 'Stochastic %K, 0 to 100: where the close is in the high-low range of the last n bars, averaged across smooth bars (1 for none).',
     example: 'buy when stoch_k(14, 3) < 20',
   },
   stoch_d: {
     args: ['n', 'smooth', 'd'],
-    short: 'stochastic %D: stoch_k averaged over d bars',
-    text: 'Stochastic %D: stoch_k, with the same n and smooth, averaged over d more bars.',
+    short: 'stochastic %D: the d-bar average of stoch_k',
+    text: 'Stochastic %D: the d-bar average of stoch_k, with the same n and smooth.',
     example: 'buy when stoch_k() crosses above stoch_d()',
   },
   adx: {
     args: ['n'],
     short: 'average directional index, 0 to 100',
-    text: 'Wilder’s average directional index, from 0 to 100: how strong the trend is, whichever way, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di).',
+    text: 'Average directional index, 0 to 100: the strength of the trend, up or down, as the n-bar Wilder average of 100 * |plus_di - minus_di| / (plus_di + minus_di).',
     example: 'buy when adx(14) > 25 and plus_di(14) > minus_di(14)',
   },
   plus_di: {
     args: ['n'],
     short: 'plus directional indicator, 0 to 100',
-    text: 'Wilder’s plus directional indicator, from 0 to 100: the Wilder average over n bars of upward movement, divided by that of the true range, times 100.',
+    text: 'Plus directional indicator, 0 to 100: 100 times the n-bar Wilder average of the up movement, divided by that of the true range.',
     example: 'buy when plus_di(14) > minus_di(14)',
   },
   minus_di: {
     args: ['n'],
     short: 'minus directional indicator, 0 to 100',
-    text: 'Wilder’s minus directional indicator, from 0 to 100: the Wilder average over n bars of downward movement, divided by that of the true range, times 100.',
+    text: 'Minus directional indicator, 0 to 100: 100 times the n-bar Wilder average of the down movement, divided by that of the true range.',
     example: 'sell when minus_di(14) > plus_di(14)',
   },
   cci: {
@@ -323,110 +323,111 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   williams_r: {
     args: ['n'],
     short: 'Williams %R, -100 to 0',
-    text: 'Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) over the last n bars.',
+    text: 'Williams %R, from -100 to 0: -100 * (highest high - close) / (highest high - lowest low) of the last n bars.',
     example: 'buy when williams_r(14) < -80',
   },
   mfi: {
     args: ['n'],
     short: 'money flow index, 0 to 100',
-    text: 'Money flow index, from 0 to 100: 100 - 100 / (1 + money flowing in / money flowing out) over the last n bars, where a bar’s flow is its typical price times its volume, counted in when the typical price rose and out when it fell.',
+    text: 'Money flow index, 0 to 100: 100 - 100 / (1 + up flow / down flow) of the last n bars, with flow = typical price * volume.',
     example: 'buy when mfi(14) < 20',
-    series: 'It takes no series and needs volume.',
+    series: 'It has no series argument, the ticker must have volume, and the flow of a bar is up when its typical price increased.',
   },
   obv: {
     args: [],
-    short: 'on-balance volume, a running total',
-    text: 'On-balance volume: a running total that adds a bar’s volume when the close rose and takes it off when it fell, starting at 0 on the first bar.',
+    short: 'on-balance volume, a total of volume',
+    text: 'On-balance volume: a total, 0 on the first bar, that adds the bar volume when the close increases and subtracts it when the close decreases.',
     example: 'buy when obv() > sma(obv(), 20)',
-    series: 'It takes no series and needs volume.',
+    series: 'It has no series argument, and the ticker must have volume.',
   },
   vwap: {
     args: ['n'],
     short: 'volume-weighted average price of the last n bars',
-    text: 'Volume-weighted average of the typical price (high + low + close) / 3 over the last n bars.',
+    text: 'Volume-weighted average of the typical price (high + low + close) / 3 of the last n bars.',
     example: 'buy when close > vwap(20)',
-    series: 'It takes no series and needs volume.',
+    series: 'It has no series argument, and the ticker must have volume.',
   },
   keltner_upper: {
     args: ['n', 'width', 'atr'],
     short: 'upper Keltner channel',
-    text: 'Upper Keltner channel: the n-bar exponential average plus width times the average true range over atr bars, which is read from the ticker’s own bars.',
+    text: 'Upper Keltner channel: the n-bar exponential average plus width times the average true range of the last atr bars of the ticker.',
     example: 'buy when close > keltner_upper(20, 2, 10)',
   },
   keltner_lower: {
     args: ['n', 'width', 'atr'],
     short: 'lower Keltner channel',
-    text: 'Lower Keltner channel: the n-bar exponential average minus width times the average true range over atr bars, which is read from the ticker’s own bars.',
+    text: 'Lower Keltner channel: the n-bar exponential average minus width times the average true range of the last atr bars of the ticker.',
     example: 'buy when close < keltner_lower(20, 2, 10)',
   },
   supertrend: {
     args: ['n', 'mult'],
-    short: 'supertrend line, under the price in an uptrend',
-    text: 'Supertrend line: bands at (high + low) / 2 plus and minus mult average true ranges over n bars, each moving only towards the price until the close crosses it, the lower band in an uptrend and the upper in a downtrend.',
+    short: 'supertrend line, below the price in an uptrend',
+    text: 'Supertrend line: the lower band in an uptrend, the upper in a downtrend, at (high + low) / 2 minus or plus mult n-bar average true ranges.',
+    series: 'It has no series argument, and a band only moves nearer to the price until the close crosses it.',
     example: 'buy when close > supertrend(10, 3)',
   },
   supertrend_up: {
     args: ['n', 'mult'],
     short: 'condition: the supertrend is in an uptrend',
-    text: 'A condition that is true while the supertrend is in an uptrend, with its line under the price, and false in a downtrend.',
+    text: 'A condition: true when the supertrend is in an uptrend (its line is below the price), and false in a downtrend.',
     example: 'buy when supertrend_up(10, 3)',
   },
   wma: {
     args: ['n'],
     short: 'weighted average of the last n values',
-    text: 'Linearly weighted average of the last n values, the newest weighing n and the oldest 1.',
+    text: 'Linear weighted average of the last n values: the newest value has the weight n, and each bar before it has 1 less.',
     example: 'buy when close > wma(20)',
   },
   hma: {
     args: ['n'],
     short: 'Hull moving average',
-    text: 'Hull moving average: the weighted average over sqrt(n) bars of twice the weighted average over n / 2 bars minus the one over n bars, with n / 2 and sqrt(n) rounded down.',
+    text: 'Hull moving average: the sqrt(n)-bar weighted average of twice the (n / 2)-bar weighted average minus the n-bar one, with n / 2 and sqrt(n) rounded down.',
     example: 'buy when close > hma(21)',
   },
   median: {
     args: ['n'],
     short: 'median of the last n values',
-    text: 'Median of the last n values, the mean of the two middle ones when n is even.',
+    text: 'Median of the last n values: for an even n, the average of the two middle values.',
     example: 'buy when close > median(20)',
   },
   zscore: {
     args: ['n'],
     short: 'standard deviations from the n-bar average',
-    text: 'How many standard deviations the value is from its average over the last n values, dividing by n as stdev does, and unknown when they are all equal.',
+    text: 'How many standard deviations the value is from the average of the last n values, with stdev (division by n), unknown when all are equal.',
     example: 'buy when zscore(20) < -2',
   },
   percent_rank: {
     args: ['n'],
-    short: 'share of the previous n values below this one',
-    text: 'The share of the previous n values that are below this one, from 0 to 100.',
+    short: 'percentage of the previous n values less than this one',
+    text: 'The percentage of the previous n values that are less than this value, from 0 to 100.',
     example: 'buy when percent_rank(100) > 95',
   },
   slope: {
     args: ['n'],
-    short: 'least-squares slope over n bars, per bar',
-    text: 'Slope of the least-squares line through the last n values, in the series’ units per bar.',
+    short: 'least-squares slope of n bars, per bar',
+    text: 'Slope of the least-squares line through the last n values, in the units of the series per bar.',
     example: 'buy when slope(90) / close > 0.1%',
   },
   correl: {
     args: ['n'],
-    short: 'correlation with another ticker, -1 to 1',
-    text: 'Correlation, from -1 to 1, of the one-bar changes of this ticker’s close and of the series written first, over the last n bars, unknown when either one is constant.',
+    short: 'correlation with a different ticker, -1 to 1',
+    text: 'Correlation (-1 to 1) of the last n one-bar changes of the first series and this ticker’s close, unknown if one is constant.',
     example: 'buy when correl(close of SPY, 60) < 0.5',
-    series: 'It reads close for this ticker; the series written first is read as of reads it, so it lines up with this ticker’s bars.',
+    series: 'It reads close for this ticker, and the series you write first as of reads it, aligned with the bars of this ticker.',
   },
   count: {
     args: ['n'],
     short: 'how many of the last n bars a condition held',
-    text: 'How many of the last n bars the condition held, this one included, and unknown while any of them is unknown.',
+    text: 'How many of the last n bars the condition held on, this bar included, unknown while one of them is unknown.',
     example: 'buy when count(close > close[1], 10) >= 7',
-    series: 'It takes no series, only a condition.',
+    series: 'It has no series argument, only a condition.',
   },
   bars_since: {
     args: [],
     short: 'bars since a condition was last true',
-    text: 'Bars since the condition was last true: 0 on a bar where it is, and unknown until it has been true.',
+    text: 'Bars since the condition was last true: 0 on a bar where it is true, and unknown until it is true for the first time.',
     example: 'buy when bars_since(close crosses above sma(50)) < 10',
-    series: 'It takes no series, only a condition.',
+    series: 'It has no series argument, only a condition.',
   },
   sum: {
     args: ['n'],
@@ -437,73 +438,74 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   dema: {
     args: ['n'],
     short: 'double exponential average, less lag than ema',
-    text: 'Double exponential average, 2 * e1 - e2 with e1 = ema(n) and e2 the ema of e1 over n bars, which follows the price with less lag than ema.',
+    text: 'Double exponential average, 2 * e1 - e2, with e1 = ema(n) and e2 the n-bar ema of e1: it has less lag than ema.',
     example: 'buy when close > dema(50)',
   },
   tema: {
     args: ['n'],
     short: 'triple exponential average, less lag than ema',
-    text: 'Triple exponential average, 3 * e1 - 3 * e2 + e3 with e1 = ema(n) and each next one the ema of the one before, which follows the price with less lag than dema.',
+    text: 'Triple exponential average, 3 * e1 - 3 * e2 + e3, with e1 = ema(n), e2 = ema of e1 and e3 = ema of e2 (n bars each): less lag than dema.',
     example: 'buy when close > tema(30)',
   },
   kama: {
     args: ['n', 'fast', 'slow'],
-    short: 'Kaufman adaptive average',
-    text: 'Kaufman’s adaptive average, which follows the price closely while it runs and slowly while it chops: each bar it moves the share sc = (ER * (2 / (fast + 1) - 2 / (slow + 1)) + 2 / (slow + 1)) squared of the way to the price, ER being the efficiency ratio over n bars, and it starts from the price of the bar before the first bar where ER is known.',
+    short: 'Kaufman adaptive average: fast in a trend, slow in a range',
+    text: 'Kaufman adaptive average: on each bar it moves sc = (ER * (2 / (fast + 1) - 2 / (slow + 1)) + 2 / (slow + 1)) squared of the distance to the price, with ER the n-bar efficiency ratio.',
+    series: 'It reads close, or the series you write first, and starts from the value of the bar before the first known ER.',
     example: 'buy when close > kama(10, 2, 30)',
   },
   aroon_up: {
     args: ['n'],
-    short: 'aroon up, 0 to 100: how recent the high is',
-    text: 'Aroon up, from 0 to 100: 100 * (n - bars since the highest high of the last n + 1 bars) / n, so 100 on a bar that makes the high and 0 when it was n bars ago, a tie going to the most recent bar.',
+    short: 'aroon up, 0 to 100: 100 on the bar of the high',
+    text: 'Aroon up, 0 to 100: 100 * (n - bars since the highest high of the last n + 1 bars) / n, with the newest of equal highs.',
     example: 'buy when aroon_up(25) > 70 and aroon_down(25) < 30',
-    series: 'It takes no series and reads the ticker’s own highs.',
+    series: 'It has no series argument and reads the highs of the ticker.',
   },
   aroon_down: {
     args: ['n'],
-    short: 'aroon down, 0 to 100: how recent the low is',
-    text: 'Aroon down, from 0 to 100: 100 * (n - bars since the lowest low of the last n + 1 bars) / n, so 100 on a bar that makes the low and 0 when it was n bars ago, a tie going to the most recent bar.',
+    short: 'aroon down, 0 to 100: 100 on the bar of the low',
+    text: 'Aroon down, 0 to 100: 100 * (n - bars since the lowest low of the last n + 1 bars) / n, with the newest of equal lows.',
     example: 'sell when aroon_down(25) > 70',
-    series: 'It takes no series and reads the ticker’s own lows.',
+    series: 'It has no series argument and reads the lows of the ticker.',
   },
   psar: {
     args: ['step', 'max'],
-    short: 'parabolic SAR, a stop that trails the price',
-    text: 'Wilder’s parabolic SAR, a stop that trails the price, under the lows in an uptrend and over the highs in a downtrend: its pace starts at step, grows by step with each new extreme and stops at max, a bar that crosses it reverses the trend, and the first trend is up when the second close is above the first.',
+    short: 'parabolic SAR, a stop below the price in an uptrend',
+    text: 'Parabolic SAR, a stop below the lows in an uptrend and above the highs in a downtrend: a bar across it changes the trend, and the first trend is up if the second close is higher.',
     example: 'buy when close crosses above psar()',
-    series: 'It takes no series, and step may not be above max.',
+    series: 'It has no series argument, and its speed increases by step at each new high or low, from step to max (step cannot be more than max).',
   },
   cmf: {
     args: ['n'],
     short: 'Chaikin money flow, -1 to 1',
-    text: 'Chaikin money flow, from -1 to 1: the sum over the last n bars of ((close - low) - (high - close)) / (high - low) * volume, over the sum of their volume, a bar with no range adding 0.',
+    text: 'Chaikin money flow, -1 to 1: the sum of ((close - low) - (high - close)) / (high - low) * volume of the last n bars, divided by their volume.',
     example: 'buy when cmf(20) > 0.1',
-    series: 'It takes no series and needs volume.',
+    series: 'It has no series argument, the ticker must have volume, and a bar with no range adds 0.',
   },
   linreg: {
     args: ['n'],
     short: 'least-squares line, at this bar',
-    text: 'The value at this bar of the least-squares straight line through the last n values, against the bar number, whose slope per bar is slope(n).',
+    text: 'The value at this bar of the least-squares line through the last n values, with slope(n) as its slope per bar.',
     example: 'buy when close > linreg(50)',
   },
   rsquared: {
     args: ['n'],
-    short: 'how well a line fits the last n values, 0 to 1',
-    text: 'How well the least-squares straight line through the last n values fits them, from 0 to 1 (1 when they lie on a line), and unknown when they are all equal.',
+    short: 'fit of a line to the last n values, 0 to 1',
+    text: 'R squared of the least-squares line through the last n values, 0 to 1 (1 when all are on a line), unknown for equal values.',
     example: 'buy when slope(90) > 0 and rsquared(90) > 0.8',
   },
   efficiency: {
     args: ['n'],
-    short: 'Kaufman efficiency ratio, 0 to 1',
-    text: 'Kaufman’s efficiency ratio, from 0 to 1: how far the value moved over n bars, |x - x[n]|, over how far it travelled, the sum of |x - x[1]| over those bars, so 1 is a straight run, and unknown when it did not move.',
+    short: 'Kaufman efficiency ratio, 0 to 1 (1 for a straight move)',
+    text: 'Kaufman efficiency ratio, 0 to 1: |x - x[n]| divided by the sum of |x - x[1]| in the last n bars, unknown with no move.',
     example: 'buy when efficiency(20) > 0.3 and close > sma(50)',
   },
   streak: {
     args: [],
     short: 'bars in a row up (1, 2, ...) or down (-1, -2, ...)',
-    text: 'Consecutive bars the value rose (1, 2, 3, ...) or fell (-1, -2, ...), 0 on a bar equal to the one before, and unknown on the first bar and where a value is unknown, counting again from the next known change.',
+    text: 'Bars in a row the value increased (1, 2, 3, ...) or decreased (-1, -2, ...), 0 if it did not change, unknown on the first bar.',
     example: 'buy when streak() <= -3',
-    series: 'Without a series it reads close; write another first, as in streak(volume).',
+    series: 'It reads close, or the series you write first, as in streak(volume), and after an unknown value it is unknown until the next known change.',
   },
 };
 
@@ -519,21 +521,21 @@ for (const name of Object.keys(INDICATORS)) {
   const def = INDICATORS[name];
   const doc = FUNCTION_DOCS[name];
   const sample = `${name}(volume, ${def.params.map((d) => d ?? 20).join(', ')})`;
-  const series = doc.series ?? (def.src === null ? 'It takes no series.' : `Without a series it reads ${def.src}; write another first, as in ${sample}.`);
+  const series = doc.series ?? (def.src === null ? 'It has no series argument.' : `It reads ${def.src}, or the series you write first, as in ${sample}.`);
   add('function', name, functionSignature(name), doc.short, `${doc.text} ${series}`, doc.example);
 }
 add('function', 'min', 'min(a, b)', 'the smaller value', 'The smaller of two values.', 'buy when close > min(sma(20), sma(50))');
 add('function', 'max', 'max(a, b)', 'the larger value', 'The larger of two values.', 'buy when close > max(sma(20), sma(50))');
 add('function', 'abs', 'abs(x)', 'value without its sign', 'The value without its sign.', 'buy when abs(close - open) > atr(14)');
-add('function', 'sqrt', 'sqrt(x)', 'square root', 'The square root of the value, unknown below 0.', 'buy when stdev(roc(1), 20) * sqrt(252) < 20%');
-add('function', 'log', 'log(x)', 'natural logarithm', 'The natural logarithm of the value, unknown at 0 and below.', 'buy when slope(log(close), 90) > 0.1%');
-add('function', 'exp', 'exp(x)', 'e to the power x', 'e raised to the power of the value, unknown when too large to hold.', 'buy when exp(slope(log(close), 90) * 252) - 1 > 20%');
+add('function', 'sqrt', 'sqrt(x)', 'square root', 'The square root of the value, unknown for a value less than 0.', 'buy when stdev(roc(1), 20) * sqrt(252) < 20%');
+add('function', 'log', 'log(x)', 'natural logarithm', 'The natural logarithm of the value, unknown for 0 or less.', 'buy when slope(log(close), 90) > 0.1%');
+add('function', 'exp', 'exp(x)', 'e to the power x', 'e to the power of the value, unknown when the result is too large.', 'buy when exp(slope(log(close), 90) * 252) - 1 > 20%');
 add(
   'function',
   'if',
   'if(condition, a, b)',
-  'a where the condition holds, otherwise b',
-  'The number a where the condition holds and b where it does not, and unknown where the condition is unknown; a and b are numbers, not conditions.',
+  'a where the condition holds, b where it does not',
+  'The number a where the condition holds and b where it does not, or unknown where the condition is unknown. a and b are numbers, not conditions.',
   'buy when if(close > sma(200), roc(126), 0) > 5%',
 );
 add(
@@ -541,22 +543,22 @@ add(
   'column',
   'column(name) of file',
   'a column of a CSV file: column(score) of signals',
-  'Reads a numeric column of a CSV file by its header, in lower case with underscores for spaces, such as column(score) of signals. A row counts as known at the close of the day it is dated.',
+  'Reads a numeric column of a CSV file by its header in lowercase, with underscores for spaces, for example column(score) of signals. A row counts as known at the close of its date.',
   'buy when column(score) of csv:Data/signals.csv > 0.7',
 );
 
-const ADJUSTED = 'With Yahoo data prices are adjusted for splits and dividends, so compare them with an average, not a fixed number.';
-add('series', 'open', 'open', "the bar's open", `The open price of each bar of the ticker the rule belongs to. ${ADJUSTED}`, 'buy when open > close[1]');
-add('series', 'high', 'high', "the bar's high", `The highest price of each bar of the ticker the rule belongs to. ${ADJUSTED}`, 'buy when high > high[1]');
-add('series', 'low', 'low', "the bar's low", `The lowest price of each bar of the ticker the rule belongs to. ${ADJUSTED}`, 'buy when low < low[1]');
-add('series', 'close', 'close', "the bar's close", `The close price of each bar of the ticker the rule belongs to. ${ADJUSTED}`, 'buy when close > sma(200)');
-add('series', 'volume', 'volume', "the bar's volume", 'The traded volume of each bar of the ticker the rule belongs to.', 'buy when volume > sma(volume, 20)');
+const ADJUSTED = 'Yahoo adjusts prices for splits and dividends: compare them with an average, not with a constant number.';
+add('series', 'open', 'open', "the bar's open", `The open price of each bar of the ticker of the rule. ${ADJUSTED}`, 'buy when open > close[1]');
+add('series', 'high', 'high', "the bar's high", `The highest price of each bar of the ticker of the rule. ${ADJUSTED}`, 'buy when high > high[1]');
+add('series', 'low', 'low', "the bar's low", `The lowest price of each bar of the ticker of the rule. ${ADJUSTED}`, 'buy when low < low[1]');
+add('series', 'close', 'close', "the bar's close", `The close price of each bar of the ticker of the rule. ${ADJUSTED}`, 'buy when close > sma(200)');
+add('series', 'volume', 'volume', "the bar's volume", 'The traded volume of each bar of the ticker of the rule.', 'buy when volume > sma(volume, 20)');
 
-const calendar = (id: string, signature: string, short: string, text: string, example: string) => add('calendar', id, signature, short, `${text} It is read from each bar’s date in UTC.`, example);
+const calendar = (id: string, signature: string, short: string, text: string, example: string) => add('calendar', id, signature, short, `${text} The plugin reads it from the date of each bar, in UTC.`, example);
 calendar('month', 'month', 'month of the bar, 1 to 12', 'The month of the bar, 1 to 12.', 'buy when month == 11');
 calendar('day', 'day', 'day of the month, 1 to 31', 'The day of the month, 1 to 31.', 'sell when month == 5 and day > 20');
 calendar('weekday', 'weekday', '1 = Monday to 7 = Sunday', 'The day of the week: 1 for Monday to 7 for Sunday.', 'buy when weekday == 1');
-calendar('year', 'year', 'the year, as 2024', 'The year, such as 2024.', 'buy when year >= 2010');
+calendar('year', 'year', 'the year, as 2024', 'The year, for example 2024.', 'buy when year >= 2010');
 calendar('month_start', 'month_start', 'first bar of a month', 'A condition: the first bar of a month.', 'buy when month_start');
 calendar('month_end', 'month_end', 'last bar of a month', 'A condition: the last bar of a month.', 'buy when month_end');
 calendar('quarter', 'quarter', 'quarter of the bar, 1 to 4', 'The quarter of the year of the bar, 1 to 4.', 'buy when quarter == 4');
@@ -566,16 +568,16 @@ calendar('quarter_start', 'quarter_start', 'first bar of a quarter', 'A conditio
 calendar('quarter_end', 'quarter_end', 'last bar of a quarter', 'A condition: the last bar of a quarter.', 'sell when quarter_end');
 calendar('year_start', 'year_start', 'first bar of a year', 'A condition: the first bar of a year.', 'buy when year_start');
 calendar('year_end', 'year_end', 'last bar of a year', 'A condition: the last bar of a year.', 'sell when year_end');
-calendar('trading_day', 'trading_day', 'number of the day in its month, counting days with a bar', 'The number of the bar’s day within its month, counting the days that have a bar: 1 on the month’s first such day, the same for every bar of a day, and unknown in the data’s first month, which may have begun before it.', 'sell when trading_day == 3');
-calendar('trading_days_left', 'trading_days_left', 'days with a bar left in the month', 'The days with a bar left in the month after the bar’s day, 0 on the month’s last such day, counting past the last bar the days it would go on to have, so a holiday it does not know of is counted.', 'buy when trading_days_left == 3');
+calendar('trading_day', 'trading_day', 'number of the day in its month, of the days with a bar', 'The day number in the month, of days with a bar: 1 on the month’s first such day, unknown in the data’s first month.', 'sell when trading_day == 3');
+calendar('trading_days_left', 'trading_days_left', 'remaining days with a bar in the month', 'Days with a bar after this day in its month, 0 on the month’s last such day: after the last bar, holidays also count.', 'buy when trading_days_left == 3');
 
-const BELONGS = 'Only sell, cover and add rules can read it, and not inside a function, over a window of bars, with [n] or with of.';
+const BELONGS = 'Only sell, cover and add rules can read it, and not in a function, in a window of bars, with [n] or with of.';
 add(
   'position',
   POSITION.bars_held,
   'bars held',
   'completed bars since the entry filled, 0 on that bar',
-  `The number of completed bars since the buy filled (for a short, the short sale), or with several entries the first; it is 0 on the bar of the fill. ${BELONGS}`,
+  `Completed bars since the buy filled, or the short sale (the first of more entries): it is 0 on the bar of the fill. ${BELONGS}`,
   'sell when bars held >= 20',
 );
 add(
@@ -583,15 +585,15 @@ add(
   POSITION.entry_price,
   'entry price',
   'the price the position was bought or sold short at',
-  `The price the position was bought at, slippage included, or for a short the price it was sold at; with several entries, their average price. ${BELONGS}`,
+  `The price the position was bought at, slippage included, or for a short the price it was sold at (for more entries, the average). ${BELONGS}`,
   'sell when close < entry price * 0.9',
 );
 add(
   'position',
   POSITION.last_entry_price,
   'last entry price',
-  'the price of the latest entry',
-  `The price the latest entry of the position filled at, slippage included; with one entry it is the entry price. ${BELONGS}`,
+  'the price of the last entry',
+  `The fill price of the last entry of the position, slippage included, and with one entry, the same as entry price. ${BELONGS}`,
   'sell when close < last entry price * 0.95',
 );
 add(
@@ -599,23 +601,23 @@ add(
   POSITION.entries_made,
   'entries made',
   'how many entries the position has',
-  `How many entries the open position has made: 1 after the buy or short sale, then one more for each add. ${BELONGS}`,
+  `The number of entries of the open position: 1 after the buy or short sale, plus 1 for each add. ${BELONGS}`,
   'sell when entries made == 1 and bars held >= 10',
 );
 add(
   'position',
   POSITION.highest_since_entry,
   'highest since entry',
-  'the highest price since the position was entered',
-  `The highest price since the position's first entry: its fill price before slippage, then the high of each later bar, and of the fill bar too when it filled at that bar's open. ${BELONGS}`,
+  'the highest price since the first entry',
+  `The maximum of the first fill price before slippage and each next high (and the fill bar high for a fill at its open). ${BELONGS}`,
   'sell when close < highest since entry - 3 * atr(22)',
 );
 add(
   'position',
   POSITION.lowest_since_entry,
   'lowest since entry',
-  'the lowest price since the position was entered',
-  `The lowest price since the position's first entry: its fill price before slippage, then the low of each later bar, and of the fill bar too when it filled at that bar's open. ${BELONGS}`,
+  'the lowest price since the first entry',
+  `The minimum of the first fill price before slippage and each next low (and the fill bar low for a fill at its open). ${BELONGS}`,
   'short when close < sma(200)\ncover when close > lowest since entry + 3 * atr(22)',
 );
 add(
@@ -630,100 +632,100 @@ add(
 word(
   'between',
   'a between lo and hi',
-  'inside a range, both ends included',
-  'True when a is at least lo and at most hi, so rsi(2) between 10 and 30 means rsi(2) >= 10 and rsi(2) <= 30. It does not chain, and it is read as one comparison, so not rsi(2) between 10 and 30 holds outside the range.',
+  'in a range, the two ends included',
+  'True when a is lo or more and hi or less: rsi(2) between 10 and 30 is rsi(2) >= 10 and rsi(2) <= 30. It is one comparison that does not chain: not rsi(2) between 10 and 30 is true when rsi(2) is not in the range.',
   'buy when rsi(2) between 10 and 30',
 );
 word(
   'for … bars',
   'condition for n bars',
   'held on each of the last n bars',
-  'True when the condition held on each of the last n bars, this one included, and unknown until all n are known. It applies to the comparison before it and a not in front of it, so a and b for 3 bars means a and (b for 3 bars), and not up for 3 bars means (not up) for 3 bars: use brackets for more.',
+  'True when the condition held on each of the last n bars, this bar included, and unknown until all n are known. It applies to the comparison before it and to a not in front of that (not up for 3 bars is (not up) for 3 bars): use brackets for more.',
   'buy when close > sma(200) for 3 bars',
 );
 word(
   'within',
   'condition within n bars',
-  'held on at least one of the last n bars',
-  'True when the condition held on at least one of the last n bars, this one included, and unknown until all n are known. n is a whole number from 1 to 10000 or a parameter, and bar is also accepted.',
+  'held on one or more of the last n bars',
+  'True when the condition held on one or more of the last n bars, this bar included, and unknown until all n are known. n is an integer from 1 to 10000 or a parameter, and you can also write bar.',
   'sell when rsi(2) > 90 within 3 bars',
 );
 word(
   'buy when',
   'buy when condition',
   'condition that opens a long position',
-  'Opens a long position in a ticker you do not hold when the condition is true at a close. It fills at that ticker’s next open, unless the fill setting says close.',
+  'Opens a long position in a ticker that the strategy does not hold when the condition is true at a close. It fills at the next open of that ticker, unless fill is close.',
   'buy when close > sma(200)',
 );
 word(
   'sell when',
   'sell when condition',
   'condition that closes a long position',
-  'Closes a long position when the condition is true at a close. Without a sell rule a position is held until a stop or a short rule closes it, or the run ends.',
+  'Closes a long position when the condition is true at a close. Without a sell rule, the strategy holds a position until a stop or a short rule closes it, or until the run ends.',
   'sell when close < sma(200)',
 );
 word(
   'add when',
   'add when condition',
   'condition that adds the next entry',
-  'Adds the next entry to the position held, long or short, when the condition is true at a close, until the entries setting’s count is made. It needs an entries line, and it is skipped at a close where the sell rule, or for a short the cover rule, holds.',
+  'Adds the next entry to the open position, long or short, when the condition is true at a close, up to the number in entries. It must have an entries line, and the plugin ignores it at a close where the sell rule (for a short, the cover rule) holds.',
   'entries: 3\nadd when close > last entry price * 1.03',
 );
 word(
   'short when',
   'short when condition',
   'condition that opens a short position',
-  'Sells short a ticker you do not hold when the condition is true at a close, so the position gains as the price falls; it fills as a buy would. A ticker held long is closed by it, and turns short at the same fill when the buy rule does not hold there too.',
+  'Sells short a ticker that the strategy does not hold when the condition is true at a close, and fills as a buy does. It also closes a long position in the ticker, and opens the short at the same fill if the buy rule does not hold there.',
   'short when close < sma(200)',
 );
 word(
   'cover when',
   'cover when condition',
   'condition that closes a short position',
-  'Buys a short position back when the condition is true at a close; it needs a short rule. Without a cover rule a short is held until a stop or the buy rule closes it, or the run ends.',
+  'Buys a short position back when the condition is true at a close, and it must have a short rule. Without a cover rule, the strategy holds a short until a stop or the buy rule closes it, or until the run ends.',
   'short when close < sma(200)\ncover when close > sma(200)',
 );
 word(
   'for',
   'for TICKER:',
-  'rules and stops for one ticker or several: for TLT:',
-  'Starts rules for one ticker, or for several separated by commas, as in for SPY, TLT:; each must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit written below it replaces the shared one for those tickers only.',
+  'rules and stops for one or more tickers: for TLT:',
+  'Starts rules for one ticker, or for more tickers with commas between them (for SPY, TLT:), and each must be in the universe. A buy, sell, short, cover or add rule, stop loss, trailing stop or take profit below it replaces the shared one for those tickers only.',
   'for SPY, TLT:',
 );
-word('for all', 'for all:', 'back to the rules every ticker shares', 'Goes back to the rules every ticker shares. What you write after it applies to every ticker that has no rule of its own.', 'for all:');
+word('for all', 'for all:', 'back to the rules that all tickers share', 'Goes back to the rules that all tickers share. The lines after it apply to all tickers, but a rule in a for section replaces the shared rule for its tickers.', 'for all:');
 word(
   'and',
   'a and b',
-  'both conditions hold',
-  'True when both conditions are true. A rule can continue on the next line: indent it and start it with and or or.',
+  'the two conditions hold',
+  'True when the two conditions are true. A rule can continue on the next line: indent the line and start it with and or or.',
   'buy when close > sma(200) and rsi(14) < 70',
 );
-word('or', 'a or b', 'either condition holds', 'True when either condition is true. It binds loosest, so a and b or c reads as (a and b) or c.', 'sell when close < sma(200) or rsi(14) > 85');
+word('or', 'a or b', 'one or more of the conditions hold', 'True when one or more of the conditions are true. The plugin applies it last: a and b or c is (a and b) or c.', 'sell when close < sma(200) or rsi(14) > 85');
 word(
   'not',
   'not a',
   'the condition does not hold',
-  'True when the condition after it is not true. It binds tighter than and but looser than a comparison, so not close > 1 reads as not (close > 1), and a window after it covers it: not up for 3 bars is (not up) for 3 bars.',
+  'True when the condition after it is not true. The plugin applies it after a comparison and before and: not close > 1 is not (close > 1), and not up for 3 bars is (not up) for 3 bars.',
   'buy when not close < sma(200)',
 );
 word(
   'crosses',
   'a crosses b',
-  'changed sides: crossed above or below',
-  'True on a bar where a crosses above or below b: it is on the other side of b than it was on the previous bar. Write crosses above or crosses below for one direction only.',
+  'crossed above or below',
+  'True on a bar where a crosses b: a is not on the same side of b as on the previous bar. Write crosses above or crosses below for one direction only.',
   'buy when close crosses sma(50)',
 );
 word(
   'crosses above',
   'a crosses above b',
-  'was at or below, is now above',
+  'was at or below, then above',
   'True on a bar where a is above b and was at or below b on the previous bar.',
   'buy when sma(50) crosses above sma(200)',
 );
 word(
   'crosses below',
   'a crosses below b',
-  'was at or above, is now below',
+  'was at or above, then below',
   'True on a bar where a is below b and was at or above b on the previous bar.',
   'sell when sma(50) crosses below sma(200)',
 );
@@ -732,56 +734,56 @@ word('below', 'a below b', 'same as <', 'The same as <. You can also write is be
 word(
   'of',
   'value of TICKER',
-  "another ticker's value: sma(200) of SPY",
-  'Reads a value from another ticker, which does not have to be in the universe. For each bar you get that ticker’s latest bar that had ended by the time this bar ended.',
+  'a value of a different ticker: sma(200) of SPY',
+  'Reads a value from a different ticker, in the universe or not. For each bar, it reads the ticker’s last bar that ended at or before the end of this bar.',
   'buy when close > sma(200) and close of ^VIX < 25',
 );
 word(
   'tiingo:',
   'tiingo:TICKER',
-  'a ticker from Tiingo, such as tiingo:SPY',
-  'Takes this ticker’s daily prices from Tiingo, adjusted for splits and dividends, with the key chosen under Tiingo API key in the plugin settings. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
+  'a ticker from Tiingo, for example tiingo:SPY',
+  'Downloads the daily prices of this ticker from Tiingo, adjusted for splits and dividends, with the key from the Tiingo API key setting. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
   'universe: tiingo:SPY',
 );
 word(
   'fred:',
   'fred:SERIES',
-  'an economic series from FRED, such as fred:T10Y2Y',
-  'A series from FRED, each value counted from the day it was first published, with the key chosen under FRED API key in the plugin settings. Rules read it with of, as in close of fred:T10Y2Y, and cash rate takes a yield such as fred:DGS3MO, but it cannot be traded or be the benchmark.',
+  'a FRED data series, for example fred:T10Y2Y',
+  'A series from FRED, with each value from the day FRED first published it and the key from the FRED API key setting. Rules read it with of, and cash rate can use it as a yield (fred:DGS3MO), but you cannot trade it or make it the benchmark.',
   'buy when close of fred:T10Y2Y > 0',
 );
 word(
   '[n]',
   'value[n]',
-  'the value n bars earlier: close[5]',
-  'The value n bars earlier, so close[5] is the close five bars back. It works on any value, and n must be a whole number or a parameter that is one.',
+  'the value n bars before: close[5]',
+  'The value n bars before this bar: close[5] is the close five bars before. It works on all values, and n must be an integer or a parameter with an integer value.',
   'buy when close > close[5]',
 );
 word(
   'in … step',
   'name = 50 in 20..100 step 10',
-  'a range to try: 50 in 20..100 step 10',
-  'Gives a parameter a range of values worth trying; the block still runs with the value before in, which must lie inside the range. The step is optional and is 1 unless you write it, or 1% for a percentage.',
+  'a range for a sweep: 50 in 20..100 step 10',
+  'Gives a parameter a range of values for a sweep, but the block runs with the value before in, which must be in the range. The step is optional: without it, the step is 1, or 1% for a percentage.',
   'fast = 50 in 20..100 step 10',
 );
 word(
   'top … by',
   'hold: top 3 by score',
   'hold the 3 tickers with the highest score',
-  'Inside hold: how many tickers to hold, and the score that ranks them, written like a value in a rule. The universe must have at least that many tickers.',
+  'In hold: the number of tickers to hold, and the score that sets their sequence, written as a value in a rule. The universe must have that number of tickers or more.',
   'hold: top 3 by roc(126)',
 );
 word(
   'at',
   'risk per trade: 1% at 2 atr(14)',
-  'share of equity risked at a stop distance',
-  'Inside risk per trade: it joins the share of equity at risk to the distance, in average true ranges, that the price is assumed to move against the position.',
+  'share of equity at risk for a stop distance',
+  'In risk per trade: the word between the share of equity at risk and the move against the position, in average true ranges.',
   'risk per trade: 1% at 2 atr(14)',
 );
-word('true', 'true', 'always holds', 'A condition that always holds. always means the same.', 'buy when true');
-word('false', 'false', 'never holds', 'A condition that never holds. never means the same.', 'sell when false');
-add('unit', '%', '5%', 'a percentage: 5% counts as 0.05', 'A percentage. It counts as the number 0.05 wherever a number is expected, so roc(20) > 5% means roc(20) > 0.05.', 'buy when roc(20) > 5%');
-add('unit', 'bps', '5 bps', 'basis points: 100 bps is 1%', 'Basis points: hundredths of a percent, so 100 bps is 1%. In costs and slippage a plain number counts as bps too.', 'costs: 5 bps');
+word('true', 'true', 'always holds', 'A condition that always holds. You can also write always.', 'buy when true');
+word('false', 'false', 'does not hold', 'A condition that does not hold. You can also write never.', 'sell when false');
+add('unit', '%', '5%', 'a percentage: 5% counts as 0.05', 'A percentage. It counts as the number 0.05 where you can write a number: roc(20) > 5% is roc(20) > 0.05.', 'buy when roc(20) > 5%');
+add('unit', 'bps', '5 bps', 'basis points: 100 bps is 1%', 'Basis points: hundredths of a percent, thus 100 bps is 1%. In costs and slippage, a number without a unit also counts as bps.', 'costs: 5 bps');
 
 const PERIOD = /^(\d+)([mhdw])$/;
 const UNIT_NAME = { m: 'minute', h: 'hour', d: 'day', w: 'week' } as const;
@@ -790,27 +792,27 @@ const value = (id: string, short: string, text: string, example: string) => {
   add('value', id, `${key}: ${v}`, short, text, example);
 };
 
-value('rebalance=never', 'positions are never put back to their weights', 'Held positions are never put back to their weights. This is the default.', 'rebalance: never');
+value('rebalance=never', 'no rebalance of held positions', 'The strategy does not set held positions back to their weights. This is the default.', 'rebalance: never');
 const PERIODS = { weekly: 'week', monthly: 'month', quarterly: 'quarter', yearly: 'year' } as const;
 for (const [name, unit] of Object.entries(PERIODS)) {
   value(
     `rebalance=${name}`,
     `back to the weights at the start of each ${unit}`,
-    `Each held ticker goes back to its target weight at the open of its first bar in each new ${unit}. ${name === 'weekly' ? 'Weeks start on Monday.' : 'A rebalance never opens a position.'}`,
+    `The strategy sets each held ticker back to its target weight at the open of its first bar in each new ${unit}. ${name === 'weekly' ? 'Weeks start on Monday.' : 'A rebalance does not open a position.'}`,
     `rebalance: ${name}`,
   );
 }
 value(
   'data=yahoo',
   'Yahoo prices, adjusted for splits and dividends',
-  'Plain tickers come from Yahoo, spelt the way Yahoo spells them, such as SPY, BRK-B, BTC-USD or ^GSPC. Yahoo gives 1d and 1w bars.',
+  'Tickers without a prefix come from Yahoo: write them as Yahoo does, for example SPY, BRK-B, BTC-USD or ^GSPC. Yahoo gives 1d and 1w bars.',
   'data: yahoo',
 );
-value('data=binance', 'Binance market symbols, such as BTCUSDT', 'Plain tickers are Binance market symbols, such as BTCUSDT, though one that starts with ^, such as ^VIX, still comes from Yahoo. Binance gives bars from 1m up to 1w.', 'data: binance');
+value('data=binance', 'Binance market symbols, for example BTCUSDT', 'Tickers without a prefix are Binance market symbols, for example BTCUSDT, but a ticker that starts with ^ (for example ^VIX) comes from Yahoo. Binance gives bars from 1m to 1w.', 'data: binance');
 value(
   'data=tiingo',
   'Tiingo prices, adjusted for splits and dividends',
-  'Plain tickers come from Tiingo, with the key chosen under Tiingo API key in the plugin settings, though one that starts with ^, such as ^VIX or the cash rate ^IRX, still comes from Yahoo, which alone has them. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
+  'Tickers without a prefix come from Tiingo, with the key from the Tiingo API key setting, but tickers that start with ^ come from Yahoo. Tiingo gives 1d and 1w bars of US stocks, ETFs and funds.',
   'data: tiingo',
 );
 for (const v of BINANCE_INTERVALS) {
@@ -821,13 +823,13 @@ for (const v of BINANCE_INTERVALS) {
     `interval=${v}`,
     both ? `${bars} bars` : `${bars} bars, Binance only`,
     both
-      ? `${bars[0].toUpperCase()}${bars.slice(1)} bars, from Yahoo, Tiingo or Binance.${v === '1w' ? ' A weekly bar is used once its week is over.' : ''}`
-      : `${count}-${UNIT_NAME[unit as keyof typeof UNIT_NAME]} bars. Only Binance gives them, so the block needs data: binance or a binance: ticker.`,
+      ? `${bars[0].toUpperCase()}${bars.slice(1)} bars, from Yahoo, Tiingo or Binance.${v === '1w' ? ' The plugin uses a weekly bar only after its week ends.' : ''}`
+      : `${count}-${UNIT_NAME[unit as keyof typeof UNIT_NAME]} bars, only from Binance. The block must have data: binance or a binance: ticker.`,
     both ? `interval: ${v}` : `data: binance\ninterval: ${v}`,
   );
 }
-value('fill=next open', 'a rule read at a close fills at the next open', 'A rule read at a bar’s close fills at that ticker’s next open. This is the default.', 'fill: next open');
-value('fill=close', 'a rule read at a close fills at that same close', 'A rule read at a bar’s close fills at that same close.', 'fill: close');
+value('fill=next open', 'an order at a close fills at the next open', 'An order at the close of a bar fills at the next open of that ticker. This is the default.', 'fill: next open');
+value('fill=close', 'an order at a close fills at that same close', 'An order at the close of a bar fills at that same close.', 'fill: close');
 
 /** Every entry, in the order they are written above. */
 export const ALL_DOCS: readonly Doc[] = DOCS;
@@ -857,16 +859,16 @@ const PARAM_DECL = new RegExp(String.raw`^(${NUM})(?:\s+in\s+(${NUM})\s*\.\.\s*(
 function parameterDoc(name: string, written: string): Doc {
   const m = written.match(PARAM_DECL);
   const signature = `${name} = ${written}`;
-  if (!m) return { id: name, kind: 'parameter', signature, short: `parameter: ${written}`, text: 'Your parameter. Its value is not a number yet, so the block cannot use it.', example: '' };
+  if (!m) return { id: name, kind: 'parameter', signature, short: `parameter: ${written}`, text: 'Your parameter. The block cannot use it because its value is not a number.', example: '' };
   const percent = [m[1], m[2], m[3], m[4]].some((s) => s?.includes('%'));
   const shown = (s: string) => s.replace(/\s+/g, '');
   const range = m[2] === undefined ? 'with no range' : `with a range of ${shown(m[2])} to ${shown(m[3])} in steps of ${m[4] === undefined ? (percent ? '1%' : '1') : shown(m[4])}`;
-  const rule = percent ? ` Inside a rule ${shown(m[1])} counts as the number ${Number(shown(m[1]).replace('%', '')) / 100}.` : '';
-  return { id: name, kind: 'parameter', signature, short: `parameter: ${written}`, text: `Your parameter. It is set to ${shown(m[1])}, ${range}.${rule}`, example: '' };
+  const rule = percent ? ` In a rule, ${shown(m[1])} counts as the number ${Number(shown(m[1]).replace('%', '')) / 100}.` : '';
+  return { id: name, kind: 'parameter', signature, short: `parameter: ${written}`, text: `Your parameter. Its value is ${shown(m[1])}, ${range}.${rule}`, example: '' };
 }
 
 function definitionDoc(name: string, written: string): Doc {
-  return { id: name, kind: 'definition', signature: `${name} = ${written}`, short: `definition: ${written}`, text: `Your definition. Wherever you write ${name}, it means ${written}.`, example: '' };
+  return { id: name, kind: 'definition', signature: `${name} = ${written}`, short: `definition: ${written}`, text: `Your definition. When you write ${name}, the plugin reads ${written}.`, example: '' };
 }
 
 const WORD_ALIASES: Record<string, string> = {

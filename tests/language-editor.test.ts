@@ -90,7 +90,7 @@ test('the diagnostics keep a definition\'s colours and put an error on its own l
 test('hovering a definition shows its text, wherever its name is written', () => {
   const declared = helpAt(BLOCK, 2, 2)!;
   assert.deepEqual([declared.doc.kind, declared.doc.signature, declared.doc.short], ['definition', 'uptrend = close > sma(200)', 'definition: close > sma(200)']);
-  assert.equal(declared.doc.text, 'Your definition. Wherever you write uptrend, it means close > sma(200).');
+  assert.equal(declared.doc.text, 'Your definition. When you write uptrend, the plugin reads close > sma(200).');
   const used = helpAt(BLOCK, 5, BLOCK[5].indexOf('uptrend') + 3)!;
   assert.deepEqual([used.from, used.to, used.doc.id], [BLOCK[5].indexOf('uptrend'), BLOCK[5].indexOf('uptrend') + 7, 'uptrend']);
   // A definition over several lines shows all of them.

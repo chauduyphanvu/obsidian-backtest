@@ -91,15 +91,15 @@ test('margin calls, a ruin and rules that both held are notes on the result, cou
   assert.deepEqual(
     root.byClass('bt-warning').map((w) => w.textContent),
     [
-      "1 margin call: equity fell below 25% of the positions' value, and every position was closed at the next open.",
-      'Ruined on 2020-01-04: equity fell to zero and the run stopped there; the account owed $1,000 more.',
+      '1 margin call: the equity decreased to less than 25% of the value of the positions, and the run closed all positions at the next open.',
+      'The equity decreased to zero on 2020-01-04, and the run stopped. The account had a debt of $1,000.',
     ],
   );
   assert.equal(root.byClass('bt-fold-mark')[0].textContent, '2 notes');
   const both = draw(run('universe: A\nbuy when true\nshort when true', { A: flat(5) }));
-  assert.deepEqual(both.byClass('bt-warning').map((w) => w.textContent), ['Buy and short rules both held on 5 bars, so neither opened a position.']);
+  assert.deepEqual(both.byClass('bt-warning').map((w) => w.textContent), ['The buy rule and the short rule held at the same time on 5 bars. Thus the run did not open a position on them.']);
   const one = draw(run('universe: A\nbuy when close > 100\nshort when close > 100\nfill: close', { A: bars([100, 101, 100]) }));
-  assert.ok(one.byClass('bt-warning').some((w) => w.textContent === 'Buy and short rules both held on 1 bar, so neither opened a position.'));
+  assert.ok(one.byClass('bt-warning').some((w) => w.textContent === 'The buy rule and the short rule held at the same time on 1 bar. Thus the run did not open a position on it.'));
 });
 
 test('a ruined run\'s line ends before the ruin, and the axis is not stretched to 0', () => {
@@ -129,7 +129,7 @@ test('the positions table says a short held, and the trades table gives each tra
   const table = details.byClass('bt-table')[0];
   assert.deepEqual(table.all().filter((e) => e.tag === 'th').map((e) => e.textContent), ['Why', 'Ticker', 'Side', 'Opened', 'At', 'Closed', 'At', 'Return', 'Profit', 'Exit']);
   const rows = table.all().filter((e) => e.tag === 'tr').slice(1).map((r) => r.children.slice(1).map((c) => (c as El).textContent));
-  assert.deepEqual(rows.map((r) => [r[1], r[2], r[8]]), [['Short', '2020-01-04', 'still held'], ['Long', '2020-01-03', 'flipped to short'], ['Short', '2020-01-02', 'flipped to long'], ['Long', '2020-01-01', 'flipped to short']]);
+  assert.deepEqual(rows.map((r) => [r[1], r[2], r[8]]), [['Short', '2020-01-04', 'not closed'], ['Long', '2020-01-03', 'flipped to short'], ['Short', '2020-01-02', 'flipped to long'], ['Long', '2020-01-01', 'flipped to short']]);
   // The Side column leaves the dates less room: each is kept whole, so a line breaks at a space, as in the exit, never inside a date.
   const dates = table.all().filter((e) => e.tag === 'td' && /^\d{4}-\d\d-\d\d$/.test(e.textContent));
   assert.equal(dates.length, 7);
@@ -191,12 +191,12 @@ test('the bar-by-bar table shades the bars held short apart, dims the cover rule
   const position = rows.map((r) => r.byClass('bt-debug-position')[0].textContent);
   assert.match(position[3], /^Short, [\d.]+ shares$/);
   const legend = root.byClass('bt-debug-legend-key')[0].textContent;
-  assert.ok(legend.endsWith('sell rule columns are dimmed where no long was held, and cover rule columns where no short was.'), legend);
+  assert.ok(legend.endsWith('Sell rule columns are grey where no long position was held, and cover rule columns are grey where no short position was held.'), legend);
   // Columns: buy, sell, short, cover, each one comparison.
   const cells = (r: El) => r.byClass('bt-debug-cell');
   const idle = (r: El) => cells(r).map((c) => c.classes().includes('bt-debug-idle'));
   assert.deepEqual(idle(rows[1]), [false, false, false, true]);
   assert.deepEqual(idle(rows[3]), [false, true, false, false]);
-  assert.ok(cells(rows[1])[3].title.endsWith('No short was held, so the cover rule was not in play.'));
-  assert.ok(cells(rows[3])[1].title.endsWith('No long was held, so the sell rule was not in play.'));
+  assert.ok(cells(rows[1])[3].title.endsWith('No short position was held. Thus the cover rule did not apply.'));
+  assert.ok(cells(rows[3])[1].title.endsWith('No long position was held. Thus the sell rule did not apply.'));
 });

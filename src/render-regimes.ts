@@ -31,7 +31,7 @@ export function renderRegimes(parent: HTMLElement, input: RegimeInput): () => vo
   const falls = crisesFor(input.universe);
   const results = crisisResults(input.run, falls);
   const compared = results.filter((r) => Number.isFinite(r.benchmark));
-  tabInfo(details, 'Regimes and crises', compared.length ? `better in ${compared.filter(better).length} of ${plural(compared.length, 'fall')}` : 'by market state');
+  tabInfo(details, 'Regimes and crises', compared.length ? `better in ${compared.filter(better).length} of ${plural(compared.length, 'drawdown')}` : 'by market condition');
   let gone = false;
   details.addEventListener('toggle', () => build(h(details, 'div', 'bt-regimes-body'), input, results, falls.length, () => gone), { once: true });
   return () => {
@@ -51,9 +51,9 @@ function build(body: HTMLElement, input: RegimeInput, results: CrisisResult[], k
   const plan = regimePlan(input.universe);
   const from = input.run.t[0];
   const names = plan.refs.map((r) => r.name);
-  h(body, 'div', 'bt-stats-heading bt-regimes-first', 'Market falls');
+  h(body, 'div', 'bt-stats-heading bt-regimes-first', 'Market drawdowns');
   fallRows(body, input.benchmarkLabel, results, input.intraday, known);
-  h(body, 'div', 'bt-stats-heading', 'By market state');
+  h(body, 'div', 'bt-stats-heading', 'By market condition');
   const box = h(body, 'div', 'bt-regimes-box');
 
   const show = (got: Extras): void => {
@@ -69,12 +69,12 @@ function build(body: HTMLElement, input: RegimeInput, results: CrisisResult[], k
   const offer = (problem?: string): void => {
     box.replaceChildren();
     if (problem) h(box, 'div', 'bt-note', problem);
-    h(box, 'div', 'bt-note', `This reads the daily prices of ${list(names)} from ${plan.source}, which are not saved yet. They are fetched only when you press the button, and saved like any other prices.`);
+    h(box, 'div', 'bt-note', `This section reads the daily prices of ${list(names)} from ${plan.source}. These prices are not saved at this time. The plugin downloads them only when you click the button, and saves them the same as other prices.`);
     const row = h(box, 'div', 'bt-run-row');
     const button = h(row, 'button', 'bt-button mod-cta', `Load ${names.join(', ')} from ${plan.source}`);
     button.addEventListener('click', () => {
       button.disabled = true;
-      button.textContent = 'Loading…';
+      button.textContent = 'Prices load…';
       input.load(plan.refs, from, plan.lookback).then(
         (got) => {
           if (!gone()) show(got);
@@ -85,7 +85,7 @@ function build(body: HTMLElement, input: RegimeInput, results: CrisisResult[], k
       );
     });
   };
-  h(box, 'div', 'bt-note', 'Looking for saved prices…');
+  h(box, 'div', 'bt-note', 'The plugin looks for saved prices…');
   void input.saved(plan.refs, from, plan.lookback).then((got) => {
     if (gone()) return;
     if (got) show(got);
@@ -95,7 +95,7 @@ function build(body: HTMLElement, input: RegimeInput, results: CrisisResult[], k
 }
 
 const REGIME_NOTE =
-  "Each step of the run is put in the state known at the close before it. A state is read from the ticker's own daily prices, so a weekly or hourly strategy gets the same state a daily one would. Returns are compounded over the steps in a state, per year once they add up to a year or more, and the benchmark's are over the same steps. Worst drawdown is the largest fall within one unbroken stretch in the state.";
+  'The plugin puts each step of the run in the market condition that was known at the previous close. It reads each condition from the daily prices of its ticker. Thus a weekly or hourly strategy has the same condition as a daily strategy. Returns are compounded across the steps in a condition. When these steps make a year or more, the returns are per year. The benchmark returns use the same steps. Worst drawdown is the largest decrease in one continuous period in the condition.';
 
 /** A return as a percentage, with "a year" or "in all" after it. */
 export function growthCell(g: Growth): Cell {
@@ -116,7 +116,7 @@ export function regimeRows(stats: BucketStats[], states: string[]): Row[] {
       ? []
       : [
           {
-            label: i < states.length ? states[i] : 'Not known yet',
+            label: i < states.length ? states[i] : 'Not known',
             cells: [[share(s.share), null], growthCell(s.strategy), growthCell(s.benchmark), investedCell(s), [pct(s.worstDrawdown), null]] as Cell[],
           },
         ],
@@ -144,7 +144,7 @@ function regimeTable(parent: HTMLElement, benchmarkLabel: string, groups: { titl
 
 /** How the day the strategy was back at its earlier high is put, or why there is none. */
 export function recoveryText(r: Recovery, intraday: boolean): string {
-  return r.kind === 'back' ? stamp(r.t, intraday) : r.kind === 'held' ? 'Never below it' : 'Not by the end';
+  return r.kind === 'back' ? stamp(r.t, intraday) : r.kind === 'held' ? 'Always at or above it' : 'Not by the end';
 }
 
 /** What was invested, gross, with the net beside it for a run that can borrow: "150%", "(net 50%)". */
@@ -166,14 +166,14 @@ export function crisisRow(r: CrisisResult, intraday: boolean): Row & { dates: st
  */
 function fallRows(parent: HTMLElement, benchmarkLabel: string, results: CrisisResult[], intraday: boolean, known: number): void {
   if (results.length === 0) {
-    h(parent, 'div', 'bt-note', `The run does not cover any of the ${known} market falls this section knows.`);
+    h(parent, 'div', 'bt-note', `The run includes none of the ${known} market drawdowns that this section knows.`);
     return;
   }
   const bench = benchProse(benchmarkLabel);
   const compared = results.filter((r) => Number.isFinite(r.benchmark));
   const won = compared.filter(better);
   if (compared.length > 0) {
-    let lead = `Did better than ${bench} in ${won.length} of the ${plural(compared.length, 'market fall')} it covered.`;
+    let lead = `The strategy did better than ${bench} in ${won.length} of the ${plural(compared.length, 'market drawdown')} in the run.`;
     const closest = won.length === compared.length ? won.reduce((a, r) => (r.strategy - r.benchmark < a.strategy - a.benchmark ? r : a)) : null;
     if (closest && compared.length > 1 && closest.strategy - closest.benchmark < 0.01) lead += ` In the ${closest.crisis.name}, by only ${((closest.strategy - closest.benchmark) * 100).toFixed(1)} points.`;
     h(parent, 'p', 'bt-tab-lead', lead);
@@ -203,5 +203,5 @@ function fallRows(parent: HTMLElement, benchmarkLabel: string, results: CrisisRe
     const b = h(line, 'span', 'bt-vs-b');
     h(b, 'span', 'bt-vs-value', row.cells[1][0]);
   }
-  h(parent, 'div', 'bt-note', 'Each fall runs from the close of the market’s peak day to the close of its trough day, and is shown only when the run covers all of it. Worst is the strategy’s deepest drawdown within the fall; its earlier high is its highest value before the fall began.');
+  h(parent, 'div', 'bt-note', 'Each market drawdown starts at the close of the peak day of the market and stops at the close of its trough day. The plugin shows it only when the run includes all of it. "Worst" is the deepest drawdown of the strategy in the market drawdown. "Its high" is the highest value of the strategy before the market drawdown started.');
 }

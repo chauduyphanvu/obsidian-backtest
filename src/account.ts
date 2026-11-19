@@ -41,9 +41,9 @@ const TICKER = /^[A-Za-z0-9^._=-]+$/;
 /** A comma that separates holdings, not one inside a number such as 1,200. */
 const BETWEEN_HOLDINGS = /;|,(?!\d{3}(?!\d))/;
 
-const BORROWED = "Cash can't be below 0: the account holds no borrowed money";
+const BORROWED = 'Cash cannot be below 0: the account holds no borrowed money';
 const NOT_A_LINE =
-  'This line is neither a setting nor a strategy. A setting is written such as cash: 10,000, and a strategy as [[Note name]] 40% or [[Note name#Strategy name]] 40%';
+  'This line is not a setting or a strategy. Write a setting as cash: 10,000. Write a strategy as [[Note name]] 40% or [[Note name#Strategy name]] 40%';
 const settingList = () => `${SETTINGS.slice(0, -1).join(', ')} and ${SETTINGS[SETTINGS.length - 1]}`;
 
 /** An amount such as 4,200, $4,200.50 or 48k; NaN for anything else. */
@@ -74,9 +74,9 @@ function holdingsOf(raw: string, value: string, line: number): Holding[] | Diagn
     const m = item.match(/^(\S+)\s+(\S+)$/);
     const shares = m ? (NEGATIVE.test(m[2]) ? -1 : 1) * amount(m[2].replace(NEGATIVE, '')) : NaN;
     if (!m || !TICKER.test(m[1]) || /[kKmM$]/.test(m[2]) || Number.isNaN(shares)) {
-      return { line, message: `"${item}" is not a holding. Write each as a ticker and its shares, such as SPY 120`, ...where };
+      return { line, message: `"${item}" is not a holding. Write each holding as a ticker and its shares, for example SPY 120`, ...where };
     }
-    if (shares === 0) return { line, message: `${m[1].toUpperCase()} has no shares: leave it out instead`, ...where };
+    if (shares === 0) return { line, message: `${m[1].toUpperCase()} has no shares: remove it from the holdings`, ...where };
     const ticker = m[1].toUpperCase();
     if (out.some((h) => h.ticker === ticker)) return { line, message: `${ticker} is listed twice`, ...where };
     out.push({ ticker, shares });
@@ -104,31 +104,31 @@ function readSetting(config: AccountConfig, key: Setting, value: string, raw: st
     }
     case 'cash': {
       const cash = amount(value.replace(NEGATIVE, ''));
-      if (Number.isNaN(cash)) return wrong(`"${value}" is not an amount of cash. Write it as 4,200 or 4200.50`);
+      if (Number.isNaN(cash)) return wrong(`"${value}" is not a cash value. Write it as 4,200 or 4200.50`);
       config.cash = (NEGATIVE.test(value) ? -cash : cash) + 0;
       // parseAccount names this error `borrowed`: a strategy that can borrow lifts it once the strategies have run.
       return config.cash < 0 ? wrong(BORROWED) : null;
     }
     case 'capital at start': {
       const capital = amount(value);
-      if (!(capital > 0)) return wrong(`"${value}" is not an amount above 0. Write the account's value on the day in fills from, such as 48,000`);
+      if (!(capital > 0)) return wrong(`"${value}" is not a value above 0. Write the value of the account on the date in fills from, for example 48,000`);
       config.capitalAtStart = capital;
       return null;
     }
     case 'whole shares':
-      if (!/^(yes|no)$/i.test(value)) return wrong('whole shares is yes or no');
+      if (!/^(yes|no)$/i.test(value)) return wrong('whole shares must be yes or no');
       config.wholeShares = value.toLowerCase() === 'yes';
       return null;
     case 'skip under': {
       const m = value.match(PERCENT);
-      if (!m) return wrong(`"${value}" is not a share of the account. Write it as 1%, or 0% to make every order`);
-      if (Number(m[1]) >= 100) return wrong('skip under must be under 100%');
+      if (!m) return wrong(`"${value}" is not a percentage of the account. Write it as 1%, or as 0% to make all orders`);
+      if (Number(m[1]) >= 100) return wrong('skip under must be less than 100%');
       config.skipUnder = Number(m[1]) / 100;
       return null;
     }
     case 'fills': {
       const path = value.replace(/^\[\[(.*)\]\]$/, '$1').trim();
-      if (!/\.csv$/i.test(path)) return wrong("fills takes the vault path of the broker's CSV file, such as Broker/schwab.csv");
+      if (!/\.csv$/i.test(path)) return wrong("fills must be the vault path of the broker's CSV file, for example Broker/schwab.csv");
       config.fills = path;
       return null;
     }
@@ -186,7 +186,7 @@ export function parseAccount(source: string): ParsedAccount {
       }
       const before = seen.get(key);
       if (before !== undefined) {
-        errors.push({ line, message: `${key} is already set on line ${before}` });
+        errors.push({ line, message: `${key} is also set on line ${before}` });
         return;
       }
       seen.set(key, line);
@@ -206,12 +206,12 @@ export function parseAccount(source: string): ParsedAccount {
   });
 
   errors.push(...duplicateEntries(entries));
-  if (entries.length > MAX_ENTRIES) errors.push({ line: entries[MAX_ENTRIES].line, message: `An account follows at most ${MAX_ENTRIES} strategies` });
-  if (entries.length === 0 && errors.length === 0) errors.push({ line: 1, message: 'Add the strategies the account follows, such as [[Trend following]] 60%' });
+  if (entries.length > MAX_ENTRIES) errors.push({ line: entries[MAX_ENTRIES].line, message: `An account can follow a maximum of ${MAX_ENTRIES} strategies` });
+  if (entries.length === 0 && errors.length === 0) errors.push({ line: 1, message: 'Add the strategies that the account follows, for example [[Trend following]] 60%' });
   errors.push(...weightProblems(entries));
-  if (!seen.has('cash') && !seen.has('holdings')) errors.push({ line: 1, message: "Write the account's cash, its holdings or both, such as cash: 10,000" });
+  if (!seen.has('cash') && !seen.has('holdings')) errors.push({ line: 1, message: "Write the account's cash, its holdings or the two, for example cash: 10,000" });
   if (config.fills !== null && !seen.has('fills from')) {
-    errors.push({ line: seen.get('fills')!, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' });
+    errors.push({ line: seen.get('fills')!, message: 'Add a fills from line: the first day that the account followed its strategies, for example fills from: 2026-06-01' });
   }
   return { config, entries, errors: errors.sort((a, b) => a.line - b.line), borrowed, shorted };
 }
@@ -410,7 +410,7 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
       else shares = (holding > 0 ? Math.max(Math.round(change), -holding) : Math.min(Math.round(change), -holding)) + 0;
     }
     if ((kind === 'open' || kind === 'flip') && target !== 0 && holding + shares === 0 && !skipped) {
-      notes.push(`${ticker}: the strategies' position comes to under half a share, so it is not ${target > 0 ? 'bought' : 'sold short'}.`);
+      notes.push(`${ticker}: the position of the strategies is less than half a share. Thus the account does not ${target > 0 ? 'buy it' : 'sell it short'}.`);
     }
     const rate = gross > 0 ? row.parts.reduce((s, x, i) => s + Math.abs(x) * strategies[i].cost, 0) / gross : 0;
     const saved = gross - Math.abs(own);
@@ -448,18 +448,18 @@ export function accountOrders(config: Pick<AccountConfig, 'holdings' | 'cash' | 
         }
       }
     }
-    const means = floor <= -0.5 ? "the cash, the sales and the strategies' borrowing allow" : 'the cash and the sales bring';
-    notes.push(`The buys come to ${money(wanted)}, more than ${means}${covers > 0 ? ' after the covers' : ''} (${minusMoney(available)}), so each is cut to fit.`);
+    const means = floor <= -0.5 ? 'the cash, the sales and the borrowing of the strategies can pay' : 'the cash and the sales can pay';
+    notes.push(`The buys cost ${money(wanted)}. This is more than ${means}${covers > 0 ? ' after the covers' : ''} (${minusMoney(available)}). Thus the plugin makes each buy smaller.`);
   }
 
   for (const s of strategies) {
     if (s.rebalance !== 'never' && s.states.some((st) => st.side !== null)) {
-      notes.push(`${s.label} rebalances ${s.rebalance}. A rebalance due at the next open shows here a bar late, once its backtest has made it.`);
+      notes.push(`${s.label} rebalances ${s.rebalance}. A rebalance at the next open shows here one bar after that open, when its backtest makes it.`);
     }
     if (s.sizing !== 'fixed' && s.states.some((st) => st.pending === 'buy' || st.pending === 'short' || st.pending === 'add')) {
-      notes.push(`${s.label} sizes positions by ${SIZING_WORDS[s.sizing]}, so the size of a new one here is an estimate from the last close.`);
+      notes.push(`${s.label} sizes positions by ${SIZING_WORDS[s.sizing]}. Thus the size of a new position here is an estimate from the last close.`);
     }
-    if (s.closeFill) notes.push(`${s.label} fills at the close: what it holds here already includes what it traded at the last close.`);
+    if (s.closeFill) notes.push(`${s.label} fills at the close. Its holdings here include its trades at the last close.`);
   }
 
   // Sales and covers come first, as the engine fills them, so their cash is there for the purchases and short sales.

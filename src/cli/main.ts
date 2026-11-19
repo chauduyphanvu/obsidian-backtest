@@ -31,26 +31,26 @@ export async function readText(stream: AsyncIterable<Buffer | string>): Promise<
   return Buffer.concat(parts).toString('utf8');
 }
 
-const HELP = `backtest-blocks: check and backtest the strategy blocks of Backtest Blocks, outside Obsidian.
+const HELP = `backtest-blocks: examine and backtest the strategy blocks of Backtest Blocks without Obsidian.
 
 Usage:
-  backtest-blocks check <file|->...      check every strategy block in notes (or a bare block); exit 1 on errors
+  backtest-blocks check <file|->...      examine all strategy blocks in notes, or one block without a fence (exit code 1 for errors)
   backtest-blocks run <file|-> [--block <name|n>] [--vault <dir>] [--cache <dir>] [--refresh]
                                           backtest one block on live prices and print the result
-  backtest-blocks explain <word>          what a function, setting, value or word means
-  backtest-blocks words                   every word of the language
-  backtest-blocks guide                   the guide for writing blocks (llms-full.txt)
-  backtest-blocks mcp                     serve check, run and explain as MCP tools over stdio
+  backtest-blocks explain <word>          show the help text for a function, setting, value or word
+  backtest-blocks words                   list all words of the language
+  backtest-blocks guide                   print the instructions to write blocks (llms-full.txt)
+  backtest-blocks mcp                     start an MCP server on stdio with the check, run and explain tools
   backtest-blocks --version | --help
 
 Options:
-  --json     print JSON instead of text (check, run, words)
-  --block    which block of the note to run: its name, or its number from 1
-  --vault    the vault folder, for CSV files a block reads (default: the folder above the note that holds .obsidian)
-  --cache    where prices are saved between runs (default: $XDG_CACHE_HOME/backtest-blocks or ~/.cache/backtest-blocks)
-  --refresh  fetch prices again instead of using saved ones
+  --json     print JSON, not text (check, run, words)
+  --block    the block of the note to run: its name, or its number (the first block is 1)
+  --vault    the vault folder, for the CSV files that a block reads (default: the folder above the note that contains .obsidian)
+  --cache    the folder for saved prices (default: $XDG_CACHE_HOME/backtest-blocks or ~/.cache/backtest-blocks)
+  --refresh  download the prices again, and do not use the saved prices
 
-Tiingo and FRED read their keys from TIINGO_API_KEY and FRED_API_KEY.`;
+The keys for Tiingo and FRED are in TIINGO_API_KEY and FRED_API_KEY.`;
 
 export function version(): string {
   if (typeof BACKTEST_BLOCKS_VERSION === 'string') return BACKTEST_BLOCKS_VERSION;
@@ -68,7 +68,7 @@ interface FoundBlock {
 const isNote = (file: string) => /\.md$/i.test(file);
 
 /** What to say of a text with no strategy block in it. */
-export const noBlock = (file: string) => `no strategy block: a block opens with \`\`\`strategy${isNote(file) ? '' : ', or give its lines with no fence'}`;
+export const noBlock = (file: string) => `no strategy block: a block starts with \`\`\`strategy${isNote(file) ? '' : ', or give the lines of the block without a fence'}`;
 
 /** The strategy blocks of a note, or the whole text as one block when it is not a note and has no fence at all. */
 export function blocksIn(text: string, note = false): FoundBlock[] {
@@ -117,7 +117,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 async function check(files: string[], json: boolean, io: Io): Promise<number> {
   if (files.length === 0) {
-    io.err('check: name a note, or - to read a block from standard input');
+    io.err('check: give a note, or - to read a block from standard input');
     return 2;
   }
   const problems: Problem[] = [];
@@ -130,7 +130,7 @@ async function check(files: string[], json: boolean, io: Io): Promise<number> {
       text = await readInput(file, io);
     } catch (e) {
       // The other notes are still checked, so their problems are not lost.
-      io.err(`check: can't read ${file}: ${e instanceof Error ? e.message : e}`);
+      io.err(`check: cannot read ${file}: ${e instanceof Error ? e.message : e}`);
       unread++;
       continue;
     }
@@ -152,7 +152,7 @@ async function check(files: string[], json: boolean, io: Io): Promise<number> {
       ...(empty ? [`${plural(empty, 'note', 'notes')} with no strategy block`] : []),
       ...(unread ? [`${plural(unread, 'note', 'notes')} not read`] : []),
     ];
-    io.err(`${plural(blocks, 'block', 'blocks')} checked: ${said.join('; ') || 'no problems'}`);
+    io.err(`${plural(blocks, 'block', 'blocks')} examined: ${said.join('; ') || 'no problems'}`);
   }
   return unread > 0 ? 2 : errors > 0 || empty > 0 ? 1 : 0;
 }
@@ -175,7 +175,7 @@ export function pickBlock(text: string, file: string, block: string | undefined,
   const list = found.map((x, i) => `${i + 1}${x.name ? `: ${x.name}` : ''}`).join(', ');
   return {
     error:
-      found.length === 0 ? `${file}: ${noBlock(file)}` : block === undefined ? `${file} has ${found.length} blocks (${list}). Choose one with ${how}` : `${file} has no block "${block}". Its blocks: ${list}`,
+      found.length === 0 ? `${file}: ${noBlock(file)}` : block === undefined ? `${file} has ${found.length} blocks (${list}). Select one with ${how}` : `${file} has no block "${block}". Its blocks: ${list}`,
   };
 }
 
@@ -187,25 +187,25 @@ export async function runNote(text: string, file: string, block: string | undefi
   const picked = pickBlock(text, file, block, how);
   if ('error' in picked) return { code: 2, message: picked.error };
   const errors = problemsOf(file, text, picked.block).filter((p) => p.severity === 'error');
-  if (errors.length > 0) return { code: 1, message: `The block has errors, so it was not run:\n${errors.map(problemLine).join('\n')}` };
+  if (errors.length > 0) return { code: 1, message: `The block has errors. It did not run:\n${errors.map(problemLine).join('\n')}` };
   const runner = new Runner(deps, defaultsFrom(DEFAULT_SETTINGS));
   try {
     return { out: await runner.run(runner.parse(picked.block.source).spec!, refresh) };
   } catch (e) {
-    return { code: 1, message: `The backtest could not run: ${e instanceof Error ? e.message : e}` };
+    return { code: 1, message: `The backtest did not run: ${e instanceof Error ? e.message : e}` };
   }
 }
 
 async function run(file: string | undefined, o: { block?: string; vault?: string; cache?: string; refresh: boolean; json: boolean }, io: Io): Promise<number> {
   if (!file) {
-    io.err('run: name a note, or - to read a block from standard input');
+    io.err('run: give a note, or - to read a block from standard input');
     return 2;
   }
   let text: string;
   try {
     text = await readInput(file, io);
   } catch (e) {
-    io.err(`run: can't read ${file}: ${e instanceof Error ? e.message : e}`);
+    io.err(`run: cannot read ${file}: ${e instanceof Error ? e.message : e}`);
     return 2;
   }
   const noteDir = file === '-' ? io.cwd : dirname(resolve(io.cwd, file));
@@ -241,12 +241,12 @@ export function explainText(word: string): { text: string } | { error: string } 
   const d = findDoc(word);
   if (d) return { text: [d.signature, '', d.text, ...(d.example ? ['', 'Example:', d.example] : [])].join('\n') };
   const near = ALL_DOCS.filter((x) => x.id.toLowerCase().includes(word.trim().toLowerCase())).map((x) => x.id);
-  return { error: `"${word}" is not a word of the language.${near.length ? ` Did you mean: ${near.slice(0, 8).join(', ')}?` : ' list_words, or backtest-blocks words, gives them all.'}` };
+  return { error: `"${word}" is not a word of the language.${near.length ? ` Words that contain "${word.trim()}": ${near.slice(0, 8).join(', ')}.` : ' To see all words, use list_words or backtest-blocks words.'}` };
 }
 
 function explain(word: string | undefined, io: Io): number {
   if (!word) {
-    io.err('explain: name a word, such as sma or stop loss');
+    io.err('explain: give a word, for example sma or stop loss');
     return 2;
   }
   const found = explainText(word);
@@ -265,7 +265,7 @@ export const WORD_KINDS = ['functions', 'series', 'calendar', 'position', 'setti
 export const wordNames = (): string => WORD_KINDS.map((k) => `${k}: ${wordList()[k].map((w) => w.name).join(', ')}`).join('\n');
 
 function words(json: boolean, io: Io): number {
-  io.out(json ? languageJson().trimEnd() : `${wordNames()}\n\nFor one of them: backtest-blocks explain <word>`);
+  io.out(json ? languageJson().trimEnd() : `${wordNames()}\n\nFor the help text of a word: backtest-blocks explain <word>`);
   return 0;
 }
 

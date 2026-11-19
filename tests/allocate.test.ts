@@ -331,7 +331,7 @@ test('a line whose weights change each month is valued like combine, month by mo
   // Constant weights give exactly what combine gives.
   const c = curves(3, 200);
   assert.deepEqual(rebalanced(c, () => [0.2, 0.3, 0.4]), combine(c, [0.2, 0.3, 0.4]));
-  assert.throws(() => rebalanced(aligned, (i) => (i === 0 ? [0.5, 0.5] : [0.7, 0.7])), /cannot add up to more than 100%/);
+  assert.throws(() => rebalanced(aligned, (i) => (i === 0 ? [0.5, 0.5] : [0.7, 0.7])), /cannot be more than 100%/);
 });
 
 // --- Whole percentages ---------------------------------------------------------------------------------------------

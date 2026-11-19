@@ -165,7 +165,7 @@ function warmupNotes(spec: Spec, data: Map<string, Bars>, signals: Map<string, S
   for (const a of spec.universe) {
     const { t } = data.get(a.name)!;
     const sig = signals.get(a.name)!;
-    const unknown = (i: number) => (Number.isNaN(sig.buy[i]) ? 'buy rule' : sig.score && !Number.isFinite(sig.score[i]) ? 'ranking score' : null);
+    const unknown = (i: number) => (Number.isNaN(sig.buy[i]) ? 'buy rule' : sig.score && !Number.isFinite(sig.score[i]) ? 'hold score' : null);
     let first = 0;
     while (first < t.length && t[first] < run.t[0]) first++;
     const what = unknown(first);
@@ -181,8 +181,8 @@ function warmupNotes(spec: Spec, data: Map<string, Bars>, signals: Map<string, S
   return [...byWhen.values()].map(({ what, known, names }) => {
     const subject = names.length === 1 ? `The ${what} for ${names[0]} was` : `The ${what}s for ${list(names)} were`;
     return known === null
-      ? `${subject} unknown for the whole run: ${names.length === 1 ? 'its' : 'their'} indicators need more bars than the prices have.`
-      : `${subject} unknown until ${stamp(known, intraday)} while ${names.length === 1 ? 'its' : 'their'} indicators warmed up, so ${list(names)} could not be bought before then.`;
+      ? `${subject} unknown for the full run: ${names.length === 1 ? 'its' : 'their'} indicators must have more bars than the prices have.`
+      : `${subject} unknown until ${stamp(known, intraday)}, when ${names.length === 1 ? 'its' : 'their'} indicators had sufficient bars. Thus the strategy did not buy ${list(names)} before then.`;
   });
 }
 
@@ -206,11 +206,10 @@ function skippedNotes(skipped: Skipped[]): string[] {
   return [...groups.values()].map((rows) => {
     const total = rows.reduce((sum, r) => sum + r.count, 0);
     const signals = `${total} buy signal${total === 1 ? '' : 's'}`;
-    const verb = total === 1 ? 'was' : 'were';
     const input = WARMUP_INPUT[rows[0].input](rows[0].n);
     return rows.length === 1
-      ? `${signals} for ${rows[0].asset} ${verb} not acted on while ${input} was still unknown.`
-      : `${signals} ${verb} not acted on while ${input} was still unknown: ${rows.map((r) => `${r.asset} ${r.count}`).join(', ')}.`;
+      ? `The run ignored ${signals} for ${rows[0].asset}, because ${input} was unknown at that time.`
+      : `The run ignored ${signals}, because ${input} was unknown at that time: ${rows.map((r) => `${r.asset} ${r.count}`).join(', ')}.`;
   });
 }
 
@@ -220,8 +219,8 @@ function list(names: string[]): string {
 }
 
 function cashRateNote(spec: Spec): string {
-  if (spec.cash.k === 'ticker') return `Cash earns the ${spec.cash.ref.name} rate`;
-  return spec.cash.rate === 0 ? 'Cash earns nothing' : `Cash earns ${Number((spec.cash.rate * 100).toFixed(2))}% a year`;
+  if (spec.cash.k === 'ticker') return `Cash receives the ${spec.cash.ref.name} rate`;
+  return spec.cash.rate === 0 ? 'Cash receives no interest' : `Cash receives ${Number((spec.cash.rate * 100).toFixed(2))}% a year`;
 }
 
 /**
@@ -245,25 +244,25 @@ function closeReadNotes(spec: Spec, data: Map<string, Bars>, intraday: boolean):
   const early = reads.filter(([reader, read]) => apart(read, reader));
   if (early.length) {
     notes.push(
-      `With fill: close, a rule reads the previous bar of a ticker that keeps other hours than the one it trades (another source, other days of the week or another bar size), because that ticker's bar of the same ${when} can close after the fill: ${early.map(([reader, read]) => `${read} for ${reader}`).join(', ')}.`,
+      `With fill: close, a rule reads the previous bar of a ticker with different hours from the ticker that it trades: ${early.map(([reader, read]) => `${read} for ${reader}`).join(', ')}. The bar of the same ${when} can close after the fill. Different hours come from a different source, different days of the week or a different bar size.`,
     );
   }
   const ranked = spec.rank !== null && names.length > 1;
   if (ranked && pairs.some(([a, b]) => apart(a, b))) {
     notes.push(
-      `With fill: close, the ranked tickers keep different hours (another source, other days of the week or another bar size), so at a time when tickers on different hours both trade, the ranking reads every ticker's previous bar: a close of the same ${when} can come after the fill.`,
+      `With fill: close, the tickers of the "hold" line have different hours (a different source, different days of the week or a different bar size). Thus, when tickers with different hours trade at the same time, the score reads the previous bar of each ticker. A close of the same ${when} can occur after the fill.`,
     );
   }
   const same = reads.filter(([reader, read]) => !apart(read, reader) && !together(read, reader));
   const sameRank = ranked && pairs.some(([a, b]) => !apart(a, b) && !together(a, b));
   if (same.length || sameRank) {
     const what = [
-      same.length ? `a rule reads another ticker's close of the same ${when} (${same.map(([reader, read]) => `${read} for ${reader}`).join(', ')})` : '',
-      sameRank ? `the ranking compares the tickers' closes of the same ${when}` : '',
+      same.length ? `a rule reads the close of a different ticker of the same ${when} (${same.map(([reader, read]) => `${read} for ${reader}`).join(', ')})` : '',
+      sameRank ? `the "hold" score compares the closes of the tickers of the same ${when}` : '',
     ].filter(Boolean);
     const one = same.length === 1 && !sameRank;
     notes.push(
-      `With fill: close, ${what.join(', and ')}. The result assumes ${one ? 'that close is' : 'those closes are'} known at the moment of the fill, which is not true for a market that closes later.`,
+      `With fill: close, ${what.join(', and ')}. The result counts ${one ? 'that close' : 'those closes'} as known at the time of the fill. This is not correct for a market that closes after the fill.`,
     );
   }
   return notes;
@@ -281,7 +280,7 @@ function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intrad
     source === 'yahoo' && YAHOO_INSIDE_DAYS[size]
       ? ` (Yahoo gives ${size} bars for the last ${YAHOO_INSIDE_DAYS[size]} days)`
       : source === 'binance'
-        ? ` (at most ${INSIDE_BARS.toLocaleString('en-US')} ${size} bars are loaded for a ticker)`
+        ? ` (the plugin downloads a maximum of ${INSIDE_BARS.toLocaleString('en-US')} ${size} bars for each ticker)`
         : '';
   const groups = new Map<string, { names: string[]; from: number | null; source: string; looked: number; whole: number }>();
   for (const r of run.inside) {
@@ -296,43 +295,43 @@ function insideNotes(spec: Spec, data: Map<string, Bars>, run: RunResult, intrad
     g.whole += r.whole;
   }
   const notes: string[] = [];
-  const firstStop = 'when a bar holds both a stop and a target the stop is taken first';
+  const firstStop = 'when a bar holds a stop and a target, the run uses the stop first';
   for (const g of groups.values()) {
     const one = g.names.length === 1;
     const their = one ? 'its' : 'their';
     const held =
       g.looked === 0
-        ? `none of them held a stop or target inside ${one ? 'its' : 'their'} range`
-        : `${g.looked} ${g.looked === 1 ? 'bar held a stop or target and was' : 'bars held a stop or target and were'} followed through them`;
+        ? 'no bar held a stop or target in its range'
+        : `${g.looked} ${g.looked === 1 ? 'bar held a stop or target, and the run examined it' : 'bars held a stop or target, and the run examined them'} with the smaller bars`;
     if (g.from === null) {
-      notes.push(`No ${size} bars of ${list(g.names)} reach into this run${window(g.source)}, so ${their} bars are read whole, and ${firstStop}.`);
+      notes.push(`No ${size} bars of ${list(g.names)} are in the period of this run${window(g.source)}. Thus the run did not examine ${their} bars with smaller bars, and ${firstStop}.`);
       continue;
     }
-    if (g.from === -Infinity) notes.push(`Looked inside every bar of ${list(g.names)} using ${their} ${size} bars: ${held}.`);
+    if (g.from === -Infinity) notes.push(`The run examined each bar of ${list(g.names)} with ${their} ${size} bars: ${held}.`);
     else {
       notes.push(
-        `Looked inside the bars of ${list(g.names)} from ${stamp(g.from, intraday)} on, using ${their} ${size} bars${window(g.source)}: ${held}. Before that, bars are read whole, and ${firstStop}.`,
+        `The run examined the bars of ${list(g.names)} from ${stamp(g.from, intraday)} with ${their} ${size} bars${window(g.source)}: ${held}. Before that date, the run did not examine the bars with smaller bars, and ${firstStop}.`,
       );
     }
     if (g.whole > 0) {
       notes.push(
-        `In that time ${g.whole} ${g.whole === 1 ? 'bar' : 'bars'} of ${list(g.names)} with a stop or target inside ${g.whole === 1 ? 'it was' : 'them were'} read whole, because ${g.whole === 1 ? 'its' : 'their'} ${size} bars were missing or did not match ${g.whole === 1 ? 'it' : 'them'}.`,
+        `In that period, the run did not examine ${g.whole} ${g.whole === 1 ? 'bar' : 'bars'} of ${list(g.names)} with a stop or target in ${g.whole === 1 ? 'it' : 'them'}, because ${g.whole === 1 ? 'its' : 'their'} ${size} bars were missing or did not agree with ${g.whole === 1 ? 'it' : 'them'}.`,
       );
     }
   }
   const csv = spec.universe.filter((a) => a.source === 'csv').map((a) => a.name);
   if (csv.length) {
-    notes.push(`${list(csv)} ${csv.length === 1 ? 'is a CSV file, which has' : 'are CSV files, which have'} no smaller bars, so ${csv.length === 1 ? 'its' : 'their'} bars are read whole.`);
+    notes.push(`${list(csv)} ${csv.length === 1 ? 'is a CSV file, which has' : 'are CSV files, which have'} no smaller bars. Thus the run did not examine ${csv.length === 1 ? 'its' : 'their'} bars with smaller bars.`);
   }
   const tiingo = spec.universe.filter((a) => a.source === 'tiingo').map((a) => a.name);
   if (tiingo.length) {
-    notes.push(`${list(tiingo)} ${tiingo.length === 1 ? 'comes' : 'come'} from Tiingo, which gives no smaller bars here, so ${tiingo.length === 1 ? 'its' : 'their'} bars are read whole.`);
+    notes.push(`${list(tiingo)} ${tiingo.length === 1 ? 'comes' : 'come'} from Tiingo, which gives no smaller bars here. Thus the run did not examine ${tiingo.length === 1 ? 'its' : 'their'} bars with smaller bars.`);
   }
   return notes;
 }
 
 export const CLOSE_FILL_NOTE =
-  'Orders fill at the same close the rules were read at (fill: close). The result assumes you can trade at that closing price, which a real order can only come near by being placed just before the close.';
+  'Orders fill at the same close at which the strategy read the rules (fill: close). The result uses the price of that close. An order at a broker has a price near to it only when you send the order immediately before the close.';
 
 /** What each ticker's rules say, as simulate reads them. */
 export function specSignals(spec: Spec, data: Map<string, Bars>): Map<string, Signals> {
@@ -404,27 +403,27 @@ export function runBacktest(spec: Spec, data: Map<string, Bars>): Backtest {
   if (run.smallTrades) {
     const n = run.smallTrades;
     notes.push(
-      `${n} ${n === 1 ? 'add or rebalancing trade was' : 'adds and rebalancing trades were'} not made because the commission would have been ${SMALL_TRADE * 100}% of ${n === 1 ? 'its' : 'their'} value or more.`,
+      `The run did not make ${n} ${n === 1 ? 'add or rebalance trade' : 'adds and rebalance trades'}, because the commission was ${SMALL_TRADE * 100}% or more of ${n === 1 ? 'its' : 'their'} value.`,
     );
   }
   if (run.marginCalls) {
     const n = run.marginCalls;
     const level = `${Number((spec.margin!.maintenance * 100).toFixed(1))}%`;
-    notes.push(`${n} ${n === 1 ? 'margin call' : 'margin calls'}: equity fell below ${level} of the positions' value, and every position was closed at the next open.`);
+    notes.push(`${n} ${n === 1 ? 'margin call' : 'margin calls'}: the equity decreased to less than ${level} of the value of the positions, and the run closed all positions at the next open.`);
   }
   if (run.ruin) {
     // A debt under half a dollar would read as "$0 more".
-    const owed = run.ruin.deficit >= 0.5 ? `; the account owed ${money(run.ruin.deficit)} more` : '';
-    notes.push(`Ruined on ${stamp(run.ruin.t, intraday)}: equity fell to zero and the run stopped there${owed}.`);
+    const owed = run.ruin.deficit >= 0.5 ? ` The account had a debt of ${money(run.ruin.deficit)}.` : '';
+    notes.push(`The equity decreased to zero on ${stamp(run.ruin.t, intraday)}, and the run stopped.${owed}`);
   }
   if (run.conflicts) {
     const n = run.conflicts;
-    notes.push(`Buy and short rules both held on ${n} ${n === 1 ? 'bar' : 'bars'}, so neither opened a position.`);
+    notes.push(`The buy rule and the short rule held at the same time on ${n} ${n === 1 ? 'bar' : 'bars'}. Thus the run did not open a position on ${n === 1 ? 'it' : 'them'}.`);
   }
   if (spec.fill === 'close') notes.push(CLOSE_FILL_NOTE, ...closeReadNotes(spec, data, intraday));
   notes.push(...insideNotes(spec, data, run, intraday));
   if (spec.benchmark && bench.t[0] - run.t[0] > 7 * DAY) {
-    notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}, so its figures cover a shorter period than the strategy's.`);
+    notes.push(`${spec.benchmark.name} has prices only from ${stamp(bench.t[0], intraday)}. Thus its figures are for a shorter period than the figures of the strategy.`);
   }
 
   let segments: Segment[] | null = null;

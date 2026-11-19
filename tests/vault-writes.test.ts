@@ -38,7 +38,7 @@ function host(text: string, o: { kept?: boolean; fails?: string[]; frontmatter?:
     runSource: async (source, opts) => {
       asked.push(opts.cachedOnly);
       if (o.fails?.some((f) => source.includes(f))) throw new Error('no');
-      if (opts.cachedOnly && o.kept === false) throw new Error('This strategy has not run yet.');
+      if (opts.cachedOnly && o.kept === false) throw new Error('This strategy did not run at this time.');
       return run(source);
     },
     notice: (t) => void notices.push(t),
@@ -61,9 +61,9 @@ test('when asked for, the strategies run first and the result is said', async ()
   const props = new NoteProperties(x.h);
   await props.saveProperties({ path: 'N.md' }, true);
   assert.deepEqual(x.asked, [false, false]);
-  assert.match(x.notices[0], /^Saved \d+ figures to this note's properties\. 1 of 2 strategies couldn't run, so figures from earlier runs were kept\.$/);
+  assert.match(x.notices[0], /^Saved \d+ figures to the properties of this note\. 1 of 2 strategies did not run\. The plugin kept the figures from their previous runs\.$/);
   await props.saveProperties({ path: 'N.md' }, true);
-  assert.equal(x.notices[1], "This note's properties are already up to date.");
+  assert.equal(x.notices[1], 'The properties of this note agree with the results. There is nothing to save.');
   assert.equal(x.writes(), 1);
 });
 
@@ -73,7 +73,7 @@ test('a note with no strategy that runs writes nothing, and says so only when as
   await props.saveProperties({ path: 'N.md' }, false);
   assert.deepEqual(x.notices, []);
   await props.saveProperties({ path: 'N.md' }, true);
-  assert.deepEqual(x.notices, ['This note has no strategy that runs, so there is nothing to save.']);
+  assert.deepEqual(x.notices, ['This note has no strategy that runs. There is nothing to save.']);
   assert.equal(x.writes(), 0);
 });
 
@@ -129,7 +129,7 @@ test('a file that cannot be saved says why', async () => {
   const notices: string[] = [];
   const f: NewFiles = { exists: async () => false, createFolder: async () => {}, create: async () => Promise.reject(new Error('disk full')) };
   await saveDatedFile(f, 'Backtests', 'A', 'md', 'text', (t) => void notices.push(t));
-  assert.deepEqual(notices, ["Couldn't save the file: disk full"]);
+  assert.deepEqual(notices, ['Cannot save the file: disk full']);
 });
 
 test('a new file takes the next free name, numbered before its extension', async () => {

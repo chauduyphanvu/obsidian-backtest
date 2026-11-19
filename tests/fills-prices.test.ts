@@ -142,5 +142,5 @@ test('a fills columns header with a +, a ; or a quote is written in quotes and r
   assert.equal(text, 'date = Trade Date; ticker = "The ""Symbol"""; side = "Buy;Sell"; quantity = Qty; price = Price (USD); fees = "Comm+Fees" + Reg. fee');
   assert.deepEqual(parseFillColumns(text), columns);
   assert.deepEqual(parseFillColumns('fees = "A + B"+C; price = "Px"'), { fees: ['A + B', 'C'], price: 'Px' });
-  assert.equal(parseFillColumns('price = "Px'), 'A header in quotes needs its closing quote: "Px');
+  assert.equal(parseFillColumns('price = "Px'), 'A header in quotation marks must have a closing quotation mark: "Px');
 });

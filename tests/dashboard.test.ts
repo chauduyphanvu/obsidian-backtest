@@ -68,11 +68,11 @@ test('an unknown line is an error that names both settings, with its line number
 test('a sort that is not one of the four, an empty folder and a repeated setting are errors', () => {
   const { config, errors } = parseDashboard('sort: best\nfolder:\nfolder: A\nfolder: B\nsort: name');
   assert.deepEqual(errors, [
-    { line: 1, message: '"best" is not a way to sort. Use return, drawdown, sharpe or name' },
-    { line: 2, message: 'Write the folder after "folder:", such as "folder: Trading"' },
-    { line: 3, message: 'folder is already set on line 2' },
-    { line: 4, message: 'folder is already set on line 2' },
-    { line: 5, message: 'sort is already set on line 1' },
+    { line: 1, message: '"best" is not a sort order. Use return, drawdown, sharpe or name' },
+    { line: 2, message: 'Write the folder after "folder:", for example "folder: Trading"' },
+    { line: 3, message: 'folder is also set on line 2' },
+    { line: 4, message: 'folder is also set on line 2' },
+    { line: 5, message: 'sort is also set on line 1' },
   ]);
   assert.equal(config.sort, 'name');
   assert.equal(parseDashboard('folder: /').errors.length, 1);
@@ -158,7 +158,7 @@ test('the next orders give a time unless it is the next open, and what filled at
   const many = next(`universe: ${names.join(', ')}\nfill: close\nbuy when close > 10`, Object.fromEntries(names.map((n) => [n, bars([5, 5, 20])])));
   assert.deepEqual(many.next, ['Bought A, B, C and 2 more at the last close']);
   assert.equal(next('universe: A\nfill: close\nbuy when true', { A: bars([10, 10, 12, 15]) }).next.length, 0);
-  assert.match(COLUMNS.find((c) => c.key === 'next')!.hint!, /next open.*another time.*Bought and Sold.*last close/);
+  assert.match(COLUMNS.find((c) => c.key === 'next')!.hint!, /next open.*different time.*Bought and Sold.*last close/);
 });
 
 test('a later entry is an Add, not a Buy, in the Next column: after the buys, and in its own words at the last close', () => {
@@ -225,7 +225,7 @@ test('a failure keeps its reason, whether it was an Error or text', () => {
     reason: 'Yahoo has no prices for XYZ. Check the ticker.',
   });
   assert.equal(failedRow('n.md', 'S', 'boom').reason, 'boom');
-  assert.equal(failureText(failedRow('n.md', 'S', new Error('Line 3: Unknown name'))), "Couldn't run. Line 3: Unknown name");
+  assert.equal(failureText(failedRow('n.md', 'S', new Error('Line 3: Unknown name'))), "The strategy did not run. Line 3: Unknown name");
 });
 
 // ---- sorting
@@ -410,7 +410,7 @@ test('an empty vault says how to add a strategy', async () => {
   const r = recorder();
   await runRound(host, { folder: null, sort: 'name' }, false, r.round);
   assert.deepEqual(r.events, ['list 0']);
-  assert.equal(emptyText({ folder: null, sort: 'name' }, 0), 'No strategy blocks found in the vault. Add one with the command "Insert strategy block".');
+  assert.equal(emptyText({ folder: null, sort: 'name' }, 0), 'The vault has no strategy blocks. Add one with the command "Insert strategy block".');
 });
 
 test('force is passed on to every run', async () => {
@@ -470,13 +470,13 @@ test('when the strategies cannot be listed the round rejects with the reason', a
 
 test('the line under the table counts the strategies and says when the figures were worked out', () => {
   const rows = [done('A', 0.1), failed('B')];
-  assert.equal(summaryText(rows, local(2026, 11, 17, 14, 5)), '2 strategies. Figures worked out 2026-11-17 14:05.');
-  assert.equal(summaryText([done('A', 0.1)], local(2026, 1, 2, 9, 30)), '1 strategy. Figures worked out 2026-01-02 09:30.');
+  assert.equal(summaryText(rows, local(2026, 11, 17, 14, 5)), '2 strategies. The plugin calculated these figures on 2026-11-17 14:05.');
+  assert.equal(summaryText([done('A', 0.1)], local(2026, 1, 2, 9, 30)), '1 strategy. The plugin calculated these figures on 2026-01-02 09:30.');
 });
 
 test('while it runs the line says how far it has got', () => {
-  assert.equal(summaryText([done('A', 0.1), running('B'), running('C'), failed('D')], null), 'Running 2 of 4\u2026');
-  assert.equal(summaryText([running('A')], null), 'Running 0 of 1\u2026');
+  assert.equal(summaryText([done('A', 0.1), running('B'), running('C'), failed('D')], null), 'The plugin runs 2 of 4\u2026');
+  assert.equal(summaryText([running('A')], null), 'The plugin runs 0 of 1\u2026');
 });
 
 test('a round tells the host once, when it starts, whether it is forced', async () => {

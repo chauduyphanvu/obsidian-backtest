@@ -83,7 +83,7 @@ test('settings take other spellings, and the defaults are whole shares, no band 
 
 test('a fills file needs the day the account started following the strategies', () => {
   assert.deepEqual(parseAccount('cash: 1\nfills: Broker/x.csv\n[[A]]').errors, [
-    { line: 2, message: 'fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01' },
+    { line: 2, message: 'Add a fills from line: the first day that the account followed its strategies, for example fills from: 2026-06-01' },
   ]);
   assert.deepEqual(parseAccount('cash: 1\nfills from: 2026-06-01\n[[A]]').errors, []);
 });
@@ -94,25 +94,25 @@ test('the fills columns setting is read with the block', () => {
   assert.deepEqual(config.fillColumns, { date: 'When', fees: ['Fee', 'Tax'] });
   const bad = parseAccount('cash: 1\nfills columns: when = Date\n[[A]]').errors;
   assert.equal(bad.length, 1);
-  assert.match(bad[0].message, /"when = Date" does not say which column holds what/);
+  assert.match(bad[0].message, /"when = Date" does not give a part and its column/);
 });
 
 test('a holding that is not a ticker and its shares is an error that points at it', () => {
   const line = 'holdings: SPY 120, TLT fifty';
   assert.deepEqual(parseAccount(`${line}\n[[A]]`).errors, [
-    { line: 1, message: '"TLT fifty" is not a holding. Write each as a ticker and its shares, such as SPY 120', from: 19, to: 28 },
+    { line: 1, message: '"TLT fifty" is not a holding. Write each holding as a ticker and its shares, for example SPY 120', from: 19, to: 28 },
   ]);
   assert.match(parseAccount('holdings: SPY\n[[A]]').errors[0].message, /"SPY" is not a holding/);
   assert.match(parseAccount('holdings: SPY 10k\n[[A]]').errors[0].message, /"SPY 10k" is not a holding/);
   assert.match(parseAccount('holdings: S&P 10\n[[A]]').errors[0].message, /"S&P 10" is not a holding/);
-  assert.deepEqual(parseAccount('holdings: SPY 0\n[[A]]').errors, [{ line: 1, message: 'SPY has no shares: leave it out instead', from: 10, to: 15 }]);
+  assert.deepEqual(parseAccount('holdings: SPY 0\n[[A]]').errors, [{ line: 1, message: 'SPY has no shares: remove it from the holdings', from: 10, to: 15 }]);
   assert.deepEqual(parseAccount('holdings: SPY 1, spy 2\n[[A]]').errors, [{ line: 1, message: 'SPY is listed twice', from: 17, to: 22 }]);
   // The second of two that are spelled the same is the one pointed at.
   assert.deepEqual(parseAccount('holdings: SPY 1, SPY 1\n[[A]]').errors, [{ line: 1, message: 'SPY is listed twice', from: 17, to: 22 }]);
   assert.deepEqual(parseAccount('name: name\nholdings: X 1\n[[A]]').errors, []);
   assert.deepEqual(parseAccount('cash: 1\nfills: fills\n[[A]]').errors[0], {
     line: 2,
-    message: "fills takes the vault path of the broker's CSV file, such as Broker/schwab.csv",
+    message: "fills must be the vault path of the broker's CSV file, for example Broker/schwab.csv",
     from: 7,
     to: 12,
   });
@@ -124,26 +124,26 @@ test('each setting says what is wrong with its value', () => {
     assert.equal(errors.length, 1, line);
     return errors[0].message;
   };
-  assert.equal(parseAccount('cash: -100\n[[A]]').errors[0].message, "Cash can't be below 0: the account holds no borrowed money");
-  assert.equal(parseAccount('cash: lots\n[[A]]').errors[0].message, '"lots" is not an amount of cash. Write it as 4,200 or 4200.50');
-  assert.equal(error('capital at start: 0'), '"0" is not an amount above 0. Write the account\'s value on the day in fills from, such as 48,000');
-  assert.equal(error('whole shares: maybe'), 'whole shares is yes or no');
-  assert.equal(error('skip under: 1'), '"1" is not a share of the account. Write it as 1%, or 0% to make every order');
-  assert.equal(error('skip under: 100%'), 'skip under must be under 100%');
-  assert.equal(error('fills: Broker/schwab.xlsx'), "fills takes the vault path of the broker's CSV file, such as Broker/schwab.csv");
+  assert.equal(parseAccount('cash: -100\n[[A]]').errors[0].message, 'Cash cannot be below 0: the account holds no borrowed money');
+  assert.equal(parseAccount('cash: lots\n[[A]]').errors[0].message, '"lots" is not a cash value. Write it as 4,200 or 4200.50');
+  assert.equal(error('capital at start: 0'), '"0" is not a value above 0. Write the value of the account on the date in fills from, for example 48,000');
+  assert.equal(error('whole shares: maybe'), 'whole shares must be yes or no');
+  assert.equal(error('skip under: 1'), '"1" is not a percentage of the account. Write it as 1%, or as 0% to make all orders');
+  assert.equal(error('skip under: 100%'), 'skip under must be less than 100%');
+  assert.equal(error('fills: Broker/schwab.xlsx'), "fills must be the vault path of the broker's CSV file, for example Broker/schwab.csv");
   assert.equal(error('fills from: 2026-02-30'), '"2026-02-30" is not a date. Write it as 2026-06-01');
   assert.equal(error('fills from: June 1'), '"June 1" is not a date. Write it as 2026-06-01');
   assert.equal(error('name:'), 'Write the name of the account after "name:"');
   // The error points at the value.
-  assert.deepEqual(parseAccount('skip under:   5 percent\ncash: 1\n[[A]]').errors[0], { line: 1, message: '"5 percent" is not a share of the account. Write it as 1%, or 0% to make every order', from: 14, to: 23 });
+  assert.deepEqual(parseAccount('skip under:   5 percent\ncash: 1\n[[A]]').errors[0], { line: 1, message: '"5 percent" is not a percentage of the account. Write it as 1%, or as 0% to make all orders', from: 14, to: 23 });
 });
 
 test('an unknown setting, a setting given twice and a line that is neither are errors', () => {
   assert.deepEqual(parseAccount('cash: 1\nbroker: Schwab\n[[A]]').errors, [
     { line: 2, message: '"broker" is not a setting of an account. The settings are name, holdings, cash, whole shares, skip under, fills, fills from, capital at start and fills columns' },
   ]);
-  assert.deepEqual(parseAccount('cash: 1\ncash: 2\n[[A]]').errors, [{ line: 2, message: 'cash is already set on line 1' }]);
-  assert.match(parseAccount('cash: 1\nSPY 120\n[[A]]').errors[0].message, /^This line is neither a setting nor a strategy/);
+  assert.deepEqual(parseAccount('cash: 1\ncash: 2\n[[A]]').errors, [{ line: 2, message: 'cash is also set on line 1' }]);
+  assert.match(parseAccount('cash: 1\nSPY 120\n[[A]]').errors[0].message, /^This line is not a setting or a strategy/);
   // Comments and blank lines are skipped and counted.
   assert.deepEqual(parseAccount('# My account\n\ncash: 1\n   # more\n[[A]]').entries[0].line, 5);
 });
@@ -156,7 +156,7 @@ test("strategies are listed as in a compare block, and 0% lists one with none of
     ['B', 'Second', 'Two', 0],
     ['Research/C.md', null, null, 0.4],
   ]);
-  assert.deepEqual(parseAccount('cash: 1\n[[A]] 50%\n[[B]] -5%').errors, [{ line: 3, message: "A weight can't be below 0%", from: 6, to: 9 }]);
+  assert.deepEqual(parseAccount('cash: 1\n[[A]] 50%\n[[B]] -5%').errors, [{ line: 3, message: 'A weight cannot be below 0%', from: 6, to: 9 }]);
   assert.deepEqual(allocations(entries), [0.6, 0, 0.4]);
 });
 
@@ -168,13 +168,13 @@ test('without weights the strategies share the account equally', () => {
 });
 
 test('the rules on the list of strategies', () => {
-  assert.deepEqual(parseAccount('cash: 1').errors, [{ line: 1, message: 'Add the strategies the account follows, such as [[Trend following]] 60%' }]);
-  assert.deepEqual(parseAccount('cash: 1\n[[A]]\n[[a.md]]').errors, [{ line: 3, message: 'This strategy is already listed on line 2' }]);
-  assert.deepEqual(parseAccount('cash: 1\n[[A]] 50%\n[[B]]').errors, [{ line: 3, message: 'Give every strategy a weight, or none of them' }]);
-  assert.deepEqual(parseAccount('cash: 1\n[[A]] 70%\n[[B]] 40%').errors, [{ line: 3, message: "The weights add up to 110%, and they can't add up to more than 100%" }]);
+  assert.deepEqual(parseAccount('cash: 1').errors, [{ line: 1, message: 'Add the strategies that the account follows, for example [[Trend following]] 60%' }]);
+  assert.deepEqual(parseAccount('cash: 1\n[[A]]\n[[a.md]]').errors, [{ line: 3, message: 'This strategy is also listed on line 2' }]);
+  assert.deepEqual(parseAccount('cash: 1\n[[A]] 50%\n[[B]]').errors, [{ line: 3, message: 'Give a weight to all strategies, or to none of them' }]);
+  assert.deepEqual(parseAccount('cash: 1\n[[A]] 70%\n[[B]] 40%').errors, [{ line: 3, message: "The total of the weights is 110%. It cannot be more than 100%" }]);
   const nine = Array.from({ length: 9 }, (_, i) => `[[N${i}]]`).join('\n');
-  assert.deepEqual(parseAccount(`cash: 1\n${nine}`).errors, [{ line: 10, message: 'An account follows at most 8 strategies' }]);
-  assert.deepEqual(parseAccount('[[A]]').errors, [{ line: 1, message: "Write the account's cash, its holdings or both, such as cash: 10,000" }]);
+  assert.deepEqual(parseAccount(`cash: 1\n${nine}`).errors, [{ line: 10, message: 'An account can follow a maximum of 8 strategies' }]);
+  assert.deepEqual(parseAccount('[[A]]').errors, [{ line: 1, message: "Write the account's cash, its holdings or the two, for example cash: 10,000" }]);
   assert.deepEqual(parseAccount('holdings: SPY 1\n[[A]]').errors, []);
 });
 
@@ -278,7 +278,7 @@ test('the band skips small resizes only: never an opening or a closing order', (
   assert.deepEqual([by(banded, 'SPY').skipped, by(banded, 'SPY').shares], [true, 0]);
   assert.deepEqual([by(banded, 'IWM').skipped, by(banded, 'IWM').kind, by(banded, 'IWM').shares], [false, 'open', 0]);
   assert.deepEqual([by(banded, 'XLE').skipped, by(banded, 'XLE').kind, by(banded, 'XLE').shares], [false, 'close', -0.5]);
-  assert.ok(banded.notes.includes("IWM: the strategies' position comes to under half a share, so it is not bought."));
+  assert.ok(banded.notes.includes("IWM: the position of the strategies is less than half a share. Thus the account does not buy it."));
   // Without the band the half share rounds up to one.
   const plain = accountOrders(account({ cash: 4950, holdings }), [S]);
   assert.deepEqual([by(plain, 'SPY').skipped, by(plain, 'SPY').shares], [false, 1]);
@@ -327,7 +327,7 @@ test('buys are cut to the cash and what the sales bring', () => {
   const spy = whole.orders.find((o) => o.ticker === 'SPY')!;
   assert.deepEqual([spy.shares, spy.cut], [1, true]);
   assert.equal(whole.cashAfter, 200);
-  assert.ok(whole.notes.some((n) => n.startsWith('The buys come to $600')));
+  assert.ok(whole.notes.some((n) => n.startsWith('The buys cost $600')));
   // In fractions 1.67 shares cost exactly what the sale brings, and nothing is cut.
   const fractions = accountOrders(account({ holdings, wholeShares: false }), [S]);
   const fspy = fractions.orders.find((o) => o.ticker === 'SPY')!;
@@ -364,9 +364,9 @@ test('notes: a rebalance a bar late, sizes that are estimates, fills at the clos
   const C = strat('Closer', 0, 1000, [state('QQQ', { shares: 1 })], { closeFill: true, sizing: 'risk' });
   const { notes } = accountOrders(account({ cash: 1000 }), [S, C]);
   assert.deepEqual(notes, [
-    'Rotation rebalances monthly. A rebalance due at the next open shows here a bar late, once its backtest has made it.',
-    'Rotation sizes positions by inverse volatility, so the size of a new one here is an estimate from the last close.',
-    'Closer fills at the close: what it holds here already includes what it traded at the last close.',
+    'Rotation rebalances monthly. A rebalance at the next open shows here one bar after that open, when its backtest makes it.',
+    'Rotation sizes positions by inverse volatility. Thus the size of a new position here is an estimate from the last close.',
+    'Closer fills at the close. Its holdings here include its trades at the last close.',
   ]);
   // A strategy in cash has nothing to rebalance.
   assert.deepEqual(accountOrders(account({ cash: 1000 }), [strat('R', 1, 1000, [state('SPY')], { rebalance: 'weekly' })]).notes, []);
@@ -399,7 +399,7 @@ test("an account's strategies are found and run as a compare block's are, each w
     ['Buying dips', 0.5, 3],
   ]);
   assert.equal(runs[0].out.backtest.run.t.length, 5);
-  await assert.rejects(runAccount(parseAccount('cash: 1\n[[Trend]] 50%\n[[Nowhere]] 0%').entries, host), { message: 'Line 3: there is no note called "Nowhere".' });
+  await assert.rejects(runAccount(parseAccount('cash: 1\n[[Trend]] 50%\n[[Nowhere]] 0%').entries, host), { message: 'Line 3: there is no note with the name "Nowhere".' });
 });
 
 test("a run's last states, equity and costs, read into what the account needs", () => {
@@ -464,7 +464,7 @@ test('buys cut to the cash get whole shares back, largest remainder first, while
 
 // --- Shorts and borrowed money -------------------------------------------------------------------------------------
 
-const BORROWED = "Cash can't be below 0: the account holds no borrowed money";
+const BORROWED = 'Cash cannot be below 0: the account holds no borrowed money';
 const spec = (source: string) => parseSpec(`universe: A\ncapital: 1000\n${source}`).spec!;
 
 test('a holding below 0 is a short, written with either minus sign', () => {
@@ -478,7 +478,7 @@ test('a holding below 0 is a short, written with either minus sign', () => {
     { ticker: 'TLT', shares: 20 },
     { ticker: 'QQQ', shares: -1200 },
   ]);
-  assert.deepEqual(parseAccount('holdings: SPY -0\n[[A]]').errors, [{ line: 1, message: 'SPY has no shares: leave it out instead', from: 10, to: 16 }]);
+  assert.deepEqual(parseAccount('holdings: SPY -0\n[[A]]').errors, [{ line: 1, message: 'SPY has no shares: remove it from the holdings', from: 10, to: 16 }]);
   assert.match(parseAccount('holdings: SPY -10k\n[[A]]').errors[0].message, /"SPY -10k" is not a holding/);
   assert.match(parseAccount('holdings: SPY --5\n[[A]]').errors[0].message, /"SPY --5" is not a holding/);
 });
@@ -507,7 +507,7 @@ test('cash below 0 waits for the strategies: one that can borrow allows it, and 
   assert.deepEqual(errorsBeforeRun(parseAccount('cash: -1\nskip under: 1\n[[A]]')).map((e) => e.line), [2]);
   assert.deepEqual([parseAccount('cash: -0\n[[A]]').errors, parseAccount('cash: -0\n[[A]]').config.cash], [[], 0]);
   const words = parseAccount('cash: -lots\n[[A]]');
-  assert.deepEqual([words.errors.map((e) => e.message), words.borrowed], [['"-lots" is not an amount of cash. Write it as 4,200 or 4200.50'], null]);
+  assert.deepEqual([words.errors.map((e) => e.message), words.borrowed], [['"-lots" is not a cash value. Write it as 4,200 or 4200.50'], null]);
   assert.equal(borrowedError(parseAccount('cash: 5\n[[A]]'), [long]), null);
 });
 
@@ -576,7 +576,7 @@ test('a flip takes the holding through 0: it sells all and sells short, or cover
   // A short of under half a share is not made: the flip only sells.
   const tiny = accountOrders(account({ cash: 7000, holdings: [{ ticker: 'SPY', shares: 30 }] }), [strat('S', 1, 1000, [state('SPY', { shares: 10, pending: 'short', targetWeight: 0.004 })], { borrows: true })]);
   assert.deepEqual(orderSteps(tiny.orders[0]), [{ action: 'sell', shares: 30 }]);
-  assert.ok(tiny.notes.includes("SPY: the strategies' position comes to under half a share, so it is not sold short."));
+  assert.ok(tiny.notes.includes("SPY: the position of the strategies is less than half a share. Thus the account does not sell it short."));
 });
 
 test('whole shares on the short side: a cover never goes past 0, and the band and rounding work as for a long', () => {
@@ -593,7 +593,7 @@ test('whole shares on the short side: a cover never goes past 0, and the band an
   const open = (targetWeight: number) => accountOrders(account({ cash: 1000 }), [strat('S', 1, 1000, [state('SPY', { pending: 'short', targetWeight })], { borrows: true })]);
   assert.equal(open(0.26).orders[0].shares, -3);
   assert.equal(open(0.03).orders[0].shares, 0);
-  assert.deepEqual(open(0.03).notes, ["SPY: the strategies' position comes to under half a share, so it is not sold short."]);
+  assert.deepEqual(open(0.03).notes, ["SPY: the position of the strategies is less than half a share. Thus the account does not sell it short."]);
   // In fractions the short is as it is.
   assert.ok(near(accountOrders(account({ cash: 1000, wholeShares: false }), [strat('S', 1, 1000, [state('SPY', { pending: 'short', targetWeight: 0.26 })])]).orders[0].shares, -2.6, 1e-12));
 });
@@ -609,7 +609,7 @@ test('the cash: a short sale brings it, a cover spends it and is never cut, and 
     ['QQQ', 'open', 30, true],
   ]);
   assert.equal(plan.cashAfter, 100);
-  assert.ok(plan.notes.includes('The buys come to $4,030, more than the cash and the sales bring after the covers ($4,000), so each is cut to fit.'), plan.notes.join('|'));
+  assert.ok(plan.notes.includes('The buys cost $4,030. This is more than the cash and the sales can pay after the covers ($4,000). Thus the plugin makes each buy smaller.'), plan.notes.join('|'));
   // Selling 5 SPY short brings 500, which with the 1,000 of cash pays for 14 QQQ.
   const proceeds = accountOrders(account({ cash: 1000 }), [strat('S', 1, 1000, [state('SPY', { pending: 'short', targetWeight: 0.5 }), state('QQQ', { pending: 'buy', targetWeight: 1.4 })], { borrows: true })]);
   assert.deepEqual(proceeds.orders.map((o) => [o.ticker, o.shares, o.cut]), [
@@ -626,7 +626,7 @@ test('the cash: a short sale brings it, a cover spends it and is never cut, and 
   // Rounding past what the strategy borrows is cut, as rounding past the cash is: 93.75 shares at 160 round to 94, which is 15,040.
   const rounded = accountOrders(account({ cash: 10_000 }), [lev({ borrows: true }, 160)]);
   assert.deepEqual([rounded.orders[0].shares, rounded.orders[0].cut, rounded.cashAfter], [93, true, -4880]);
-  assert.match(rounded.notes[0], /more than the cash, the sales and the strategies' borrowing allow/);
+  assert.match(rounded.notes[0], /more than the cash, the sales and the borrowing of the strategies can pay/);
   // A strategy that can borrow but is listed at 0% gets none of the money, so it lets no one borrow.
   const idle = strat('I', 0, 1000, [], { borrows: true });
   assert.deepEqual(accountOrders(account({ cash: 10_000 }), [lev({}), idle]).orders.map((o) => [o.shares, o.cut]), [[100, true]]);
@@ -654,8 +654,8 @@ test('sales and covers come before purchases and short sales, each by ticker', (
 test('notes: a strategy that holds a short rebalances, and one that sizes sizes its short sales too', () => {
   const S = strat('Shorts', 1, 1000, [state('SPY', { shares: -5 }), state('TLT', { pending: 'short', targetWeight: 0.2 })], { rebalance: 'monthly', sizing: 'invvol' });
   assert.deepEqual(accountOrders(account({ cash: 1000 }), [S]).notes, [
-    'Shorts rebalances monthly. A rebalance due at the next open shows here a bar late, once its backtest has made it.',
-    'Shorts sizes positions by inverse volatility, so the size of a new one here is an estimate from the last close.',
+    'Shorts rebalances monthly. A rebalance at the next open shows here one bar after that open, when its backtest makes it.',
+    'Shorts sizes positions by inverse volatility. Thus the size of a new position here is an estimate from the last close.',
   ]);
 });
 

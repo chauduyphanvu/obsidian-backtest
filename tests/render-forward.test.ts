@@ -42,10 +42,10 @@ test('the sentences under the figures say how the gain and the fall compare with
   const equity = [...before, 118.9, 122, 124, 125, 126];
   const f = forwardFigures(equity.map((_, i) => i * DAY), equity, equity, 19 * DAY);
   assert.deepEqual(windowLines(f), [
-    'The gain beat 67% of the 15 earlier stretches of 5 bars. The middle one gained +3.9%.',
-    'The worst fall, −0.9%, was milder than in 53% of them. The middle one fell −0.9%.',
+    'The return was better than in 67% of the 15 previous periods of 5 bars. Their median return was +3.9%.',
+    'The worst drawdown, −0.9%, was smaller than in 53% of them. Their median worst drawdown was −0.9%.',
   ]);
-  assert.deepEqual(windowLines(forwardFigures(equity.map((_, i) => i * DAY), equity, equity, 21 * DAY)), ['Earlier periods are compared from 5 bars on: 2 more bars to go.']);
+  assert.deepEqual(windowLines(forwardFigures(equity.map((_, i) => i * DAY), equity, equity, 21 * DAY)), ['The plugin compares previous periods when the test has 5 bars. It must have 2 more bars.']);
 });
 
 test('the log line offers the new bars, or only to mark the day, or nothing when it is up to date', () => {
@@ -54,20 +54,20 @@ test('the log line offers the new bars, or only to mark the day, or nothing when
   const log = (checkedThrough: number | null, bars: { t: number; orders: string[] }[] = []) => ({ forward, bars, checkedThrough });
   const two = [row(utc(2026, 11, 16), [order('buy', 'SPY', 1)]), row(utc(2026, 11, 18), [order('sell', 'SPY', 1)])];
 
-  assert.deepEqual(logLine(log(null), two, through), { text: '2 bars since then gave orders. It has not been checked yet.', button: 'Add 2 new bars to the log' });
+  assert.deepEqual(logLine(log(null), two, through), { text: '2 bars that are not in the log gave orders. The log has no "Checked through" date.', button: 'Add 2 new bars to the log' });
   assert.deepEqual(logLine(log(utc(2026, 11, 17), [{ t: utc(2026, 11, 16), orders: ['Buy SPY'] }]), two, through), {
-    text: '1 bar since then gave orders. It was checked through 2026-11-17.',
+    text: '1 bar that are not in the log gave orders. The log is checked through 2026-11-17.',
     button: 'Add 1 new bar to the log',
   });
-  assert.deepEqual(logLine(log(null), [], through), { text: 'No new bar gave an order. It has not been checked yet.', button: 'Mark the log checked through 2026-11-20' });
-  assert.deepEqual(logLine(log(utc(2026, 11, 17)), [], through), { text: 'No new bar gave an order. It was checked through 2026-11-17.', button: 'Mark the log checked through 2026-11-20' });
+  assert.deepEqual(logLine(log(null), [], through), { text: 'No new bar gave an order. The log has no "Checked through" date.', button: 'Set "Checked through" to 2026-11-20' });
+  assert.deepEqual(logLine(log(utc(2026, 11, 17)), [], through), { text: 'No new bar gave an order. The log is checked through 2026-11-17.', button: 'Set "Checked through" to 2026-11-20' });
   assert.deepEqual(logLine(log(through, [{ t: utc(2026, 11, 16), orders: ['Buy SPY'] }]), two.slice(0, 1), through), { text: 'The log is up to date through 2026-11-20.', button: null });
 });
 
 test('the log line names times of day for an intraday test', () => {
   const forward = parseStarted(true);
   const log = { forward, bars: [], checkedThrough: utc(2026, 11, 13, 16, 30) };
-  assert.deepEqual(logLine(log, [], utc(2026, 11, 13, 17, 30)), { text: 'No new bar gave an order. It was checked through 2026-11-13 16:30.', button: 'Mark the log checked through 2026-11-13 17:30' });
+  assert.deepEqual(logLine(log, [], utc(2026, 11, 13, 17, 30)), { text: 'No new bar gave an order. The log is checked through 2026-11-13 16:30.', button: 'Set "Checked through" to 2026-11-13 17:30' });
 });
 
 function parseStarted(intraday = false) {
@@ -114,12 +114,12 @@ test('a note that changed, or that is not the plugin\'s, is left as it is and th
 
   const edited = store(note.replace('sma(4)', 'sma(5)'));
   const refused = await writeLog(edited.process, line, rows, utc(2026, 11, 18), 0);
-  assert.ok(!refused.ok && refused.message.startsWith('The rules or the start were changed after the forward test began'));
+  assert.ok(!refused.ok && refused.message.startsWith('The rules or the start changed after the forward test started'));
   assert.equal(edited.file.text, note.replace('sma(4)', 'sma(5)'));
 
   const foreign = store('# My note\n\n## Log\n');
   const notOurs = await writeLog(foreign.process, undefined, rows, utc(2026, 11, 18), 0);
-  assert.ok(!notOurs.ok && notOurs.message.includes('was not made as a forward test'));
+  assert.ok(!notOurs.ok && notOurs.message.includes('did not make this note as a forward test'));
   assert.equal(foreign.file.text, '# My note\n\n## Log\n');
 });
 
@@ -227,7 +227,7 @@ function stage(over: { failRun?: boolean; refuse?: boolean; source?: string } = 
     },
     append: async (rows, through) => {
       calls.append.push({ rows, through });
-      if (over.refuse) return { ok: false, message: 'The note has changed since this result was drawn, so nothing was written. Try again.' };
+      if (over.refuse) return { ok: false, message: 'The note changed after the plugin showed this result. The plugin did not write to the note. Do the step again.' };
       return writeLog(async (edit) => void (file.text = edit(file.text)), extractBlocks(file.text, 'forward')[0].line, rows, through, utc(2026, 11, 17, 12));
     },
     open: (target) => void calls.opened.push(target),
@@ -249,13 +249,13 @@ const press = (button: El): void => button.click();
 test('a forward block runs its rules, shows its figures, and its button logs the new bars once', async () => {
   const x = stage();
   const { root } = draw(x.source, x.host);
-  assert.ok(root.has('Running the frozen rules'));
+  assert.ok(root.has('The plugin runs the frozen rules'));
   await later();
   assert.equal(x.calls.run, 1);
-  for (const part of ['Since the start', 'Worst fall', 'Time invested', 'Started after the bar of 2020-02-19, from Swing note > Swing.', 'The last bar is 2020-03-10.', 'Prices are three days old.', 'The frozen rules', 'It has not been checked yet.']) {
+  for (const part of ['Since the start', 'Worst drawdown', 'Time invested', 'The test started after the bar of 2020-02-19, from Swing note > Swing.', 'The last bar is 2020-03-10.', 'Prices are three days old.', 'The frozen rules', 'The log has no "Checked through" date.']) {
     assert.ok(root.has(part), part);
   }
-  assert.ok(root.has('Earlier periods are compared only when there are 3 times as many bars'), 'with 20 bars since and 50 before, the comparison waits');
+  assert.ok(root.has('The plugin compares previous periods only if there are 3 times as many bars'), 'with 20 bars since and 50 before, the comparison waits');
 
   root.find('a', 'Swing note > Swing')!.click();
   assert.deepEqual(x.calls.opened, ['Swing note']);
@@ -290,7 +290,7 @@ test('a refused write is said, and the button can be pressed again', async () =>
   const button = root.find('button', 'Add 2 new bars to the log')!;
   press(button);
   await later();
-  const warning = root.all().find((e) => e.className === 'bt-warning' && e.textContent.startsWith('The note has changed'));
+  const warning = root.all().find((e) => e.className === 'bt-warning' && e.textContent.startsWith('The note changed after'));
   assert.ok(warning && !warning.hidden);
   assert.equal(button.disabled, false);
   assert.ok(!x.file.text.includes('Checked through'));
@@ -300,7 +300,7 @@ test('rules edited after the start show the warning and nothing else, and run no
   const x = stage();
   const { root } = draw(x.source.replace('sma(4)', 'sma(5)'), x.host);
   await later();
-  assert.ok(root.has('The rules or the start were changed after the forward test began, so this is no longer a forward test.'));
+  assert.ok(root.has('The rules or the start changed after the forward test started. As a result, this is not a forward test.'));
   assert.equal(x.calls.run, 0);
   assert.equal(root.find('button'), undefined);
 });
@@ -308,7 +308,7 @@ test('rules edited after the start show the warning and nothing else, and run no
 test('a block that cannot be read lists its problems with their lines', () => {
   const x = stage();
   const { root } = draw('started: yesterday\n---\nuniverse: A', x.host);
-  assert.ok(root.has("This forward test can't be read: 3 problems") && root.has('Line 1') && root.has('is not a date'));
+  assert.ok(root.has('This forward test cannot run: 3 problems') && root.has('Line 1') && root.has('is not a date'));
   assert.equal(x.calls.run, 0);
 });
 
@@ -316,8 +316,8 @@ test('a run that fails says so and can be tried again; a block drawn away before
   const failing = stage({ failRun: true });
   const { root } = draw(failing.source, failing.host);
   await later();
-  assert.ok(root.has("The frozen rules couldn't run") && root.has('Yahoo has no prices for A.'));
-  assert.ok(root.find('button', 'Try again'));
+  assert.ok(root.has('The frozen rules did not run') && root.has('Yahoo has no prices for A.'));
+  assert.ok(root.find('button', 'Run again'));
 
   const away = stage();
   const drawn = draw(away.source, away.host);

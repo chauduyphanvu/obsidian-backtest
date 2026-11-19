@@ -89,11 +89,11 @@ test('two headers that become the same name make neither readable, and the messa
   assert.deepEqual(b.columns!.map((c) => c.name), ['score']);
   assert.equal(b.unread!.length, 1);
   assert.equal(b.unread![0].name, 'news_sentiment');
-  assert.match(b.unread![0].why, /2 columns would all be called news_sentiment: "News Sentiment" and "news-sentiment"\. Rename all but one in the file/);
-  assert.throws(() => run('universe: csv:Data/a.csv\nbuy when column(news_sentiment) > 0', { a: b }), /The CSV file a can't give the column news_sentiment: 2 columns would all be called news_sentiment: "News Sentiment" and "news-sentiment"/);
+  assert.match(b.unread![0].why, /2 columns have the name news_sentiment: "News Sentiment" and "news-sentiment"\. In the file, give each of them a different header/);
+  assert.throws(() => run('universe: csv:Data/a.csv\nbuy when column(news_sentiment) > 0', { a: b }), /The CSV file a cannot give the column news_sentiment: 2 columns have the name news_sentiment: "News Sentiment" and "news-sentiment"/);
   // Three of a name are all named.
   const three = parseCsv('Date,Open,High,Low,Close,A b,a-b,A_B\n2024-01-02,1,2,1,2,1,2,3');
-  assert.match(three.unread![0].why, /3 columns would all be called a_b: "A b", "a-b" and "A_B"/);
+  assert.match(three.unread![0].why, /3 columns have the name a_b: "A b", "a-b" and "A_B"/);
   // A clash with a column that holds no numbers is no clash.
   const text = parseCsv('Date,Open,High,Low,Close,Note,note\n2024-01-02,1,2,1,2,hi,4');
   assert.deepEqual(text.columns!.map((c) => c.name), ['note']);
@@ -109,7 +109,7 @@ test('past the limit the first columns are readable and the rest are named as le
   assert.equal(b.columns![MAX_COLUMNS - 1].name, `s${MAX_COLUMNS - 1}`);
   assert.deepEqual(b.unread!.map((u) => u.name), names.slice(MAX_COLUMNS));
   assert.ok(b.unread!.every((u) => u.limit === true));
-  assert.throws(() => run(`universe: csv:Data/a.csv\nbuy when column(s${MAX_COLUMNS}) > 0`, { a: b }), new RegExp(`can't give the column s${MAX_COLUMNS}: only the first ${MAX_COLUMNS} columns of a file can be read`));
+  assert.throws(() => run(`universe: csv:Data/a.csv\nbuy when column(s${MAX_COLUMNS}) > 0`, { a: b }), new RegExp(`cannot give the column s${MAX_COLUMNS}: a rule can read only the first ${MAX_COLUMNS} columns of a file`));
   assert.equal(run(`universe: csv:Data/a.csv\nbuy when column(s0) >= 0`, { a: b }).run.t.length, 2);
 });
 
@@ -126,10 +126,10 @@ test('a file of a date and columns, with no prices, is read as signals that cann
   assert.deepEqual(parseCsv('date,volume,score\n2024-01-02,1,2').columns!.map((c) => c.name), ['volume', 'score']);
   assert.throws(() => parseCsv('date,volume,adj close\n2024-01-02,1,2'), /no open, high, low, close column/);
   // What this changes is only a file that could not be read before. These still cannot.
-  assert.throws(() => parseCsv('date,notes\n2024-01-02,hello'), /header row with date, open, high, low and close columns, but has no open, high, low, close column/);
+  assert.throws(() => parseCsv('date,notes\n2024-01-02,hello'), /header row with date, open, high, low and close columns, but it has no open, high, low, close column/);
   assert.throws(() => parseCsv('a,b\n1,2'), /header row/);
   assert.throws(() => parseCsv('Day,Score\n2024-01-02,1'), /no date, open, high, low, close column/);
-  assert.throws(() => parseCsv('date,score\nsoon,1'), /"date" column could be read/);
+  assert.throws(() => parseCsv('date,score\nsoon,1'), /can read in the "date" column/);
   // A file with some price columns but not all is still an error.
   assert.throws(() => parseCsv('date,close,score\n2024-01-02,1,2'), /no open, high, low column/);
 });
@@ -221,11 +221,11 @@ test('a name can be written in capitals, in quotes with spaces, or start with a 
 });
 
 test('a column reached by of must come from a CSV file, and a rule\'s own column needs its ticker to be one', () => {
-  assert.deepEqual(errorsOf('universe: SPY\nbuy when column(score) of SPY > 0'), ['SPY comes from Yahoo, not from a CSV file, so it has no column called score. Name the file, as in column(score) of csv:Data/signals.csv']);
+  assert.deepEqual(errorsOf('universe: SPY\nbuy when column(score) of SPY > 0'), ['SPY comes from Yahoo, not from a CSV file. Thus it has no column with the name score. Write the file name, for example column(score) of csv:Data/signals.csv']);
   assert.match(errorsOf('universe: SPY\nbuy when column(score) of binance:BTCUSDT > 0')[0], /^BTCUSDT comes from Binance, not from a CSV file/);
   // A bare name that was never given a file is a Yahoo ticker.
   assert.match(errorsOf('universe: SPY\nbuy when column(score) of signals > 0')[0], /^SIGNALS comes from Yahoo/);
-  assert.deepEqual(errorsOf('universe: SPY\nbuy when column(score) > 0'), ['column(score) reads a column of the ticker the rule belongs to, and SPY comes from Yahoo, not from a CSV file. Name the file instead, as in column(score) of csv:Data/signals.csv']);
+  assert.deepEqual(errorsOf('universe: SPY\nbuy when column(score) > 0'), ['column(score) reads a column of the ticker of the rule. SPY comes from Yahoo, not from a CSV file. Write the file name, for example column(score) of csv:Data/signals.csv']);
   // The check follows the rule to every ticker it applies to, and each place is reported once.
   assert.equal(errorsOf('universe: csv:Data/a.csv, SPY, TLT\nbuy when column(x) > 0').length, 1);
   assert.match(errorsOf('universe: csv:Data/a.csv, SPY\nbuy when column(x) > 0')[0], /SPY comes from Yahoo/);
@@ -244,20 +244,20 @@ test('a column reached by of must come from a CSV file, and a rule\'s own column
 });
 
 test('a column that is written wrong says how to write it, where it is', () => {
-  const usage = /^column needs the name of a column in brackets, as in column\(score\) of signals/;
+  const usage = /^Write the name of the column in brackets after column, for example column\(score\) of signals/;
   for (const rule of ['column > 1', 'column() > 1', 'column(a-b) > 1', 'column(1 + 2) > 1', 'column(a b) > 1', 'column(score > 1']) {
     const e = parseSpec(`universe: csv:Data/a.csv\nbuy when ${rule}`).errors;
     assert.equal(e.length, 1, rule);
     assert.match(e[0].message, usage, rule);
     assert.equal(e[0].line, 2);
   }
-  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column("") > 1')[0], /needs a letter or a digit, and "" has none/);
-  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column("%%") > 1')[0], /needs a letter or a digit, and "%%" has none/);
+  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column("") > 1')[0], /must have a letter or a digit\. "" has none/);
+  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column("%%") > 1')[0], /must have a letter or a digit\. "%%" has none/);
   const e = parseSpec('universe: csv:Data/a.csv\nbuy when column(a-b) > 1').errors[0];
   assert.deepEqual([e.from, e.to], [9, 17]);
   // A column is a number, never a condition.
-  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column(a)')[0], /needs a condition/);
-  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column(a) and true')[0], /needs a condition on each side/);
+  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column(a)')[0], /must have a condition/);
+  assert.match(errorsOf('universe: csv:Data/a.csv\nbuy when column(a) and true')[0], /must have a condition on each side/);
 });
 
 test('a parameter called column still works, because it is a function only before brackets', () => {
@@ -360,11 +360,11 @@ test('with fill: close a column from another source is read one bar early, and t
     const rows = explainTrade(bt, bt.run.trades[0]).sections.find((s) => s.id === 'bought')!.rows;
     const code = rows.find((r) => r.code)!;
     assert.match(code.label, /column\(score\) of csv:Data\/sig\.csv > 3$/);
-    assert.match(code.value, /read from sig's row of 2020-01-06/);
+    assert.match(code.value, /read from the sig row of 2020-01-06/);
   }
   // One note says how sig is read, and the note on tickers read a bar early leaves it out.
   assert.deepEqual(close.notes.filter((n) => n.includes('sig')), [
-    "A row of sig counts as known at the end of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future. With fill: close, a rule of A reads the latest row of sig that had ended when its own bar began, never the row of the same date, because the order fills at the close, before that row is known.",
+    'A row of sig counts as known at the end of the day it is dated. Thus the date of each row must be the day of the close that its value comes from. A row with a date before the data that it comes from lets the rules see the future. With fill: close, a rule of A reads the last row of sig that ended before its bar started. It does not read the row of the same date, because the order fills at the close, before that row is known.',
   ]);
   assert.ok(!close.notes.some((n) => n.startsWith('With fill: close, a rule reads the previous bar')));
 });
@@ -391,27 +391,27 @@ test('a ranking by a column holds the ticker with the highest value, tie to the 
 test('a missing column stops the run with the file, the column asked for and the columns it has', () => {
   const a = withColumns(priced(4), { score: [1, 2, 3, 4], rate: [4, 3, 2, 1] });
   assert.throws(() => run('universe: csv:Data/a.csv\nbuy when column(sentiment) > 0', { a }), (e: Error) => {
-    assert.equal(e.message, 'The CSV file a has no column called sentiment. Its columns are score, rate. Only a column with numbers in it can be read.');
+    assert.equal(e.message, 'The CSV file a has no column with the name sentiment. Its columns are score, rate. A rule can read only a column with numbers in it.');
     return true;
   });
-  assert.throws(() => run('universe: A\nbuy when column(x) of csv:Data/sig.csv > 0', { A: priced(4), sig: signals(days(4), { y: [1, 2, 3, 4] }) }), /The CSV file sig has no column called x\. Its columns are y\./);
+  assert.throws(() => run('universe: A\nbuy when column(x) of csv:Data/sig.csv > 0', { A: priced(4), sig: signals(days(4), { y: [1, 2, 3, 4] }) }), /The CSV file sig has no column with the name x\. Its columns are y\./);
   // A file with no columns besides its prices says so.
-  assert.throws(() => run('universe: csv:Data/a.csv\nbuy when column(score) > 0', { a: priced(4) }), /The CSV file a has no column called score\. It has no columns besides its prices\./);
+  assert.throws(() => run('universe: csv:Data/a.csv\nbuy when column(score) > 0', { a: priced(4) }), /The CSV file a has no column with the name score\. It has only price columns\./);
 });
 
 test('a file with no prices cannot be traded, compared with or used for a cash rate, and its prices cannot be read', () => {
   const sig = signals(days(5), { score: [1, 2, 3, 4, 5] });
   const A = priced(5);
   const why = 'has no prices, only columns\\. A strategy can read its columns with column\\(\\.\\.\\.\\) of sig, but sig cannot';
-  assert.throws(() => run('universe: csv:Data/sig.csv\nbuy when column(score) > 0', { sig }), new RegExp(`^Error: sig ${why} be in the universe, because it cannot be traded`));
+  assert.throws(() => run('universe: csv:Data/sig.csv\nbuy when column(score) > 0', { sig }), new RegExp(`^Error: sig ${why} be in the universe, because the strategy cannot trade it`));
   assert.throws(() => run('universe: A\nbenchmark: csv:Data/sig.csv\nbuy when true', { A, sig }), new RegExp(`^Error: sig ${why} be the benchmark`));
   assert.throws(() => run('universe: A\ncash rate: csv:Data/sig.csv\nbuy when true', { A, sig }), new RegExp(`^Error: sig ${why} give the cash rate`));
-  assert.throws(() => run('universe: A\nbuy when close of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so its close can't be read\. Read a column with column\(name\) of sig\./);
-  assert.throws(() => run('universe: A\nbuy when sma(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so its close can't be read/);
-  assert.throws(() => run('universe: A\nbuy when atr(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns, so atr\(\) can't be worked out for it/);
+  assert.throws(() => run('universe: A\nbuy when close of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns\. Thus a rule cannot read its close\. Read a column with column\(name\) of sig\./);
+  assert.throws(() => run('universe: A\nbuy when sma(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns\. Thus a rule cannot read its close/);
+  assert.throws(() => run('universe: A\nbuy when atr(3) of csv:Data/sig.csv > 0', { A, sig }), /^Error: sig has no prices, only columns\. Thus the plugin cannot calculate atr\(\) for it/);
   // A Keltner channel of a column still reads the file's own average true range.
   for (const fn of ['keltner_upper', 'keltner_lower']) {
-    assert.throws(() => run(`universe: A\nbuy when ${fn}(column(score), 2, 2, 2) of csv:Data/sig.csv > 0`, { A, sig }), new RegExp(`^Error: sig has no prices, only columns, so ${fn}\\(\\) can't be worked out for it`));
+    assert.throws(() => run(`universe: A\nbuy when ${fn}(column(score), 2, 2, 2) of csv:Data/sig.csv > 0`, { A, sig }), new RegExp(`^Error: sig has no prices, only columns\\. Thus the plugin cannot calculate ${fn}\\(\\) for it`));
   }
   // What is not a price is allowed: the column itself, and a calendar value or a window of the column.
   assert.equal(run('universe: A\nbuy when sma(column(score), 2) of csv:Data/sig.csv > 1 and month == 1', { A, sig }).run.t.length, 5);
@@ -450,7 +450,7 @@ test('a strategy driven by a signal file: the trade dates follow from the dates 
   const rows = explainTrade(bt, bt.run.trades[0]).sections.find((s) => s.id === 'bought')!.rows;
   const rule = rows.find((r) => r.code)!;
   assert.equal(rule.label, 'buy when column(score) of csv:Data/sig.csv > 0.7');
-  assert.equal(rule.value, 'column(score) of csv:Data/sig.csv 0.8000 > 0.7; read from sig\'s row of 2020-01-03');
+  assert.equal(rule.value, 'column(score) of csv:Data/sig.csv 0.8000 > 0.7 (read from the sig row of 2020-01-03)');
   assert.equal(rule.outcome, 'yes');
 });
 
@@ -466,12 +466,12 @@ test('the result notes which files a strategy reads columns of, and says how a r
   assert.deepEqual(columnNotes(spec('universe: SPY\nbuy when close > sma(5)')), []);
   const one = spec('universe: SPY\nbuy when column(score) of csv:Data/signals.csv > 0');
   assert.deepEqual(columnFiles(one), ['signals']);
-  assert.deepEqual(columnNotes(one), ['A row of signals counts as known at the end of the day it is dated, so each row must carry the day whose close its value was computed from: a row dated earlier than the data behind it lets the rules see the future.']);
+  assert.deepEqual(columnNotes(one), ['A row of signals counts as known at the end of the day it is dated. Thus the date of each row must be the day of the close that its value comes from. A row with a date before the data that it comes from lets the rules see the future.']);
   const many = spec('universe: csv:Data/a.csv, csv:Data/b.csv\nhold: top 1 by column(x)\nbuy when column(y) of csv:Data/c.csv > 0');
   assert.deepEqual(columnFiles(many), ['c', 'a', 'b']);
   assert.match(columnNotes(many)[0], /^A row of c, a and b counts as known/);
-  // One sentence.
-  assert.equal(columnNotes(many)[0].split(/\.\s/).length, 1);
+  // Three sentences.
+  assert.equal(columnNotes(many)[0].split(/\.\s/).length, 3);
 });
 
 test('a run through the worker\'s message handler, with the file posted as data, gives what the main thread gives', async () => {
@@ -494,7 +494,7 @@ test('a run through the worker\'s message handler, with the file posted as data,
   const h2 = serve((m) => bad.push(structuredClone(m)), 0);
   await h2(structuredClone({ type: 'data', id: 1, data } satisfies ToWorker));
   await h2(structuredClone({ type: 'run', id: 4, data: 1, block: { source: source.replace('score) of csv', 'nope) of csv'), defaults: {}, overrides: {} } } satisfies ToWorker));
-  assert.deepEqual(bad, [{ type: 'error', id: 4, message: 'The CSV file sig has no column called nope. Its columns are score. Only a column with numbers in it can be read.' }]);
+  assert.deepEqual(bad, [{ type: 'error', id: 4, message: 'The CSV file sig has no column with the name nope. Its columns are score. A rule can read only a column with numbers in it.' }]);
 });
 
 test('the size of a result counts the columns a file carries', () => {

@@ -45,8 +45,8 @@ export function windowLines(f: ForwardFigures): string[] {
   const w = f.windows;
   if (!w.ok) return [w.message];
   return [
-    `The gain beat ${pct(w.beaten, 0)} of the ${w.count} earlier stretches of ${plural(f.bars, 'bar')}. The middle one gained ${signedPct(w.typicalReturn)}.`,
-    `The worst fall, ${pct(f.worstFall ?? NaN)}, was milder than in ${pct(w.milder, 0)} of them. The middle one fell ${pct(w.typicalFall)}.`,
+    `The return was better than in ${pct(w.beaten, 0)} of the ${w.count} previous periods of ${plural(f.bars, 'bar')}. Their median return was ${signedPct(w.typicalReturn)}.`,
+    `The worst drawdown, ${pct(f.worstFall ?? NaN)}, was smaller than in ${pct(w.milder, 0)} of them. Their median worst drawdown was ${pct(w.typicalFall)}.`,
   ];
 }
 
@@ -63,14 +63,14 @@ export interface LogLine {
 export function logLine(log: Pick<ForwardLog, 'forward' | 'bars' | 'checkedThrough'>, rows: LogRow[], through: number): LogLine {
   const at = (t: number) => stamp(t, log.forward.intraday);
   const fresh = newRows(log, rows).length;
-  const checked = log.checkedThrough === null ? 'It has not been checked yet.' : `It was checked through ${at(log.checkedThrough)}.`;
-  if (fresh > 0) return { text: `${plural(fresh, 'bar')} since then gave orders. ${checked}`, button: `Add ${plural(fresh, 'new bar')} to the log` };
-  if (log.checkedThrough === null || log.checkedThrough < through) return { text: `No new bar gave an order. ${checked}`, button: `Mark the log checked through ${at(through)}` };
+  const checked = log.checkedThrough === null ? 'The log has no "Checked through" date.' : `The log is checked through ${at(log.checkedThrough)}.`;
+  if (fresh > 0) return { text: `${plural(fresh, 'bar')} that are not in the log gave orders. ${checked}`, button: `Add ${plural(fresh, 'new bar')} to the log` };
+  if (log.checkedThrough === null || log.checkedThrough < through) return { text: `No new bar gave an order. ${checked}`, button: `Set "Checked through" to ${at(through)}` };
   return { text: `The log is up to date through ${at(log.checkedThrough)}.`, button: null };
 }
 
 function errorsIn(root: HTMLElement, errors: Diagnostic[], source: string): void {
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? "This forward test can't be read" : `This forward test can't be read: ${errors.length} problems`);
+  h(root, 'div', 'bt-error-title', errors.length === 1 ? 'This forward test cannot run' : `This forward test cannot run: ${errors.length} problems`);
   const lines = source.split('\n');
   const list = h(root, 'ul', 'bt-errors');
   for (const e of errors) {
@@ -93,7 +93,7 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
   if (forwardChanged(forward)) {
     h(root, 'div', 'bt-title', 'Forward test');
     h(root, 'div', 'bt-warning', CHANGED);
-    h(root, 'div', 'bt-note', 'Start a new forward test from the strategy, or put the rules and the start back as they were.');
+    h(root, 'div', 'bt-note', 'Start a new forward test from the strategy. Or, change the rules and the start to their initial text.');
     return () => {};
   }
 
@@ -121,7 +121,7 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
     body.replaceChildren();
 
     const sub = h(body, 'div', 'bt-sub');
-    sub.append(`Started after the bar of ${at(forward.started)}${forward.intraday ? ' UTC' : ''}, from `);
+    sub.append(`The test started after the bar of ${at(forward.started)}${forward.intraday ? ' UTC' : ''}, from `);
     const { label, target } = linkParts(forward.from);
     const link = h(sub, 'a', 'internal-link bt-fwd-link', label);
     link.setAttribute('data-href', target);
@@ -134,7 +134,7 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
     for (const text of out.warnings) h(body, 'div', 'bt-warning', text);
 
     if (span === null) {
-      h(body, 'div', 'bt-note', `No bar has come since the test began. ${windowLines(figs)[0]}`);
+      h(body, 'div', 'bt-note', `There are no new bars after the start of the test. ${windowLines(figs)[0]}`);
     } else {
       const tiles = h(h(body, 'div', 'bt-fwd-tiles-box'), 'div', 'bt-fwd-tiles');
       const tile = (name: string, value: string, hint: string): void => {
@@ -145,13 +145,13 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
       };
       const vs = (text: string) => `${bt.benchmark.label} ${text}`;
       tile('Since the start', signedPct(figs.strategy ?? NaN), vs(signedPct(figs.benchmark ?? NaN)));
-      tile('Worst fall', pct(figs.worstFall ?? NaN), vs(pct(span.benchmarkStats.maxDrawdown)));
+      tile('Worst drawdown', pct(figs.worstFall ?? NaN), vs(pct(span.benchmarkStats.maxDrawdown)));
       tile('Bars', String(figs.bars), `after ${at(forward.started)}`);
       // A block that can borrow may hold more than its equity, or short, as on the result's own tile.
       if (bt.spec.margin) tile('Exposure', pct(span.stats.exposure, 0), `gross, net ${pct(span.stats.netExposure ?? NaN, 0)}`);
-      else tile('Time invested', pct(span.stats.exposure, 0), 'of the bars since');
+      else tile('Time invested', pct(span.stats.exposure, 0), 'of the bars after the start');
       for (const line of windowLines(figs)) h(body, 'div', 'bt-note', line);
-      if (figs.windows.ok) h(body, 'div', 'bt-note', 'The earlier stretches overlap and are the period the rules may have been chosen on, so this flatters them.');
+      if (figs.windows.ok) h(body, 'div', 'bt-note', 'The previous periods overlap. Also, these are possibly the periods that the rules were selected on. Thus this comparison makes the rules look better than they are.');
     }
 
     if (log !== null) logSection(body, log, rows, through);
@@ -164,14 +164,14 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
     const section = h(into, 'div', 'bt-fwd-log');
     h(section, 'div', 'bt-fwd-heading', 'Log');
     if (!log.ok) {
-      h(section, 'div', 'bt-note', `The log can't be used. ${log.message}`);
+      h(section, 'div', 'bt-note', `The plugin cannot use the log. ${log.message}`);
       return;
     }
     const changed = revisions(log, rows);
     if (changed.length > 0) {
       const list = h(section, 'ul', 'bt-fwd-revisions');
       for (const r of changed) h(list, 'li', undefined, r.message);
-      h(section, 'div', 'bt-note', 'Prices adjusted for dividends and splits since then can move an order that was close to its threshold. The log keeps what it said.');
+      h(section, 'div', 'bt-note', 'Prices adjusted for dividends and splits after that date can change an order that was near its threshold. The log keeps the orders that it shows.');
     }
     const line = logLine(log, rows, through);
     h(section, 'div', 'bt-note', line.text);
@@ -191,7 +191,7 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
           button.disabled = false;
         })
         .catch((e: unknown) => {
-          problem.textContent = `Couldn't write to the note. ${e instanceof Error ? e.message : String(e)}`;
+          problem.textContent = `Cannot write to the note. ${e instanceof Error ? e.message : String(e)}`;
           problem.hidden = false;
           button.disabled = false;
         });
@@ -204,16 +204,16 @@ export function renderForward(parent: HTMLElement, source: string, host: Forward
     refresh.disabled = true;
     try {
       if (!kept || latest === null) {
-        message('Running the frozen rules…');
+        message('The plugin runs the frozen rules…');
         latest = await host.run(forward.source, force);
       }
       if (!stopped) await paint(latest);
     } catch (e) {
       if (stopped) return;
       body.replaceChildren();
-      h(body, 'div', 'bt-error-title', "The frozen rules couldn't run");
+      h(body, 'div', 'bt-error-title', 'The frozen rules did not run');
       h(body, 'div', 'bt-note', e instanceof Error ? e.message : String(e));
-      h(body, 'button', 'bt-button', 'Try again').addEventListener('click', () => void load(false));
+      h(body, 'button', 'bt-button', 'Run again').addEventListener('click', () => void load(false));
     } finally {
       refresh.disabled = false;
     }

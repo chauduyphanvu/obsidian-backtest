@@ -117,33 +117,33 @@ export function duration(ms: number): string {
   return `${minutes} minutes`;
 }
 
-const SMALLER = 'A later "from" date, a longer "interval" or fewer tickers make it smaller.';
+const SMALLER = 'To make it smaller, move the "from" date forward, use a longer "interval" or use a smaller number of tickers.';
 /** A longer interval leaves the smaller bars as many as they were, so it helps little when they are most of the bars. */
-const SMALLER_INSIDE = 'Most of them are the smaller bars of "magnify", so a longer "magnify" size, a later "from" date or fewer tickers make it smaller.';
-const FOREGROUND = 'Backtests run in the foreground here, so Obsidian does not respond while one runs.';
+const SMALLER_INSIDE = 'Most of them are the smaller bars of "magnify". To make it smaller, use a longer "magnify" size, move the "from" date forward or use a smaller number of tickers.';
+const FOREGROUND = 'Backtests run in the foreground here. Obsidian cannot do other work while a backtest runs.';
 
 /** Why a run of this size is not started where `where` says, or null when it fits. */
 export function sizeRefusal(size: RunSize, where: 'worker' | 'here'): string | null {
   const limits = LIMITS[where];
   const lead = where === 'here' ? `${FOREGROUND} ` : '';
-  const limit = where === 'here' ? 'the limit here is' : 'the limit is';
+  const limit = where === 'here' ? 'The limit here is' : 'The limit is';
   if (size.bars > limits.bars) {
     const smaller = 2 * (size.inside ?? 0) > size.bars ? SMALLER_INSIDE : SMALLER;
-    return `${lead}This run has ${amount(size.bars, limits.bars)} bars across ${tickers(size.tickers)}; ${limit} ${amount(limits.bars, size.bars)}. ${smaller}`;
+    return `${lead}This run has ${amount(size.bars, limits.bars)} bars across ${tickers(size.tickers)}. ${limit} ${amount(limits.bars, size.bars)}. ${smaller}`;
   }
   if (size.ruleWork > limits.ruleWork) {
-    return `${lead}Its rules work out ${amount(size.ruleWork, limits.ruleWork)} values, one for each part of a ticker's rules on each of its bars; ${limit} ${amount(limits.ruleWork, size.ruleWork)}. Shorter rules, a later "from" date, a longer "interval" or fewer tickers make it smaller.`;
+    return `${lead}Its rules calculate ${amount(size.ruleWork, limits.ruleWork)} values: one for each part of the rules of a ticker on each of its bars. ${limit} ${amount(limits.ruleWork, size.ruleWork)}. To make it smaller, use shorter rules, move the "from" date forward, use a longer "interval" or use a smaller number of tickers.`;
   }
   if (size.windowWork > limits.windowWork) {
-    return `${lead}Its functions read ${amount(size.windowWork, limits.windowWork)} prices, the period of each function on each bar; ${limit} ${amount(limits.windowWork, size.windowWork)}. Shorter periods, a later "from" date or a longer "interval" make it smaller.`;
+    return `${lead}Its functions read ${amount(size.windowWork, limits.windowWork)} prices: the period of each function on each bar. ${limit} ${amount(limits.windowWork, size.windowWork)}. To make it smaller, use shorter periods, move the "from" date forward or use a longer "interval".`;
   }
   return null;
 }
 
 /** Why a run was stopped after `ms`. With its size for a single backtest; without one for a step of a sweep or a luck check. */
 export function timeMessage(ms: number, size: RunSize | null): string {
-  if (size === null) return `This was stopped after ${duration(ms)} without finishing a backtest, the most one may take.`;
-  return `This backtest was stopped after ${duration(ms)}, the most one run may take. It has ${amount(size.bars)} bars across ${tickers(size.tickers)}. A later "from" date, a longer "interval", fewer tickers or shorter periods make it faster.`;
+  if (size === null) return `The plugin stopped this after ${duration(ms)}, the maximum time for one backtest, before a backtest was complete.`;
+  return `The plugin stopped this backtest after ${duration(ms)}, the maximum time for one run. It has ${amount(size.bars)} bars across ${tickers(size.tickers)}. To make it faster, move the "from" date forward, use a longer "interval", use a smaller number of tickers or use shorter periods.`;
 }
 
 /** A run refused before it started (size) or stopped while it ran (time). */
@@ -162,7 +162,7 @@ export class LimitError extends Error {
 
 /** The label of the button that runs a refused or stopped run again without its limit. */
 export function anywayLabel(error: LimitError): string {
-  return error.kind === 'time' ? `Run it anyway, for up to ${duration(LIMITS.anywayMs)}` : 'Run it anyway';
+  return error.kind === 'time' ? `Run it again for a maximum of ${duration(LIMITS.anywayMs)}` : 'Run it with no size limit';
 }
 
 /** About how many bytes a kept result holds: its prices, its steps, its trades and its fills (five numbers or names each). */

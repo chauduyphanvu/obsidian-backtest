@@ -65,7 +65,7 @@ test('a new setting goes after the last line that sets something, or first', () 
   assert.equal(next, ACCOUNT.replace('  fills: Broker/x.csv\n', '  fills: Broker/x.csv\nfills columns: price = Px\n'));
   const { config, errors } = parseAccount(SOURCE.replace('  fills: Broker/x.csv\n', '  fills: Broker/x.csv\nfills columns: price = Px\n'));
   assert.deepEqual(config.fillColumns, { price: 'Px' });
-  assert.deepEqual(errors.map((e) => e.message), ['fills needs a fills from line: the first day the account followed its strategies, such as fills from: 2026-06-01']);
+  assert.deepEqual(errors.map((e) => e.message), ['Add a fills from line: the first day that the account followed its strategies, for example fills from: 2026-06-01']);
   const bare = [`${fence}account`, '[[A]]', fence].join('\n');
   assert.equal(setSettingInNote(bare, 0, '[[A]]', 'account', 'cash', '100'), [`${fence}account`, 'cash: 100', '[[A]]', fence].join('\n'));
 });

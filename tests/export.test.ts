@@ -188,11 +188,11 @@ const SNAPSHOT = [
   '',
   '# Trend following',
   '',
-  'Snapshot taken on 2026-11-17. The run covers 2020-01-01 to 2020-01-03, starting with $10k, and is compared with SPY buy & hold.',
+  'Snapshot made on 2026-11-17. The run is from 2020-01-01 to 2020-01-03. Start capital: $10k. The run is compared with SPY buy & hold.',
   '',
   '## Strategy',
   '',
-  'Kept as plain text, so it does not run again.',
+  'This copy is text, not a strategy block. Thus it does not run again.',
   '',
   '```text',
   'universe: SPY, TLT',
@@ -209,20 +209,20 @@ const SNAPSHOT = [
   '| Sharpe ratio | 0.88 | 0.50 |',
   '| Time invested | 63% | 100% |',
   '| Trades | 2 closed, 1 open | – |',
-  '| Share won | 50% | – |',
+  '| Trades won | 50% | – |',
   '',
-  '## Positions now',
+  '## Positions',
   '',
   '| Ticker | Weight | Now |',
   '| --- | ---: | --- |',
   '| SPY | 50% | Long since 2020-01-07 |',
   '| TLT | 50% | In cash, buys at the next open |',
   '',
-  '## Latest trades',
+  '## Last trades',
   '',
   '| Ticker | Bought | At | Sold | At | Return | Exit |',
   '| --- | --- | ---: | --- | ---: | ---: | --- |',
-  '| TLT | 2020-01-07 | 50.00 | – | – | +4.0% | still held |',
+  '| TLT | 2020-01-07 | 50.00 | – | – | +4.0% | not closed |',
   '| SPY | 2020-01-02 | 100.00 | 2020-01-10 | 110.00 | +10.0% | sell rule |',
   '',
 ].join('\n');
@@ -241,7 +241,7 @@ test('snapshot: a strategy with a commission says what it paid, and one built in
   const bt = run(src);
   assert.ok(bt.run.commission! > 0 && bt.run.costs > bt.run.commission!);
   const md = snapshotMarkdown({ name: 'Adds', source: src, backtest: bt, now: NOW });
-  assert.ok(md.includes(`| Costs paid | ${money(bt.run.costs)}, of which ${money(bt.run.commission!)} commission | – |\n`), md);
+  assert.ok(md.includes(`| Costs paid | ${money(bt.run.costs)} (${money(bt.run.commission!)} commission) | – |\n`), md);
   assert.ok(md.includes('| A | 100% | Long since 2020-01-07, 3 of 3 entries |'), md);
   assert.ok(md.includes('| A | 2020-01-07, 3 entries | '), md);
   // Without a commission the figures have no such row, as before.
@@ -295,12 +295,12 @@ test('snapshot: only the latest 30 trades, a fence that outgrows backticks in th
   const many = Array.from({ length: 35 }, (_, i) => trade({ asset: `T${i}`, entryT: utc(2020, 1, 1) + i * DAY }));
   const md = snapshotMarkdown({ name: '', source: 'a ```` b', backtest: result({ trades: many }), now: NOW });
   assert.ok(md.includes('# Backtest\n'));
-  assert.ok(md.includes('Showing the latest 30 of 35.'));
+  assert.ok(md.includes('The last 30 of 35 trades.'));
   assert.ok(md.includes('| T34 |') && md.includes('| T5 |') && !md.includes('| T4 |'));
   assert.ok(md.includes('`````text\na ```` b\n`````\n'));
   const piped = snapshotMarkdown({ name: 'p', source: 'x', backtest: result({ trades: [trade({ asset: 'A|B' })] }), now: NOW });
   assert.ok(piped.includes('| A\\|B |'));
-  assert.ok(snapshotMarkdown({ name: 'p', source: 'x', backtest: result({ trades: [] }), now: NOW }).includes('## Latest trades\n\nNo trades.\n'));
+  assert.ok(snapshotMarkdown({ name: 'p', source: 'x', backtest: result({ trades: [] }), now: NOW }).includes('## Last trades\n\nNo trades.\n'));
 });
 
 // --- What to write to a note's front matter ------------------------------------------------------------------------

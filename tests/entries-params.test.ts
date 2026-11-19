@@ -58,7 +58,7 @@ test('without an add rule the values above 1 say so in plain words, in the sweep
   const noAdd = 'universe: A\nn = 1 in 1..4\nentries: n\nbuy when close > sma(20)\nsell when close < sma(20)';
   const sweep = await runSweep(noAdd, data, {});
   assert.deepEqual(sweep.points.map((p) => p.error === null), [true, false, false, false]);
-  const said = '"entries: 2" builds each position in 2 entries, so it needs an add rule that says when to make the next one, such as add when close > last entry price * 1.03';
+  const said = '"entries: 2" makes each position in 2 entries. Thus it must have an add rule that tells when to make the next entry, for example add when close > last entry price * 1.03';
   assert.equal(sweep.points[1].error, said);
   // The bar asks the block to run with the slider's value and reports the message in a sentence of its own.
   const shown: unknown[] = [];

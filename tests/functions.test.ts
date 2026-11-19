@@ -59,54 +59,54 @@ test('a series can come first where a function reads one, and the others take no
   assert.equal((num('hma(rsi(14), 21)') as Extract<Expr, { k: 'ind' }>).src!.k, 'ind');
   assert.equal((num('keltner_upper(volume, 20, 2, 10)') as Extract<Expr, { k: 'ind' }>).args.length, 3);
   assert.equal((num('stoch_k(14)') as Extract<Expr, { k: 'ind' }>).src, null);
-  assert.equal(failure('adx(close) > 25'), 'adx() periods must be plain numbers');
-  assert.equal(failure('mfi(volume) > 25'), 'mfi() periods must be plain numbers');
+  assert.equal(failure('adx(close) > 25'), 'The periods of adx() must be numbers or parameters');
+  assert.equal(failure('mfi(volume) > 25'), 'The periods of mfi() must be numbers or parameters');
 });
 
 test('wrong numbers of arguments and lengths out of range are refused in plain words', () => {
-  assert.equal(failure('adx(14, 3) > 25'), 'adx() takes at most 1 number');
-  assert.equal(failure('stoch_d(14, 3, 3, 2) > 25'), 'stoch_d() takes at most 3 numbers');
-  assert.equal(failure('obv(5) > 0'), 'obv() takes no arguments');
-  assert.equal(failure('wma() > 0'), 'wma() needs a period, as in wma(20)');
-  assert.equal(failure('slope() > 0'), 'slope() needs a period, as in slope(20)');
-  assert.equal(failure('adx(0) > 25'), 'adx(): 0 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('adx(1.5) > 25'), 'adx(): 1.5 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('adx(10001) > 25'), 'adx(): 10001 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('stoch_k(14, 0) > 25'), 'stoch_k(): 0 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('keltner_upper(20, 2, 0) > 25'), 'keltner_upper(): 0 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('keltner_upper(20, 0) > 25'), 'keltner_upper(): 0 is not a valid band width');
-  assert.equal(failure('supertrend(10, 0) > 25'), 'supertrend(): 0 is not a valid multiplier');
+  assert.equal(failure('adx(14, 3) > 25'), 'adx() can have a maximum of 1 number');
+  assert.equal(failure('stoch_d(14, 3, 3, 2) > 25'), 'stoch_d() can have a maximum of 3 numbers');
+  assert.equal(failure('obv(5) > 0'), 'obv() cannot have arguments');
+  assert.equal(failure('wma() > 0'), 'wma() must have a period, for example wma(20)');
+  assert.equal(failure('slope() > 0'), 'slope() must have a period, for example slope(20)');
+  assert.equal(failure('adx(0) > 25'), 'adx(): 0 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('adx(1.5) > 25'), 'adx(): 1.5 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('adx(10001) > 25'), 'adx(): 10001 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('stoch_k(14, 0) > 25'), 'stoch_k(): 0 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('keltner_upper(20, 2, 0) > 25'), 'keltner_upper(): 0 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('keltner_upper(20, 0) > 25'), 'keltner_upper(): 0 is not a permitted band width');
+  assert.equal(failure('supertrend(10, 0) > 25'), 'supertrend(): 0 is not a permitted multiplier');
   // These need at least two bars: a line, a spread or a correlation through one value says nothing.
-  for (const name of ['slope', 'zscore', 'cci', 'hma']) assert.equal(failure(`${name}(1) > 0`), `${name}(): 1 is not a valid period. Use a whole number from 2 to 10000`);
-  assert.equal(failure('correl(close of SPY, 1) > 0'), 'correl(): 1 is not a valid period. Use a whole number from 2 to 10000');
+  for (const name of ['slope', 'zscore', 'cci', 'hma']) assert.equal(failure(`${name}(1) > 0`), `${name}(): 1 is not a permitted period. Use a whole number from 2 to 10000`);
+  assert.equal(failure('correl(close of SPY, 1) > 0'), 'correl(): 1 is not a permitted period. Use a whole number from 2 to 10000');
   // A length of 1 is fine where it means something.
   for (const name of ['adx', 'plus_di', 'minus_di', 'williams_r', 'mfi', 'vwap', 'wma', 'median', 'percent_rank']) assert.deepEqual(parseSpec(`universe: A\nbuy when ${name}(1) > 0`).errors, [], name);
 });
 
 test('correl needs the other ticker\'s series first, and bars_since a condition', () => {
-  assert.equal(failure('correl() > 0'), "correl() needs the other ticker's series first, as in correl(close of SPY, 60)");
-  assert.equal(failure('correl(60) > 0'), "correl() needs the other ticker's series first, as in correl(close of SPY, 60)");
-  assert.equal(failure('correl(close of SPY) > 0'), 'correl() needs a period, as in correl(close of SPY, 20)');
-  assert.equal(failure('correl(close > 1, 20) > 0'), 'correl() needs a number, not a condition');
-  assert.equal(failure('bars_since() > 0'), 'bars_since() takes one condition, as in bars_since(close crosses above sma(50))');
-  assert.equal(failure('bars_since(close > 1, 2) > 0'), 'bars_since() takes one condition, as in bars_since(close crosses above sma(50))');
-  assert.equal(failure('bars_since(close) > 0'), 'bars_since() needs a condition, not a number, as in bars_since(close crosses above sma(50))');
-  assert.match(problems('bars_since(bars held > 3) > 0')[0], /"bars held" can't go inside bars_since\(\)/);
+  assert.equal(failure('correl() > 0'), "The first value of correl() must be a series of the other ticker, for example correl(close of SPY, 60)");
+  assert.equal(failure('correl(60) > 0'), "The first value of correl() must be a series of the other ticker, for example correl(close of SPY, 60)");
+  assert.equal(failure('correl(close of SPY) > 0'), 'correl() must have a period, for example correl(close of SPY, 20)');
+  assert.equal(failure('correl(close > 1, 20) > 0'), 'correl() must have a number, not a condition');
+  assert.equal(failure('bars_since() > 0'), 'bars_since() must have one condition, for example bars_since(close crosses above sma(50))');
+  assert.equal(failure('bars_since(close > 1, 2) > 0'), 'bars_since() must have one condition, for example bars_since(close crosses above sma(50))');
+  assert.equal(failure('bars_since(close) > 0'), 'bars_since() must have a condition, not a number, for example bars_since(close crosses above sma(50))');
+  assert.match(problems('bars_since(bars held > 3) > 0')[0], /You cannot use "bars held" in bars_since\(\)/);
   assert.deepEqual(problems('bars_since(close crosses above sma(50)) < 10'), []);
 });
 
 test('supertrend_up is a condition and supertrend a number', () => {
   assert.deepEqual(parseSpec('universe: A\nbuy when supertrend_up(10, 3)').errors, []);
   assert.deepEqual(parseSpec('universe: A\nbuy when supertrend_up() and not close < sma(5)\nsell when not supertrend_up()').errors, []);
-  assert.match(failure('supertrend(10, 3)'), /A rule needs a condition/);
-  assert.match(failure('supertrend_up(10, 3) > 0'), /A comparison needs a number, not a condition/);
+  assert.match(failure('supertrend(10, 3)'), /A rule must have a condition/);
+  assert.match(failure('supertrend_up(10, 3) > 0'), /A comparison must have a number, not a condition/);
   assert.deepEqual(parseSpec('universe: A\nbuy when close > supertrend(10, 3)').errors, []);
   // Every other function is a number.
   for (const name of NEW.filter((n) => n !== 'supertrend_up')) {
     const { lead, params } = INDICATORS[name];
     const numbers = params.map((d) => d ?? 20).join(', ');
     const call = lead === 'series' ? `${name}(close of SPY, ${numbers})` : lead === 'condition' ? `${name}(close > 1)` : `${name}(${numbers})`;
-    assert.match(failure(call), /A rule needs a condition/, name);
+    assert.match(failure(call), /A rule must have a condition/, name);
   }
 });
 
@@ -230,13 +230,13 @@ test('volume functions say so when the prices have none', () => {
   const none = market(60, 3, false);
   for (const call of ['mfi(14)', 'obv()', 'vwap(20)']) {
     const name = call.split('(')[0];
-    assert.throws(() => values(`${call} > 0`, { A: none }), new RegExp(`^Error: A has no volume, which ${name}\\(\\) needs`), call);
+    assert.throws(() => values(`${call} > 0`, { A: none }), new RegExp(`^Error: A has no volume, but ${name}\\(\\) must have volume`), call);
   }
   // Another ticker's prices are checked the same way, and named.
   assert.throws(() => values('mfi(14) of IDX > 0', { A: market(60), IDX: none }), /IDX has no volume/);
   // The run itself stops with that message, rather than never buying.
   const { spec } = parseSpec('universe: A\nbuy when obv() > sma(obv(), 5)');
-  assert.throws(() => runBacktest(spec!, new Map([['A', none]])), /A has no volume, which obv\(\) needs/);
+  assert.throws(() => runBacktest(spec!, new Map([['A', none]])), /A has no volume, but obv\(\) must have volume/);
   // Prices with a little volume are fine, and the others never ask for it.
   const some = { ...none, v: none.v.map((_, i) => (i === 30 ? 5 : 0)) };
   assert.doesNotThrow(() => values('obv() > 0', { A: some }));
@@ -342,7 +342,7 @@ test('correl on a day the other ticker had no new bar sees a change of 0, and an
   const rows = explainTrade(bt, bt.run.trades[0]).sections.find((s) => s.id === 'bought')!.rows;
   const rule = rows.find((r) => r.code && r.label.includes('correl'));
   assert.ok(rule, rows.map((r) => r.label).join('\n'));
-  assert.match(rule.value, /read from CRY's bar of 2020-01-/);
+  assert.match(rule.value, /read from the CRY bar of 2020-01-/);
   assert.match(rule.value, /correl\(close of binance:CRY, 6\) -?[0-9.]+ > 0\.1/);
 });
 
@@ -497,10 +497,10 @@ test('every function completes, with its signature and what it does', () => {
 });
 
 test('the help for a function says whether it reads a series, needs volume, or needs the other ticker', () => {
-  for (const name of ['mfi', 'obv', 'vwap']) assert.match(docFor(name)!.text, /no series and needs volume/, name);
-  assert.match(docFor('correl')!.text, /reads close for this ticker; the series written first is read as of reads it/);
-  assert.match(docFor('bars_since')!.text, /no series, only a condition/);
-  assert.match(docFor('keltner_upper')!.text, /read from the ticker’s own bars/);
+  for (const name of ['mfi', 'obv', 'vwap']) assert.match(docFor(name)!.text, /no series argument,( and)? the ticker must have volume/, name);
+  assert.match(docFor('correl')!.text, /reads close for this ticker, and the series you write first as of reads it/);
+  assert.match(docFor('bars_since')!.text, /no series argument, only a condition/);
+  assert.match(docFor('keltner_upper')!.text, /average true range of the last atr bars of the ticker/);
 });
 
 test('an explanation labels each function with its value, and a trend by its direction and line', () => {

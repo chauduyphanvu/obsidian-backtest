@@ -13,7 +13,7 @@ import type { Bars } from './types.ts';
 /** The note property that tells the plugin it made the note, as `ORDERS_MARKER` does for the orders note. */
 export const FORWARD_MARKER = 'backtest_forward';
 
-export const CHANGED = 'The rules or the start were changed after the forward test began, so this is no longer a forward test.';
+export const CHANGED = 'The rules or the start changed after the forward test started. As a result, this is not a forward test.';
 
 /** A forward test is compared with earlier periods only from this many bars on. */
 export const MIN_FORWARD_BARS = 5;
@@ -135,7 +135,7 @@ export function pinDefaults(source: string, defaults: Defaults): string {
   return [
     body,
     '',
-    '# Pinned when the forward test began, so a later change to the plugin settings cannot move it.',
+    '# Plugin settings at the start of the forward test. If you change the plugin settings, this test does not change.',
     ...(scoped ? ['for all:'] : []),
     ...open.map(([key, value]) => `${key}: ${value}`),
   ].join('\n');
@@ -161,10 +161,10 @@ export function forwardLink(notePath: string, name: string | null): string {
  * Refuses a strategy that does not run, and one with a `to:` date, which never sees a new bar.
  */
 export function makeForward(input: ForwardStart): { ok: true; note: string } | Refusal {
-  if (!WIKILINK.test(input.link)) return { ok: false, message: `The link ${input.link} can't be written into a note. Write it as [[Note name#Strategy name]].` };
+  if (!WIKILINK.test(input.link)) return { ok: false, message: `The plugin cannot write the link ${input.link} into a note. Write it as [[Note name#Strategy name]].` };
   const { spec, errors } = parseSpec(input.source, { defaults: input.defaults });
-  if (!spec) return { ok: false, message: `This strategy has a problem, so a forward test can't start from it. Line ${errors[0].line}: ${errors[0].message}` };
-  if (spec.to !== null) return { ok: false, message: 'This strategy stops at a "to" date, so it never sees a new bar. Take the "to" line out before starting a forward test.' };
+  if (!spec) return { ok: false, message: `This strategy has a problem. Thus a forward test cannot start from it. Line ${errors[0].line}: ${errors[0].message}` };
+  if (spec.to !== null) return { ok: false, message: 'This strategy stops at a "to" date. Thus it does not get new bars. Remove the "to" line before you start a forward test.' };
 
   const frozen = pinDefaults(input.source, input.defaults);
   const started = stamp(input.started, input.intraday);
@@ -174,7 +174,7 @@ export function makeForward(input: ForwardStart): { ok: true; note: string } | R
   const note = [
     ['---', `${FORWARD_MARKER}: true`, '---'].join('\n'),
     `# Forward test${title ? ` of ${title}` : ''}`,
-    `The rules below were frozen after the bar of ${started}${input.intraday ? ' UTC' : ''}, taken from ${input.link}. Only bars after that count. Nothing here places an order.`,
+    `The plugin froze the rules below after the bar of ${started}${input.intraday ? ' UTC' : ''}. They are from ${input.link}. Only the bars after that bar count. The plugin does not send orders.`,
     fenced(block, 'forward'),
     '## Log',
   ].join('\n\n');
@@ -212,20 +212,20 @@ export function parseForward(body: string): { forward: ForwardBlock | null; erro
     if (!text || text.startsWith('#')) continue;
     const m = text.match(SETTING);
     const key = m?.[1].toLowerCase().replace(/\s+/g, ' ');
-    if (!m || key === undefined) errors.push({ line: i + 1, message: 'Not a setting. Write started:, from: and check: lines, then ---' });
+    if (!m || key === undefined) errors.push({ line: i + 1, message: 'This line is not a setting. Write the started:, from: and check: lines, then ---' });
     else if (!KEYS.includes(key)) errors.push({ line: i + 1, message: `Unknown setting "${m[1]}". Settings: ${KEYS.join(', ')}` });
-    else if (found.has(key)) errors.push({ line: i + 1, message: `"${key}" is set twice` });
+    else if (found.has(key)) errors.push({ line: i + 1, message: `"${key}" is also set on line ${found.get(key)!.line}` });
     else if (!m[2]) errors.push({ line: i + 1, message: `"${key}" has no value` });
     else found.set(key, { value: m[2], line: i + 1 });
   }
 
   const started = found.get('started');
   const when = started ? parseWhen(started.value) : null;
-  if (started && !when) errors.push({ line: started.line, message: `"${started.value}" is not a date. Write it as 2026-11-13, or as 2026-11-13 15:30 for bars inside a day` });
+  if (started && !when) errors.push({ line: started.line, message: `"${started.value}" is not a date. Write it as 2026-11-13, or as 2026-11-13 15:30 for bars shorter than a day` });
   const from = found.get('from');
   if (from && !WIKILINK.test(from.value)) errors.push({ line: from.line, message: 'Write the strategy as [[Note name#Strategy name]]' });
   const check = found.get('check');
-  if (check && !/^[0-9a-z]+$/.test(check.value)) errors.push({ line: check.line, message: `"${check.value}" is not a check code. Leave the line as the plugin wrote it` });
+  if (check && !/^[0-9a-z]+$/.test(check.value)) errors.push({ line: check.line, message: `"${check.value}" is not a check code. Do not change the line that the plugin wrote` });
   for (const key of KEYS) if (!found.has(key)) errors.push({ line: rule + 1, message: `Add a "${key}:" line above the ---` });
 
   const source = lines.slice(rule + 1).join('\n');
@@ -325,7 +325,7 @@ export function forwardFigures(t: number[], equity: number[], benchmark: number[
   const n = t.length;
   const first = firstAtOrAfter(t, started + 1);
   const bars = n - first;
-  const more = (k: number) => `Earlier periods are compared from ${plural(MIN_FORWARD_BARS, 'bar')} on: ${plural(k, 'more bar')} to go.`;
+  const more = (k: number) => `The plugin compares previous periods when the test has ${plural(MIN_FORWARD_BARS, 'bar')}. It must have ${plural(k, 'more bar')}.`;
   if (bars === 0) return { first, bars, strategy: null, benchmark: null, worstFall: null, windows: { ok: false, message: more(MIN_FORWARD_BARS) } };
 
   const base = Math.max(0, first - 1);
@@ -344,7 +344,7 @@ export function forwardFigures(t: number[], equity: number[], benchmark: number[
   else if (first < HISTORY_FACTOR * bars) {
     windows = {
       ok: false,
-      message: `Earlier periods are compared only when there are ${HISTORY_FACTOR} times as many bars before the start as since it. Needed: ${plural(HISTORY_FACTOR * bars - first, 'more bar')} of earlier prices.`,
+      message: `The plugin compares previous periods only if there are ${HISTORY_FACTOR} times as many bars before the start as after it. It must have ${plural(HISTORY_FACTOR * bars - first, 'more bar')} of previous prices.`,
     };
   } else {
     const before = equity.slice(0, first);
@@ -467,7 +467,7 @@ function locate(note: string, line: number | undefined): { ok: true; at: Located
   const block = forwardBlock(note, line);
   if (!block) return { ok: false, message: line === undefined ? 'This note has no forward block.' : NOTE_CHANGED };
   const { forward, errors } = parseForward(block.source);
-  if (!forward) return { ok: false, message: `The forward block can't be read. Line ${errors[0].line}: ${errors[0].message}` };
+  if (!forward) return { ok: false, message: `The plugin cannot read the forward block. Line ${errors[0].line}: ${errors[0].message}` };
 
   const lines = note.split('\n');
   const text = lines.map((l) => l.replace(/\r$/, ''));
@@ -499,7 +499,7 @@ function locate(note: string, line: number | undefined): { ok: true; at: Located
     let to = from;
     while (to + 1 < end && text[to + 1].trimStart().startsWith('|')) to++;
     table = { from, to };
-    const edited = { ok: false as const, message: "The log table was changed by hand, so the last logged bar can't be read." };
+    const edited = { ok: false as const, message: 'The log table was changed by hand. Thus the plugin cannot read the last bar in the log.' };
     if (to === from || !cellsOf(text[from + 1]).every((c) => RULE_CELL.test(c))) return edited;
     for (let i = from + 2; i <= to; i++) {
       const [bar, orders = ''] = cellsOf(text[i]);
@@ -562,11 +562,11 @@ function insertAfter(lines: string[], after: number, chunk: string[], cr: string
  * `forwardBlockLine` is the 0-based line the block opened on when it was drawn.
  */
 export function appendLog(note: string, forwardBlockLine: number | undefined, rows: LogRow[], checkedThrough: number, now: number): { ok: true; note: string; added: number } | Refusal {
-  if (!isForwardNote(note)) return { ok: false, message: `This note was not made as a forward test by Backtest Blocks (it has no ${FORWARD_MARKER} property), so nothing was written.` };
+  if (!isForwardNote(note)) return { ok: false, message: `Backtest Blocks did not make this note as a forward test (it has no ${FORWARD_MARKER} property). Thus the plugin did not write to the note.` };
   const found = locate(note, forwardBlockLine);
-  if (!found.ok) return found.message === NOTE_CHANGED ? found : { ok: false, message: `${found.message} Nothing was written.` };
+  if (!found.ok) return found.message === NOTE_CHANGED ? found : { ok: false, message: `${found.message} The plugin did not write to the note.` };
   const { forward, lines, heading, checked, table, bars } = found.at;
-  if (forwardChanged(forward)) return { ok: false, message: `${CHANGED} Nothing was written.` };
+  if (forwardChanged(forward)) return { ok: false, message: `${CHANGED} The plugin did not write to the note.` };
 
   const intraday = forward.intraday;
   const logged = localDate(now);
@@ -638,8 +638,8 @@ export function revisions(log: Pick<ForwardLog, 'forward' | 'checkedThrough' | '
       t,
       message:
         was.length === 0
-          ? `The log has no order on ${day}; today's prices give ${is.join(', ')} there.`
-          : `The log says ${was.join(', ')} on ${day}; today's prices give ${is.length === 0 ? 'no order' : is.join(', ')} there.`,
+          ? `The log has no order on ${day}. Today's prices give ${is.join(', ')} on that day.`
+          : `The log shows ${was.join(', ')} on ${day}. Today's prices give ${is.length === 0 ? 'no order' : is.join(', ')} on that day.`,
     });
   }
   return out;

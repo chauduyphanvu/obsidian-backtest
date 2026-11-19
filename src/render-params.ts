@@ -123,7 +123,7 @@ export function differenceText(params: Param[], values: Record<string, number>):
   const changed = params.filter((p) => tidy(values[p.name]) !== tidy(p.declared));
   if (changed.length === 0) return null;
   const list = (value: (p: Param) => number) => changed.map((p) => `${p.name} ${formatParam(p, value(p))}`).join(', ');
-  return `Showing ${list((p) => values[p.name])}. The block says ${list((p) => p.declared)}.`;
+  return `The result shows ${list((p) => values[p.name])}. The values in the block are ${list((p) => p.declared)}.`;
 }
 
 export interface ParamBarInput {
@@ -210,9 +210,9 @@ let nextId = 0;
 /** An error's message as a sentence: messages in this plugin do not end with a full stop. */
 const sentence = (e: unknown) => `${(e instanceof Error ? e.message : String(e)).replace(/[.\s]+$/, '')}.`;
 
-const WAITING = 'This value needs more price history than is loaded. The result stays as it was, and the history loads when you let go of the slider.';
-const LOADING = 'Loading more price history…';
-const ON_RELEASE = 'This strategy takes too long to run again at every step of a drag. It runs when you let go of the slider.';
+const WAITING = 'For this value, the plugin must load more price history. The result does not change. The plugin loads the history when you release the slider.';
+const LOADING = 'More price history loads…';
+const ON_RELEASE = 'This strategy is too slow to run again at each step of a drag. It runs when you release the slider.';
 
 /** The "Parameters" bar. The bar is built once and never redrawn, so the slider under a finger survives. Returns a cleanup function. */
 export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () => void {
@@ -284,7 +284,7 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     waiting: () => say(WAITING, true),
     loading: () => say(LOADING, true),
     failed(e, settled) {
-      say(`These values do not run. ${sentence(e)} The result below is still the last one that ran.`);
+      say(`These values do not run. ${sentence(e)} The result below is from the last values that ran.`);
       // A drag that ends on values that do not run leaves the last good result half drawn.
       if (settled && last && !lastSettled) {
         lastSettled = true;
@@ -339,7 +339,7 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
       await hook.apply!(values);
       say(null);
     } catch (e) {
-      say(`Couldn't write the values to the block. ${sentence(e)}`);
+      say(`Cannot write the values to the block. ${sentence(e)}`);
     } finally {
       reset.disabled = write.disabled = false;
     }

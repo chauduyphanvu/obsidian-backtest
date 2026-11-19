@@ -27,7 +27,7 @@ const find = (ex: Explanation, id: Section['id'], label: string | RegExp): Row =
   return hit;
 };
 const titles = (ex: Explanation) => ex.sections.map((s) => s.title);
-const RETURN = 'A short is measured on what it brought in a share, less what covering it cost and its borrow fees, over what it brought in';
+const RETURN = 'Return of a short: the money received for each share, less the cover cost and borrow fees, divided by the money received';
 
 test('a short: why it was shorted and covered, what it took in, and its return with the borrow fees', () => {
   // Shorted at day 1's open of 100 (100 shares), covered at day 3's open of 80. The fee runs over two nights, on 90 and 80.
@@ -38,17 +38,17 @@ test('a short: why it was shorted and covered, what it took in, and its return w
   assert.equal(ex.title, 'A: shorted 2020-01-02 at 100.00, covered 2020-01-04 at 80.00');
   assert.deepEqual(titles(ex), ['Why it was shorted', 'How much', 'Why it was covered', 'Result']);
   assert.deepEqual(table(ex, 'bought'), [
-    ['The short rule was read at the close of 2020-01-01.', '', null, 0],
+    ['The run read the short rule at the close of 2020-01-01.', '', null, 0],
     ['short when close >= 100', 'close 100 ≥ 100', 'yes', 0],
   ]);
   assert.deepEqual(table(ex, 'size'), [
     ['Portfolio value at the open of 2020-01-02', '$10,000.00', null, 0],
     ['Weight', '100% of that: $10,000.00', null, 0],
-    ['Money taken in', '$10,000.00, for 100 shares sold short', null, 0],
-    ['Filled at the open of 2020-01-02', '100.00; the close the rule read was 100.00', null, 0],
+    ['Money received', '$10,000.00, for 100 shares sold short', null, 0],
+    ['Filled at the open of 2020-01-02', '100.00. The rule read a close of 100.00', null, 0],
   ]);
   assert.deepEqual(table(ex, 'sold'), [
-    ['The cover rule was read at the close of 2020-01-03.', '', null, 0],
+    ['The run read the cover rule at the close of 2020-01-03.', '', null, 0],
     ['cover when close < 85', 'close 80 < 85', 'yes', 0],
     ['Covered at the open of 2020-01-04', '80.00', null, 0],
   ]);
@@ -71,8 +71,8 @@ test('slippage, costs and a commission make a short sale take in less and its co
   const bt = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [97, 97, 95, 125], [125, 125, 125, 125]]) });
   const [t] = bt.run.trades;
   const ex = explainTrade(bt, t);
-  assert.equal(find(ex, 'size', 'Filled at the open of 2020-01-02').value, '98.00, less 20 bps slippage: 97.80; the close the rule read was 99.00');
-  assert.match(find(ex, 'size', 'Money taken in').value, /^\$9,\d{3}\.\d\d less \$9\.\d\d costs and \$1\.00 commission, for \d+\.\d+ shares sold short$/);
+  assert.equal(find(ex, 'size', 'Filled at the open of 2020-01-02').value, '98.00, less 20 bps slippage: 97.80. The rule read a close of 99.00');
+  assert.match(find(ex, 'size', 'Money received').value, /^\$9,\d{3}\.\d\d less \$9\.\d\d costs and \$1\.00 commission, for \d+\.\d+ shares sold short$/);
   assert.equal(find(ex, 'sold', 'Covered at the open of 2020-01-04').value, '125.00, plus 20 bps slippage: 125.25');
   // The engine's formula: (entry × (1 − costs) − commission a share − exit × (1 + costs) − commission a share − borrow) / basis.
   assert.ok(near(ex.facts.ret, t.ret, 1e-15), `${ex.facts.ret} vs ${t.ret}`);
@@ -85,14 +85,14 @@ test('a short\'s stop sits above its fill: a gap through it covers at the open, 
   const gap = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [112, 115, 111, 114], [114, 114, 114, 114]]) });
   const g = explainTrade(gap, gap.run.trades[0]);
   assert.deepEqual(table(g, 'sold'), [
-    ['Stop loss at 107.80', '10% over the 98.00 fill', null, 0],
-    ['On 2020-01-03 the bar opened at 112.00, above the stop, so it was covered at the open.', '', null, 0],
+    ['Stop loss at 107.80', '10% above the 98.00 fill', null, 0],
+    ['On 2020-01-03, the bar opened at 112.00, above the stop. Thus it was covered at the open.', '', null, 0],
     ['Covered at the open', '112.00', null, 0],
   ]);
   assert.deepEqual([g.facts.level, g.facts.exitPrice, g.facts.ret], [gap.run.trades[0].why!.stopLoss, 112, gap.run.trades[0].ret]);
   const inside = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [100, 109, 99, 105], [105, 105, 105, 105]]) });
   const i = explainTrade(inside, inside.run.trades[0]);
-  assert.equal(section(i, 'sold')[1].label, 'On 2020-01-03 the bar rose to 109.00, through the stop, so it was covered at the stop.');
+  assert.equal(section(i, 'sold')[1].label, 'On 2020-01-03, the price increased to 109.00, through the stop. Thus it was covered at the stop.');
   assert.deepEqual(table(i, 'sold')[2], ['Covered at the stop', '107.80', null, 0]);
   assert.equal(i.facts.exitPrice, inside.run.trades[0].exitPrice);
 });
@@ -102,16 +102,16 @@ test('a short\'s target sits below its fill, and a gap through it covers at the 
   const within = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [95, 96, 85, 90], [90, 90, 90, 90]]) });
   const w = explainTrade(within, within.run.trades[0]);
   assert.deepEqual(table(w, 'sold'), [
-    ['Take profit at 88.20', '10% under the 98.00 fill', null, 0],
-    ['On 2020-01-03 the bar fell to 85.00, through the target, so it was covered at the target.', '', null, 0],
+    ['Take profit at 88.20', '10% below the 98.00 fill', null, 0],
+    ['On 2020-01-03, the price decreased to 85.00, through the target. Thus it was covered at the target.', '', null, 0],
     ['Covered at the target', '88.20', null, 0],
   ]);
   const gap = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [80, 104, 79, 90], [90, 90, 90, 90]]) });
   const g = explainTrade(gap, gap.run.trades[0]);
   assert.deepEqual(table(g, 'sold').map((r) => r[0]), [
     'Take profit at 88.20',
-    'On 2020-01-03 the bar opened at 80.00, below the target, so it was covered at the open.',
-    'The bar later rose through the stop at 102.90 too, but the open came first.',
+    'On 2020-01-03, the bar opened at 80.00, below the target. Thus it was covered at the open.',
+    'Then the price also increased through the stop at 102.90, but the open came first.',
     'Covered at the open',
   ]);
   assert.equal(g.facts.ret, gap.run.trades[0].ret);
@@ -119,7 +119,7 @@ test('a short\'s target sits below its fill, and a gap through it covers at the 
   const both = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [98, 104, 87, 90], [90, 90, 90, 90]]) });
   const b = explainTrade(both, both.run.trades[0]);
   assert.equal(both.run.trades[0].reason, 'stop loss');
-  assert.equal(section(b, 'sold').at(-2)!.label, 'The take profit at 88.20 was inside this bar too. When both are, the stop is taken first.');
+  assert.equal(section(b, 'sold').at(-2)!.label, 'The take profit at 88.20 was also in this bar. When the two levels are in one bar, the stop comes first.');
 });
 
 test('a short\'s trailing stop trails from the lowest low, above it, and the stop loss is the higher one', () => {
@@ -129,15 +129,15 @@ test('a short\'s trailing stop trails from the lowest low, above it, and the sto
   const ex = explainTrade(bt, t);
   assert.equal(t.reason, 'trailing stop');
   assert.deepEqual(table(ex, 'sold'), [
-    ['Trailing stop at 97.65', '5% over 93.00, the lowest price from the short sale to the bar before', null, 0],
+    ['Trailing stop at 97.65', '5% above 93.00, the lowest price from the short sale to the previous bar', null, 0],
     ['The stop loss, at 117.60, was higher.', '', null, 0],
-    ['On 2020-01-05 the bar rose to 99.00, through the stop, so it was covered at the stop.', '', null, 0],
+    ['On 2020-01-05, the price increased to 99.00, through the stop. Thus it was covered at the stop.', '', null, 0],
     ['Covered at the stop', '97.65', null, 0],
   ]);
   assert.ok(near(ex.facts.level!, 93 * 1.05, 1e-12) && ex.facts.exitPrice === t.exitPrice && ex.facts.ret === t.ret);
   // On its first bar it trails from the open it was sold short at.
   const first = run(src, { A: ohlc([[100, 100, 99, 99], [98, 104, 97, 103], [103, 103, 103, 103]]) });
-  assert.equal(find(explainTrade(first, first.run.trades[0]), 'sold', /^Trailing stop at/).value, '5% over 98.00, the open it was sold short at');
+  assert.equal(find(explainTrade(first, first.run.trades[0]), 'sold', /^Trailing stop at/).value, '5% above 98.00, the open it was sold short at');
 });
 
 test('an ATR stop of a short is that many ATRs over the fill', () => {
@@ -147,7 +147,7 @@ test('an ATR stop of a short is that many ATRs over the fill', () => {
   const t = bt.run.trades.find((x) => x.reason === 'stop loss')!;
   const ex = explainTrade(bt, t);
   const row = find(ex, 'sold', /^Stop loss at/);
-  assert.match(row.value, /^2 × ATR\(14\) [\d.]+ \(at the close of [\d-]+\) = [\d.]+ over the [\d.]+ fill$/);
+  assert.match(row.value, /^2 × ATR\(14\) [\d.]+ \(at the close of [\d-]+\) = [\d.]+ above the [\d.]+ fill$/);
   assert.ok(near(ex.facts.level!, t.why!.stopLoss!, 1e-9) && ex.facts.level! > t.entryPrice);
 });
 
@@ -157,24 +157,24 @@ test('a flip: the long is closed by the short rule, and the short says the same 
   const [long, short] = bt.run.trades;
   const l = explainTrade(bt, long);
   assert.deepEqual(table(l, 'sold'), [
-    ['The short rule was read at the close of 2020-01-03. It closes a long position.', '', null, 0],
+    ['The run read the short rule at the close of 2020-01-03. This rule closes a long position.', '', null, 0],
     ['short when close < 100', 'close 99 < 100', 'yes', 0],
-    ['So the position flipped: a short position was opened at the same fill.', '', null, 0],
+    ['Thus the position flipped: a short position opened at the same fill.', '', null, 0],
     ['Sold at the open of 2020-01-04', '98.00', null, 0],
   ]);
   assert.deepEqual([l.facts.sellT, l.facts.sellRule], [day(2), 'yes']);
   const s = explainTrade(bt, short);
-  assert.equal(s.title, 'A: shorted 2020-01-04 at 98.00, still held');
-  assert.equal(section(s, 'bought')[2].label, 'The same rule closed the long position held until then, so the position flipped at the same fill.');
-  assert.deepEqual(table(s, 'sold').slice(1), [['No order to cover it is waiting.', '', null, 0]]);
-  assert.equal(find(s, 'result', 'A short still held counts the cost of covering at the last close in its return, without slippage.').value, '');
+  assert.equal(s.title, 'A: shorted 2020-01-04 at 98.00, not closed');
+  assert.equal(section(s, 'bought')[2].label, 'The same rule closed the long position held until then. Thus the position flipped at the same fill.');
+  assert.deepEqual(table(s, 'sold').slice(1), [['There is no order to cover it.', '', null, 0]]);
+  assert.equal(find(s, 'result', 'The return of an open short includes the cost to cover at the last close, without slippage.').value, '');
   // The other way, with fill: close: the buy rule closes the short.
   const back = run(`${src}\nfill: close`, { A: bars([99, 101]) });
   const c = explainTrade(back, back.run.trades[0]);
   assert.deepEqual(table(c, 'sold').map((r) => r[0]), [
-    'The buy rule was read at the close of 2020-01-02. It closes a short position.',
+    'The run read the buy rule at the close of 2020-01-02. This rule closes a short position.',
     'buy when close > 100',
-    'So the position flipped: a long position was opened at the same fill.',
+    'Thus the position flipped: a long position opened at the same fill.',
     'Covered at the close of 2020-01-02, the close the rule read',
   ]);
 });
@@ -183,15 +183,15 @@ test('a short still held: its cover rule at the last close, and the order waitin
   const cover = run('universe: A\nshort when true\ncover when close < 9', { A: bars([10, 10, 10, 8]) });
   const c = explainTrade(cover, cover.run.trades[0]);
   assert.deepEqual(table(c, 'sold').map((r) => r[0]), [
-    'Still held at the end of the run. It is valued at the last close, 2020-01-04.',
+    'The position is open at the end of the run. Its value uses the last close, 2020-01-04.',
     'The cover rule at the close of 2020-01-04:',
     'cover when close < 9',
-    'An order to cover it is waiting for the next open.',
+    'An order to cover it waits for the next open.',
   ]);
   const flip = run('universe: A\nbuy when close > 100\nshort when close < 100', { A: bars([99, 99, 101]) });
-  assert.equal(section(explainTrade(flip, flip.run.trades[0]), 'sold').at(-1)!.label, 'An order to cover it and buy is waiting for the next open.');
+  assert.equal(section(explainTrade(flip, flip.run.trades[0]), 'sold').at(-1)!.label, 'An order to cover it and buy waits for the next open.');
   const sell = run('universe: A\nbuy when close > 100\nshort when close < 100', { A: bars([101, 101, 99]) });
-  assert.equal(section(explainTrade(sell, sell.run.trades[0]), 'sold').at(-1)!.label, 'An order to sell it and sell short is waiting for the next open.');
+  assert.equal(section(explainTrade(sell, sell.run.trades[0]), 'sold').at(-1)!.label, 'An order to sell it and sell short waits for the next open.');
 });
 
 test('a short built in entries: each one sold short, the stop moved over the average', () => {
@@ -199,10 +199,10 @@ test('a short built in entries: each one sold short, the stop moved over the ave
   const bt = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [97, 97, 95, 95], [95, 95, 94, 94], [94, 94, 94, 94]]) });
   const [t] = bt.run.trades;
   const ex = explainTrade(bt, t);
-  assert.equal(ex.title, 'A: shorted in 2 entries from 2020-01-02, at 96.47 on average, still held');
-  assert.equal(find(ex, 'add', 'The stop loss moved to').value, '106.11, 10% over the average');
-  assert.match(find(ex, 'add', 'Money taken in').value, /shares sold short$/);
-  assert.equal(find(ex, 'result', 'Sold short in 2 entries of the 2 allowed').value, 'at 96.47 on average');
+  assert.equal(ex.title, 'A: shorted in 2 entries from 2020-01-02, at 96.47 on average, not closed');
+  assert.equal(find(ex, 'add', 'The stop loss moved to').value, '106.11, 10% above the average');
+  assert.match(find(ex, 'add', 'Money received').value, /shares sold short$/);
+  assert.equal(find(ex, 'result', 'Sold short in 2 of the 2 entries').value, 'at 96.47 on average');
   assert.ok(near(ex.facts.ret, t.ret, 1e-12));
 });
 
@@ -212,8 +212,8 @@ test('a margin call closes at the next open even with fill: close, and says how 
   const ex = explainTrade(bt, t);
   assert.deepEqual(table(ex, 'sold'), [
     [
-      'A margin call was made at the close of 2020-01-03: equity was below 25% of the value of the positions, long and short together, so every position was closed at the next open.',
-      '$3,200.00 against $13,200.00, 24.24%',
+      'A margin call occurred at the close of 2020-01-03. The equity was below 25% of the value of all long and short positions. Thus all positions closed at the next open.',
+      '$3,200.00 compared with $13,200.00, 24.24%',
       null,
       0,
     ],
@@ -229,7 +229,7 @@ test('after a margin call the buy rule has to stop holding before it buys again,
   assert.deepEqual([called.reason, again.why!.rearm], ['margin call', { exitT: day(2), heldT: day(4), clearedT: day(5) }]);
   assert.equal(
     section(explainTrade(bt, again), 'bought').at(-1)!.label,
-    'After the margin call on 2020-01-03 the buy rule still held, last on 2020-01-05. After a margin call the rule has to stop holding before it can buy again: it did not hold on 2020-01-06, and held again at the next close.',
+    'After the margin call on 2020-01-03, the buy rule continued to hold. The last close where it held was 2020-01-05. After a margin call, the rule must become false before it can buy again. The rule did not hold on 2020-01-06, and it held again at the next close.',
   );
 });
 
@@ -238,7 +238,7 @@ test('a position a margin call made at the last close is closing waits for the n
   const ex = explainTrade(bt, bt.run.trades[0]);
   assert.equal(
     section(ex, 'sold').at(-1)!.label,
-    'A margin call was made at the last close: equity was below 25% of the value of the positions, long and short together, so an order to sell it is waiting for the next open.',
+    'A margin call occurred at the last close. The equity was below 25% of the value of all long and short positions. Thus an order to sell it waits for the next open.',
   );
 });
 
@@ -248,19 +248,19 @@ test('a ruin is priced where it was found: at a close when equity fell below 0 a
   const atClose = run(src, { A: ohlc([[100, 100, 100, 100], [100, 100, 100, 100], [95, 95, 45, 45], [45, 45, 45, 45]]) });
   const c = explainTrade(atClose, atClose.run.trades[0]);
   assert.equal(atClose.run.trades[0].reason, 'ruin');
-  assert.match(section(c, 'sold')[0].label, /^Equity fell to −\$[\d,]+\.\d\d at the close of 2020-01-03, so every position was closed there and the run stopped\.$/);
+  assert.match(section(c, 'sold')[0].label, /^The equity decreased to −\$[\d,]+\.\d\d at the close of 2020-01-03\. Thus all positions closed there and the run stopped\.$/);
   assert.deepEqual(table(c, 'sold')[1], ['Sold at the close of 2020-01-03', '45.00, less 10 bps slippage: 44.96', null, 0]);
   assert.deepEqual([c.facts.exitPrice, c.facts.ret], [atClose.run.trades[0].exitPrice, atClose.run.trades[0].ret]);
   const atOpen = run(src, { A: ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66], [45, 65, 45, 60], [60, 80, 60, 80]]) });
   const o = explainTrade(atOpen, atOpen.run.trades[0]);
-  assert.match(section(o, 'sold')[0].label, /at the open of 2020-01-04, so every position was closed there and the run stopped\.$/);
+  assert.match(section(o, 'sold')[0].label, /at the open of 2020-01-04\. Thus all positions closed there and the run stopped\.$/);
   assert.equal(section(o, 'sold')[1].label, 'Sold at the open of 2020-01-04');
   assert.deepEqual([o.facts.exitPrice, o.facts.ret], [atOpen.run.trades[0].exitPrice, atOpen.run.trades[0].ret]);
   // A short ruined by a price that runs away from it.
   const short = run('universe: A\ncapital: 10000\nmargin rate: 0%\nborrow fee: 0%\nshort when true', { A: ohlc([[100, 100, 100, 100], [100, 100, 100, 100], [150, 150, 150, 150], [210, 210, 210, 210], [210, 210, 210, 210]]) });
   const s = explainTrade(short, short.run.trades[0]);
   assert.deepEqual(table(s, 'sold').map((r) => r[0]), [
-    'Equity fell to −$1,000.00 at the open of 2020-01-04, so every position was closed there and the run stopped.',
+    'The equity decreased to −$1,000.00 at the open of 2020-01-04. Thus all positions closed there and the run stopped.',
     'Covered at the open of 2020-01-04',
   ]);
   assert.equal(find(s, 'result', RETURN).value, '(100.00 − 210.00 − 0.00) ÷ 100.00');
@@ -271,7 +271,7 @@ test('a buy cut by a block\'s room, not its cash: it may hold more than its equi
   const ex = explainTrade(bt, bt.run.trades[0]);
   assert.deepEqual(table(ex, 'size').slice(1, 3), [
     ['Weight', '150% of that: $1,500.00', null, 0],
-    ['Positions, long and short together, may come to at most 150% of equity, so the buy was cut to the room left with its commission', '$1,495.00', null, 0],
+    ['Long and short positions together can be at most 150% of equity. Thus the buy was cut to fit this limit with its commission', '$1,495.00', null, 0],
   ]);
 });
 
@@ -323,7 +323,7 @@ test('every explanation of a short, a flip or a leveraged trade agrees with its 
         const short = t.side === 'short';
         assert.equal(f.buyT, why.buyT);
         assert.equal(f.buyRule, 'yes', `entry rule at the signal: ${where}`);
-        assert.equal(section(ex, 'bought')[0].label, `The ${short ? 'short' : 'buy'} rule was read at the close of ${iso(why.buyT)}.`);
+        assert.equal(section(ex, 'bought')[0].label, `The run read the ${short ? 'short' : 'buy'} rule at the close of ${iso(why.buyT)}.`);
         assert.ok(near(f.entryPrice, t.entryPrice, 1e-12 * t.entryPrice), `entry ${f.entryPrice} vs ${t.entryPrice}: ${where}`);
         assert.equal(f.reason, t.reason);
         if (why.exit?.k === 'rule') assert.equal(f.sellRule, 'yes', `exit rule at its bar: ${where}`);

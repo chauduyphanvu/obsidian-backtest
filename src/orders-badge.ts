@@ -32,23 +32,23 @@ function problemLines(list: StrategyStatus[]): string[] {
   const old = list.filter((s) => s.error === null && s.stale).length;
   const warned = list.filter((s) => s.error === null && !s.stale && problemsOf(s).length > 0).length;
   return [
-    ...(failed > 0 ? [`${strategies(failed)} couldn't be checked.`] : []),
-    ...(old > 0 ? [`${strategies(old)} ${plural(old, 'has', 'have')} old prices.`] : []),
+    ...(failed > 0 ? [`${strategies(failed)} did not run.`] : []),
+    ...(old > 0 ? [`${strategies(old)} ${plural(old, 'has', 'have')} prices that are out of date.`] : []),
     ...(warned > 0 ? [`${strategies(warned)} ${plural(warned, 'has a price warning', 'have price warnings')}.`] : []),
   ];
 }
 
 export function badgeView(state: BadgeState): BadgeView {
-  if (state.kind === 'checking') return { text: 'Checking orders…', tooltip: "Working out today's orders.", mark: 'none', orders: 0 };
+  if (state.kind === 'checking') return { text: "Today's orders…", tooltip: "The plugin calculates today's orders.", mark: 'none', orders: 0 };
   if (state.kind === 'failed') {
-    return { text: "Couldn't check orders", tooltip: ["Couldn't check the strategies.", state.message, 'Click to open the orders window.'].filter(Boolean).join('\n'), mark: 'error', orders: 0 };
+    return { text: 'Cannot calculate orders', tooltip: ['Cannot run the strategies.', state.message, 'Click to open the orders window.'].filter(Boolean).join('\n'), mark: 'error', orders: 0 };
   }
 
   const list = state.statuses;
   if (list.length === 0) return { text: null, tooltip: '', mark: 'none', orders: 0 };
   const problems = problemLines(list);
   if (list.every((s) => s.error !== null)) {
-    return { text: "Couldn't check orders", tooltip: [...problems, 'Click to see why.'].join('\n'), mark: 'error', orders: 0 };
+    return { text: 'Cannot calculate orders', tooltip: [...problems, 'Click to see the problems.'].join('\n'), mark: 'error', orders: 0 };
   }
 
   const rows = todoRows(list);
@@ -59,7 +59,7 @@ export function badgeView(state: BadgeState): BadgeView {
   const watch = watched.length ? [`${WATCH_HEADING}:`, ...watched.map(({ status, row }) => `${row.ticker} ${row.phrase[0].toLowerCase()}${row.phrase.slice(1)}, ${status.strategy}`)] : [];
   const lines =
     rows.length === 0
-      ? ['No strategy has an order.', ...watch, ...problems, 'Click to see what each one holds.']
+      ? ['No strategy has an order.', ...watch, ...problems, 'Click to see the holdings of each strategy.']
       : [...orders.slice(0, LISTED), ...(more > 0 ? [`and ${more} more`] : []), ...watch, ...problems, 'Click to open the orders window.'];
   return { text: ordersText(rows.length), tooltip: lines.join('\n'), mark, orders: rows.length };
 }

@@ -16,7 +16,7 @@ for TLT:
   sell when close < sma(100)
   rebalance: quarterly`,
     errors: [
-      { line: 10, message: '"rebalance" applies to the whole strategy. Put it above the first "for" line or after "for all:"' },
+      { line: 10, message: '"rebalance" is a setting for the full strategy. Put it above the first "for" line or after "for all:"' },
     ],
     fixed: `name: 60/40 with a bond filter
 universe: SPY 60%, TLT 40%
@@ -41,7 +41,7 @@ costs: 10 bps
 buy when close > sma(150)
 sell when close < sma(150)`,
     errors: [
-      { line: 5, message: '"costs" is set twice' },
+      { line: 5, message: '"costs" is also set on line 3' },
     ],
     fixed: `name: Three funds, monthly
 universe: SPY, TLT, GLD
@@ -60,7 +60,7 @@ universe: SPY, QQQ
 buy when close > sma(200)
 cover when close < sma(200)`,
     errors: [
-      { line: 5, message: '"cover when" closes a short, so it needs a short rule for SPY that says when to go short, such as short when close < sma(200)' },
+      { line: 5, message: '"cover when" closes a short. Thus it must have a short rule for SPY that tells when to go short, for example short when close < sma(200)' },
     ],
     fixed: `name: Trend with an exit
 universe: SPY, QQQ
@@ -79,7 +79,7 @@ hold: top 3 by roc(126)
 short when close < sma(200)
 cover when close > sma(200)`,
     errors: [
-      { line: 6, message: "A ranking can't also go short yet; remove the short and cover rules, or the \"hold\" line to trade each ticker by its own rules" },
+      { line: 6, message: 'A strategy with "hold" cannot go short. Remove the short and cover rules. Or remove the "hold" line to trade each ticker with its rules' },
     ],
     fixed: `name: Momentum with a short side
 universe: SPY, QQQ, IWM, EFA, EEM, TLT
@@ -94,7 +94,7 @@ universe: SPY 40%, QQQ 30%, TLT 30%
 rebalance: monthly
 hold: top 2 by roc(126)`,
     errors: [
-      { line: 2, message: 'Leave the weights out of the universe when "hold" ranks the tickers: each one held gets an equal share of size' },
+      { line: 2, message: 'Do not write weights in the universe when you use "hold". Each ticker that the strategy holds has an equal part of size' },
     ],
     fixed: `name: Top 2 with weights
 universe: SPY, QQQ, TLT
@@ -111,7 +111,7 @@ rebalance: quarterly
 
 buy when true`,
     errors: [
-      { line: 3, message: 'Use either weights in the universe or "size", not both' },
+      { line: 3, message: 'Use weights in the universe or "size". You cannot use the two together' },
     ],
     fixed: `name: Weights and size
 universe: SPY 48%, TLT 32%
@@ -130,7 +130,7 @@ risk per trade: 1% at 2 atr(14)
 buy when close > highest(100)[1]
 sell when close < lowest(50)[1]`,
     errors: [
-      { line: 4, message: 'Use either "weighting" or "risk per trade", not both' },
+      { line: 4, message: 'Use "weighting" or "risk per trade". You cannot use the two together' },
     ],
     fixed: `name: Calm funds with a risk budget
 universe: SPY, QQQ, IWM
@@ -150,7 +150,7 @@ risk per trade: 1% at 2 atr(14)
 buy when close > highest(100)[1]
 sell when close < lowest(50)[1]`,
     errors: [
-      { line: 4, message: "\"risk per trade\" sizes each position once, when it is bought, so it can't be combined with \"rebalance: monthly\". Remove one of them" },
+      { line: 4, message: '"risk per trade" sizes each position one time, when the strategy buys it. Thus you cannot use it with "rebalance: monthly". Remove one of them' },
     ],
     fixed: `name: Rebalanced breakouts
 universe: SPY, QQQ, IWM
@@ -168,7 +168,7 @@ rebalance: quarterly
 
 buy when true`,
     errors: [
-      { line: 2, message: 'Weights add up to 250.0%. The most is 200%: long and short positions together may be at most 2 times the equity' },
+      { line: 2, message: 'The total of the weights is 250.0%. It cannot be more than 200%: long and short positions together can be a maximum of 2 times the equity' },
     ],
     fixed: `name: Too much leverage
 universe: SPY 100%, TLT 100%
@@ -211,7 +211,7 @@ costs: 5 bps
 buy when close > sma(200)
 sell when close < sma(200)`,
     errors: [
-      { line: 1, message: 'Add a universe, such as "universe: SPY" or "universe: SPY 60%, TLT 40%"' },
+      { line: 1, message: 'Add a universe, for example "universe: SPY" or "universe: SPY 60%, TLT 40%"' },
     ],
     fixed: `name: Trend following
 universe: SPY
@@ -235,7 +235,7 @@ for QQQ:
   buy when close > sma(100)
   sell when close < sma(100)`,
     errors: [
-      { line: 1, message: 'There is no buy rule for TLT. Add one, such as "buy when close > sma(200)"' },
+      { line: 1, message: 'There is no buy rule for TLT. Add one, for example "buy when close > sma(200)"' },
     ],
     fixed: `name: Three funds, two with rules
 universe: SPY, QQQ, TLT
@@ -262,7 +262,7 @@ buy when close > sma(200)
 buy when rsi(2) < 10
 sell when rsi(2) > 70`,
     errors: [
-      { line: 5, message: 'There is already a buy rule. Join conditions with "and" or "or"' },
+      { line: 5, message: 'There are two buy rules. Put the conditions in one rule with "and" or "or"' },
     ],
     fixed: `name: Dip buyer
 universe: SPY, QQQ
@@ -284,8 +284,8 @@ for QQQ:
   buy when close > sma(50)
   sell when close < sma(50)`,
     errors: [
-      { line: 9, message: 'There is already a buy rule for QQQ. Join conditions with "and" or "or"' },
-      { line: 10, message: 'There is already a sell rule for QQQ. Join conditions with "and" or "or"' },
+      { line: 9, message: 'There are two buy rules for QQQ. Put the conditions in one rule with "and" or "or"' },
+      { line: 10, message: 'There are two sell rules for QQQ. Put the conditions in one rule with "and" or "or"' },
     ],
     fixed: `name: Own entry for QQQ
 universe: SPY, QQQ
@@ -306,7 +306,7 @@ universe: SPY 60%, TLT, GLD
 
 buy when true`,
     errors: [
-      { line: 2, message: 'Give every ticker a weight, or none' },
+      { line: 2, message: 'Give each ticker a weight, or give no weights' },
     ],
     fixed: `name: Part weighted
 universe: SPY 60%, TLT 20%, GLD 20%
@@ -322,7 +322,7 @@ universe: SPY, fred:T10Y2Y
 buy when close > sma(200) and close of fred:T10Y2Y > 0
 sell when close < sma(200)`,
     errors: [
-      { line: 2, message: 'fred:T10Y2Y is a series of values from FRED, not prices, so it cannot be traded. A rule can read it instead, as in close of fred:T10Y2Y > 0' },
+      { line: 2, message: 'fred:T10Y2Y is a series of values from FRED, not prices. The strategy cannot trade it. Use it in a rule, for example close of fred:T10Y2Y > 0' },
     ],
     fixed: `name: SPY with the yield curve
 universe: SPY

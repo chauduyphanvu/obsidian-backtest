@@ -421,7 +421,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     const task = l.current && !l.current.here ? l.current : null;
     kill(l);
     if (task) {
-      settle(task, null, new Error(`The run stopped unexpectedly: ${message}`));
+      settle(task, null, new Error(`The run stopped because of an error: ${message}`));
       next(l);
     }
   }
@@ -633,7 +633,7 @@ const blobWorker: MakeWorker = (on) => {
   worker.addEventListener('message', revoke, { once: true });
   worker.addEventListener('error', revoke, { once: true });
   worker.onmessage = (e: MessageEvent<FromWorker>) => on.message(e.data);
-  worker.onerror = (e: ErrorEvent) => on.error(e.message || 'The worker could not start');
+  worker.onerror = (e: ErrorEvent) => on.error(e.message || 'The worker did not start');
   return {
     post: (m) => worker.postMessage(m),
     terminate: () => {

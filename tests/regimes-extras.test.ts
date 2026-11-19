@@ -139,7 +139,7 @@ test('saved extras come from the saved files alone, and only while they are fres
 test('a failed download of extras says which ticker, and saved extras never write', async () => {
   const { deps, cache } = market();
   const failing: DataDeps = { ...deps, fetchText: () => Promise.reject(new Error('offline')) };
-  await assert.rejects(new Runner(failing).loadExtras([SPY], Date.UTC(2023, 0, 2), 250), /Couldn't load SPY from yahoo: offline/);
+  await assert.rejects(new Runner(failing).loadExtras([SPY], Date.UTC(2023, 0, 2), 250), /Cannot load SPY from yahoo: offline/);
   assert.equal(await new Runner(deps).savedExtras([SPY], Date.UTC(2023, 0, 2), 250), null);
   assert.equal(cache.size, 0);
 });

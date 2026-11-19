@@ -50,7 +50,7 @@ export interface WriteState {
   said: string;
 }
 
-export const WRITTEN = 'Done: the block now uses these values.';
+export const WRITTEN = 'Done: the block uses these values.';
 
 /** Writes `values` with `apply`, reporting the button's state as it goes: busy with nothing said, then done or why not. */
 export async function writeValues(apply: Apply, values: Record<string, number>, report: (state: WriteState) => void): Promise<void> {
@@ -90,7 +90,7 @@ export function did(m: Metric, v: number): string {
     case 'cagr':
       return `made ${pct(v)} a year`;
     case 'totalReturn':
-      return `returned ${pct(v)}`;
+      return `had a total return of ${pct(v)}`;
     case 'maxDrawdown':
       return `had a worst drawdown of ${pct(v)}`;
     case 'sharpe':
@@ -101,7 +101,7 @@ export function did(m: Metric, v: number): string {
 }
 
 /** The progress label while a job waits its turn behind another block's (or this block's other section's). */
-export const WAITING = 'Waiting for another run to finish…';
+export const WAITING = 'A different run must finish first…';
 
 /** Appends a progress bar with a label; hidden until shown. */
 export function progressBar(parent: HTMLElement): { set: (done: number, total: number, text: string) => void; show: (on: boolean) => void } {
@@ -249,7 +249,7 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
   const view: View = { metric: 'cagr', period: segments ? 'before' : 'all', down, across: across ?? 0 };
   const testDay = segments ? segments[1].label.replace(/^From /, '') : null;
 
-  if (result.stopped) h(results, 'div', 'bt-warning', `Stopped after ${result.tried} of ${plural(result.total, 'variant')}: what follows covers those only.`);
+  if (result.stopped) h(results, 'div', 'bt-warning', `The sweep stopped after ${result.tried} of ${plural(result.total, 'variant')}. The results below include only those variants.`);
   const pickers = h(results, 'div', 'bt-pickers');
   const explain = h(results, 'div', 'bt-note bt-sweep-explain');
   const splitBox = h(results, 'div');
@@ -257,7 +257,7 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
   const content = h(results, 'div');
   const pick = input.apply ? picking(h(results, 'div', 'bt-sweep-picked'), result, input.apply) : null;
   const overfit = h(results, 'div', 'bt-sweep-pbo');
-  h(overfit, 'div', 'bt-sweep-pbo-title', 'How often the best fell back');
+  h(overfit, 'div', 'bt-sweep-pbo-title', 'Overfitting check');
   h(overfit, 'p', 'bt-sweep-pbo-text', pboWords(sweepPbo(result)));
 
   const draw = () => {
@@ -289,7 +289,7 @@ function showResults(results: HTMLElement, input: SweepInput, result: SweepResul
     const periods: [Period, string][] = [
       ['before', segments[0].label],
       ['after', segments[1].label],
-      ['all', 'Whole run'],
+      ['all', 'Full run'],
     ];
     select(periodRow, 'Show', periods, view.period, (p) => {
       view.period = p;
@@ -304,7 +304,7 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
   const split = splitSummary(result, metric);
   if (!split) return;
   const box = h(el, 'div', 'bt-sweep-split');
-  h(box, 'div', 'bt-sweep-split-title', `Tuned before ${day}, tested after: ${METRICS[metric].noun} from ${day} on`);
+  h(box, 'div', 'bt-sweep-split-title', `Tuned before ${day}, then tested: ${METRICS[metric].noun} from ${day}`);
   const tiles = h(box, 'div', 'bt-sweep-split-tiles');
   const tile = (label: string, value: number, sub: string) => {
     const t = h(tiles, 'div', 'bt-tile');
@@ -313,16 +313,16 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
     h(t, 'div', 'bt-tile-sub', sub);
   };
   const p = result.params;
-  tile(`Best before ${day}`, split.chosenAfter, `${valuesText(p, split.chosen.values)}; ${fmtMetric(metric, split.chosenBefore)} before`);
+  tile(`Best before ${day}`, split.chosenAfter, `${valuesText(p, split.chosen.values)}. Before: ${fmtMetric(metric, split.chosenBefore)}`);
   const declared = result.points.find((q) => isDeclared(result, q));
-  if (declared) tile('Values in the note', split.declaredAfter, `${valuesText(p, declared.values)}; ${fmtMetric(metric, split.declaredBefore)} before`);
+  if (declared) tile('Values in the note', split.declaredAfter, `${valuesText(p, declared.values)}. Before: ${fmtMetric(metric, split.declaredBefore)}`);
   tile('Middle variant', split.medianAfter, `half of ${split.count} did better`);
 
   const fell = split.chosenAfter < split.chosenBefore;
   const lines = [
-    `The variant that did best before ${day} (${valuesText(p, split.chosen.values)}) ${did(metric, split.chosenBefore)} then and ${did(metric, split.chosenAfter)} from ${day} on, ranking ${ordinal(split.chosenAfterRank)} of ${split.count} after it.`,
-    fell ? 'Some of what it showed before came from fitting those years.' : 'It held up after the split.',
-    `The pick never saw the later prices, so this is the best guide here to what choosing values this way is worth.${declared ? ' The values in the note are only as clean as how they were chosen: if they were picked by looking at the whole run, their later result is not a fair test either.' : ''}`,
+    `The variant that did best before ${day} (${valuesText(p, split.chosen.values)}) ${did(metric, split.chosenBefore)} before ${day}. From ${day}, it ${did(metric, split.chosenAfter)} and ranked ${ordinal(split.chosenAfterRank)} of ${split.count}.`,
+    fell ? 'Part of its result before the split came from a fit to those years.' : 'Its result continued to be good after the split.',
+    `The selection did not see the subsequent prices. Thus this result is the best indication here of the value of this method of selection.${declared ? ' The values in the note are only as clean as the method that you used to select them. If you selected them when you looked at the full run, their subsequent result is also not a correct test.' : ''}`,
   ];
   h(box, 'p', 'bt-sweep-split-text', lines.join(' '));
 }
@@ -332,19 +332,19 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
  * history ranked in the bottom half on the other half, one exactly in the middle counting as half.
  */
 export function pboWords(p: Pbo): string {
-  const left = p.leftOut ? ` ${plural(p.leftOut, 'variant')} that ran over a different number of bars ${p.leftOut === 1 ? 'is' : 'are'} left out.` : '';
-  if (p.short === 'variants') return `This needs at least 5 variants that traded, and this sweep has ${p.variants}.${left}`;
-  if (p.short === 'steps') return `This needs at least 20 bars in each of the ${p.groups} parts the history is cut into, ${(20 * p.groups).toLocaleString('en-US')} in all, and these runs have ${p.steps.toLocaleString('en-US')}.${left}`;
+  const left = p.leftOut ? ` The plugin did not include ${plural(p.leftOut, 'variant')} that ran on a different number of bars.` : '';
+  if (p.short === 'variants') return `This check must have a minimum of 5 variants that traded. This sweep has ${p.variants}.${left}`;
+  if (p.short === 'steps') return `This check must have a minimum of 20 bars in each of the ${p.groups} parts of the history, ${(20 * p.groups).toLocaleString('en-US')} in total. These runs have ${p.steps.toLocaleString('en-US')}.${left}`;
   const share = p.pbo!;
   const reading =
     share < 0.2
-      ? 'Picking the best here mostly held up on the half it had not seen.'
+      ? 'The best variant usually stayed good on the half that it did not see.'
       : share < 0.5
-        ? 'Picking the best here often did not hold up on the half it had not seen.'
-        : 'Picking the best here did no better on the half it had not seen than picking at random.';
+        ? 'The best variant frequently did not stay good on the half that it did not see.'
+        : 'On the half that it did not see, the best variant did not do better than a random selection.';
   return (
-    `The history was cut into ${p.groups} parts and split into two halves in all ${p.splits.toLocaleString('en-US')} ways. In ${pct(share, 0)} of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other, one exactly in the middle counting as half. ${reading} ` +
-    `This is the probability of backtest overfitting (Bailey, Borwein, López de Prado and Zhu). It swings widely from one sweep to the next, since every split reuses the same history, so take it as a rough sign, not a measure.${left}`
+    `The plugin cut the history into ${p.groups} parts, and divided them into two halves in all ${p.splits.toLocaleString('en-US')} possible combinations. In ${pct(share, 0)} of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other half. A variant at the middle position counts as half. ${reading} ` +
+    `This is the probability of backtest overfitting (Bailey, Borwein, López de Prado and Zhu). It changes much from one sweep to the next, because each split uses the same history again. Thus use it as an approximate sign, not as a measurement.${left}`
   );
 }
 
@@ -358,39 +358,39 @@ function reading(el: HTMLElement, result: SweepResult, sum: SweepSummary, benchL
 
   const failed = result.points.filter((q) => q.error !== null);
   line(
-    `${plural(result.tried, 'variant')} tried` +
-      (failed.length ? `; ${plural(failed.length, 'variant')} could not run (${valuesText(p, failed[0].values)}: ${failed[0].error})` : '') +
-      (sum.idle ? `; ${plural(sum.idle, 'variant')} never traded, so ${sum.idle === 1 ? 'it is' : 'they are'} left out of the ranking` : '') +
-      (sum.failed > failed.length ? `; ${sum.failed - failed.length} had no ${label} for this period` : '') +
+    `The sweep ran ${plural(result.tried, 'variant')}` +
+      (failed.length ? `. ${plural(failed.length, 'variant')} did not run (${valuesText(p, failed[0].values)}: ${failed[0].error})` : '') +
+      (sum.idle ? `. ${plural(sum.idle, 'variant')} did not trade. Thus the ranking does not include ${sum.idle === 1 ? 'it' : 'them'}` : '') +
+      (sum.failed > failed.length ? `. ${sum.failed - failed.length} had no ${label} for this period` : '') +
       '.',
   );
   if (sum.declared && sum.declaredRank !== null) {
     line(
       `The values in the note (${valuesText(p, sum.declared.values)}) rank ${ordinal(sum.declaredRank)} of ${n} on ${label}, at ${fmtMetric(m, metricOf(sum.declared, m, sum.period))}. ` +
-        `The best variant reached ${fmtMetric(m, metricOf(sum.best, m, sum.period))}, and the middle one (half did better, half worse) ${fmtMetric(m, sum.median)}.`,
+        `The best variant had ${fmtMetric(m, metricOf(sum.best, m, sum.period))}, and the middle variant (half did better, half did worse) had ${fmtMetric(m, sum.median)}.`,
     );
   } else {
-    line(`The values in the note ${sum.declared?.trades === 0 ? 'never trade, so they are not ranked' : 'have no result here'}. The best variant reached ${fmtMetric(m, metricOf(sum.best, m, sum.period))}, and the middle one (half did better, half worse) ${fmtMetric(m, sum.median)}.`);
+    line(`The values in the note ${sum.declared?.trades === 0 ? 'do not trade. Thus they have no rank' : 'have no result here'}. The best variant had ${fmtMetric(m, metricOf(sum.best, m, sum.period))}, and the middle variant (half did better, half did worse) had ${fmtMetric(m, sum.median)}.`);
   }
   const nb = sum.neighbours;
-  const near = `Its neighbours, one step away on each parameter, typically reached ${fmtMetric(m, nb.median)}`;
+  const near = `The variants next to it, one step from it on each parameter, usually had ${fmtMetric(m, nb.median)}`;
   const say: Record<SweepSummary['neighbours']['verdict'], string> = {
-    plateau: `${near}: close to the best, so the result does not hang on the exact values.`,
-    mixed: `${near}: clearly below the best, so part of its lead is a lucky spot on the grid.`,
-    spike: `${near}: far below it, so the best is a lonely spike and most likely noise.`,
-    flat: 'Most variants did about as well as the best, so the exact values matter little.',
-    none: 'Its neighbours have nothing to compare (they could not run or never traded), so there is no telling whether the best is a lonely spike.',
+    plateau: `${near}. This is near the best. Thus the result does not change much with the specific values.`,
+    mixed: `${near}. This is clearly below the best. Thus part of its better result comes from a lucky position on the grid.`,
+    spike: `${near}. This is far below the best. Thus the best is an isolated spike and very possibly noise.`,
+    flat: 'Most variants had approximately the same result as the best. Thus the specific values are not important.',
+    none: 'The variants next to it have no results to compare (they did not run or did not trade). Thus it is not possible to know if the best is an isolated spike.',
   };
   if (n > 1) line(say[nb.verdict]);
   if (n > 1) {
     line(
-      `Picking the best of ${plural(n, 'try', 'tries')} flatters it: even if no variant had a real edge, one would come out on top by luck. Expect something nearer the middle result than the best.`,
+      `The best of ${plural(n, 'try', 'tries')} looks better than it is. If no variant has an edge, one variant is the best by luck. The result in the future is possibly nearer to the middle result than to the best.`,
     );
   }
   if (sum.shareBeatingBenchmark !== undefined) {
     const k = Math.round(sum.shareBeatingBenchmark * n);
     const who = benchLabel.replace(/^(Buy|Equal)/, (w) => w.toLowerCase());
-    line(`${k} of ${plural(n, 'variant')} (${pct(sum.shareBeatingBenchmark, 0)}) beat ${who} on ${label}, which reached ${fmtMetric(m, bench[m])}.`);
+    line(`${k} of ${plural(n, 'variant')} (${pct(sum.shareBeatingBenchmark, 0)}) did better than ${who} on ${label}, which had ${fmtMetric(m, bench[m])}.`);
   }
 }
 
@@ -403,12 +403,12 @@ const offersBest = (period: Period, testDay: string | null) => testDay === null 
  * period are not offered, because their later result would not be a fair test.
  */
 export function bestWords(period: Period, testDay: string | null): { label: string; advice: string } {
-  const label = testDay === null ? 'Best variant here: ' : period === 'before' ? `Best before ${testDay}: ` : period === 'after' ? `Best from ${testDay} on: ` : 'Best on the whole run: ';
+  const label = testDay === null ? 'Best variant here: ' : period === 'before' ? `Best before ${testDay}: ` : period === 'after' ? `Best from ${testDay}: ` : 'Best on the full run: ';
   return {
     label,
     advice: offersBest(period, testDay)
-      ? 'To try it, change those lines in the block; the note stays the record of what you chose.'
-      : 'Values picked on this view have seen the test period, so their later result is not a fair test.',
+      ? 'To run it, change those lines in the block. The note keeps the record of your selection.'
+      : 'The selection of values on this view used the test period. Thus their subsequent result is not a correct test.',
   };
 }
 
@@ -452,7 +452,7 @@ interface Picking {
 
 function picking(el: HTMLElement, result: SweepResult, apply: Apply): Picking {
   const params = result.params;
-  const hint = params.length === 1 ? 'To try another value, click or tap it on the chart.' : `To try other values, click or tap a cell${params.length >= 3 ? ' or a row in the table' : ''}.`;
+  const hint = params.length === 1 ? 'To select a different value, click or tap it on the chart.' : `To select different values, click or tap a cell${params.length >= 3 ? ' or a row in the table' : ''}.`;
   const self: Picking = {
     el,
     picked: null,
@@ -471,11 +471,11 @@ function picking(el: HTMLElement, result: SweepResult, apply: Apply): Picking {
       h(el, 'span', 'bt-sweep-pick-hint', hint);
       return;
     }
-    el.append('Picked: ');
+    el.append('Selected: ');
     valueCodes(el, params, p.values);
     el.append('. ');
     if (isDeclared(result, p)) el.append('These are the values in the note.');
-    else if (p.error) el.append('These values could not run.');
+    else if (p.error) el.append('These values do not run.');
     else applyButton(el, p.values, apply);
   };
   show();
@@ -632,7 +632,7 @@ function tipRows(tip: HTMLElement, point: SweepPoint, m: Metric): void {
     h(r, 'span', 'bt-tip-value', value);
   };
   if (point.error) {
-    h(tip, 'div', 'bt-sweep-tip-error', `Could not run: ${point.error}`);
+    h(tip, 'div', 'bt-sweep-tip-error', `Cannot run: ${point.error}`);
     return;
   }
   row(METRICS[m].label, fmtMetric(m, metricOf(point, m)));
@@ -837,9 +837,9 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
   ramp.style.background = `linear-gradient(to right, ${lo < 0 ? `${tint(-peak, peak)}, ` : ''}var(--background-secondary)${hi > 0 ? `, ${tint(peak, peak)}` : ''})`;
   h(scale, 'span', 'bt-key-value', hi > 0 ? fmtMetric(m, peak) : fmtMetric(m, 0));
   const failed =
-    (result.points.some((q) => q.error !== null) ? ' × marks values that could not run.' : '') +
-    (result.points.some((q) => q.error === null && q.trades === 0) ? ' – marks values that never traded.' : '');
-  h(key, 'div', 'bt-note', `${METRICS[m].label} in each cell${format.unit}: blue for gains, red for losses, deeper for larger.${failed}${svgW > width ? ' Scroll sideways for more.' : ''}`);
+    (result.points.some((q) => q.error !== null) ? ' × shows values that did not run.' : '') +
+    (result.points.some((q) => q.error === null && q.trades === 0) ? ' – shows values that did not trade.' : '');
+  h(key, 'div', 'bt-note', `${METRICS[m].label} in each cell${format.unit}: blue for gains, red for losses, darker for larger values.${failed}${svgW > width ? ' Scroll to the right to see more.' : ''}`);
 }
 
 function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary, pick: Picking | null): void {

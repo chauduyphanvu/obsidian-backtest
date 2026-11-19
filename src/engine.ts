@@ -605,7 +605,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const steps = p.entries ?? 1;
   const assets = p.assets.map((a, order) => {
     const bars = data.get(a.name);
-    if (!bars || bars.t.length === 0) throw new Error(`No price data for ${a.name}`);
+    if (!bars || bars.t.length === 0) throw new Error(`There are no prices for ${a.name}`);
     return {
       name: a.name,
       order,
@@ -680,7 +680,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const start = Math.max(p.from ?? -Infinity, ...assets.map((a) => a.bars.t[0]));
   const end = p.to ?? Infinity;
   const timeline = mergeTimes(assets.map((a) => a.bars.t), start, end);
-  if (timeline.length < 2) throw new Error('No bars in the chosen date range');
+  if (timeline.length < 2) throw new Error('The date range has less than 2 bars');
 
   for (const a of assets) {
     while (a.i + 1 < a.bars.t.length && a.bars.t[a.i + 1] < start) a.i++;
@@ -715,7 +715,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const volAt = (a: A, n: number, idx: number) => (idx < 0 ? NaN : cached(`vol ${a.name} ${n}`, () => ind.stdev(ind.returns(a.bars.c), n))[idx]);
 
   const rateBars = p.cash.k === 'ticker' ? data.get(p.cash.ref.name) : null;
-  if (p.cash.k === 'ticker' && !rateBars) throw new Error(`No data for the cash rate ticker ${p.cash.ref.name}`);
+  if (p.cash.k === 'ticker' && !rateBars) throw new Error(`There is no data for the cash rate ticker ${p.cash.ref.name}`);
   // The yield quoted at the close of the timeline's bar k: that of the rate's latest bar ended by then. A row of values
   // (FRED) is known at the end of the day it is dated, whatever its spacing, where a monthly bar would end a month later.
   const rateIdx = !rateBars ? null : rateBars.values ? ind.endedBy(rateBars.t, ind.barEnds(timeline), ind.valueEnds(rateBars.t)) : ind.alignByEnd(rateBars.t, timeline);

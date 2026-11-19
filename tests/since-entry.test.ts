@@ -47,8 +47,8 @@ test('the three values, with spaces or underscores, in sell, cover and add rules
   assert.deepEqual(sellRule('position return > 20%'), { k: 'cmp', op: '>', a: { k: 'pos', name: 'position_return' }, b: { k: 'num', v: 0.2 } });
   for (const word of ['highest since entry', 'lowest since entry', 'position return']) {
     const buy = parseSpec(`universe: A\nbuy when ${word} > 1`).errors;
-    assert.deepEqual(buy.map((e) => [e.line, e.from, e.to, e.message]), [[2, 9, 9 + word.length, `"${word}" only makes sense in a sell, cover or add rule`]]);
-    assert.equal(parseSpec(`universe: A\nbuy when close > 1\nshort when ${word} > 1`).errors[0].message, `"${word}" only makes sense in a sell, cover or add rule`);
+    assert.deepEqual(buy.map((e) => [e.line, e.from, e.to, e.message]), [[2, 9, 9 + word.length, `You can use "${word}" only in a sell, cover or add rule`]]);
+    assert.equal(parseSpec(`universe: A\nbuy when close > 1\nshort when ${word} > 1`).errors[0].message, `You can use "${word}" only in a sell, cover or add rule`);
     assert.equal(parseSpec(`universe: A\nbuy when close > 1\nsell when ${word} > 1`).errors.length, 0);
     assert.equal(parseSpec(`universe: A\nbuy when close > 1\nshort when close < 1\ncover when ${word} > 1`).errors.length, 0);
     assert.equal(parseSpec(`universe: A\nentries: 2\nbuy when close > 1\nadd when ${word} > 1`).errors.length, 0);
@@ -60,20 +60,20 @@ test('highest, lowest and position alone keep their meanings, and the words afte
   assert.equal(JSON.stringify(fn).includes('"fn":"highest"') && JSON.stringify(fn).includes('"fn":"lowest"'), true);
   // "position" is free for a parameter, as "last" is.
   assert.deepEqual(parseSpec('universe: A\nposition = 3\nbuy when close > sma(position)\nsell when position return > 0.1').errors, []);
-  assert.match(parseSpec('universe: A\nbuy when true\nsell when highest since > 1').errors[0].message, /^"highest since" needs "entry" after it, as in highest since entry$/);
-  assert.match(parseSpec('universe: A\nbuy when true\nsell when lowest since high > 1').errors[0].message, /^"lowest since" needs "entry" after it, as in lowest since entry$/);
-  assert.match(parseSpec('universe: A\nbuy when true\nsell when highest > 1').errors[0].message, /^highest\(\) needs a period/);
+  assert.match(parseSpec('universe: A\nbuy when true\nsell when highest since > 1').errors[0].message, /^Write "entry" after "highest since", for example highest since entry$/);
+  assert.match(parseSpec('universe: A\nbuy when true\nsell when lowest since high > 1').errors[0].message, /^Write "entry" after "lowest since", for example lowest since entry$/);
+  assert.match(parseSpec('universe: A\nbuy when true\nsell when highest > 1').errors[0].message, /^highest\(\) must have a period/);
   assert.match(parseSpec('universe: A\nbuy when true\nsell when position > 1').errors[0].message, /^Unknown name "position"/);
 });
 
 test('they cannot go inside a function, over a window, with [n] or with of, and each says so', () => {
   const msg = (rule: string) => parseSpec(`universe: A, B\nbuy when true\nsell when ${rule}`).errors.map((e) => e.message);
-  assert.deepEqual(msg('highest since entry[1] > 1'), ['"highest since entry" can\'t be read for an earlier bar with [n]']);
-  assert.deepEqual(msg('position return of B > 0'), ['"position return" belongs to the open position, so it can\'t be read with "of"']);
-  assert.deepEqual(msg('sma(highest since entry, 3) > 1'), ['"highest since entry" can\'t go inside sma(): it only exists while a position is open']);
-  assert.match(msg('lowest since entry < 1 for 3 bars')[0], /^"lowest since entry" can't be read over several bars/);
+  assert.deepEqual(msg('highest since entry[1] > 1'), ['A rule cannot read "highest since entry" for a previous bar with [n]']);
+  assert.deepEqual(msg('position return of B > 0'), ['"position return" is a value of the open position. You cannot use it with "of"']);
+  assert.deepEqual(msg('sma(highest since entry, 3) > 1'), ['You cannot use "highest since entry" in sma(). It has a value only while a position is open']);
+  assert.match(msg('lowest since entry < 1 for 3 bars')[0], /^A rule cannot read "lowest since entry" for more than one bar/);
   // A "hold" score has no position either.
-  assert.match(parseSpec('universe: A, B\nhold: top 1 by position return').errors[0].message, /^"position return" only makes sense in a sell, cover or add rule/);
+  assert.match(parseSpec('universe: A, B\nhold: top 1 by position return').errors[0].message, /^You can use "position return" only in a sell, cover or add rule/);
 });
 
 test('the history a rule needs does not change for a position value', () => {

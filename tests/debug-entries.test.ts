@@ -93,21 +93,21 @@ test('what happened names each entry: the add rule held, the fill, the average p
   const [one, two] = trade.why!.adds!;
   assert.equal(rows[5].what, 'Buy rule held: bought entry 1 of 3 at the next open (2020-01-07) at 104.00.');
   assert.equal(rows[6].what, 'Bought entry 1 of 3 at the open at 104.00.');
-  assert.equal(rows[7].what, 'Add rule held: added entry 2 of 3 at the next open (2020-01-09) at 109.00. Buy rule held but already long.');
+  assert.equal(rows[7].what, 'Add rule held: added entry 2 of 3 at the next open (2020-01-09) at 109.00. Buy rule held, but a long position was open.');
   assert.equal(
     rows[8].what,
-    `Added entry 2 of 3 at the open at 109.00. Average entry price now ${price(one.average)}; stop loss moved to ${price(one.stopLoss!)}. Buy rule held but already long.`,
+    `Added entry 2 of 3 at the open at 109.00. Average entry price changed to ${price(one.average)}, stop loss moved to ${price(one.stopLoss!)}. Buy rule held, but a long position was open.`,
   );
   assert.equal(
     rows[10].what,
-    `Added entry 3 of 3 at the open at 114.00. Average entry price now ${price(two.average)}; stop loss moved to ${price(two.stopLoss!)}. Buy rule held but already long.`,
+    `Added entry 3 of 3 at the open at 114.00. Average entry price changed to ${price(two.average)}, stop loss moved to ${price(two.stopLoss!)}. Buy rule held, but a long position was open.`,
   );
   // The stop that moved is the average entry price less 8%, and it is what stopped the position out.
   assert.ok(near(two.stopLoss!, two.average * 0.92, 1e-9));
   assert.equal(rows[14].what, `Stopped out at ${price(trade.exitPrice)}.`);
   assert.ok(near(trade.exitPrice, two.stopLoss!, 1e-9));
   // The rule held again with every entry made.
-  assert.equal(rows[11].what, 'Buy rule held but already long. Add rule held but the position was already whole.');
+  assert.equal(rows[11].what, 'Buy rule held, but a long position was open. Add rule held, but the position had all its entries.');
   assert.deepEqual(kinds(rows[8]), ['add', 'long']);
   assert.deepEqual(rows.map((r) => positionWords(r)), [
     ...Array(6).fill('Flat'),
@@ -128,7 +128,7 @@ test('with fill: close an add is decided and filled at one close, after the rule
     const row = at(e.t);
     assert.ok(row.events.some((x) => x.k === 'add' && x.stage === 'both' && x.entry === k + 2), row.what);
     assert.ok(row.what.includes(`added entry ${k + 2} of 3 at this close at ${price(e.price)}.`), row.what);
-    assert.ok(row.what.includes('Average entry price now'), row.what);
+    assert.ok(row.what.includes('Average entry price changed to'), row.what);
     assert.equal(row.entries, k + 2);
     // The add columns saw the entry before this one, not this one: the close's own order had not filled when they were read.
     assert.ok(near(row.cells[2].b, trade.entries![k].price * 1.03, 1e-9));
@@ -141,7 +141,7 @@ test('an add order from the last bar is pending, and a strategy with no add rule
   assert.equal(bt.run.states[0].pending, 'add');
   const rows = rowsOf(bt);
   const average = bt.run.trades[0].why!.adds![0].average;
-  assert.equal(rows[3].what, `Added entry 2 of 3 at the open at 12.00. Average entry price now ${price(average)}. Buy rule held but already long. Order pending: add at the next open.`);
+  assert.equal(rows[3].what, `Added entry 2 of 3 at the open at 12.00. Average entry price changed to ${price(average)}. Buy rule held, but a long position was open. An order to add waits for the next open.`);
   assert.deepEqual(kinds(rows[3]), ['add', 'long', 'pending']);
   assert.equal(rows[3].entries, 2);
   // Without an add rule the table is as it was: no add columns, no new words.
@@ -159,7 +159,7 @@ test('an add that was not made says why it may not have been: no cash, a positio
   const rows = rowsOf(nothing);
   const undone = rows.filter((r) => kinds(r).includes('add-undone'));
   assert.deepEqual(undone.map((r) => r.index), [4, 5, 6, 7]);
-  assert.equal(undone[0].what, 'Add rule held, but no entry was made: no cash was free, or the position was already as large as its weight allows.');
+  assert.equal(undone[0].what, 'Add rule held, but no entry was made: there was no free cash, or the position was at the limit of its weight.');
   const addC = colOf(nothing, 'close > 250');
   assert.ok(rows.slice(4, 8).every((r) => r.cells[addC].outcome === 'yes' && r.entries === 1));
   // At the last bar the position has no room left at that close, so no add is left pending for the next open either.
@@ -172,7 +172,7 @@ test('an add that was not made says why it may not have been: no cash, a positio
   assert.equal(dear.run.trades[0].entries!.length, 1);
   const named = rowsOf(dear).filter((r) => kinds(r).includes('add-undone'));
   assert.ok(named.length >= 2);
-  assert.equal(named[0].what, 'Add rule held, but no entry was made: no cash was free, or the position was already as large as its weight allows, or its commission would be 10% or more of it.');
+  assert.equal(named[0].what, 'Add rule held, but no entry was made: there was no free cash, or the position was at the limit of its weight, or its commission is 10% or more of it.');
   // A commission that held nothing back leaves the shorter words.
   const light = run(`universe: A 50%\ncapital: 1000\ncommission: 0.01\n${rule}`, { A: jump });
   assert.equal(light.run.smallTrades, 0);
@@ -246,8 +246,8 @@ test('parts that use the newer functions get columns and values, and the table a
   assert.ok(known > 100, `${known} bars with every part known`);
   assert.ok(rows.some((r) => r.cells[bsC].outcome === 'yes') && rows.some((r) => r.cells[bsC].outcome === 'no'));
   assert.ok(rows.some((r) => r.cells[corC].outcome === 'yes') && rows.some((r) => r.cells[corC].outcome === 'no'));
-  // A part that is still warming up says so, and the sell rule's newer functions are columns too.
+  // A part that is its warm-up is not complete says so, and the sell rule's newer functions are columns too.
   assert.equal(rows[0].cells[corC].outcome, 'unknown');
-  assert.equal(rows[0].cells[corC].note, 'still warming up');
+  assert.equal(rows[0].cells[corC].note, 'its warm-up is not complete');
   assert.deepEqual(heads(bt).filter((h) => h.startsWith('sell:')), ['sell:hma(9) < wma(9)', 'sell:cci(14) < -100', 'sell:hma(9) < wma(9) or cci(14) < -100']);
 });

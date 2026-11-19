@@ -37,25 +37,25 @@ const VALUE_HINTS: Record<string, Completion[]> = {
   ],
   slippage: [{ label: '5 bps', insert: '5 bps', detail: 'each fill 0.05% worse than the price' }],
   'cash rate': [
-    { label: '4%', insert: '4%', detail: 'a fixed yearly rate' },
+    { label: '4%', insert: '4%', detail: 'a constant yearly rate' },
     { label: '^IRX', insert: '^IRX', detail: '13-week Treasury bill yield, from Yahoo' },
     { label: 'fred:DGS3MO', insert: 'fred:DGS3MO', detail: '3-month Treasury bill yield, from FRED' },
   ],
   'borrow fee': [{ label: '0.5%', insert: '0.5%', detail: 'a year on the value of each short' }],
-  'margin rate': [{ label: '6%', insert: '6%', detail: 'a year on money borrowed' }],
-  'test from': [{ label: '2019-01-01', insert: '2019-01-01', detail: 'results before and from this day are shown apart' }],
+  'margin rate': [{ label: '6%', insert: '6%', detail: 'a year on borrowed money' }],
+  'test from': [{ label: '2019-01-01', insert: '2019-01-01', detail: 'shows results before and from this day apart' }],
   hold: [{ label: 'top 3 by roc(126)', insert: 'top 3 by roc(126)', detail: 'the 3 tickers with the highest score' }],
-  weighting: [{ label: 'inverse volatility(60)', insert: 'inverse volatility(60)', detail: 'weights by 1 / volatility of the last 60 returns' }],
-  'risk per trade': [{ label: '1% at 2 atr(14)', insert: '1% at 2 atr(14)', detail: 'lose 1% of equity if the price moves 2 average true ranges against the position' }],
+  weighting: [{ label: 'inverse volatility(60)', insert: 'inverse volatility(60)', detail: 'weight = 1 / volatility of the last 60 returns' }],
+  'risk per trade': [{ label: '1% at 2 atr(14)', insert: '1% at 2 atr(14)', detail: '1% of equity at risk for a move of 2 average true ranges against the position' }],
   commission: [
-    { label: '1', insert: '1', detail: 'a fixed 1 for each order' },
-    { label: '0.005 per share, min 1', insert: '0.005 per share, min 1', detail: '0.005 a share, at least 1 an order' },
+    { label: '1', insert: '1', detail: '1 for each order' },
+    { label: '0.005 per share, min 1', insert: '0.005 per share, min 1', detail: '0.005 for each share, minimum 1 for each order' },
   ],
-  entries: [{ label: '3', insert: '3', detail: 'each position in up to 3 entries, each a third; needs an add rule' }],
+  entries: [{ label: '3', insert: '3', detail: 'each position in a maximum of 3 entries, one third each, with an add rule' }],
   magnify: [
-    { label: '1h', insert: '1h', detail: 'stops and targets followed through 1-hour bars inside each bar' },
-    { label: '5m', insert: '5m', detail: 'stops and targets followed through 5-minute bars inside each bar' },
-    { label: '1d', insert: '1d', detail: 'daily bars inside each weekly bar' },
+    { label: '1h', insert: '1h', detail: 'stops and targets read on 1-hour bars in each bar' },
+    { label: '5m', insert: '5m', detail: 'stops and targets read on 5-minute bars in each bar' },
+    { label: '1d', insert: '1d', detail: 'daily bars in each weekly bar' },
   ],
 };
 
@@ -201,7 +201,7 @@ export function complete(block: string[], above: string[], before: string, colum
       );
       return items.length === 0 || (items.length === 1 && items[0].insert === typed) ? null : { from: before.length - inColumn.length, items };
     }
-    if (/\bof\s+$/i.test(head)) return match([...names('', 'read this ticker instead'), ...(word ? PREFIXES : [])], true);
+    if (/\bof\s+$/i.test(head)) return match([...names('', 'read the value from this ticker'), ...(word ? PREFIXES : [])], true);
     if (/\bcrosses\s+$/i.test(head)) return match([{ label: 'above', insert: 'above ', detail: '' }, { label: 'below', insert: 'below ', detail: '' }], true);
     if (/^\d/.test(word) || /[\d.]$/.test(head)) return null;
     const spanning = phraseMatch(before, [...(positions ? POSITION_WORDS : []), ...WORDS]);
@@ -239,7 +239,7 @@ export function complete(block: string[], above: string[], before: string, colum
   const listed = head.match(/^\s*for\s+(.+,\s*)$/i);
   if (listed) {
     const taken = new Set(listed[1].split(',').map((x) => x.trim().toLowerCase()));
-    return match(names(':', 'rules for this ticker too').filter((t) => !taken.has(t.label.toLowerCase())), true);
+    return match(names(':', 'rules also for this ticker').filter((t) => !taken.has(t.label.toLowerCase())), true);
   }
 
   const key = settingKey(head);

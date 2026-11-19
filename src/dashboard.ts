@@ -19,7 +19,7 @@ export interface DashboardConfig {
 
 /** The text inserted by the command "Insert strategy dashboard". */
 export const DASHBOARD_TEMPLATE = `\`\`\`backtests
-# Every strategy in the vault. To list one folder only, add: folder: Trading
+# All strategies in the vault. To show only one folder, add: folder: Trading
 sort: return
 \`\`\`
 `;
@@ -44,18 +44,18 @@ export function parseDashboard(source: string): { config: DashboardConfig; error
     }
     const before = seen.get(key);
     if (before !== undefined) {
-      errors.push({ line, message: `${key} is already set on line ${before}` });
+      errors.push({ line, message: `${key} is also set on line ${before}` });
       return;
     }
     seen.set(key, line);
     const value = m[2].trim();
     if (key === 'folder') {
       const folder = value.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/^\/+|\/+$/g, '');
-      if (!folder) errors.push({ line, message: 'Write the folder after "folder:", such as "folder: Trading"' });
+      if (!folder) errors.push({ line, message: 'Write the folder after "folder:", for example "folder: Trading"' });
       else config.folder = folder;
     } else {
       const sort = SORTS.find((s) => s === value.toLowerCase());
-      if (!sort) errors.push({ line, message: `"${value}" is not a way to sort. Use return, drawdown, sharpe or name` });
+      if (!sort) errors.push({ line, message: `"${value}" is not a sort order. Use return, drawdown, sharpe or name` });
       else config.sort = sort;
     }
   });
@@ -167,7 +167,7 @@ export function failedRow(note: string, name: string, error: unknown): FailedRow
   return { state: 'failed', note, name, reason: error instanceof Error ? error.message : String(error) };
 }
 
-export const failureText = (row: FailedRow): string => `Couldn't run. ${row.reason}`;
+export const failureText = (row: FailedRow): string => `The strategy did not run. ${row.reason}`;
 
 /** Two decimals, with no "-0.00" for a value too small to show. */
 const ratio = (x: number) => (Number.isFinite(x) ? minus((Math.round(x * 100) / 100 || 0).toFixed(2)) : '–');
@@ -191,13 +191,13 @@ export interface Column {
 export const COLUMNS: Column[] = [
   { key: 'name', label: 'Strategy', num: false },
   { key: 'return', label: 'Return per year', num: true },
-  { key: 'benchmark', label: 'Benchmark per year', num: true, hint: "The benchmark's return per year. Its name is under each figure." },
+  { key: 'benchmark', label: 'Benchmark per year', num: true, hint: "The benchmark's return per year. Its name is below each figure." },
   { key: 'drawdown', label: 'Worst drawdown', num: true },
   { key: 'sharpe', label: 'Sharpe ratio', num: true },
   { key: 'trades', label: 'Trades', num: true },
   { key: 'now', label: 'Now', num: false, hint: 'What the strategy holds after the last bar' },
-  { key: 'next', label: 'Next', num: false, hint: 'Orders for the next open, unless a line gives another time. Bought and Sold were made at the last close by a strategy with fill: close' },
-  { key: 'through', label: 'Prices through', num: false, hint: 'The last bar the figures rest on' },
+  { key: 'next', label: 'Next', num: false, hint: 'Orders for the next open, if a line does not give a different time. A strategy with fill: close made the Bought and Sold orders at the last close' },
+  { key: 'through', label: 'Prices through', num: false, hint: 'The last bar that the figures use' },
 ];
 
 export interface SortState {
@@ -310,14 +310,14 @@ function clock(t: number): string {
 
 /** The line under the table: how many strategies, then how far the run has got or when the figures were worked out. */
 export function summaryText(rows: DashRow[], finishedAt: number | null): string {
-  if (finishedAt === null) return `Running ${rows.filter((r) => r.state !== 'running').length} of ${rows.length}…`;
-  return `${plural(rows.length)}. Figures worked out ${clock(finishedAt)}.`;
+  if (finishedAt === null) return `The plugin runs ${rows.filter((r) => r.state !== 'running').length} of ${rows.length}…`;
+  return `${plural(rows.length)}. The plugin calculated these figures on ${clock(finishedAt)}.`;
 }
 
 /** The message in place of the table when there is nothing to list. */
 export function emptyText(config: DashboardConfig, inVault: number): string {
-  if (inVault === 0) return 'No strategy blocks found in the vault. Add one with the command "Insert strategy block".';
-  return `No strategy blocks found in the folder "${config.folder}". Check its name, or remove the folder line.`;
+  if (inVault === 0) return 'The vault has no strategy blocks. Add one with the command "Insert strategy block".';
+  return `The folder "${config.folder}" has no strategy blocks. Make sure that its name is correct, or remove the folder line.`;
 }
 
 export interface FoundStrategy {

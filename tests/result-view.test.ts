@@ -47,7 +47,7 @@ test('the block’s settings are folded away behind a button, its rules and a ti
   assert.ok(lines.some((l) => l.textContent === '  stop loss: 5%' && !l.classes().includes('bt-src-setting')));
   const box = root.byClass('bt-src')[0];
   const toggle = root.byClass('bt-src-toggle')[0];
-  assert.equal(toggle.textContent, 'Show the whole block');
+  assert.equal(toggle.textContent, 'Show all of the block');
   toggle.dispatch('click');
   assert.ok(box.classes().includes('bt-src-all'));
   assert.equal(toggle.attrs['aria-expanded'], 'true');
@@ -64,7 +64,7 @@ test('the sections are tabs, opened one at a time, each large one with a line of
   assert.deepEqual(texts(tabs.map((t) => t.byClass('bt-tab-name')[0])), ['Trades', 'Years', 'Months']);
   const previews = texts(tabs.map((t) => t.byClass('bt-tab-preview')[0]));
   assert.match(previews[0], /^\d+ closed · \d+% won$/);
-  assert.match(previews[1], /^ahead in \d of [23]$/);
+  assert.match(previews[1], /^better in \d of [23]$/);
   assert.match(previews[2], /^up in \d+%$/);
   const sections = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details');
   tabs[1].dispatch('click');
@@ -107,7 +107,7 @@ test('the Years tab gives the years ahead, level and behind and draws the gap ea
   const root = draw(run(TREND));
   const [trades, years, months] = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details');
   years.dispatch('toggle');
-  assert.match(years.byClass('bt-tab-lead')[0].textContent, /^Ahead of buy and hold in \d of [23] whole years, level in \d, behind in \d\./);
+  assert.match(years.byClass('bt-tab-lead')[0].textContent, /^In [23] full years, the strategy did better than buy and hold in \d, the same in \d and worse in \d\./);
   assert.ok(years.all().some((e) => e.tag === 'svg'));
   months.dispatch('toggle');
   // 1,100 days from the first of January 2019: January 2019 to January 2022, 37 months.
@@ -142,7 +142,7 @@ test('the chart reads out the last bar, then the bar under the pointer, with the
   assert.match(read('bt-read-date'), / · last bar$/);
   // Which line is ahead is shaded, and the key says which shade is which.
   assert.ok(chart.all().some((e) => e.attrs.class === 'bt-ahead' || e.attrs.class === 'bt-behind'));
-  assert.ok(texts(root.byClass('bt-chart-key')).includes('Market falls'));
+  assert.ok(texts(root.byClass('bt-chart-key')).includes('Market drawdowns'));
 });
 
 test('a run of three years can show its last year alone; the span stays when another run is drawn', () => {
@@ -197,7 +197,7 @@ test('the chip names the nearest order within 2% of the last close, or one given
   assert.equal(watchText(report(SPY), 3), 'SPY 0.33% from a sell');
   assert.equal(watchText(report({ ...SPY, side: 'buy', fires: [{ lo: 740, hi: null }] }), 1), '1.0% from a buy');
   assert.equal(watchText(report({ ...SPY, side: 'buy', fires: [{ lo: 760, hi: null }] }), 1), null);
-  assert.equal(watchText(report({ ...SPY, fires: [{ lo: null, hi: 740 }] }), 1), 'Sells at an unchanged close');
+  assert.equal(watchText(report({ ...SPY, fires: [{ lo: null, hi: 740 }] }), 1), 'Sells if the close does not change');
   assert.equal(watchText(report({ ...SPY, fires: [{ lo: null, hi: 650 }] }), 1), null);
 });
 
@@ -262,7 +262,7 @@ test('a trade clicked in the payoff chart that the list leaves out says so', () 
   const hit = trades.byClass('bt-payoff')[0].all().find((e) => e.tag === 'rect' && e.attrs.fill === 'transparent')!;
   const step = (WIDTH - 8) / sorted.length;
   hit.dispatch('click', { clientX: 4 + (i + 0.5) * step });
-  assert.match(trades.byClass('bt-tab-read')[0].textContent, /not in the list, which shows the latest 500 trades\.$/);
+  assert.match(trades.byClass('bt-tab-read')[0].textContent, /not in the list\. The list shows only the last 500 trades\.$/);
   // A trade of one bar says so in the singular.
   const one = sorted.findIndex((t) => t.bars === 1);
   hit.dispatch('pointermove', { clientX: 4 + (one + 0.5) * step });
@@ -289,10 +289,10 @@ test('a fall the strategy beat by less than the Years tab calls level is not cou
     d.dispatch('toggle');
     return { preview: d.attrs['data-bt-preview'], lead: d.byClass('bt-tab-lead')[0]?.textContent };
   };
-  assert.deepEqual(regimes(equity), { preview: 'better in 0 of 1 fall', lead: 'Did better than buy and hold in 0 of the 1 market fall it covered.' });
+  assert.deepEqual(regimes(equity), { preview: 'better in 0 of 1 drawdown', lead: 'The strategy did better than buy and hold in 0 of the 1 market drawdown in the run.' });
   // Ahead by half a point, it is.
   const ahead = regimes(bench.map((v, i) => v * (1 + 0.005 * Math.min(1, Math.max(0, (t[i] - Date.UTC(2020, 1, 19)) / (Date.UTC(2020, 2, 23) - Date.UTC(2020, 1, 19)))))));
-  assert.equal(ahead.preview, 'better in 1 of 1 fall');
+  assert.equal(ahead.preview, 'better in 1 of 1 drawdown');
 });
 
 test('“More figures” keeps the keyboard on it when it opens and closes the rest', () => {

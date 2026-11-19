@@ -29,14 +29,14 @@ test('commission: the forms it is written in, and what is wrong with the others'
   assert.deepEqual(c('commission: 0.005 per share, max 1%, min $1'), { k: 'share', fee: 0.005, min: 1, max: 0.01 });
   assert.equal(c('commission: 0'), undefined);
   assert.equal(parseSpec('universe: SPY\nbuy when true').spec!.commission, undefined);
-  errorOf('universe: SPY\nbuy when true\ncommission: lots', /"lots" is not a commission. Write it as 1 for a fixed amount per order, or as 0.005 per share/);
-  errorOf('universe: SPY\nbuy when true\ncommission: 1, min 2', /"min" and "max" go with a commission per share/);
-  errorOf('universe: SPY\nbuy when true\ncommission: 0 per share', /per share must be above 0/);
-  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, min 1, min 2', /"min" is written twice/);
-  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, max 10%', /above 0% and under 10%/);
-  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, max 1', /percentage of the order's value/);
-  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, cap 1%', /Can't read "cap 1%"/);
-  errorOf('universe: SPY\nbuy when true\nfor SPY:\n  commission: 1', /"commission" applies to the whole strategy/);
+  errorOf('universe: SPY\nbuy when true\ncommission: lots', /"lots" is not a commission. Write it as 1 for the same fee on each order, or as 0.005 per share/);
+  errorOf('universe: SPY\nbuy when true\ncommission: 1, min 2', /Use "min" and "max" only with a commission per share/);
+  errorOf('universe: SPY\nbuy when true\ncommission: 0 per share', /per share must be more than 0/);
+  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, min 1, min 2', /"min" is written two times/);
+  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, max 10%', /more than 0% and less than 10%/);
+  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, max 1', /percentage of the order value/);
+  errorOf('universe: SPY\nbuy when true\ncommission: 0.01 per share, cap 1%', /Cannot read "cap 1%"/);
+  errorOf('universe: SPY\nbuy when true\nfor SPY:\n  commission: 1', /"commission" is a setting for the full strategy/);
 });
 
 test('the plugin setting is the default, checked like a block line, and a block line overrides it, 0 included', () => {
@@ -117,7 +117,7 @@ test('a rebalancing trade too small for its commission is not made, and the resu
   assert.equal(r.run.states[0].shares, 900);
   assert.equal(r.run.smallTrades, 1);
   assert.equal(r.run.trades[0].why!.trims, 0);
-  assert.ok(r.notes.includes('1 add or rebalancing trade was not made because the commission would have been 10% of its value or more.'));
+  assert.ok(r.notes.includes('The run did not make 1 add or rebalance trade, because the commission was 10% or more of its value.'));
   // A trim worth ten times its commission or more is made: A doubles, so 500 of it is sold for 1.
   const A = bars([10, 20, 20, 20], { opens: [10, 10, 20, 20], start });
   const B = bars([10, 10, 10, 10], { start });
@@ -131,17 +131,17 @@ test('the explanation gives each fill\'s commission, and the costs paid say how 
   const bt = run('universe: A\ncapital: 1000\ncosts: 10 bps\ncommission: 2\nbuy when true\nsell when close > 11', { A });
   const ex = explainTrade(bt, bt.run.trades[0]);
   const spent = 998 / 1.001;
-  assert.ok(rows(ex, 'size').some(([l, v]) => l === 'The costs and commission are paid on top, so the $1,000.00 in cash covered' && v === '$997.00'));
+  assert.ok(rows(ex, 'size').some(([l, v]) => l === 'The costs and commission are added to the money put in. Thus the $1,000.00 in cash was sufficient for' && v === '$997.00'));
   assert.ok(rows(ex, 'size').some(([l, v]) => l === 'Money put in' && v === `$997.00 plus $1.00 costs and $2.00 commission, for ${(spent / 10).toLocaleString('en-US', { maximumFractionDigits: 4 })} shares`));
   const paid = bt.run.trades[0].why!.fees;
-  assert.ok(rows(ex, 'result').some(([l, v]) => l === 'Costs paid' && v === `$${paid.toFixed(2)}, of which $4.00 commission`));
+  assert.ok(rows(ex, 'result').some(([l, v]) => l === 'Costs paid' && v === `$${paid.toFixed(2)} ($4.00 commission)`));
   assert.ok(near(ex.facts.ret, bt.run.trades[0].ret, 1e-12));
 });
 
 test('the summary names the commission', () => {
   const spec = (extra: string) => parseSpec(`universe: SPY\nbuy when true\n${extra}`).spec!;
   assert.equal(summary(spec('commission: 1')), 'SPY, commission 1 an order');
-  assert.equal(summary(spec('costs: 5 bps\ncommission: 0.005 per share, min 1, max 1%')), 'SPY, 5 bps costs, commission 0.005 a share, at least 1, at most 1% of the order');
+  assert.equal(summary(spec('costs: 5 bps\ncommission: 0.005 per share, min 1, max 1%')), 'SPY, 5 bps costs, commission 0.005 a share, minimum 1, maximum 1% of the order');
   assert.equal(commissionText({ k: 'share', fee: 0.01, min: 0, max: null }), 'commission 0.01 a share');
   assert.equal(summary(spec('costs: 5 bps')), 'SPY, 5 bps costs');
 });

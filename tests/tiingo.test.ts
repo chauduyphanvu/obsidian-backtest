@@ -99,7 +99,7 @@ test('this week is left out until the Monday after it, in New York', () => {
 
 test('tiingo explains a problem in a JSON detail', () => {
   assert.throws(() => parseTiingo(JSON.stringify({ detail: 'Not found.' }), 0), /^Error: Not found\.$/);
-  assert.throws(() => parseTiingo('{}', 0), /Tiingo returned no data/);
+  assert.throws(() => parseTiingo('{}', 0), /Tiingo sent no data/);
 });
 
 // ------------------------------------------------------------------------------------------------ loading
@@ -150,20 +150,20 @@ test('a tiingo ticker is asked for its whole daily history, with the key in the 
 
 test('tiingo: a ticker it does not know is final, a rejected key and a broken answer are not', async () => {
   const missing = deps(async () => JSON.stringify({ detail: 'Error: Ticker \'XYZ\' not found' }));
-  await assert.rejects(loadBars({ name: 'XYZ', source: 'tiingo', id: 'XYZ' }, '1d', 0, missing.d), { message: 'Tiingo has no prices for XYZ. Check the ticker.' });
+  await assert.rejects(loadBars({ name: 'XYZ', source: 'tiingo', id: 'XYZ' }, '1d', 0, missing.d), { message: 'Tiingo has no prices for XYZ. Make sure that the ticker is correct.' });
   const rejected = deps(async () => JSON.stringify({ detail: 'Invalid token.' }));
   await assert.rejects(loadBars(SPY, '1d', 0, rejected.d), {
-    message: 'Couldn\'t load SPY from tiingo: Tiingo did not accept the API key. Check the secret chosen under "Tiingo API key" in the plugin settings',
+    message: 'Cannot load SPY from tiingo: Tiingo did not accept the API key. Make sure that the secret in the plugin setting "Tiingo API key" is correct',
   });
   const other = deps(async () => JSON.stringify({ detail: 'You have run over your hourly request allocation.' }));
-  await assert.rejects(loadBars(SPY, '1d', 0, other.d), { message: "Couldn't load SPY from tiingo: Tiingo said: You have run over your hourly request allocation." });
+  await assert.rejects(loadBars(SPY, '1d', 0, other.d), { message: 'Cannot load SPY from tiingo: Tiingo sent this message: You have run over your hourly request allocation.' });
   const html = deps(async () => '<html>Bad gateway</html>');
-  await assert.rejects(loadBars(SPY, '1d', 0, html.d), { message: "Couldn't load SPY from tiingo: Tiingo sent something other than price data" });
+  await assert.rejects(loadBars(SPY, '1d', 0, html.d), { message: 'Cannot load SPY from tiingo: Tiingo did not send price data' });
 });
 
 test('tiingo without a key asks nothing and names the setting; with a saved copy it uses that copy', async () => {
   const none = deps(async () => DAILY, { secret: () => null });
-  const message = 'Tiingo needs an API key to load SPY. Choose the secret that holds it under "Tiingo API key" in the plugin settings.';
+  const message = 'The plugin must have a Tiingo API key to load SPY. Select the secret with the key in the plugin setting "Tiingo API key".';
   await assert.rejects(loadBars(SPY, '1d', 0, none.d), { message });
   assert.equal(none.calls.length, 0);
   // Deps with no secret storage at all are the same as no key.
@@ -174,7 +174,7 @@ test('tiingo without a key asks nothing and names the setting; with a saved copy
   const later = deps(async () => DAILY, { secret: () => '  ', now: () => NOW + 7 * HOUR, cacheRead: saved.d.cacheRead });
   const r = await loadBars(SPY, '1d', 0, later.d);
   assert.equal(r.stale, true);
-  assert.equal(r.warning, `Couldn't refresh SPY (${message}); using prices saved on 2025-03-12.`);
+  assert.equal(r.warning, `Cannot download new prices for SPY (${message}). The plugin uses the prices saved on 2025-03-12.`);
 });
 
 // ------------------------------------------------------------------------------------------------ in place of Yahoo
@@ -205,10 +205,10 @@ async function savedYahoo(n: ReturnType<typeof network>, age: number): Promise<v
 
 test('with the setting off, Tiingo never stands in for Yahoo', async () => {
   const n = network({ fallback: false });
-  await assert.rejects(loadBars(YSPY, '1d', 0, n.d), { message: "Couldn't load SPY from yahoo: HTTP 503" });
+  await assert.rejects(loadBars(YSPY, '1d', 0, n.d), { message: 'Cannot load SPY from yahoo: HTTP 503' });
   assert.equal(n.toTiingo(), 0);
   const unset = network({ over: { tiingoFallback: undefined } });
-  await assert.rejects(loadBars(YSPY, '1d', 0, unset.d), { message: "Couldn't load SPY from yahoo: HTTP 503" });
+  await assert.rejects(loadBars(YSPY, '1d', 0, unset.d), { message: 'Cannot load SPY from yahoo: HTTP 503' });
   assert.equal(unset.toTiingo(), 0);
 });
 
@@ -217,7 +217,7 @@ test('when Yahoo fails and nothing is saved, Tiingo stands in, says so, and is n
   const r = await loadBars(YSPY, '1d', 0, n.d);
   assert.equal(n.toTiingo(), 1);
   assert.deepEqual([r.source, r.stale, iso(r.through)], ['tiingo', false, '2025-03-11']);
-  assert.equal(r.warning, "Couldn't load SPY from Yahoo (HTTP 503); using Tiingo's prices instead.");
+  assert.equal(r.warning, "Cannot load SPY from Yahoo (HTTP 503). The plugin uses the prices from Tiingo.");
   // Tiingo's prices are saved under Tiingo's name, never as Yahoo's.
   assert.deepEqual([...n.cache.keys()], ['tiingo-SPY-1d']);
   // A fresh Tiingo copy stands in again without a request; a refresh asks Tiingo again.
@@ -231,7 +231,7 @@ test('a saved Yahoo copy under 3 days old comes before Tiingo, and an older one 
   const young = network();
   await savedYahoo(young, 2 * DAY);
   const a = await loadBars(YSPY, '1d', 0, young.d);
-  assert.deepEqual([a.source, a.stale, a.warning], ['yahoo', true, "Couldn't refresh SPY (HTTP 503); using prices saved on 2025-03-10."]);
+  assert.deepEqual([a.source, a.stale, a.warning], ['yahoo', true, 'Cannot download new prices for SPY (HTTP 503). The plugin uses the prices saved on 2025-03-10.']);
   assert.equal(young.toTiingo(), 0);
 
   const old = network();
@@ -242,32 +242,32 @@ test('a saved Yahoo copy under 3 days old comes before Tiingo, and an older one 
   const both = network({ tiingoAnswer: () => Promise.reject(new Error('HTTP 500')) });
   await savedYahoo(both, 4 * DAY);
   const c = await loadBars(YSPY, '1d', 0, both.d);
-  assert.deepEqual([c.source, c.stale, c.warning], ['yahoo', true, "Couldn't refresh SPY (HTTP 503); using prices saved on 2025-03-08."]);
+  assert.deepEqual([c.source, c.stale, c.warning], ['yahoo', true, 'Cannot download new prices for SPY (HTTP 503). The plugin uses the prices saved on 2025-03-08.']);
   assert.equal(both.toTiingo(), 1);
 });
 
 test('when Tiingo cannot stand in either, the message says why', async () => {
   const down = network({ tiingoAnswer: () => Promise.reject(new Error('HTTP 500')) });
-  await assert.rejects(loadBars(YSPY, '1d', 0, down.d), { message: "Couldn't load SPY from yahoo: HTTP 503. Tiingo could not stand in: HTTP 500" });
+  await assert.rejects(loadBars(YSPY, '1d', 0, down.d), { message: 'Cannot load SPY from yahoo: HTTP 503. The plugin also cannot use Tiingo: HTTP 500' });
   const keyless = network({ over: { secret: () => null } });
   await assert.rejects(loadBars(YSPY, '1d', 0, keyless.d), {
-    message: 'Couldn\'t load SPY from yahoo: HTTP 503. Tiingo could not stand in: Tiingo needs an API key to load SPY. Choose the secret that holds it under "Tiingo API key" in the plugin settings.',
+    message: 'Cannot load SPY from yahoo: HTTP 503. The plugin also cannot use Tiingo: The plugin must have a Tiingo API key to load SPY. Select the secret with the key in the plugin setting "Tiingo API key".',
   });
   assert.equal(keyless.toTiingo(), 0);
   // An old Tiingo copy, with nothing from Yahoo, is better than nothing.
   const stale = network({ tiingoAnswer: () => Promise.reject(new Error('HTTP 500')) });
   stale.cache.set('tiingo-SPY-1d', JSON.stringify({ fetched: NOW - 2 * DAY, since: 0, bars: parseTiingo(DAILY, NOW) }));
   const r = await loadBars(YSPY, '1d', 0, stale.d);
-  assert.deepEqual([r.source, r.stale, r.warning], ['tiingo', true, "Couldn't load SPY from Yahoo (HTTP 503) or Tiingo; using Tiingo's prices saved on 2025-03-10."]);
+  assert.deepEqual([r.source, r.stale, r.warning], ['tiingo', true, 'Cannot load SPY from Yahoo (HTTP 503) or Tiingo. The plugin uses the Tiingo prices saved on 2025-03-10.']);
 });
 
 test('Tiingo does not stand in for a ticker Yahoo does not know, for one that is not a US listing, or for smaller bars', async () => {
   const unknown = network({ yahoo: () => Promise.resolve(NOT_FOUND) });
-  await assert.rejects(loadBars({ name: 'XYZ', source: 'yahoo', id: 'XYZ' }, '1d', 0, unknown.d), { message: 'Yahoo has no prices for XYZ. Check the ticker.' });
+  await assert.rejects(loadBars({ name: 'XYZ', source: 'yahoo', id: 'XYZ' }, '1d', 0, unknown.d), { message: 'Yahoo has no prices for XYZ. Make sure that the ticker is correct.' });
   assert.equal(unknown.toTiingo(), 0);
   for (const id of ['^GSPC', 'SHOP.TO', 'BTC-USD', 'EURUSD=X', 'ES=F', 'VOD.L']) {
     const n = network();
-    await assert.rejects(loadBars({ name: id, source: 'yahoo', id }, '1d', 0, n.d), { message: `Couldn't load ${id} from yahoo: HTTP 503` });
+    await assert.rejects(loadBars({ name: id, source: 'yahoo', id }, '1d', 0, n.d), { message: `Cannot load ${id} from yahoo: HTTP 503` });
     assert.equal(n.toTiingo(), 0, id);
   }
   for (const id of ['BRK-B', 'VFIAX', 'BF-A']) {
@@ -318,27 +318,27 @@ test('did you mean: a misspelt data: tiingo and a wrong interval for Tiingo', ()
     const d = parseSpec(lines.join('\n')).errors[0];
     return fixFor(lines, d)?.hint ?? null;
   };
-  assert.equal(at(['universe: SPY', 'data: tiingoo', 'buy when true']), 'Did you mean tiingo?');
-  assert.equal(at(['universe: tiingo:SPY', 'interval: 1dd', 'buy when true']), 'Did you mean 1d?');
+  assert.equal(at(['universe: SPY', 'data: tiingoo', 'buy when true']), 'Possible correction: tiingo.');
+  assert.equal(at(['universe: tiingo:SPY', 'interval: 1dd', 'buy when true']), 'Possible correction: 1d.');
 });
 
 test('a fixed price level warns for Tiingo, which adjusts its prices too, and names both sources when both are read', () => {
   const warn = (src: string) => parseSpec(src).warnings.map((w) => w.message);
-  const tail = 'prices are adjusted for later dividends and splits, so old prices are lower than what actually traded.';
-  assert.deepEqual(warn('universe: tiingo:SPY\nbuy when close > 100'), [`This compares a price with a fixed number. Tiingo ${tail}`]);
-  assert.deepEqual(warn('universe: SPY, tiingo:QQQ\nbuy when close > 100'), [`This compares a price with a fixed number. Yahoo and Tiingo ${tail}`]);
-  assert.deepEqual(warn('universe: SPY\nbuy when close > 100'), [`This compares a price with a fixed number. Yahoo ${tail}`]);
+  const tail = 'prices include adjustments for subsequent dividends and splits. Thus previous prices are lower than the traded prices.';
+  assert.deepEqual(warn('universe: tiingo:SPY\nbuy when close > 100'), [`This compares a price with a constant number. Tiingo ${tail}`]);
+  assert.deepEqual(warn('universe: SPY, tiingo:QQQ\nbuy when close > 100'), [`This compares a price with a constant number. Yahoo and Tiingo ${tail}`]);
+  assert.deepEqual(warn('universe: SPY\nbuy when close > 100'), [`This compares a price with a constant number. Yahoo ${tail}`]);
 });
 
 test('magnify has no smaller bars to look inside a Tiingo ticker with, and says so', () => {
-  assert.deepEqual(errorsOf('universe: tiingo:SPY\nmagnify: 1h\nbuy when true'), ['magnify looks inside bars with smaller bars from Yahoo or Binance, and Tiingo has none here']);
+  assert.deepEqual(errorsOf('universe: tiingo:SPY\nmagnify: 1h\nbuy when true'), ['magnify examines bars with smaller bars from Yahoo or Binance. Tiingo does not have smaller bars']);
   assert.deepEqual(errorsOf('universe: tiingo:SPY, csv:Data/a.csv\nmagnify: 1h\nbuy when true'), [
-    'magnify looks inside bars with smaller bars from Yahoo or Binance, and Tiingo and CSV files have none here',
+    'magnify examines bars with smaller bars from Yahoo or Binance. Tiingo and CSV files do not have smaller bars',
   ]);
   const both = bars([100, 100, 100, 100, 100]);
   const { spec } = parseSpec('universe: A, tiingo:QQQ\ncapital: 1000\nstop loss: 10%\nbuy when true\nmagnify: 1h');
   const bt = runBacktest(spec!, new Map<string, Bars>([['A', both], ['QQQ', both], [insideKey('A', '1h'), { t: [], o: [], h: [], l: [], c: [], v: [] }]]));
-  assert.ok(bt.notes.includes('QQQ comes from Tiingo, which gives no smaller bars here, so its bars are read whole.'));
+  assert.ok(bt.notes.includes('QQQ comes from Tiingo, which gives no smaller bars here. Thus the run did not examine its bars with smaller bars.'));
 });
 
 test('Tiingo and Yahoo keep one clock, so with fill: close one reads the other at the same close', () => {

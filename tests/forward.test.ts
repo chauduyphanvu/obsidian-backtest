@@ -65,7 +65,7 @@ test('a new note holds the property, a forward block that parses cleanly, and an
   const note = started();
   assert.ok(note.startsWith('---\nbacktest_forward: true\n---\n'));
   assert.ok(isForwardNote(note));
-  assert.ok(note.includes(`taken from ${LINK}`));
+  assert.ok(note.includes(`They are from ${LINK}.`));
   assert.ok(note.endsWith('\n## Log\n'));
 
   const { forward, errors } = parseForward(body(note));
@@ -103,7 +103,7 @@ test('a strategy that leaves everything to the defaults gets all six pinned, and
   const frozen = pinned(STRATEGY, DEFAULTS);
   assert.deepEqual(lines(frozen).slice(lines(STRATEGY).length), [
     '',
-    '# Pinned when the forward test began, so a later change to the plugin settings cannot move it.',
+    '# Plugin settings at the start of the forward test. If you change the plugin settings, this test does not change.',
     'capital: 10000',
     'costs: 0 bps',
     'slippage: 0 bps',
@@ -229,14 +229,14 @@ test('the block is fenced longer than any run of backticks in the strategy', () 
 test('a strategy with a "to" date, one that does not run, and a link that cannot be written are refused with a plain message', () => {
   const to = makeForward({ source: `${STRATEGY}\nto: 2024-12-31`, defaults: DEFAULTS, started: utc(2026, 11, 13), intraday: false, link: LINK, name: 'x' });
   assert.equal(to.ok, false);
-  assert.ok(!to.ok && to.message.includes('"to" date') && to.message.includes('never sees a new bar'));
+  assert.ok(!to.ok && to.message.includes('"to" date') && to.message.includes('does not get new bars'));
 
   const broken = makeForward({ source: 'universe: SPY\nbuy when close >', defaults: DEFAULTS, started: utc(2026, 11, 13), intraday: false, link: LINK, name: 'x' });
-  assert.ok(!broken.ok && broken.message.startsWith("This strategy has a problem, so a forward test can't start from it. Line 2:"));
+  assert.ok(!broken.ok && broken.message.startsWith('This strategy has a problem. Thus a forward test cannot start from it. Line 2:'));
 
   for (const link of ['Trend following#x', '[[Trend]following]]', '[[]]', '[[Two\nlines]]']) {
     const bad = makeForward({ source: STRATEGY, defaults: DEFAULTS, started: utc(2026, 11, 13), intraday: false, link, name: 'x' });
-    assert.ok(!bad.ok && bad.message.includes("can't be written into a note"), link);
+    assert.ok(!bad.ok && bad.message.includes('into a note. Write it as'), link);
   }
 });
 
@@ -256,7 +256,7 @@ test('the check follows the start and the frozen text: an edit shows, trailing b
   assert.equal(forwardChanged({ ...forward!, check: 'abc' }), true);
   // Moving the start back would make bars already seen count as forward ones.
   assert.equal(forwardChanged({ ...forward!, started: forward!.started - 30 * 86_400_000 }), true);
-  assert.equal(CHANGED, 'The rules or the start were changed after the forward test began, so this is no longer a forward test.');
+  assert.equal(CHANGED, 'The rules or the start changed after the forward test started. As a result, this is not a forward test.');
 });
 
 test('every missing or malformed part of a block is a problem with its line', () => {
@@ -279,13 +279,13 @@ test('every missing or malformed part of a block is a problem with its line', ()
   assert.deepEqual(parse([4, '', ]).errors, [{ line: 4, message: 'There is no strategy below the ---' }]);
 
   assert.deepEqual(parse([0, 'started: yesterday']).errors, [
-    { line: 1, message: '"yesterday" is not a date. Write it as 2026-11-13, or as 2026-11-13 15:30 for bars inside a day' },
+    { line: 1, message: '"yesterday" is not a date. Write it as 2026-11-13, or as 2026-11-13 15:30 for bars shorter than a day' },
   ]);
   for (const bad of ['2026-02-30', '2026-13-01', '2026-11-13 24:00', '2026-11-13 12:60', '13-11-2026', '2026-11-13 9:30']) {
     assert.equal(parse([0, `started: ${bad}`]).errors.length, 1, bad);
   }
   assert.deepEqual(parse([1, 'from: Note#Name']).errors, [{ line: 2, message: 'Write the strategy as [[Note name#Strategy name]]' }]);
-  assert.deepEqual(parse([2, 'check: not a code!']).errors, [{ line: 3, message: '"not a code!" is not a check code. Leave the line as the plugin wrote it' }]);
+  assert.deepEqual(parse([2, 'check: not a code!']).errors, [{ line: 3, message: '"not a code!" is not a check code. Do not change the line that the plugin wrote' }]);
   assert.deepEqual(parse([0, 'started:']).errors, [{ line: 1, message: '"started" has no value' }, { line: 4, message: 'Add a "started:" line above the ---' }]);
 });
 
@@ -294,9 +294,9 @@ test('an unknown setting, a repeated one, a line that is no setting, and a missi
   assert.deepEqual(parseForward(`started: 2026-11-13\nfrom: [[A]]\ncheck: abc\nstop: 5\n---\n${frozen}`).errors, [
     { line: 4, message: 'Unknown setting "stop". Settings: started, from, check' },
   ]);
-  assert.deepEqual(parseForward(`started: 2026-11-13\nstarted: 2026-11-14\nfrom: [[A]]\ncheck: abc\n---\n${frozen}`).errors, [{ line: 2, message: '"started" is set twice' }]);
+  assert.deepEqual(parseForward(`started: 2026-11-13\nstarted: 2026-11-14\nfrom: [[A]]\ncheck: abc\n---\n${frozen}`).errors, [{ line: 2, message: '"started" is also set on line 1' }]);
   assert.deepEqual(parseForward(`started: 2026-11-13\nhello\nfrom: [[A]]\ncheck: abc\n---\n${frozen}`).errors, [
-    { line: 2, message: 'Not a setting. Write started:, from: and check: lines, then ---' },
+    { line: 2, message: 'This line is not a setting. Write the started:, from: and check: lines, then ---' },
   ]);
   const none = parseForward('started: 2026-11-13\nfrom: [[A]]\ncheck: abc\nuniverse: SPY');
   assert.equal(none.forward, null);
@@ -373,20 +373,20 @@ test('the comparison waits for 5 forward bars and for 3 times as many bars befor
     const equity = Array.from({ length: before + after }, (_, i) => 100 + i);
     return forwardFigures(equity.map((_, i) => i * DAY), equity, equity, (before - 1) * DAY);
   };
-  assert.deepEqual(make(40, 0).windows, { ok: false, message: 'Earlier periods are compared from 5 bars on: 5 more bars to go.' });
+  assert.deepEqual(make(40, 0).windows, { ok: false, message: 'The plugin compares previous periods when the test has 5 bars. It must have 5 more bars.' });
   assert.equal(make(40, 0).strategy, null);
   assert.equal(make(40, 0).worstFall, null);
   assert.equal(make(40, 0).bars, 0);
-  assert.deepEqual(make(40, 1).windows, { ok: false, message: 'Earlier periods are compared from 5 bars on: 4 more bars to go.' });
-  assert.deepEqual(make(40, 4).windows, { ok: false, message: 'Earlier periods are compared from 5 bars on: 1 more bar to go.' });
+  assert.deepEqual(make(40, 1).windows, { ok: false, message: 'The plugin compares previous periods when the test has 5 bars. It must have 4 more bars.' });
+  assert.deepEqual(make(40, 4).windows, { ok: false, message: 'The plugin compares previous periods when the test has 5 bars. It must have 1 more bar.' });
   assert.ok(make(15, 5).windows.ok, '15 bars before is exactly 3 times 5');
   assert.deepEqual(make(14, 5).windows, {
     ok: false,
-    message: 'Earlier periods are compared only when there are 3 times as many bars before the start as since it. Needed: 1 more bar of earlier prices.',
+    message: 'The plugin compares previous periods only if there are 3 times as many bars before the start as after it. It must have 1 more bar of previous prices.',
   });
   assert.deepEqual(make(10, 20).windows, {
     ok: false,
-    message: 'Earlier periods are compared only when there are 3 times as many bars before the start as since it. Needed: 50 more bars of earlier prices.',
+    message: 'The plugin compares previous periods only if there are 3 times as many bars before the start as after it. It must have 50 more bars of previous prices.',
   });
   assert.ok(make(10, 20).strategy! > 0, 'the return is shown whatever the windows say');
 });
@@ -613,17 +613,17 @@ test('with two forward blocks the one named by its line is used, and a line with
 test('a note the plugin did not make is refused, and so is one whose frozen rules were edited', () => {
   const note = started();
   const noProperty = appendLog(note.replace('backtest_forward: true', 'tags: [x]'), undefined, [R1], utc(2026, 11, 17), NOW);
-  assert.ok(!noProperty.ok && noProperty.message.includes('was not made as a forward test') && noProperty.message.includes('backtest_forward'));
+  assert.ok(!noProperty.ok && noProperty.message.includes('did not make this note as a forward test') && noProperty.message.includes('backtest_forward'));
   assert.equal(appendLog(note.replace(/^---\n[\s\S]*?\n---\n/, ''), undefined, [R1], utc(2026, 11, 17), NOW).ok, false);
 
   const edited = appendLog(note.replace('sma(200)', 'sma(100)'), undefined, [R1], utc(2026, 11, 17), NOW);
-  assert.ok(!edited.ok && edited.message === `${CHANGED} Nothing was written.`);
+  assert.ok(!edited.ok && edited.message === `${CHANGED} The plugin did not write to the note.`);
 
   const noBlock = appendLog('---\nbacktest_forward: true\n---\n\n## Log\n', undefined, [R1], utc(2026, 11, 17), NOW);
-  assert.deepEqual(noBlock, { ok: false, message: 'This note has no forward block. Nothing was written.' });
+  assert.deepEqual(noBlock, { ok: false, message: 'This note has no forward block. The plugin did not write to the note.' });
 
   const broken = appendLog(note.replace(/check: \w+/, 'check:'), undefined, [R1], utc(2026, 11, 17), NOW);
-  assert.ok(!broken.ok && broken.message.includes("The forward block can't be read. Line 3:"));
+  assert.ok(!broken.ok && broken.message.includes('The plugin cannot read the forward block. Line 3:'));
 
   const noHeading = appendLog(note.replace('\n## Log\n', '\n## Diary\n'), undefined, [R1], utc(2026, 11, 17), NOW);
   assert.ok(!noHeading.ok && noHeading.message.includes('no "## Log" heading'));
@@ -634,7 +634,7 @@ test('a table edited by hand so the last bar cannot be read is refused, and noth
   const refused = (edited: string) => {
     assert.notEqual(edited, once);
     const r = appendLog(edited, undefined, [row(utc(2026, 11, 25), [order('buy', 'SPY', 1)])], utc(2026, 11, 26), NOW);
-    assert.ok(!r.ok && r.message === "The log table was changed by hand, so the last logged bar can't be read. Nothing was written.", edited);
+    assert.ok(!r.ok && r.message === 'The log table was changed by hand. Thus the plugin cannot read the last bar in the log. The plugin did not write to the note.', edited);
     assert.equal(readLog(edited).ok, false);
   };
   refused(once.replace('| 2026-11-19 |', '| last Friday |'));
@@ -761,9 +761,9 @@ test('a revision names each bar where the log and today disagree about the order
     row(utc(2026, 12, 11), [order('buy', 'QQQ', 5)]),
   ];
   assert.deepEqual(revisions(log, today), [
-    { t: utc(2026, 12, 3), message: "The log says Buy SPY on 2026-12-03; today's prices give no order there." },
-    { t: utc(2026, 12, 7), message: "The log has no order on 2026-12-07; today's prices give Buy QQQ there." },
-    { t: utc(2026, 12, 8), message: "The log says Buy SPY on 2026-12-08; today's prices give Sell SPY there." },
+    { t: utc(2026, 12, 3), message: "The log shows Buy SPY on 2026-12-03. Today's prices give no order on that day." },
+    { t: utc(2026, 12, 7), message: "The log has no order on 2026-12-07. Today's prices give Buy QQQ on that day." },
+    { t: utc(2026, 12, 8), message: "The log shows Buy SPY on 2026-12-08. Today's prices give Sell SPY on that day." },
   ]);
 });
 
@@ -782,5 +782,5 @@ test('several orders on a bar are listed in full in the message, and an intraday
     utc(2026, 11, 13, 17, 30),
   ).note;
   const out = revisions(logOf(note), [row(utc(2026, 11, 13, 16, 30), [order('sell', 'IWM', 1), order('buy', 'SPY', 1)])]);
-  assert.deepEqual(out.map((r) => r.message), ["The log says Buy QQQ, Buy SPY on 2026-11-13 16:30; today's prices give Sell IWM, Buy SPY there."]);
+  assert.deepEqual(out.map((r) => r.message), ["The log shows Buy QQQ, Buy SPY on 2026-11-13 16:30. Today's prices give Sell IWM, Buy SPY on that day."]);
 });

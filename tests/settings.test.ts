@@ -115,18 +115,18 @@ test('validateSetting rejects what the language rejects, with its message', () =
   assert.match(validateSetting('costs', 'five')!, /"five" is not a cost\. Write it as 5 bps or 0\.05%/);
   assert.match(validateSetting('slippage', 'five')!, /is not a slippage/);
   assert.match(validateSetting('costs', '-5 bps')!, /is not a cost/);
-  assert.match(validateSetting('costs', '1000 bps')!, /Costs must be under 10% per trade/);
-  assert.match(validateSetting('slippage', '10%')!, /Slippage must be under 10% per trade/);
+  assert.match(validateSetting('costs', '1000 bps')!, /Costs must be less than 10% per trade/);
+  assert.match(validateSetting('slippage', '10%')!, /Slippage must be less than 10% per trade/);
   assert.match(validateSetting('costs', '5 percent')!, /is not a cost/);
 });
 
 test('validateSetting: empty text, extra lines and comments are not values', () => {
-  assert.equal(validateSetting('costs', ''), 'Enter a value, such as 5 bps or 0.05%.');
-  assert.equal(validateSetting('cashRate', '   '), 'Enter a value, such as 4% or ^IRX.');
-  assert.equal(validateSetting('costs', '5 bps\nuniverse: QQQ'), 'Use a single line.');
-  assert.equal(validateSetting('slippage', '5 bps\r\nbuy when true'), 'Use a single line.');
-  assert.equal(validateSetting('costs', '5 bps # note'), 'Leave out comments here.');
-  assert.equal(validateSetting('cashRate', '4% // note'), 'Leave out comments here.');
+  assert.equal(validateSetting('costs', ''), 'Type a value, for example 5 bps or 0.05%.');
+  assert.equal(validateSetting('cashRate', '   '), 'Type a value, for example 4% or ^IRX.');
+  assert.equal(validateSetting('costs', '5 bps\nuniverse: QQQ'), 'Use one line.');
+  assert.equal(validateSetting('slippage', '5 bps\r\nbuy when true'), 'Use one line.');
+  assert.equal(validateSetting('costs', '5 bps # note'), 'Do not write comments here.');
+  assert.equal(validateSetting('cashRate', '4% // note'), 'Do not write comments here.');
 });
 
 test('validateSetting for the cash rate: a yearly percentage or a yield ticker', () => {
@@ -181,11 +181,11 @@ test('validateSetting for the borrow fee and the interest on borrowed money: a y
   assert.equal(validateSetting('borrowFee', '100%'), null);
   assert.match(validateSetting('borrowFee', '101%')!, /The borrow fee must be between 0% and 100% a year/);
   assert.match(validateSetting('marginRate', '51%')!, /The margin rate must be between 0% and 50% a year/);
-  assert.match(validateSetting('borrowFee', '0.5')!, /Write the borrow fee as a yearly percentage, such as 0\.5%/);
-  assert.match(validateSetting('marginRate', '-1%')!, /Write the margin rate as a yearly percentage, such as 6%/);
+  assert.match(validateSetting('borrowFee', '0.5')!, /Write the borrow fee as a yearly percentage, for example 0\.5%/);
+  assert.match(validateSetting('marginRate', '-1%')!, /Write the margin rate as a yearly percentage, for example 6%/);
   assert.match(validateSetting('marginRate', '^IRX')!, /Write the margin rate as a yearly percentage/);
-  assert.equal(validateSetting('borrowFee', ''), 'Enter a value, such as 0.5%.');
-  assert.equal(validateSetting('marginRate', '6% # broker'), 'Leave out comments here.');
+  assert.equal(validateSetting('borrowFee', ''), 'Type a value, for example 0.5%.');
+  assert.equal(validateSetting('marginRate', '6% # broker'), 'Do not write comments here.');
 });
 
 test('normalizeSettings: the rates of borrowing are kept when the language reads them, trimmed, and otherwise fall back', () => {
@@ -230,20 +230,20 @@ test('the parser uses the rates of borrowing the settings imply, and a block\'s 
 
 test('provider text: Anthropic may leave the address and model empty, and needs a key', () => {
   const t = providerText('anthropic');
-  assert.match(t.address.desc, /^Leave empty/);
-  assert.match(t.model.desc, /^Leave empty to use claude-opus-5-5\./);
+  assert.match(t.address.desc, /^Keep this field empty/);
+  assert.match(t.model.desc, /^Keep this field empty to use claude-opus-5-5\./);
   assert.equal(t.address.placeholder, 'https://api.anthropic.com');
   assert.equal(t.model.placeholder, DEFAULT_MODEL.anthropic);
-  assert.match(t.key, /^Required\./);
+  assert.match(t.key, /^You must set a key\./);
 });
 
 test('provider text: an OpenAI-compatible server needs an address and a model, and may go without a key', () => {
   const t = providerText('openai');
-  assert.match(t.address.desc, /^Required\./);
-  assert.match(t.model.desc, /^Required\./);
-  assert.doesNotMatch(t.address.desc + t.model.desc, /Leave empty/);
+  assert.match(t.address.desc, /^You must type the address/);
+  assert.match(t.model.desc, /^You must type the name/);
+  assert.doesNotMatch(t.address.desc + t.model.desc, /Keep this field empty/);
   assert.equal(t.address.placeholder, 'http://localhost:8000/v1');
-  assert.match(t.key, /Leave it empty for a server that needs no key/);
+  assert.match(t.key, /Keep this field empty if your server does not use a key/);
 });
 
 test('provider text agrees with the request code about what may be left empty', async () => {

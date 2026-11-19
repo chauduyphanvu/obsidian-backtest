@@ -147,11 +147,11 @@ test('a failed refresh falls back to saved prices with a warning; with none save
   now += DAY;
   const r = await loadBars(SPY, '1d', 0, d);
   assert.equal(r.bars.t.length, 4);
-  assert.match(r.warning!, /Couldn't refresh SPY .*saved on 2024-01-10/);
+  assert.match(r.warning!, /Cannot download new prices for SPY .*saved on 2024-01-10/);
   assert.equal(r.stale, true);
   assert.equal(r.fetched, Date.UTC(2024, 0, 10));
   assert.equal(r.through, Date.UTC(2024, 0, 5));
-  await assert.rejects(loadBars({ name: 'QQQ', source: 'yahoo', id: 'QQQ' }, '1d', 0, d), /Couldn't load QQQ from yahoo/);
+  await assert.rejects(loadBars({ name: 'QQQ', source: 'yahoo', id: 'QQQ' }, '1d', 0, d), /Cannot load QQQ from yahoo/);
 });
 
 test('binance pages until a short page and later only fetches what is new', async () => {
@@ -187,7 +187,7 @@ test('binance pages until a short page and later only fetches what is new', asyn
 test('csv comes from the vault', async () => {
   const { d } = deps({ readVaultFile: async (p) => (p === 'Data/x.csv' ? 'date,open,high,low,close\n2024-01-02,1,1,1,1' : null) });
   assert.equal((await loadBars({ name: 'x', source: 'csv', id: 'Data/x.csv' }, '1d', 0, d)).bars.t.length, 1);
-  await assert.rejects(loadBars({ name: 'y', source: 'csv', id: 'Data/y.csv' }, '1d', 0, d), /No file at Data\/y.csv/);
+  await assert.rejects(loadBars({ name: 'y', source: 'csv', id: 'Data/y.csv' }, '1d', 0, d), /There is no file at Data\/y.csv/);
 });
 
 const HOSTS = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'query1.finance.yahoo.com'];
@@ -226,7 +226,7 @@ test('a first answer needs no wait, and retries go out at once when there is no 
       throw new Error('HTTP 503');
     },
   });
-  await assert.rejects(loadBars(SPY, '1d', 0, down.d), /Couldn't load SPY from yahoo: HTTP 503/);
+  await assert.rejects(loadBars(SPY, '1d', 0, down.d), /Cannot load SPY from yahoo: HTTP 503/);
   assert.deepEqual(down.calls.map(hostOf), HOSTS);
 });
 
@@ -234,7 +234,7 @@ test('an error Yahoo explains in its answer is final and is not retried', async 
   const sleeps: number[] = [];
   const body = JSON.stringify({ chart: { result: null, error: { code: 'Bad Request', description: 'Invalid input - interval=1x is not supported' } } });
   const { d, calls } = deps({ fetchText: async (url) => (calls.push(url), body), sleep: async (ms) => void sleeps.push(ms) });
-  await assert.rejects(loadBars(SPY, '1d', 0, d), /Couldn't load SPY from yahoo: Invalid input/);
+  await assert.rejects(loadBars(SPY, '1d', 0, d), /Cannot load SPY from yahoo: Invalid input/);
   assert.equal(calls.length, 1);
   assert.deepEqual(sleeps, []);
 });
@@ -259,24 +259,24 @@ test('with every Yahoo try failed, the saved copy is used and marked stale', asy
   assert.equal(r.stale, true);
   assert.equal(r.fetched, Date.UTC(2024, 0, 10, 12));
   assert.equal(r.source, 'yahoo');
-  assert.match(r.warning!, /^Couldn't refresh SPY \(HTTP 500\); using prices saved on 2024-01-10\.$/);
+  assert.match(r.warning!, /^Cannot download new prices for SPY \(HTTP 500\)\. The plugin uses the prices saved on 2024-01-10\.$/);
 });
 
 test('an unknown ticker gets a plain message, no retry and no saved copy', async () => {
   const { d, calls } = deps({ fetchText: async (url) => (calls.push(url), NOT_FOUND) });
   const XYZ = { name: 'XYZ', source: 'yahoo' as const, id: 'XYZ' };
-  await assert.rejects(loadBars(XYZ, '1d', 0, d), { message: 'Yahoo has no prices for XYZ. Check the ticker.' });
+  await assert.rejects(loadBars(XYZ, '1d', 0, d), { message: 'Yahoo has no prices for XYZ. Make sure that the ticker is correct.' });
   assert.equal(calls.length, 1);
 
   // Even with a saved copy there is nothing to fall back to.
   const saved = deps({});
   await loadBars(XYZ, '1d', 0, saved.d);
   const gone = deps({ now: () => Date.UTC(2024, 0, 12), cacheRead: saved.d.cacheRead, fetchText: async () => NOT_FOUND });
-  await assert.rejects(loadBars(XYZ, '1d', 0, gone.d), { message: 'Yahoo has no prices for XYZ. Check the ticker.' });
+  await assert.rejects(loadBars(XYZ, '1d', 0, gone.d), { message: 'Yahoo has no prices for XYZ. Make sure that the ticker is correct.' });
 
   const bad = deps({ fetchText: async () => JSON.stringify({ code: -1121, msg: 'Invalid symbol.' }) });
   await assert.rejects(loadBars({ name: 'BTCUSD', source: 'binance', id: 'BTCUSD' }, '1h', 0, bad.d), {
-    message: 'Binance has no market called BTCUSD. Check the symbol, such as BTCUSDT.',
+    message: 'Binance has no market with the name BTCUSD. Make sure that the symbol is correct, for example BTCUSDT.',
   });
 });
 
@@ -404,7 +404,7 @@ test('csv: errors name the column that is the problem', () => {
   assert.throws(() => parseCsv('When,Open,High,Low,Close\n'), /no rows/);
   assert.throws(() => parseCsv('Date,Open,High,Low,Close\nlast tuesday,1,2,1,2'), /"Date" column/);
   assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,1,2,1,n/a'), /"Close" column/);
-  assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,0,0,0,0'), /price at or below zero/);
+  assert.throws(() => parseCsv('Date,Open,High,Low,Close\n2024-01-02,0,0,0,0'), /price of zero or less/);
 });
 
 test('a CSV file that cannot be read is named in the message', async () => {
@@ -417,5 +417,5 @@ test('a CSV file that cannot be read is named in the message', async () => {
   };
   const ref = (id: string) => ({ name: id.slice(5, -4), source: 'csv' as const, id });
   await assert.rejects(loadBars(ref('Data/empty.csv'), '1d', 0, deps), /^Error: The CSV file Data\/empty\.csv has no rows$/);
-  await assert.rejects(loadBars(ref('Data/words.csv'), '1d', 0, deps), /^Error: The CSV file Data\/words\.csv has no usable rows/);
+  await assert.rejects(loadBars(ref('Data/words.csv'), '1d', 0, deps), /^Error: The CSV file Data\/words\.csv has no rows with a date that the plugin can read/);
 });

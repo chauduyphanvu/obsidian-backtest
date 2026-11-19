@@ -53,24 +53,24 @@ test('the strategy name keeps its case, and a # inside an alias belongs to the a
 
 test('a line that is neither a link nor a path to a note is an error with its line and the weight position', () => {
   const r = parseCompare('[[A]]\nSPY\n[[B]]');
-  assert.deepEqual(r.errors, [{ line: 2, message: 'Write a note as [[Note name]] or [[Note name#Strategy name]], or as a vault path ending in .md' }]);
+  assert.deepEqual(r.errors, [{ line: 2, message: 'Write a note as [[Note name]] or [[Note name#Strategy name]], or as a vault path that ends in .md' }]);
   assert.deepEqual(r.entries.map((e) => e.link), ['A', 'B']);
 });
 
 test('link errors: no closing brackets, no note, nothing after #', () => {
   assert.deepEqual(parseCompare('[[A]]\n[[B').errors, [{ line: 2, message: 'This link has no closing ]]' }]);
-  assert.deepEqual(parseCompare('[[A]]\n[[#Name]]').errors, [{ line: 2, message: "This link doesn't name a note" }]);
-  assert.deepEqual(parseCompare('[[A]]\n[[B#]]').errors, [{ line: 2, message: 'Nothing follows # in this link: name the strategy, or remove the #' }]);
-  assert.deepEqual(parseCompare('[[A]]\nB.md#').errors, [{ line: 2, message: 'Nothing follows # in this link: name the strategy, or remove the #' }]);
+  assert.deepEqual(parseCompare('[[A]]\n[[#Name]]').errors, [{ line: 2, message: 'This link does not name a note' }]);
+  assert.deepEqual(parseCompare('[[A]]\n[[B#]]').errors, [{ line: 2, message: 'This link has no text after #. Write the name of the strategy, or remove the #' }]);
+  assert.deepEqual(parseCompare('[[A]]\nB.md#').errors, [{ line: 2, message: 'This link has no text after #. Write the name of the strategy, or remove the #' }]);
 });
 
 test('weight errors point at the weight', () => {
   const negative = parseCompare('[[A]] 50%\n[[B]] -5%');
-  assert.deepEqual(negative.errors, [{ line: 2, message: "A weight can't be below 0%", from: 6, to: 9 }]);
+  assert.deepEqual(negative.errors, [{ line: 2, message: 'A weight cannot be below 0%', from: 6, to: 9 }]);
   const word = parseCompare('[[A]] half\n[[B]]');
-  assert.deepEqual(word.errors, [{ line: 1, message: 'After the note, only a weight such as 40% can follow', from: 6, to: 10 }]);
+  assert.deepEqual(word.errors, [{ line: 1, message: 'After the note, write only a weight, for example 40%', from: 6, to: 10 }]);
   // The same weight problem on a bare path.
-  assert.deepEqual(parseCompare('A.md -1%\n[[B]] 50%').errors, [{ line: 1, message: "A weight can't be below 0%", from: 5, to: 8 }]);
+  assert.deepEqual(parseCompare('A.md -1%\n[[B]] 50%').errors, [{ line: 1, message: 'A weight cannot be below 0%', from: 5, to: 8 }]);
 });
 
 test('0% lists a strategy without putting it in the combination, and it counts towards the two a comparison needs', () => {
@@ -80,22 +80,22 @@ test('0% lists a strategy without putting it in the combination, and it counts t
   assert.deepEqual(parseCompare('A.md 0%\n[[B]] 100%').entries[0].weight, 0);
   assert.ok(Object.is(parseCompare('[[A]] -0%\n[[B]] 50%').entries[0].weight, 0));
   // Every strategy at 0% leaves nothing to combine.
-  assert.deepEqual(parseCompare('[[A]] 0%\n[[B]] 0%').errors, [{ line: 2, message: 'Give at least one strategy a weight above 0%' }]);
+  assert.deepEqual(parseCompare('[[A]] 0%\n[[B]] 0%').errors, [{ line: 2, message: 'Give one or more strategies a weight above 0%' }]);
 });
 
 test('a block needs 2 to 8 strategies', () => {
-  assert.deepEqual(parseCompare('').errors, [{ line: 1, message: 'Add at least 2 strategies to compare' }]);
-  assert.deepEqual(parseCompare('# only a comment\n[[A]]').errors, [{ line: 2, message: 'Add at least 2 strategies to compare' }]);
+  assert.deepEqual(parseCompare('').errors, [{ line: 1, message: 'Add a minimum of 2 strategies to compare' }]);
+  assert.deepEqual(parseCompare('# only a comment\n[[A]]').errors, [{ line: 2, message: 'Add a minimum of 2 strategies to compare' }]);
   const eight = Array.from({ length: 8 }, (_, i) => `[[N${i}]]`);
   assert.deepEqual(parseCompare(eight.join('\n')).errors, []);
   const nine = parseCompare([...eight, '[[N8]]'].join('\n'));
-  assert.deepEqual(nine.errors, [{ line: 9, message: 'A comparison holds at most 8 strategies' }]);
+  assert.deepEqual(nine.errors, [{ line: 9, message: 'A comparison can hold a maximum of 8 strategies' }]);
   assert.equal(nine.entries.length, 9);
 });
 
 test('every strategy has a weight or none does', () => {
-  assert.deepEqual(parseCompare('[[A]] 50%\n[[B]]').errors, [{ line: 2, message: 'Give every strategy a weight, or none of them' }]);
-  assert.deepEqual(parseCompare('[[A]]\n[[B]]\n[[C]] 10%').errors, [{ line: 3, message: 'Give every strategy a weight, or none of them' }]);
+  assert.deepEqual(parseCompare('[[A]] 50%\n[[B]]').errors, [{ line: 2, message: 'Give a weight to all strategies, or to none of them' }]);
+  assert.deepEqual(parseCompare('[[A]]\n[[B]]\n[[C]] 10%').errors, [{ line: 3, message: 'Give a weight to all strategies, or to none of them' }]);
   assert.deepEqual(parseCompare('[[A]] 50%\n[[B]] 50%').errors, []);
 });
 
@@ -103,12 +103,12 @@ test('weights may add up to 100% but not more, with no rounding trouble', () => 
   assert.deepEqual(parseCompare('[[A]] 60%\n[[B]] 40%').errors, []);
   assert.deepEqual(parseCompare('[[A]] 70%\n[[B]] 20%\n[[C]] 10%').errors, []);
   assert.deepEqual(parseCompare('[[A]] 33.3%\n[[B]] 33.3%\n[[C]] 33.4%').errors, []);
-  assert.deepEqual(parseCompare('[[A]] 60%\n[[B]] 40.5%').errors, [{ line: 2, message: "The weights add up to 100.5%, and they can't add up to more than 100%" }]);
+  assert.deepEqual(parseCompare('[[A]] 60%\n[[B]] 40.5%').errors, [{ line: 2, message: "The total of the weights is 100.5%. It cannot be more than 100%" }]);
 });
 
 test('listing the same strategy twice is an error, however it is spelled', () => {
-  assert.deepEqual(parseCompare('[[A]]\n[[B]]\n[[a.md]]').errors, [{ line: 3, message: 'This strategy is already listed on line 1' }]);
-  assert.deepEqual(parseCompare('[[A#One]]\n[[B]]\nA.md#one').errors, [{ line: 3, message: 'This strategy is already listed on line 1' }]);
+  assert.deepEqual(parseCompare('[[A]]\n[[B]]\n[[a.md]]').errors, [{ line: 3, message: 'This strategy is also listed on line 1' }]);
+  assert.deepEqual(parseCompare('[[A#One]]\n[[B]]\nA.md#one').errors, [{ line: 3, message: 'This strategy is also listed on line 1' }]);
   // A different strategy block of the same note is fine, and so is the first block next to a named one.
   assert.deepEqual(parseCompare('[[A#One]]\n[[A#Two]]\n[[A]]').errors, []);
 });
@@ -159,7 +159,7 @@ test('three curves align to the latest start and the earliest end of all of them
 
 test('curves that never overlap, or meet on one date only, are an error that names them', () => {
   assert.throws(() => alignCurves([curve('Early', [1, 2, 3], [1, 2, 3]), curve('Late', [5, 6, 7], [1, 2, 3])]), /Late starts on 2020-01-05, after Early ends on 2020-01-03/);
-  assert.throws(() => alignCurves([curve('Early', [1, 2, 3], [1, 2, 3]), curve('Late', [3, 4, 5], [1, 2, 3])]), /single date, 2020-01-03/);
+  assert.throws(() => alignCurves([curve('Early', [1, 2, 3], [1, 2, 3]), curve('Late', [3, 4, 5], [1, 2, 3])]), /only one date, 2020-01-03/);
   assert.throws(() => alignCurves([]), /no strategies/);
   assert.throws(() => alignCurves([curve('A', [1, 2], [1, 2]), curve('Empty', [], [])]), /Empty has no prices/);
 });
@@ -215,8 +215,8 @@ test('all in one curve gives that curve', () => {
 
 test('weights above 100% in total, negative weights and a wrong count are rejected', () => {
   const aligned = { t: [day(1), day(2)], series: [[1, 2], [1, 1]] };
-  assert.throws(() => combine(aligned, [0.6, 0.5]), /cannot add up to more than 100%/);
-  assert.throws(() => combine(aligned, [1.2, -0.2]), /negative/);
+  assert.throws(() => combine(aligned, [0.6, 0.5]), /cannot be more than 100%/);
+  assert.throws(() => combine(aligned, [1.2, -0.2]), /cannot be below 0/);
   assert.throws(() => combine(aligned, [1]), /one weight for each curve/);
 });
 

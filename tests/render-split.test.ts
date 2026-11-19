@@ -48,11 +48,11 @@ test('what each strategy adds: the line with it less the line without it, and no
 test('the notes say how many months the suggestions rest on, and which methods need more', () => {
   const alloc = (o: Partial<Allocation>): Allocation => ({ months: 30, still: [], shrinkage: null, suggestions: [], ...o });
   const labels = ['A', 'B', 'C'];
-  assert.match(splitNotes(alloc({ months: 4 }), labels)[0], /^From 4 full months the strategies have in common\./);
-  assert.equal(splitNotes(alloc({ months: 4 }), labels)[1], 'Inverse volatility needs 6 full months, and minimum variance and maximum diversification 24.');
-  assert.equal(splitNotes(alloc({ months: 12 }), labels)[1], 'Minimum variance and maximum diversification need 24 full months.');
-  assert.match(splitNotes(alloc({ shrinkage: 0.31 }), labels)[1], /pulled 31% of the way towards one average correlation/);
-  assert.equal(splitNotes(alloc({ still: [1] }), labels)[1], 'B barely moved over these months, so the methods that size by risk give it nothing.');
+  assert.match(splitNotes(alloc({ months: 4 }), labels)[0], /^These weights use the 4 full months that all the strategies have\./);
+  assert.equal(splitNotes(alloc({ months: 4 }), labels)[1], 'Inverse volatility must have 6 full months. Minimum variance and maximum diversification must have 24.');
+  assert.equal(splitNotes(alloc({ months: 12 }), labels)[1], 'Minimum variance and maximum diversification must have 24 full months.');
+  assert.match(splitNotes(alloc({ shrinkage: 0.31 }), labels)[1], /moves the covariances 31% of the distance to one average correlation/);
+  assert.equal(splitNotes(alloc({ still: [1] }), labels)[1], 'B almost did not move in these months. Thus the methods that size by risk give it a weight of 0.');
 });
 
 test('a strategy at 0% is drawn as a line of its own but is not in Combined', () => {
@@ -72,10 +72,10 @@ test('the note under the chart names the strategies at 0% and the cash', () => {
   const lines = [{ mark: '1' }, { mark: '2' }, { mark: '3' }];
   assert.equal(
     combinedNote(lines, [0.5, 0, 0.3]),
-    'Combined: 1 at 50%, 3 at 30%. It goes back to those weights on the first date of each month. 2 is listed at 0%: drawn, but not in Combined. The other 20% is cash that earns nothing.',
+    'Combined: 1 at 50%, 3 at 30%. It rebalances to these weights on the first date of each month. 2 is at 0%: the chart shows it, but Combined does not include it. The remaining 20% is cash with no interest.',
   );
-  assert.equal(combinedNote(lines.slice(0, 2), [0.5, 0.5]), 'Combined: each strategy at 50%. It goes back to those weights on the first date of each month.');
-  assert.equal(combinedNote(lines, [0.5, 0, 0]), 'Combined: 1 at 50%. It goes back to those weights on the first date of each month. 2, 3 are listed at 0%: drawn, but not in Combined. The other 50% is cash that earns nothing.');
+  assert.equal(combinedNote(lines.slice(0, 2), [0.5, 0.5]), 'Combined: each strategy at 50%. It rebalances to these weights on the first date of each month.');
+  assert.equal(combinedNote(lines, [0.5, 0, 0]), 'Combined: 1 at 50%. It rebalances to these weights on the first date of each month. 2, 3 are at 0%: the chart shows them, but Combined does not include them. The remaining 50% is cash with no interest.');
 });
 
 test('weights too small to write in the block offer no set to use, and say why', () => {
@@ -84,7 +84,7 @@ test('weights too small to write in the block offer no set to use, and say why',
   const alloc = suggestWeights(a, 0.00004, 2);
   const rows = splitRows({ aligned: a, weights: [0.00002, 0.00001, 0.00001] }, alloc);
   assert.ok(rows.slice(1).every((r) => r.percents === null));
-  assert.ok(splitNotes(alloc, ['A', 'B', 'C'], 2).includes('The weights add up to 0.004%, less than the 0.01% they are written in steps of, so no other set can be written.'));
+  assert.ok(splitNotes(alloc, ['A', 'B', 'C'], 2).includes('The total of the weights is 0.004%. This is less than the 0.01% step of the written weights. Thus no other set of weights can be written.'));
   // At 0.6% written in tenths, each method gives a set that adds up to 0.6%.
   const small = suggestWeights(a, 0.006, 1);
   for (const r of splitRows({ aligned: a, weights: [0.002, 0.002, 0.002] }, small).slice(1)) assert.ok(Math.abs(r.percents!.reduce((s, p) => s + p, 0) - 0.6) < 1e-9, r.name);

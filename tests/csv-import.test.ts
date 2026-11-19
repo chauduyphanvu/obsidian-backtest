@@ -145,19 +145,19 @@ test('day-first dates: proven ones are read, ambiguous ones are flagged and can 
   const p = read(proven);
   assert.deepEqual([p.first, p.last], ['2024-01-02', '2024-01-31']);
   assert.equal(p.ambiguousDates, false);
-  assert.deepEqual(p.doubts, [`The file has no volume column, so volume is 0 on every bar and a rule that reads volume cannot work.`, `Only 2 rows. The trend rule in the starter strategy uses a 100-bar average and would never act on this file.`]);
+  assert.deepEqual(p.doubts, [`The file has no volume column. Thus volume is 0 on each bar, and a rule that reads volume cannot work.`, `The file has only 2 rows. The trend rule in the starter strategy uses a 100-bar average. Thus it cannot give an order on this file.`]);
 
   const ambiguous = 'Date,Open,High,Low,Close,Volume\n02/01/2024,1,2,1,2,5\n03/01/2024,1,2,1,2,5\n04/01/2024,1,2,1,2,5\n';
   const a = read(ambiguous);
   assert.equal(a.ambiguousDates, true);
   assert.deepEqual([a.first, a.last], ['2024-02-01', '2024-04-01']);
-  assert.ok(a.doubts.some((x) => /two ways: 02\/01\/2024 is 2024-02-01 month first, or 2024-01-02 day first\. They were read month first/.test(x)), a.doubts.join('\n'));
+  assert.ok(a.doubts.some((x) => /day first: 02\/01\/2024 is 2024-02-01 month first, or 2024-01-02 day first\. It read them month first/.test(x)), a.doubts.join('\n'));
   assert.equal(dateOrderIsAmbiguous(ambiguous, 0), true);
   assert.equal(dateOrderIsAmbiguous(proven, 0), false);
 
   const dayFirst = cleaned(remapCsv(ambiguous, { ...a.columns, dateOrder: 'day-first' }));
   assert.deepEqual(parseCsv(dayFirst.text).t, [d(2024, 1, 2), d(2024, 1, 3), d(2024, 1, 4)]);
-  assert.ok(dayFirst.notes.some((n) => /read day first/.test(n)));
+  assert.ok(dayFirst.notes.some((n) => /read the dates day first/.test(n)));
   const monthFirst = cleaned(remapCsv(ambiguous, { ...a.columns, dateOrder: 'month-first' }));
   assert.deepEqual(parseCsv(monthFirst.text).t, [d(2024, 2, 1), d(2024, 3, 1), d(2024, 4, 1)]);
   // With no choice made, the cleaned copy is read the way parseCsv reads the original.
@@ -181,13 +181,13 @@ test('a file with only dates and closes is not read, and is cleaned with the res
   const rows = days(9);
   const text = `Date,Close\n${rows.map((r) => `${iso(r.t)},${r.c}`).join('\n')}\n`;
   const u = unread(text);
-  assert.match(u.reason, /This file has no open, high or low column\. A file with only dates and closes can still be used/);
-  assert.match(u.reason, /filled from the close/);
+  assert.match(u.reason, /This file has no open, high or low column\. The plugin can use a file with only dates and closes/);
+  assert.match(u.reason, /sets the open, high and low to the close/);
   assert.deepEqual(u.columns, map({ date: 0, close: 1 }));
   const c = cleaned(remapCsv(text, u.columns));
   assert.equal(c.rows, 9);
-  assert.ok(c.notes[0].startsWith('The file has no open, high or low, so each is set to the close.'));
-  assert.ok(c.notes.some((n) => /no volume column, so volume is 0/.test(n)));
+  assert.ok(c.notes[0].startsWith('The file has no open, high or low. Thus the plugin sets each of them to the close.'));
+  assert.ok(c.notes.some((n) => /no volume column\. Thus volume is 0/.test(n)));
   const bars = parseCsv(c.text);
   assert.deepEqual(bars.c, rows.map((r) => r.c));
   assert.deepEqual([bars.o, bars.h, bars.l], [bars.c, bars.c, bars.c]);
@@ -208,19 +208,19 @@ test('an empty file, a header with no rows and a file that is not prices are exp
   assert.deepEqual([empty.header, empty.rawRows], [[], []]);
   assert.equal(unread('\n  \n').reason, 'The file is empty.');
   const headerOnly = unread('Date,Open,High,Low,Close\n');
-  assert.match(headerOnly.reason, /header row and nothing under it/);
+  assert.match(headerOnly.reason, /header row and no rows below it/);
   assert.deepEqual(headerOnly.header, ['Date', 'Open', 'High', 'Low', 'Close']);
 
   const contacts = 'name,email,age\nAnn,ann@example.com,31\nBob,bob@example.com,45\nCy,cy@example.com,29\n';
   const n = unread(contacts);
-  assert.match(n.reason, /^This does not look like a file of prices: no column looks like a date or a price\./);
+  assert.match(n.reason, /^The plugin found no column with a date or a price\. Thus this is possibly not a file of prices\./);
   assert.deepEqual(n.header, ['name', 'email', 'age']);
   assert.equal(n.rawRows.length, 3);
   assert.deepEqual(n.columns, map({}));
-  assert.deepEqual(remapCsv(contacts, n.columns), { ok: false, reason: 'Choose which column holds the date.' });
+  assert.deepEqual(remapCsv(contacts, n.columns), { ok: false, reason: 'Select the column that holds the date.' });
 
   const sales = unread('date,customer,status\n2024-01-02,Ann,paid\n2024-01-03,Bob,due\n');
-  assert.match(sales.reason, /no column looks like a closing price/);
+  assert.match(sales.reason, /no column with a closing price/);
   assert.equal(sales.columns.date, 0);
   assert.equal(sales.columns.close, null);
 });
@@ -236,11 +236,11 @@ test('a date column is found by what is in it when its name says nothing', () =>
 
 test('dates that cannot be read are explained with the first one', () => {
   const u = unread('Date,Open,High,Low,Close\nlast tuesday,1,2,1,2\nnext week,1,2,1,2\n');
-  assert.equal(u.reason, 'No date in the "Date" column could be read. The first one is "last tuesday". Dates should look like 2024-01-31.');
+  assert.equal(u.reason, 'The plugin cannot read a date in the "Date" column. The first date is "last tuesday". Write dates as 2024-01-31.');
   const nums = unread('Date,Open,High,Low,Close\n2024-01-02,1,2,1,n/a\n');
-  assert.equal(nums.reason, 'No number in the "Close" column could be read. The first one is "n/a".');
+  assert.equal(nums.reason, 'The plugin cannot read a number in the "Close" column. The first value is "n/a".');
   const zero = unread('Date,Open,High,Low,Close\n2024-01-02,0,0,0,0\n');
-  assert.match(zero.reason, /price at or below zero/);
+  assert.match(zero.reason, /price of zero or less/);
 });
 
 test('rows that cannot be read are skipped and counted, with the reasons', () => {
@@ -258,7 +258,7 @@ test('rows that cannot be read are skipped and counted, with the reasons', () =>
   assert.equal(r.doubts.length, 1, r.doubts.join('\n'));
   assert.equal(
     r.doubts[0],
-    '5 of 120 rows were skipped: 1 with a date that could not be read, 1 with a price that is missing or not a number, 1 with a price at or below zero, 1 where the high or low does not contain the open and close, 1 that repeat a date already read.',
+    '5 of 120 rows were not read: 1 with a date that the plugin cannot read, 1 with a price that is missing or not a number, 1 with a price at or below zero, 1 where the high or low does not contain the open and close, 1 with the date of a previous row.',
   );
 });
 
@@ -267,14 +267,14 @@ test('rows newest first are noted, and a file with no volume or a big gap is fla
   const text = `Date,Open,High,Low,Close\n${rows.map((r) => [iso(r.t), r.o, r.h, r.l, r.c].join(',')).join('\n')}\n`;
   const r = read(text);
   assert.equal(r.first, '2024-01-02');
-  assert.ok(r.doubts.includes('The rows are newest first. They are sorted oldest first when the file is read.'));
+  assert.ok(r.doubts.includes('The rows are from the last date to the first. The plugin puts them in date order when it reads the file.'));
   assert.ok(r.doubts.some((x) => /no volume column/.test(x)));
 
   const gap = days(130);
   const withGap = gap.map((x, i) => (i >= 60 ? { ...x, t: x.t + 40 * DAY } : x));
   const g = read(`Date,Open,High,Low,Close,Volume\n${withGap.map((x) => [iso(x.t), x.o, x.h, x.l, x.c, x.v].join(',')).join('\n')}\n`);
   const note = g.doubts.find((x) => /gap/.test(x));
-  assert.match(note!, /^1 gap of more than 10 days between rows\. The longest is 4\d days, from 2024-03-2\d to 2024-05-0\d\.$/);
+  assert.match(note!, /^The file has 1 gap of more than 10 days between rows\. The longest is 4\d days, from 2024-03-2\d to 2024-05-0\d\.$/);
 });
 
 test('rows in mixed order are noted and a zero volume column is flagged', () => {
@@ -283,20 +283,20 @@ test('rows in mixed order are noted and a zero volume column is flagged', () => 
   const text = `Date,Open,High,Low,Close,Volume\n${shuffled.map((x) => [iso(x.t), x.o, x.h, x.l, x.c, 0].join(',')).join('\n')}\n`;
   const r = read(text);
   assert.equal(r.rows, 130);
-  assert.ok(r.doubts.includes('The rows are not in date order. They are sorted oldest first when the file is read.'));
-  assert.ok(r.doubts.includes('Volume is 0 on every bar, so a rule that reads volume cannot work.'));
+  assert.ok(r.doubts.includes('The rows are not in date order. The plugin puts them in date order when it reads the file.'));
+  assert.ok(r.doubts.includes('Volume is 0 on each bar. Thus a rule that reads volume cannot work.'));
 });
 
 test('dates with a time of day are noted', () => {
   const text = `Time,Open,High,Low,Close,Volume\n${Array.from({ length: 130 }, (_, i) => `2024-01-02 ${String(9 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00,1,2,1,2,5`).join('\n')}\n`;
   const r = read(text);
   assert.equal(r.first, '2024-01-02 09:00:00');
-  assert.ok(r.doubts.some((x) => /^Some dates have a time of day, such as 2024-01-02 09:00:00\. Times are read as UTC/.test(x)));
+  assert.ok(r.doubts.some((x) => /^Some dates have a time of day, for example 2024-01-02 09:00:00\. The plugin reads times as UTC/.test(x)));
 });
 
 test('a short file says the starter strategy would never act', () => {
   const r = read(yahooFile(40));
-  assert.deepEqual(r.doubts, ['Only 40 rows. The trend rule in the starter strategy uses a 100-bar average and would never act on this file.']);
+  assert.deepEqual(r.doubts, ['The file has only 40 rows. The trend rule in the starter strategy uses a 100-bar average. Thus it cannot give an order on this file.']);
   assert.equal(r.head.length + r.tail.length, 6);
   assert.deepEqual(read(yahooFile(5)).head.length + read(yahooFile(5)).tail.length, 5);
 });
@@ -354,7 +354,7 @@ test('remapCsv: dates with times, Unix times, year-first slashes and plain digit
   // 1704326400 and 04.01.2024 are the same day, so the second is left out.
   assert.deepEqual(parseCsv(c.text).t, [Date.UTC(2024, 0, 2, 14, 30), d(2024, 1, 4), d(2024, 1, 5), d(2024, 1, 6)]);
   assert.equal(c.dropped, 1);
-  assert.match(c.notes.join(' '), /1 of 5 rows were left out: 1 that repeat a date already read\./);
+  assert.match(c.notes.join(' '), /1 of 5 rows are not in the copy: 1 with the date of a previous row\./);
 });
 
 test('remapCsv: rows that cannot be read are left out and counted', () => {
@@ -362,18 +362,18 @@ test('remapCsv: rows that cannot be read are left out and counted', () => {
   const c = cleaned(remapCsv(text, map({ date: 0, close: 1 })));
   assert.equal(c.rows, 2);
   assert.equal(c.dropped, 3);
-  assert.ok(c.notes.includes('3 of 5 rows were left out: 1 with a date that could not be read, 1 with a price that is missing or not a number, 1 with a price at or below zero.'));
+  assert.ok(c.notes.includes('3 of 5 rows are not in the copy: 1 with a date that the plugin cannot read, 1 with a price that is missing or not a number, 1 with a price at or below zero.'));
   assert.deepEqual(parseCsv(c.text).c, [10, 13]);
 });
 
 test('remapCsv says why it cannot clean a file', () => {
   const text = 'Date,Open,Close\n2024-01-02,1,2\n';
   assert.deepEqual(remapCsv('', map({ date: 0, close: 1 })), { ok: false, reason: 'The file has no rows of prices.' });
-  assert.deepEqual(remapCsv(text, map({ date: 0 })), { ok: false, reason: 'Choose which column holds the closing price.' });
-  assert.deepEqual(remapCsv(text, map({ close: 2 })), { ok: false, reason: 'Choose which column holds the date.' });
-  assert.deepEqual(remapCsv(text, map({ date: 0, close: 0 })), { ok: false, reason: 'The date and the close are the same column. Choose a different column for one of them.' });
+  assert.deepEqual(remapCsv(text, map({ date: 0 })), { ok: false, reason: 'Select the column that holds the closing price.' });
+  assert.deepEqual(remapCsv(text, map({ close: 2 })), { ok: false, reason: 'Select the column that holds the date.' });
+  assert.deepEqual(remapCsv(text, map({ date: 0, close: 0 })), { ok: false, reason: 'The date and the close are the same column. Select a different column for one of them.' });
   assert.deepEqual(remapCsv(text, map({ date: 0, close: 9 })), { ok: false, reason: 'The close column is not in the file.' });
-  assert.deepEqual(remapCsv('Date,Close\nsoon,1\n', map({ date: 0, close: 1 })), { ok: false, reason: 'No row could be read. No date in the "Date" column could be read. Check the columns chosen.' });
+  assert.deepEqual(remapCsv('Date,Close\nsoon,1\n', map({ date: 0, close: 1 })), { ok: false, reason: 'The plugin cannot read the rows. The plugin cannot read a date in the "Date" column. Make sure that you selected the correct columns.' });
   assert.match((remapCsv('Date,Close\n2024-01-02,x\n', map({ date: 0, close: 1 })) as { reason: string }).reason, /hold no numbers/);
 });
 
@@ -436,7 +436,7 @@ test('characters the parser reads only on a universe line are reported', () => {
   for (const path of ['Data/gold(1).csv', 'Data/é.csv', 'Data/a&b.csv', 'Data/a#b.csv']) {
     const t = csvTicker(path);
     assert.ok(t.ok);
-    assert.match(t.note!, /universe or symbol line, but not after "of"/, path);
+    assert.match(t.note!, /universe or symbol line\. Because of its characters, it does not work after "of"/, path);
     // The note is true: after "of" the parser cannot read the path.
     const viaOf = parseSpec(`universe: SPY\nbuy when close of csv:${path} > sma(5)`);
     assert.ok(viaOf.errors.length > 0 || viaOf.spec!.extras[0]?.id !== path, path);
@@ -512,8 +512,8 @@ test('dates that mix day first and month first are noted, and the ones that cann
   const text = 'Date,Open,High,Low,Close,Volume\n31/01/2024,1,2,1,2,5\n01/31/2024,1,2,1,2,5\n02/05/2024,1,2,1,2,5\n';
   const r = read(text);
   assert.equal(r.rows, 2);
-  assert.ok(r.doubts.some((x) => x.startsWith('1 of 3 rows were skipped: 1 with a date that could not be read')));
-  assert.ok(r.doubts.includes('The dates mix day first and month first, so the ones that cannot be read as month first were skipped.'));
+  assert.ok(r.doubts.some((x) => x.startsWith('1 of 3 rows were not read: 1 with a date that the plugin cannot read')));
+  assert.ok(r.doubts.includes('The dates are a mix of day first and month first. Thus the plugin did not read the rows with dates that cannot be month first.'));
   assert.equal(r.ambiguousDates, false);
 });
 
@@ -542,7 +542,7 @@ test('dates written DD-MM-YYYY are read day first when the file proves it, every
   const r = read(dashedQuarter());
   assert.deepEqual([r.rows, r.first, r.last], [91, '2024-01-01', '2024-03-31']);
   assert.equal(r.ambiguousDates, false);
-  assert.deepEqual(r.doubts, ['The file has no volume column, so volume is 0 on every bar and a rule that reads volume cannot work.', 'Only 91 rows. The trend rule in the starter strategy uses a 100-bar average and would never act on this file.']);
+  assert.deepEqual(r.doubts, ['The file has no volume column. Thus volume is 0 on each bar, and a rule that reads volume cannot work.', 'The file has only 91 rows. The trend rule in the starter strategy uses a 100-bar average. Thus it cannot give an order on this file.']);
   const c = cleaned(remapCsv(dashedQuarter(), r.columns));
   assert.deepEqual(c.text.split('\n').slice(1, 4), ['2024-01-01,10,11,9,10.5,0', '2024-01-02,10,11,9,10.5,0', '2024-01-03,10,11,9,10.5,0']);
   assert.equal(c.rows, 91);
@@ -556,15 +556,15 @@ test('dashed dates that could be day first or month first get the same question 
   // The question about the order shows dates the way the file writes them.
   assert.equal(dateSeparator(ambiguous, 0), '-');
   assert.equal(dateSeparator(ambiguous.replace(/-/g, '/'), 0), '/');
-  assert.ok(a.doubts.includes('The dates could be read two ways: 02-01-2024 is 2024-02-01 month first, or 2024-01-02 day first. They were read month first. If the file is day first, say so below.'), a.doubts.join('\n'));
+  assert.ok(a.doubts.includes('The plugin can read the dates as month first or as day first: 02-01-2024 is 2024-02-01 month first, or 2024-01-02 day first. It read them month first. If the file is day first, select day first below.'), a.doubts.join('\n'));
   const dayFirst = cleaned(remapCsv(ambiguous, { ...a.columns, dateOrder: 'day-first' }));
   assert.deepEqual(dayFirst.text.split('\n').slice(1, 4).map((l) => l.split(',')[0]), ['2024-01-02', '2024-01-03', '2024-01-04']);
-  assert.ok(dayFirst.notes.includes('Dates such as 02-01-2024 were read day first.'));
+  assert.ok(dayFirst.notes.includes('The plugin read the dates day first, for example 02-01-2024.'));
   const monthFirst = cleaned(remapCsv(ambiguous, { ...a.columns, dateOrder: 'month-first' }));
   assert.deepEqual(parseCsv(monthFirst.text).t, [d(2024, 2, 1), d(2024, 3, 1), d(2024, 4, 1)]);
   // Mixed orders are noted as with slashes.
   const mixed = read('Date,Open,High,Low,Close,Volume\n31-01-2024,1,2,1,2,5\n01-31-2024,1,2,1,2,5\n02-05-2024,1,2,1,2,5\n');
-  assert.ok(mixed.doubts.includes('The dates mix day first and month first, so the ones that cannot be read as month first were skipped.'));
+  assert.ok(mixed.doubts.includes('The dates are a mix of day first and month first. Thus the plugin did not read the rows with dates that cannot be month first.'));
 });
 
 test('the dashed file reads and cleans the same in every time zone', () => {

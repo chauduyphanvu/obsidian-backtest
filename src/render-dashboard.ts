@@ -23,7 +23,7 @@ export type { DashboardHost } from './dashboard.ts';
 
 export function renderDashboardErrors(parent: HTMLElement, errors: Diagnostic[], source: string): void {
   const root = h(parent, 'div', 'bt-root');
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? "This dashboard can't run yet" : `This dashboard can't run yet: ${errors.length} problems`);
+  h(root, 'div', 'bt-error-title', errors.length === 1 ? 'This dashboard cannot run' : `This dashboard cannot run: ${errors.length} problems`);
   const lines = source.split('\n');
   const list = h(root, 'ul', 'bt-errors');
   for (const e of errors) {
@@ -109,7 +109,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
     for (const line of row.next) h(next, 'div', undefined, line);
     const through = h(tr, 'td', 'bt-dash-through');
     h(through, 'div', undefined, row.through);
-    if (row.stale) h(through, 'div', 'bt-dash-sub', 'may be old');
+    if (row.stale) h(through, 'div', 'bt-dash-sub', 'possibly out of date');
   };
 
   const drawRows = (): void => {
@@ -118,7 +118,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
     for (const row of sortRows(rows, sort)) {
       if (row.state === 'done') doneRow(tbody, row);
       else if (row.state === 'failed') messageRow(tbody, row, failureText(row), 'bt-dash-failed');
-      else messageRow(tbody, row, 'Running…', 'bt-dash-running');
+      else messageRow(tbody, row, 'The strategy runs…', 'bt-dash-running');
     }
     summary.textContent = summaryText(rows, finishedAt);
   };
@@ -151,7 +151,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
     finishedAt = null;
     rows = [];
     summary.textContent = '';
-    message('Looking for strategies…');
+    message('The plugin finds the strategies…');
     let listed = false;
     runRound(host, config, force, {
       current,
@@ -177,7 +177,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
         summary.textContent = summaryText(rows, finishedAt);
       },
       (e: unknown) => {
-        if (current() && !listed) message(`Couldn't list the strategies. ${e instanceof Error ? e.message : String(e)}`);
+        if (current() && !listed) message(`Cannot find the strategies. ${e instanceof Error ? e.message : String(e)}`);
       },
     );
   };

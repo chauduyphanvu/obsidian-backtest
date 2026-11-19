@@ -40,7 +40,7 @@ export function changeText(before: Version, after: Version): string {
   const added = diff.filter((d) => d.op === 'added').length;
   const removed = diff.filter((d) => d.op === 'removed').length;
   const lines = [...(added ? [`${plural(added, 'line')} added`] : []), ...(removed ? [`${plural(removed, 'line')} removed`] : [])];
-  const parts = [lines.length ? lines.join(', ') : 'the same text with other default settings'];
+  const parts = [lines.length ? lines.join(', ') : 'the same text with different default settings'];
   const a = before.figures;
   const b = after.figures;
   if (a.cagr !== null && b.cagr !== null) {
@@ -51,7 +51,7 @@ export function changeText(before: Version, after: Version): string {
     const d = b.sharpe - a.sharpe;
     parts.push(`Sharpe ratio ${signed(Number(d.toFixed(2)), Math.abs(d).toFixed(2))}`);
   }
-  return parts.join('; ');
+  return parts.join(', ');
 }
 
 export interface VersionRow {
@@ -85,8 +85,8 @@ export function versionRows(versions: readonly Version[], now: { hash: string; d
     .reverse();
 }
 
-export const RESTORE = 'Restore this version';
-export const RESTORED = "Done: the block now has this version's text.";
+export const RESTORE = 'Write this version to the block';
+export const RESTORED = 'Done: the block has the text of this version.';
 
 const normal = (text: string) => text.replace(/\r/g, '').trimEnd();
 
@@ -110,14 +110,14 @@ function fill(body: HTMLElement, input: VersionsInput): () => void {
     body.replaceChildren();
     const rows = versionRows(l.versions, now);
     if (rows.length === 0) {
-      h(body, 'p', 'bt-note', 'No version of this block has been recorded yet.');
+      h(body, 'p', 'bt-note', 'There are no recorded versions of this block.');
       return;
     }
     h(
       body,
       'p',
       'bt-note',
-      `${plural(rows.length, 'version')} of this block, newest first: each text that was run, with the default settings it was run with. The first one and the latest ${MAX_VERSIONS} are kept.`,
+      `${plural(rows.length, 'version')} of this block, newest first. Each version is a text that ran, with the default settings of that run. The plugin keeps the first version and the last ${MAX_VERSIONS} versions.`,
     );
     const list = h(body, 'ol', 'bt-versions-list');
     for (const row of rows) versionItem(h(list, 'li', row.current ? 'bt-version bt-version-current' : 'bt-version'), row, input);
@@ -134,8 +134,8 @@ function versionItem(li: HTMLElement, row: VersionRow, input: VersionsInput): vo
   h(head, 'span', 'bt-version-when', row.when);
   if (row.current) h(head, 'span', 'bt-version-tag', 'This version');
   h(li, 'div', 'bt-version-figures', row.figures);
-  h(li, 'div', 'bt-version-change', row.change ? `Against the version before: ${row.change}.` : 'The oldest version kept.');
-  if (row.otherDefaults) h(li, 'div', 'bt-version-change', 'Run with other default settings than the block has now.');
+  h(li, 'div', 'bt-version-change', row.change ? `Changes from the previous version: ${row.change}.` : 'The first version that the plugin keeps.');
+  if (row.otherDefaults) h(li, 'div', 'bt-version-change', 'Its default settings are different from the default settings of the block at this time.');
   const actions = h(li, 'div', 'bt-run-row');
   const shown = h(li, 'pre', 'bt-version-diff');
   shown.hidden = true;

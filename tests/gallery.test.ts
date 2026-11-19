@@ -47,7 +47,7 @@ test('there are about eight starters with their own titles and plain description
     assert.ok(s.title.length > 0 && s.title.length <= 40, s.title);
     assert.ok(s.description.length >= 60 && s.description.length <= 420, `${s.title}: ${s.description.length} characters`);
     assert.doesNotMatch(s.description + s.title, /!|[^\x20-\x7e]/, `${s.title}: no exclamation marks or special characters`);
-    assert.match(s.description, /struggle/, `${s.title} says when it tends to struggle`);
+    assert.match(s.description, /\bit is weak (in|when)\b/i, `${s.title} says when it is weak`);
     assert.doesNotMatch(s.description, /\b(profit|profits|outperform\w*|beat|beats|guarantee\w*|always wins?)\b/i, `${s.title} makes no performance promise`);
   }
 });
@@ -131,7 +131,7 @@ test('together the starters show the main parts of the language', () => {
 });
 
 test('the starter that builds a position in entries really does, with one, two and three entries', () => {
-  const adding = STARTERS.find((s) => s.title === 'Adding to a winner')!;
+  const adding = STARTERS.find((s) => s.title === 'Add to a winner')!;
   const { spec } = parseSpec(adding.text);
   assert.equal(spec!.entries, 3);
   assert.ok(spec!.rules.QQQ.add);

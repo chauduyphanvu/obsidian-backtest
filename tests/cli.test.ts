@@ -56,7 +56,7 @@ test('check passes a note whose blocks are fine, and says how many it read', asy
   const r = await call(['check', 'Two.md']);
   assert.equal(r.code, 0);
   assert.equal(r.out, '');
-  assert.equal(r.err, '2 blocks checked: no problems');
+  assert.equal(r.err, '2 blocks examined: no problems');
 });
 
 test('check prints each problem at its line and column in the note, and fails', async () => {
@@ -67,7 +67,7 @@ test('check prints each problem at its line and column in the note, and fails', 
     `Broken.md:4:18: error: ${r.out.split('\n')[1].split(': error: ')[1]}`,
   ]);
   assert.match(r.out.split('\n')[1], /^Broken\.md:4:18: error: Unknown name "moving_average"/);
-  assert.equal(r.err, '1 block checked: 2 errors, 0 warnings');
+  assert.equal(r.err, '1 block examined: 2 errors, 0 warnings');
 });
 
 test('check counts lines and columns past the markers of a callout', async () => {
@@ -109,10 +109,10 @@ test('run backtests the block named, on a CSV file in the vault above the note',
 test('run asks which block when a note has several, and does not run a block with errors', async () => {
   const several = await call(['run', 'Two.md']);
   assert.equal(several.code, 2);
-  assert.equal(several.err, 'Two.md has 2 blocks (1: Walk trend, 2: Walk dips). Choose one with --block');
+  assert.equal(several.err, 'Two.md has 2 blocks (1: Walk trend, 2: Walk dips). Select one with --block');
   const broken = await call(['run', 'Broken.md']);
   assert.equal(broken.code, 1);
-  assert.match(broken.err, /^The block has errors, so it was not run:\nBroken\.md:3:7: error: /);
+  assert.match(broken.err, /^The block has errors. It did not run:\nBroken\.md:3:7: error: /);
   assert.equal(broken.out, '');
 });
 
@@ -123,7 +123,7 @@ test('explain gives a word\'s form, meaning and example, in any case, and points
   assert.match((await call(['explain', 'rebalance=monthly'])).out, /monthly/);
   const near = await call(['explain', 'cross']);
   assert.equal(near.code, 1);
-  assert.match(near.err, /Did you mean: crosses, crosses above, crosses below/);
+  assert.match(near.err, /Words that contain "cross": crosses, crosses above, crosses below/);
 });
 
 test('words, guide, help and version', async () => {
@@ -151,11 +151,11 @@ test('check goes on past a note it can not read, reports every other problem, an
   const both = await call(['check', 'Broken.md', 'Missing.md']);
   assert.equal(both.code, 2);
   assert.match(both.out, /^Broken\.md:3:7: error: /);
-  assert.match(both.err, /can't read Missing\.md/);
+  assert.match(both.err, /cannot read Missing\.md/);
   const one = await call(['check', 'Two.md', 'Prose.md']);
   assert.equal(one.code, 1);
-  assert.equal(one.err, 'Prose.md: no strategy block: a block opens with ```strategy\n2 blocks checked: 1 note with no strategy block');
-  assert.equal((await call(['check', 'Prose.md'])).err, 'Prose.md: no strategy block: a block opens with ```strategy\n0 blocks checked: 1 note with no strategy block');
+  assert.equal(one.err, 'Prose.md: no strategy block: a block starts with ```strategy\n2 blocks examined: 1 note with no strategy block');
+  assert.equal((await call(['check', 'Prose.md'])).err, 'Prose.md: no strategy block: a block starts with ```strategy\n0 blocks examined: 1 note with no strategy block');
 });
 
 test('a CSV path reads from the vault as Obsidian does, and never from outside it', async () => {
@@ -164,7 +164,7 @@ test('a CSV path reads from the vault as Obsidian does, and never from outside i
   assert.equal(slash.code, 0, slash.err);
   const out = await call(['run', '-'], 'universe: csv:../outside.csv\nbuy when close > sma(20)\nsell when close < sma(20)');
   assert.equal(out.code, 1);
-  assert.match(out.err, /No file at \.\.\/outside\.csv|outside the vault/);
+  assert.match(out.err, /There is no file at \.\.\/outside\.csv|not in the vault/);
 });
 
 test('standard input is read as UTF-8 even when a character falls between two chunks', async () => {
@@ -192,13 +192,13 @@ test('a FRED or Tiingo key that is missing or refused names the variable to set,
   const fred = 'universe: csv:Data/walk.csv\nbuy when close of fred:T10Y2Y > 0\nsell when close of fred:T10Y2Y < 0';
   const missing = await call(['run', '-'], fred);
   assert.equal(missing.code, 1);
-  assert.match(missing.err, /FRED needs an API key to load T10Y2Y\. Set FRED_API_KEY in the environment\./);
+  assert.match(missing.err, /The plugin must have a FRED API key to load T10Y2Y\. Set FRED_API_KEY in the environment\./);
   assert.match((await call(['run', '-'], 'data: tiingo\nuniverse: SPY\nbuy when close > sma(20)\nsell when close < sma(20)')).err, /Set TIINGO_API_KEY in the environment\./);
   const refused = await call(['run', '-'], fred, {
     env: { FRED_API_KEY: 'wrong' },
     fetch: async () => new Response('{"error_code":400,"error_message":"Bad Request.  The value for variable api_key is not registered."}', { status: 400 }),
   });
-  assert.match(refused.err, /FRED did not accept the API key\. Check FRED_API_KEY/);
+  assert.match(refused.err, /FRED did not accept the API key\. Make sure that FRED_API_KEY is correct/);
   for (const r of [missing, refused]) assert.doesNotMatch(r.err, /plugin settings/);
 });
 
@@ -216,7 +216,7 @@ test('a note with no strategy fence is not read as a block, however plain its te
 test('a block in a plain fence is not checked, and the message says how to fence it', async () => {
   const r = await call(['check', '-'], '```\nuniverse: SPY\nbuy when close > sma(200)\n```');
   assert.equal(r.code, 1);
-  assert.equal(r.err, '-: no strategy block: a block opens with ```strategy, or give its lines with no fence\n0 blocks checked: 1 note with no strategy block');
+  assert.equal(r.err, '-: no strategy block: a block starts with ```strategy, or give the lines of the block without a fence\n0 blocks examined: 1 note with no strategy block');
 });
 
 test('the run table writes a negative Sharpe ratio with the same minus as the other figures', async () => {

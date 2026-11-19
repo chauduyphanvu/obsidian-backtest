@@ -79,13 +79,13 @@ test('run_backtest runs a block on a CSV file in the vault given, and refuses on
   assert.equal(vaults.at(-1), vault);
   const bad = await client.callTool({ name: 'run_backtest', arguments: { source: 'universe: SPY\nbuy when close > sma(' } });
   assert.equal(bad.isError, true);
-  assert.match(textOf(bad), /^The block has errors, so it was not run:\nstrategy:2/);
+  assert.match(textOf(bad), /^The block has errors. It did not run:\nstrategy:2/);
 });
 
 test('run_backtest says plainly when the prices can not be had', async () => {
   const r = await client.callTool({ name: 'run_backtest', arguments: { source: 'universe: SPY\nbuy when close > sma(5)\nsell when close < sma(5)' } });
   assert.equal(r.isError, true);
-  assert.match(textOf(r), /^The backtest could not run: /);
+  assert.match(textOf(r), /^The backtest did not run: /);
 });
 
 test('explain_word and list_words', async () => {

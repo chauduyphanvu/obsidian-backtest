@@ -170,7 +170,7 @@ test('ruin: equity at 0 or below closes everything, and the run is over with its
 test('when the buy and short rules both hold, neither side opens and the bar is counted', () => {
   const bt = run('universe: A\nbuy when true\nshort when true', { A: flat(5) });
   assert.deepEqual([bt.run.trades.length, bt.run.conflicts, bt.run.fills.t.length], [0, 5, 0]);
-  assert.ok(bt.notes.includes('Buy and short rules both held on 5 bars, so neither opened a position.'));
+  assert.ok(bt.notes.includes('The buy rule and the short rule held at the same time on 5 bars. Thus the run did not open a position on them.'));
   // A sell rule that holds vetoes the long, so the short opens alone.
   assert.equal(run('universe: A\nbuy when true\nsell when true\nshort when true', { A: flat(5) }).run.trades[0].side, 'short');
 });
@@ -245,10 +245,10 @@ test('short and cover rules: heads, position values, short-only blocks and the m
   const both = ok('universe: SPY\nshort = 20\ncover = 50\nshort when close < sma(short)\ncover when close > sma(cover)');
   assert.deepEqual([both.written!.rules.SPY.short!.text, both.written!.rules.SPY.cover!.text], ['close < sma(short)', 'close > sma(cover)']);
   // A short rule reads no position, as a buy rule does; a cover rule can.
-  assert.match(errorsOf('universe: SPY\nshort when bars held > 1')[0], /"bars held" only makes sense in a sell, cover or add rule/);
-  assert.match(errorsOf('universe: SPY\nbuy when true\ncover when close > 1')[0], /"cover when" closes a short, so it needs a short rule that says when to go short/);
-  assert.match(errorsOf('universe: SPY, QQQ\nfor SPY:\n  buy when true\nfor QQQ:\n  short when true\n  cover when true\nfor all:\ncover when close > 1\nbuy when true').join('\n'), /needs a short rule for SPY/);
-  assert.match(errorsOf('universe: SPY\nshort when true\nshort when false')[0], /There is already a short rule/);
+  assert.match(errorsOf('universe: SPY\nshort when bars held > 1')[0], /You can use "bars held" only in a sell, cover or add rule/);
+  assert.match(errorsOf('universe: SPY\nbuy when true\ncover when close > 1')[0], /"cover when" closes a short\. Thus it must have a short rule that tells when to go short/);
+  assert.match(errorsOf('universe: SPY, QQQ\nfor SPY:\n  buy when true\nfor QQQ:\n  short when true\n  cover when true\nfor all:\ncover when close > 1\nbuy when true').join('\n'), /must have a short rule for SPY/);
+  assert.match(errorsOf('universe: SPY\nshort when true\nshort when false')[0], /There are two short rules/);
   // A ticker needs a buy rule or a short rule.
   assert.match(errorsOf('universe: SPY, QQQ\nfor SPY:\n  short when true')[0], /There is no buy rule for QQQ/);
   // A rule with the wrong head says what heads there are.
@@ -264,12 +264,12 @@ test('weights and size up to 200%, the margin terms, and their settings', () => 
   assert.equal(spec('universe: SPY, TLT\nsize: 150%\nbuy when true')!.margin!.cap, 1.5);
   // A short below 100% still borrows its shares, so its cap is 1.
   assert.equal(spec('universe: SPY 50%\nshort when true')!.margin!.cap, 1);
-  assert.match(errorsOf('universe: SPY 150%, TLT 60%\nbuy when true')[0], /^Weights add up to 210\.0%\. The most is 200%/);
-  assert.match(errorsOf('universe: SPY, TLT\nsize: 201%\nbuy when true')[0], /size must be a percentage/);
+  assert.match(errorsOf('universe: SPY 150%, TLT 60%\nbuy when true')[0], /^The total of the weights is 210\.0%\. It cannot be more than 200%/);
+  assert.match(errorsOf('universe: SPY, TLT\nsize: 201%\nbuy when true')[0], /Size must be a percentage/);
   // A ranking can hold more than its equity, but not go short yet.
   const ranked = spec('universe: SPY, QQQ, TLT\nsize: 150%\nhold: top 2 by roc(20)')!;
   assert.deepEqual([ranked.universe[0].weight, ranked.margin!.cap], [0.75, 1.5]);
-  assert.match(errorsOf('universe: SPY, QQQ\nhold: top 1 by roc(20)\nshort when true')[0], /^A ranking can't also go short yet; /);
+  assert.match(errorsOf('universe: SPY, QQQ\nhold: top 1 by roc(20)\nshort when true')[0], /^A strategy with "hold" cannot go short\. /);
   assert.deepEqual(parseSpec('universe: SPY, QQQ\nhold: top 1 by roc(20)\nbuy when true\nshort when true').errors.map((e) => e.line), [4]);
   // The rates: per block, then the defaults, then the built-in ones; only a block that borrows carries them.
   const m = spec('universe: SPY\nborrow fee: 1%\nmargin rate: 7.5%\nshort when true')!.margin!;
@@ -278,7 +278,7 @@ test('weights and size up to 200%, the margin terms, and their settings', () => 
   assert.deepEqual([d.borrowFee, d.rate], [0.02, 0.04]);
   assert.equal(spec('universe: SPY\nborrow fee: 0%\nmargin rate: 0%\nshort when true')!.margin!.borrowFee, 0);
   assert.ok(!('margin' in spec('universe: SPY\nborrow fee: 1%\nbuy when true')!));
-  assert.match(errorsOf('universe: SPY\nborrow fee: 1\nshort when true')[0], /^Write the borrow fee as a yearly percentage, such as 0\.5%/);
+  assert.match(errorsOf('universe: SPY\nborrow fee: 1\nshort when true')[0], /^Write the borrow fee as a yearly percentage, for example 0\.5%/);
   assert.match(errorsOf('universe: SPY\nmargin rate: 51%\nshort when true')[0], /^The margin rate must be between 0% and 50% a year/);
   assert.match(errorsOf('universe: SPY\nborrow fee: 101%\nshort when true')[0], /^The borrow fee must be between 0% and 100% a year/);
 });
@@ -286,7 +286,7 @@ test('weights and size up to 200%, the margin terms, and their settings', () => 
 test('a percentage take profit of 100% or more is flagged where a short can never reach it', () => {
   const warned = (src: string) => parseSpec(src).warnings.map((w) => [w.line, w.message]);
   assert.deepEqual(warned('universe: SPY\ntake profit: 150%\nbuy when true\nshort when false'), [
-    [2, "A short can't reach a take profit of 150%: the price would have to fall to 0 or below, so its shorts never take profit. Use one under 100%, or a multiple of the average true range"],
+    [2, 'A take profit of 150% cannot close a short. For that, the price must decrease to 0 or less. Use a take profit less than 100%, or a multiple of the average true range'],
   ]);
   assert.deepEqual(warned('universe: SPY\ntake profit: 150%\nbuy when true'), []);
   assert.deepEqual(warned('universe: SPY\ntake profit: 90%\nshort when true'), []);

@@ -182,9 +182,9 @@ test('a value is written in the language\'s own form, with no floating-point tai
 test('the line under the bar names only the values that differ, and what the block says', () => {
   const params = [param('fast = 50'), { ...param('stop = 8%'), name: 'stop' }];
   assert.equal(differenceText(params, { fast: 50, stop: 0.08 }), null);
-  assert.equal(differenceText(params, { fast: 80, stop: 0.08 }), 'Showing fast 80. The block says fast 50.');
-  assert.equal(differenceText(params, { fast: 80, stop: 0.065 }), 'Showing fast 80, stop 6.5%. The block says fast 50, stop 8%.');
-  assert.equal(differenceText(params, { fast: 50, stop: 0.06 }), 'Showing stop 6%. The block says stop 8%.');
+  assert.equal(differenceText(params, { fast: 80, stop: 0.08 }), 'The result shows fast 80. The values in the block are fast 50.');
+  assert.equal(differenceText(params, { fast: 80, stop: 0.065 }), 'The result shows fast 80, stop 6.5%. The values in the block are fast 50, stop 8%.');
+  assert.equal(differenceText(params, { fast: 50, stop: 0.06 }), 'The result shows stop 6%. The values in the block are stop 8%.');
 });
 
 // ---- asking for a run while a slider moves

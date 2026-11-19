@@ -139,7 +139,7 @@ test('risk per trade buys the shares that lose the risk at the stop distance, up
   r = run('universe: A\ncapital: 1000\nrisk per trade: 1% at 2 atr(2)\nbuy when true', { A });
   assert.ok(near(r.run.states[0].shares, 2.5));
   assert.equal(r.run.trades[0].entryT, day(2));
-  assert.deepEqual(r.notes, ['1 buy signal for A was not acted on while the 2-bar ATR for risk per trade was still unknown.']);
+  assert.deepEqual(r.notes, ['The run ignored 1 buy signal for A, because the 2-bar ATR for risk per trade was unknown at that time.']);
 });
 
 test('inverse volatility does not buy until each ticker\'s volatility is known', () => {
@@ -152,7 +152,7 @@ test('inverse volatility does not buy until each ticker\'s volatility is known',
   const [a, b] = r.run.states;
   assert.ok(near(a.shares, 1000 / 6 / 99) && near(b.shares, 5000 / 6 / 99.96));
   // Bars 0 and 1 were one run of held-back signals for each ticker.
-  assert.deepEqual(r.notes, ['2 buy signals were not acted on while the 2-bar volatility for inverse volatility weighting was still unknown: A 1, B 1.']);
+  assert.deepEqual(r.notes, ['The run ignored 2 buy signals, because the 2-bar volatility for inverse volatility weighting was unknown at that time: A 1, B 1.']);
 });
 
 test('test from splits the one run into two parts, the second measured from the last close before it', () => {
@@ -187,7 +187,7 @@ test('a benchmark that starts later is measured over its own dates and has no va
   assert.ok(near(r.benchmark.stats.totalReturn, 0.21));
   // 21% over its own 182 days, not over the strategy's 364.
   assert.ok(near(r.benchmark.stats.cagr, 1.21 ** (365.25 / 182) - 1));
-  assert.deepEqual(r.notes, ["B has prices only from 2020-07-01, so its figures cover a shorter period than the strategy's."]);
+  assert.deepEqual(r.notes, ['B has prices only from 2020-07-01. Thus its figures are for a shorter period than the figures of the strategy.']);
   // A benchmark with prices from the start has no note.
   assert.deepEqual(run('universe: X\nbenchmark: X\nbuy when true', { X }).notes, []);
 });
@@ -199,5 +199,5 @@ test('the result carries the spec, the prices and a note on the cash rate', () =
   assert.equal(r.spec, spec);
   assert.equal(r.data, data);
   assert.equal(r.interest, 0);
-  assert.equal(r.cashRateNote, 'Cash earns nothing');
+  assert.equal(r.cashRateNote, 'Cash receives no interest');
 });

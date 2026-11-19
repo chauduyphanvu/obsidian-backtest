@@ -89,13 +89,13 @@ export class CsvModal extends Modal {
     const root = this.fresh();
     const files = [...this.host.files()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
     if (files.length === 0) {
-      h(root, 'p', 'bt-csv-empty', 'There are no CSV files in this vault. Add one with a row for each day and at least a date column and a close column, then open this window again.');
+      h(root, 'p', 'bt-csv-empty', 'There are no CSV files in this vault. Add a CSV file with a row for each day and a minimum of a date column and a close column. Then open this window again.');
       return;
     }
     const input = h(root, 'input', 'bt-csv-filter');
     input.type = 'search';
-    input.placeholder = 'Type to narrow the list of CSV files';
-    input.setAttribute('aria-label', 'Narrow the list of CSV files');
+    input.placeholder = 'Type to filter the list of CSV files';
+    input.setAttribute('aria-label', 'Filter the list of CSV files');
     input.setAttribute('role', 'combobox');
     input.setAttribute('aria-controls', 'bt-csv-files');
     input.setAttribute('aria-expanded', 'true');
@@ -133,9 +133,9 @@ export class CsvModal extends Modal {
       });
       count.textContent =
         found.length === 0
-          ? `No CSV file matches "${input.value.trim()}".`
+          ? `No CSV file has "${input.value.trim()}" in its path.`
           : found.length > shown.length
-            ? `Showing the first ${shown.length} of ${found.length} files. Type to narrow the list.`
+            ? `The list shows the first ${shown.length} of ${found.length} files. Type to filter the list.`
             : words.length > 0
               ? `${found.length} of ${files.length} files`
               : `${files.length} ${files.length === 1 ? 'file' : 'files'}`;
@@ -166,7 +166,7 @@ export class CsvModal extends Modal {
     const root = this.fresh();
     const mine = this.ticket;
     this.bar(root, path);
-    const status = h(root, 'div', 'bt-csv-status', 'Reading the file…');
+    const status = h(root, 'div', 'bt-csv-status', 'The plugin reads the file…');
     status.setAttribute('role', 'status');
     let text: string;
     try {
@@ -174,7 +174,7 @@ export class CsvModal extends Modal {
     } catch (e) {
       if (mine !== this.ticket) return;
       status.remove();
-      h(root, 'div', 'bt-error-title', "Couldn't read the file");
+      h(root, 'div', 'bt-error-title', 'Cannot read the file');
       h(root, 'p', 'bt-csv-lead', e instanceof Error ? e.message : String(e));
       return;
     }
@@ -190,7 +190,7 @@ export class CsvModal extends Modal {
 
   private showRead(root: HTMLElement, file: Open, found: CsvRead): void {
     h(root, 'div', 'bt-csv-title', 'The plugin can read this file.');
-    const adjusted = found.columns.adjClose === null ? '' : ` Prices are scaled by the "${found.header[found.columns.adjClose]}" column.`;
+    const adjusted = found.columns.adjClose === null ? '' : ` The plugin adjusts the prices with the "${found.header[found.columns.adjClose]}" column.`;
     h(root, 'p', 'bt-csv-lead', `${found.rows.toLocaleString('en-US')} rows, from ${found.first} to ${found.last}.${adjusted}`);
     if (!found.priced) {
       h(root, 'p', 'bt-csv-lead', 'This file has no prices. A strategy can read its columns but cannot trade it.');
@@ -198,7 +198,7 @@ export class CsvModal extends Modal {
       this.signals(root, file.path, found);
       // Headers the reader does not know, such as o, h, l and c, can still be prices: the form makes a copy that has them.
       const fix = h(root, 'details', 'bt-csv-fix');
-      h(fix, 'summary', undefined, 'Are some of these columns prices? Choose them yourself');
+      h(fix, 'summary', undefined, 'Are some of these columns prices? Select them here');
       this.form(fix, file);
       return;
     }
@@ -215,12 +215,12 @@ export class CsvModal extends Modal {
     this.signals(root, file.path, found);
     const fix = h(root, 'details', 'bt-csv-fix');
     fix.open = found.ambiguousDates;
-    h(fix, 'summary', undefined, 'Something looks wrong? Choose the columns or the date order yourself');
+    h(fix, 'summary', undefined, 'Is something incorrect? Select the columns or the date order here');
     this.form(fix, file);
   }
 
   private showUnread(root: HTMLElement, file: Open, found: CsvUnread): void {
-    h(root, 'div', 'bt-error-title', "The plugin can't read this file as it is");
+    h(root, 'div', 'bt-error-title', 'The plugin cannot read this file as it is');
     h(root, 'p', 'bt-csv-lead', found.reason);
     if (found.header.length > 0) {
       h(root, 'div', 'bt-csv-label', 'How the file looks');
@@ -257,7 +257,7 @@ export class CsvModal extends Modal {
     const strategy = csvStrategy(path);
     const row = h(box, 'div', 'bt-csv-actions');
     h(row, 'button', undefined, 'Insert the ticker').addEventListener('click', () => this.deliver(box, ticker.text));
-    if (strategy.ok) h(row, 'button', 'mod-cta', 'Insert a strategy using it').addEventListener('click', () => this.deliver(box, strategy.text));
+    if (strategy.ok) h(row, 'button', 'mod-cta', 'Insert a strategy for this file').addEventListener('click', () => this.deliver(box, strategy.text));
     if (ticker.note) h(box, 'div', NOTE, ticker.note);
     if (!strategy.ok) h(box, 'div', NOTE, strategy.reason);
   }
@@ -301,7 +301,7 @@ export class CsvModal extends Modal {
       return;
     }
     box.replaceChildren();
-    h(box, 'p', 'bt-csv-lead', 'No note is open for editing. Copy this text and paste it into a note.');
+    h(box, 'p', 'bt-csv-lead', 'No note is open to edit. Copy this text and paste it into a note.');
     const pre = h(box, 'pre', 'bt-source bt-csv-copy', text);
     const row = h(box, 'div', 'bt-csv-actions');
     const copy = h(row, 'button', 'mod-cta', 'Copy');
@@ -312,7 +312,7 @@ export class CsvModal extends Modal {
         () => (said.textContent = 'Copied'),
         () => {
           window.getSelection()?.selectAllChildren(pre);
-          said.textContent = 'The text is selected. Press Ctrl+C or Cmd+C to copy it.';
+          said.textContent = 'The text is selected. Use Ctrl+C or Cmd+C to copy it.';
         },
       );
     });
@@ -331,7 +331,7 @@ export class CsvModal extends Modal {
       h(field, 'span', 'bt-csv-label', role.label);
       const select = h(field, 'select', 'dropdown');
       const current = file.mapping[role.key];
-      h(select, 'option', undefined, 'none' in role ? role.none : 'Choose a column').value = '';
+      h(select, 'option', undefined, 'none' in role ? role.none : 'Select a column').value = '';
       labels.forEach((label, i) => (h(select, 'option', undefined, label).value = String(i)));
       select.value = current === null ? '' : String(current);
       select.addEventListener('change', () => {
@@ -349,9 +349,9 @@ export class CsvModal extends Modal {
     /** The question in the file's own way of writing dates: 02/01/2024 or 02-01-2024. */
     const ask = (sep: string) => {
       const date = (a: string, b: string) => `${a}${sep}${b}${sep}2024`;
-      orderLabel.textContent = `Dates such as ${date('02', '01')} are`;
-      monthFirst.textContent = `month first, so 2 January is ${date('01', '02')}`;
-      dayFirst.textContent = `day first, so 2 January is ${date('02', '01')}`;
+      orderLabel.textContent = `Dates, for example ${date('02', '01')}, are`;
+      monthFirst.textContent = `month first: 2 January is ${date('01', '02')}`;
+      dayFirst.textContent = `day first: 2 January is ${date('02', '01')}`;
     };
     ask('/');
     choose.value = file.mapping.dateOrder ?? 'month-first';
@@ -380,7 +380,7 @@ export class CsvModal extends Modal {
         h(preview, 'div', 'bt-warning', cleaned.reason);
         return;
       }
-      h(preview, 'div', 'bt-csv-label', `How it would be read: ${cleaned.rows.toLocaleString('en-US')} rows, from ${cleaned.first} to ${cleaned.last}`);
+      h(preview, 'div', 'bt-csv-label', `The plugin will read ${cleaned.rows.toLocaleString('en-US')} rows, from ${cleaned.first} to ${cleaned.last}`);
       this.table(preview, COLUMNS.map((c) => ({ label: c.label, from: null })), cleaned.sample.map(cellsOf));
       for (const note of cleaned.notes) h(preview, 'div', 'bt-warning', note);
     };
@@ -392,19 +392,19 @@ export class CsvModal extends Modal {
     const cleaned = remapCsv(file.text, file.mapping);
     if (!cleaned.ok) return;
     const mine = this.ticket;
-    problem.textContent = 'Saving…';
+    problem.textContent = 'The plugin saves the copy…';
     let saved: string;
     try {
       saved = await this.host.create(cleanedPath(file.path), cleaned.text);
     } catch (e) {
-      if (mine === this.ticket) problem.textContent = `Couldn't save the file: ${e instanceof Error ? e.message : String(e)}`;
+      if (mine === this.ticket) problem.textContent = `Cannot save the file: ${e instanceof Error ? e.message : String(e)}`;
       return;
     }
     if (mine !== this.ticket) return;
     const root = this.fresh();
     this.bar(root, saved);
-    h(root, 'div', 'bt-csv-title', 'Saved a cleaned copy');
-    h(root, 'p', 'bt-csv-lead', `${saved} has ${cleaned.rows.toLocaleString('en-US')} rows, from ${cleaned.first} to ${cleaned.last}. The original is unchanged.`);
+    h(root, 'div', 'bt-csv-title', 'The plugin saved a cleaned copy');
+    h(root, 'p', 'bt-csv-lead', `${saved} has ${cleaned.rows.toLocaleString('en-US')} rows, from ${cleaned.first} to ${cleaned.last}. The initial file did not change.`);
     for (const note of cleaned.notes) h(root, 'div', 'bt-warning', note);
     this.actions(root, saved);
     root.querySelector<HTMLElement>('.bt-csv-back')?.focus();

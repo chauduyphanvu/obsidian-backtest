@@ -413,8 +413,8 @@ test('blockTickers: tickers on the lines that take them, with their source and c
 });
 
 test('the message for a ticker the source does not know', () => {
-  assert.equal(unknownTickerMessage('SPYY', 'yahoo'), 'Yahoo has no ticker called SPYY.');
-  assert.equal(unknownTickerMessage('BTCUSDTT', 'binance'), 'Binance has no market called BTCUSDTT.');
+  assert.equal(unknownTickerMessage('SPYY', 'yahoo'), 'Yahoo has no ticker with the name SPYY.');
+  assert.equal(unknownTickerMessage('BTCUSDTT', 'binance'), 'Binance has no market with the name BTCUSDTT.');
 });
 
 test('blockTickers: a CSV file the block names is never a ticker, however a rule refers to it', () => {

@@ -106,7 +106,7 @@ test('a Tiingo ticker comes from Tiingo with the key in its header, and Tiingo n
   const t = await loadRawBars({ name: 'SPY', source: 'tiingo', id: 'SPY' }, d);
   assert.deepEqual(t.bars.c, [1.5]);
   assert.deepEqual(asked[0].headers, { Authorization: 'Token KEY' });
-  await assert.rejects(loadRawBars({ name: 'QQQ', source: 'yahoo', id: 'QQQ' }, d), /Couldn't load QQQ from yahoo/);
+  await assert.rejects(loadRawBars({ name: 'QQQ', source: 'yahoo', id: 'QQQ' }, d), /Cannot load QQQ from yahoo/);
   assert.ok(asked.slice(1).every((a) => a.url.includes('yahoo.com')));
 });
 
@@ -120,7 +120,7 @@ test('the runner loads prices as they traded for Yahoo and Tiingo tickers only, 
   ]);
   assert.deepEqual([...r.data.keys()], ['AAPL']);
   assert.equal(r.warnings.length, 1);
-  assert.match(r.warnings[0], /^Couldn't load BAD from yahoo: .*\. BAD's fills are not compared on price\.$/);
+  assert.match(r.warnings[0], /^Cannot load BAD from yahoo: .*\. The plugin does not compare the fill prices of BAD\.$/);
   assert.ok(asked.every((a) => !a.url.includes('binance')));
 });
 

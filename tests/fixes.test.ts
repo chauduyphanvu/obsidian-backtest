@@ -72,7 +72,7 @@ test('a misspelt setting name', () => {
   assert.equal(after[1], 'rebalance: monthly');
   const f = firstFix(lines)!.fix;
   assert.deepEqual([f.line, f.from, f.to, f.insert, f.label], [2, 0, 9, 'rebalance', 'Change to rebalance']);
-  assert.equal(hintFor(lines, firstFix(lines)!.d), 'Did you mean rebalance?');
+  assert.equal(hintFor(lines, firstFix(lines)!.d), 'Possible correction: rebalance.');
   assert.equal(fixedBlock([HEAD, 'stoploss: 5%', RULE])[1], 'stop loss: 5%');
   assert.equal(fixedBlock([HEAD, '  trailing stp: 5%', RULE])[1], '  trailing stop: 5%');
   assert.equal(fixedBlock([HEAD, 'Capitl: 10k', RULE])[1], 'capital: 10k');
@@ -146,7 +146,7 @@ test('a ticker in a for line that is not in the universe but is close to one tha
   assert.deepEqual(errorsOf(apply(lines, f)), []);
   assert.equal(fixedBlock([HEAD, RULE, 'for tlt2:', '  stop loss: 5%'])[2], 'for TLT:');
   assert.equal(fixedBlock([HEAD, RULE, '  for   TLTT  :  # sleeve', '  stop loss: 5%'])[2], '  for   TLT  :  # sleeve');
-  assert.equal(hintFor(lines, errors[0]), 'Did you mean TLT?');
+  assert.equal(hintFor(lines, errors[0]), 'Possible correction: TLT.');
 });
 
 test('a ticker in a for line that is not close to anything gets no fix', () => {
@@ -171,7 +171,7 @@ test('a misspelt parameter name', () => {
 test('habits from other languages', () => {
   const and = [HEAD, 'buy when close > 5 && rsi(2) < 3'];
   assert.equal(fixedBlock(and)[1], 'buy when close > 5 and rsi(2) < 3');
-  assert.equal(hintFor(and, errorsOf(and)[0]), 'Write and instead of &&.');
+  assert.equal(hintFor(and, errorsOf(and)[0]), 'Write and, not &&.');
   assert.equal(fixedBlock([HEAD, 'buy when close > 5||rsi(2) < 3'])[1], 'buy when close > 5 or rsi(2) < 3');
   assert.equal(fixedBlock([HEAD, 'buy when close > 5 & rsi(2) < 3'])[1], 'buy when close > 5 and rsi(2) < 3');
   assert.equal(fixedBlock([HEAD, 'buy when !close > 5'])[1], 'buy when not close > 5');
@@ -272,7 +272,7 @@ test('tickerFix: the same ticker named on `for` lines and after `of` changes wit
   const f = tickerFix(lines, { line: 1, from: 10, to: 14 }, ['SPY', 'GLD'])!;
   assert.ok(f);
   assert.equal(f.label, 'Change to SPY (2 places)');
-  assert.equal(f.hint, 'Did you mean SPY?');
+  assert.equal(f.hint, 'Possible correction: SPY.');
   assert.deepEqual(applyAll(lines, f), ['universe: SPY, QQQ', 'buy when close > sma(50)', 'for SPY:', '  stop loss: 5%']);
   assert.deepEqual(problems(applyAll(lines, f)), []);
 
@@ -333,7 +333,7 @@ test('an add rule\'s start misspelt is offered a fix as buy and sell are', () =>
   // On a line that continues another rule, and with the sell rule before it.
   assert.equal(fixedBlock([...entries, 'sell when close < sma(100)', 'ad when close > last entry price'])[4], 'add when close > last entry price');
   const found = firstFix([...entries, 'add wen close > 3'])!;
-  assert.equal(found.fix.hint, 'Did you mean add when?');
+  assert.equal(found.fix.hint, 'Possible correction: add when.');
   // A word that is already a rule head is not a typo, and the two-letter reach is only for a rule head.
   assert.equal(closest('ad', ['buy', 'sell', 'add']), null);
   assert.equal(fixedBlock([HEAD, 'by when close > 3'])[1], 'buy when close > 3');
@@ -345,12 +345,12 @@ test('a short or cover rule\'s start misspelt is offered a fix as buy and sell a
   const short = [HEAD, 'short when close < sma(200)'];
   assert.equal(fixedBlock([...short, 'covr when close > sma(200)'])[2], 'cover when close > sma(200)');
   assert.equal(fixedBlock([...short, '  cvoer when close > sma(200)'])[2], '  cover when close > sma(200)');
-  assert.equal(firstFix([...short, 'cover wen close > 3'])!.fix.hint, 'Did you mean cover when?');
+  assert.equal(firstFix([...short, 'cover wen close > 3'])!.fix.hint, 'Possible correction: cover when.');
 });
 
 test('a parameter written for the number of entries, misspelt, is offered the parameter', () => {
   const lines = [HEAD, 'steps = 3 in 2..5', 'entries: stepz', RULE, 'add when close > last entry price * 1.01'];
   const found = firstFix(lines)!;
-  assert.equal(found.fix.hint, 'Did you mean steps?');
+  assert.equal(found.fix.hint, 'Possible correction: steps.');
   assert.equal(apply(lines, found.fix)[2], 'entries: steps');
 });

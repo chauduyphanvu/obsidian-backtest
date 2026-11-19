@@ -25,9 +25,9 @@ const wave = (n: number) => Array.from({ length: n }, (_, i) => 100 + Math.sin(i
 
 test('a bars_since whose condition has never held says so', () => {
   const bt = run('universe: A\nbuy when bars_since(close > 1000) < 5\nsell when close < 0', { A: bars(wave(120)) });
-  assert.equal(details(bt, 100)['bars_since(close > 1000) < 5'], 'the condition has not held yet');
+  assert.equal(details(bt, 100)['bars_since(close > 1000) < 5'], 'the condition did not hold before this bar');
   // It never held before the first bar either, so the early bars say the same.
-  assert.equal(details(bt, 0)['bars_since(close > 1000) < 5'], 'the condition has not held yet');
+  assert.equal(details(bt, 0)['bars_since(close > 1000) < 5'], 'the condition did not hold before this bar');
 });
 
 test('a bars_since that held, then met a bar where its condition was unknown, is unknown with no reason given', () => {
@@ -48,19 +48,19 @@ test('a window with the same value all through says so, for zscore and for corre
   const flat = bars(Array.from({ length: 80 }, () => 100));
   const moving = bars(wave(80));
   const z = run('universe: A\nbuy when zscore(close, 20) > 1\nsell when close < 0', { A: flat });
-  assert.equal(details(z, 60)['zscore(close, 20) > 1'], 'every value in the window is the same');
+  assert.equal(details(z, 60)['zscore(close, 20) > 1'], 'all values in the window are the same');
   // Before a full window there is nothing to compare yet.
-  assert.equal(details(z, 5)['zscore(close, 20) > 1'], 'still warming up');
+  assert.equal(details(z, 5)['zscore(close, 20) > 1'], 'its warm-up is not complete');
   // A moving series has a z-score everywhere it is known.
   const m = run('universe: A\nbuy when zscore(close, 20) > 1\nsell when close < 0', { A: moving });
   assert.equal(rowsOf(m)[60].cells[0].outcome === 'unknown', false);
 
   const c = run('universe: A, B\nbuy when correl(close of B, 20) > 0\nsell when close < 0', { A: moving, B: flat });
-  assert.equal(details(c, 60)['correl(close of B, 20) > 0'], 'one of the two series changed by the same amount on every bar in the window');
-  assert.equal(details(c, 5)['correl(close of B, 20) > 0'], 'still warming up');
+  assert.equal(details(c, 60)['correl(close of B, 20) > 0'], 'one of the two series changed by the same quantity on each bar in the window');
+  assert.equal(details(c, 5)['correl(close of B, 20) > 0'], 'its warm-up is not complete');
   // The other way round: this ticker is the flat one.
   const d = run('universe: A, B\nbuy when correl(close of B, 20) > 0\nsell when close < 0', { A: flat, B: moving });
-  assert.equal(details(d, 60)['correl(close of B, 20) > 0'], 'one of the two series changed by the same amount on every bar in the window');
+  assert.equal(details(d, 60)['correl(close of B, 20) > 0'], 'one of the two series changed by the same quantity on each bar in the window');
 });
 
 /** A run where an add fills at the open and the position then exits inside the same bar. */

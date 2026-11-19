@@ -12,7 +12,7 @@ export const STARTERS: Starter[] = [
   {
     title: 'Trend following on one fund',
     description:
-      'Holds SPY while its price is above its 200-day average and moves to cash when it falls below. It tends to struggle in sideways markets, where the price keeps crossing the average and each crossing costs a little.',
+      'The strategy holds SPY while the price is above its 200-day average. It goes to cash when the price goes below the average. It is weak in a market with no trend: the price crosses the average frequently, and each cross has a small cost.',
     text: `name: Trend following on one fund
 universe: SPY
 from: 2005-01-01
@@ -25,7 +25,7 @@ sell when close < sma(200)`,
   {
     title: 'Moving-average cross',
     description:
-      'Holds QQQ while a fast average is above a slow one. Both lengths declare ranges, so "Try other parameter values" can sweep them, and "test from" reports the years from 2018 apart. It reacts late, so it tends to struggle in choppy markets.',
+      'The strategy holds QQQ while a fast average is above a slow average. The two lengths have ranges, thus "Try other parameter values" can test them. The "test from" line shows the results before and after 2018. The averages change slowly, thus it is weak in a market that changes direction frequently.',
     text: `name: Moving-average cross
 universe: QQQ
 from: 2005-01-01
@@ -40,10 +40,10 @@ buy  when sma(fast) > sma(slow)
 sell when sma(fast) < sma(slow)`,
   },
   {
-    title: 'Dip buyer in an uptrend',
+    title: 'Buy dips in an uptrend',
     description:
-      'Buys SPY when a 2-day RSI is very low but the price is still above its 200-day average. It sells when RSI recovers, after 10 bars, or at an 8% stop. It tends to struggle when a dip turns into a long decline.',
-    text: `name: Dip buyer in an uptrend
+      'The strategy buys SPY when the 2-day RSI is very low and the price is above its 200-day average. It sells when the RSI is more than 70, after 10 bars, or at an 8% stop loss. It is weak when a dip becomes a long downtrend.',
+    text: `name: Buy dips in an uptrend
 universe: SPY
 from: 2005-01-01
 costs: 5 bps
@@ -55,10 +55,10 @@ sell when rsi(2) > 70
   or bars held >= 10`,
   },
   {
-    title: 'Adding to a winner',
+    title: 'Add to a winner',
     description:
-      'Opens a third of a QQQ position when it is above its 100-day average, then adds a third at the next open after each close 3% above the latest entry, up to three entries. The 8% stop moves with the average entry price. It tends to struggle when a rise reverses soon after the last add.',
-    text: `name: Adding to a winner
+      'The strategy buys one third of a QQQ position when the price is above its 100-day average. After each close 3% above the last entry, it adds one third at the next open. The maximum is three entries. The 8% stop moves with the average entry price. It is weak when the price decreases immediately after the last add.',
+    text: `name: Add to a winner
 universe: QQQ
 from: 2010-01-01
 costs: 5 bps
@@ -72,7 +72,7 @@ sell when close < sma(100)`,
   {
     title: 'Bitcoin breakout',
     description:
-      'Buys Bitcoin from Binance when it closes above its highest price of the last 55 days. The only exit is a trailing stop 3 average true ranges below the highest price since entry. It tends to struggle when breakouts fail and reverse, and it gives back part of each gain before the stop is hit.',
+      'The strategy buys Bitcoin on Binance when it closes above its highest price of the last 55 days. The only exit is a trailing stop 3 average true ranges below the highest price since entry. It is weak when a breakout does not continue. Each trade also sells below its highest price, because the stop is below that price.',
     text: `name: Bitcoin breakout
 universe: binance:BTCUSDT
 from: 2019-01-01
@@ -85,7 +85,7 @@ buy when close > highest(55)[1]`,
   {
     title: 'Momentum rotation',
     description:
-      'Each month, holds the three of six funds with the best six-month change, and only those whose change is above zero. A slot with no such fund stays in cash. It tends to struggle when leadership changes quickly, because it buys what has already risen.',
+      'Each month, the strategy holds the three funds (of six) with the best six-month change. It holds a fund only if that change is more than zero. The part for a fund that it does not hold stays in cash. It is weak when the best funds change quickly, because it buys a fund after its price increases.',
     text: `name: Momentum rotation
 universe: SPY, QQQ, IWM, EFA, TLT, GLD
 from: 2008-01-01
@@ -99,7 +99,7 @@ buy when roc(126) > 0`,
   {
     title: 'Three funds with trend filters',
     description:
-      'A 50/30/20 mix of stocks, bonds and gold, brought back to those weights each quarter. Each fund is held only while it is above its own trend line, a quicker 100-day line for the bond fund and 200 days for the others. It is compared with holding SPY alone, and it tends to struggle when stocks rise steadily and the cash share earns nothing.',
+      'A 50/30/20 mixture of stocks, bonds and gold. The strategy rebalances to these weights each quarter. It holds each fund only while the price is above its trend line: 100 days for the bond fund and 200 days for the others. The benchmark is SPY. It is weak when stocks increase continuously, because the cash part has no return.',
     text: `name: Three funds with trend filters
 universe: SPY 50%, TLT 30%, GLD 20%
 from: 2008-01-01
@@ -116,10 +116,10 @@ for TLT:
   sell when close < sma(100)`,
   },
   {
-    title: 'Calm funds get more weight',
+    title: 'Weights by inverse volatility',
     description:
-      'Four funds share their money in proportion to how calm each has been over the last 60 days, worked out again each month, and each is held only while above its 150-day average. It tends to struggle when a calm fund suddenly becomes volatile.',
-    text: `name: Calm funds get more weight
+      'The strategy divides the money between four funds. The weight of each fund is in inverse proportion to its volatility in the last 60 days. The strategy calculates the weights again each month. It holds a fund only while the price is above its 150-day average. It is weak when the volatility of a fund increases suddenly.',
+    text: `name: Weights by inverse volatility
 universe: SPY 25%, EFA 25%, TLT 25%, GLD 25%
 from: 2007-01-01
 rebalance: monthly
@@ -133,7 +133,7 @@ sell when close < sma(150)`,
   {
     title: 'November to April',
     description:
-      'Holds SPY from November to April and sits in cash from May to October. It tests an old calendar habit, which has not held in every period, so treat it as something to test and not a rule. It tends to struggle in strong summers, when it misses the gains.',
+      'The strategy holds SPY from November to April, and stays in cash from May to October. It tests a calendar pattern that did not occur in all periods. Use it as a test, not as a rule. It is weak when SPY increases much from May to October, because the strategy is in cash then.',
     text: `name: November to April
 universe: SPY
 from: 2000-01-01
@@ -146,7 +146,7 @@ sell when month >= 5 and month <= 10`,
   {
     title: 'Trend, long or short',
     description:
-      'Holds SPY while its price is above its 200-day average and sells it short while the price is below, turning from one side to the other at each crossing. It tends to struggle in sideways markets, where each crossing is a sale and a short sale that both cost a little, and in sharp rebounds, when the short loses as the price climbs back.',
+      'The strategy holds SPY while the price is above its 200-day average, and sells it short while the price is below. At each cross, it changes from one side to the other. It is weak in a market with no trend, because each cross is a sale and a short sale, and the two have a cost. It is also weak when the price decreases and then increases quickly, because the short then has a loss.',
     text: `name: Trend, long or short
 universe: SPY
 from: 2005-01-01
@@ -159,7 +159,7 @@ short when close < sma(200)`,
 
 export const EMPTY: Starter = {
   title: 'Empty block',
-  description: 'One fund and one buy rule to build on.',
+  description: 'One fund and one buy rule, as a start for your strategy.',
   text: `name: My strategy
 universe: SPY
 costs: 5 bps

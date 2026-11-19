@@ -245,7 +245,7 @@ function ruleColumns(group: keyof typeof CAPTIONS, e: Expr, w: Written, params: 
         group,
         kind,
         caption,
-        heading: whole && kind === 'join' ? 'Whole rule' : shorten(label),
+        heading: whole && kind === 'join' ? 'Full rule' : shorten(label),
         text: label,
         whole,
         depth,
@@ -374,7 +374,7 @@ class Ctx {
       const by = spec.written?.rank?.text ?? 'the score';
       const rank = { group: 'rank', caption: 'Ranking', whole: false, depth: 0, op: '', percent: false } as const;
       cols.push({ expr: null, col: { ...rank, id: 'rank:score', kind: 'score', heading: 'Score', text: by } });
-      cols.push({ expr: null, col: { ...rank, id: 'rank:place', kind: 'place', heading: 'Place', text: 'Place among the tickers that could be chosen, at the bars where the ranking decides' } });
+      cols.push({ expr: null, col: { ...rank, id: 'rank:place', kind: 'place', heading: 'Place', text: 'Place in the tickers that the ranking can select, at the bars where the ranking makes a decision' } });
     }
     plan = { cols, chain };
     this.plans.set(name, plan);
@@ -928,10 +928,10 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
     if (x.k === 'of') {
       if (x.asset === a) return visit(x.a, a, j);
       const k = cx.ev.barOf(x.asset, a, j);
-      return k < 0 ? `${x.asset} had no finished bar yet` : visit(x.a, x.asset, k);
+      return k < 0 ? `${x.asset} had no full bar at that time` : visit(x.a, x.asset, k);
     }
-    if (x.k === 'lag') return j - x.n < 0 ? 'looks back past the first bar' : visit(x.a, a, j - x.n);
-    if (x.k === 'cal') return x.name === 'trading_day' ? "its month began before the data's first bar" : x.name.endsWith('_start') ? "it is the data's first bar" : '';
+    if (x.k === 'lag') return j - x.n < 0 ? 'it reads a bar before the first bar' : visit(x.a, a, j - x.n);
+    if (x.k === 'cal') return x.name === 'trading_day' ? 'its month started before the first bar of the data' : x.name.endsWith('_start') ? 'it is the first bar of the data' : '';
     if (x.k === 'math' && x.fn === 'if') {
       const c = value(x.args[0], a, j);
       return visit(x.args[Number.isNaN(c) ? 0 : c === 1 ? 1 : 2], a, j);
@@ -940,10 +940,10 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
       const why = visit(c, a, j);
       if (why) return why;
     }
-    if (x.k === 'math') return x.fn === 'sqrt' ? 'the square root of a negative number' : x.fn === 'log' ? 'the log of 0 or less' : x.fn === 'exp' ? 'too large a number' : '';
+    if (x.k === 'math') return x.fn === 'sqrt' ? 'the square root of a negative number' : x.fn === 'log' ? 'the log of 0 or less' : x.fn === 'exp' ? 'a number that is too large' : '';
     if (x.k === 'ind') return whyIndicator(cx, x, a, j);
     if (x.k === 'bin' && x.op === '/') return 'divides by 0';
-    if (x.k === 'cmp' && isCross(x.op)) return 'the bar before is unknown';
+    if (x.k === 'cmp' && isCross(x.op)) return 'the previous bar is unknown';
     return '';
   };
   return visit(e, asset, i);
@@ -955,11 +955,11 @@ function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | 
  * `bars_since` that was reset by an unknown bar, where no cheap reason fits.
  */
 function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j: number): string {
-  const warming = 'still warming up';
+  const warming = 'its warm-up is not complete';
   if (x.src && findPos(x.src)) return x.fn === 'bars_since' ? '' : warming;
-  if (x.fn === 'bars_since') return j < cx.firstEvent(x.src!, asset) ? 'the condition has not held yet' : '';
+  if (x.fn === 'bars_since') return j < cx.firstEvent(x.src!, asset) ? 'the condition did not hold before this bar' : '';
   const n = x.args[0];
-  if (x.fn === 'count') return j - n + 1 < 0 ? `fewer than ${n} bars so far` : 'the condition was unknown on one of the bars';
+  if (x.fn === 'count') return j - n + 1 < 0 ? `less than ${n} bars to date` : 'the condition was unknown on one of the bars';
   const window = (series: number[], length: number): number[] | null => {
     const w = j - length + 1 < 0 ? null : series.slice(j - length + 1, j + 1);
     return w && !w.some(Number.isNaN) ? w : null;
@@ -968,7 +968,7 @@ function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j:
   if (x.fn === 'zscore' || x.fn === 'rsquared' || x.fn === 'efficiency') {
     const series = x.src ? cx.ev.eval(x.src, asset) : cx.bt.data.get(asset)?.c;
     // efficiency compares the value with the one n bars back, so its window has one more.
-    return series && same(window(series, x.fn === 'efficiency' ? n + 1 : n)) ? 'every value in the window is the same' : warming;
+    return series && same(window(series, x.fn === 'efficiency' ? n + 1 : n)) ? 'all values in the window are the same' : warming;
   }
   if (x.fn === 'correl' && x.src) {
     const both = [cx.bt.data.get(asset)?.c, cx.ev.eval(x.src, asset)];
@@ -977,7 +977,7 @@ function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j:
       const w = series ? window(series, n + 1) : null;
       return w ? ind.returns(w).slice(1) : null;
     });
-    return changes.some(same) ? 'one of the two series changed by the same amount on every bar in the window' : warming;
+    return changes.some(same) ? 'one of the two series changed by the same quantity on each bar in the window' : warming;
   }
   return warming;
 }
@@ -997,12 +997,12 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
     return `at ${fillT === ix.bars.t[row.bar + 1] ? 'the next open' : 'the open'} (${when(fillT)}) at ${price(at)}`;
   };
   const atFill = cx.atClose ? 'the close' : 'the open';
-  const marginCall = `Margin call (equity below ${Number(((cx.bt.spec.margin?.maintenance ?? 0) * 100).toFixed(1))}% of the positions' value)`;
+  const marginCall = `Margin call (equity below ${Number(((cx.bt.spec.margin?.maintenance ?? 0) * 100).toFixed(1))}% of the value of the positions)`;
   /** What closed a position whose exit was decided at this bar. */
   const closedBy = (tr: Trade): string => {
     const exit = tr.why?.exit;
     const short = sideOf(tr) === 'short';
-    if (exit?.k === 'rank') return 'The ranking no longer holds it';
+    if (exit?.k === 'rank') return 'The ranking removed it';
     if (exit?.k === 'margin') return marginCall;
     if (exit?.k === 'rule' && exit.flip) return short ? 'Buy rule held' : 'Short rule held';
     return short ? 'Cover rule held' : 'Sell rule held';
@@ -1021,7 +1021,7 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
           out.push(`${did.replace(/^./, (c) => c.toUpperCase())}${entry} at ${atFill} at ${price(first)}.`);
         } else {
           const rank = tr.why?.rank;
-          const why = rank ? `Chosen by the ranking, ${placeWords(rank.place, rank.decision.eligible)}` : rule;
+          const why = rank ? `Selected by the ranking, ${placeWords(rank.place, rank.decision.eligible)}` : rule;
           out.push(`${why}: ${did}${entry} ${fillWords(tr.entryT, first)}.`);
         }
         break;
@@ -1031,7 +1031,7 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
         const tr = e.trade;
         const did = e.k === 'cover' ? 'bought to cover' : 'sold';
         const at = price(tr.exitPrice);
-        if (tr.why?.exit?.k === 'ruin') out.push(`Equity fell to zero, so every position was closed and the run stopped: ${did} at ${at}.`);
+        if (tr.why?.exit?.k === 'ruin') out.push(`The equity decreased to zero. Thus all positions closed and the run stopped: ${did} at ${at}.`);
         else if (e.stage === 'filled') {
           if (tr.reason === 'stop loss') out.push(`Stopped out at ${at}.`);
           else if (tr.reason === 'trailing stop') out.push(`Trailing stop hit: ${did} at ${at}.`);
@@ -1062,59 +1062,59 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
         break;
       }
       case 'whole':
-        out.push('Add rule held but the position was already whole.');
+        out.push('Add rule held, but the position had all its entries.');
         break;
       case 'add-undone': {
         // The run records no add that was left undone, so every reason that fits is named; the commission only when the run left some adds or trades undone for it.
-        const small = cx.bt.run.smallTrades ? `, or its commission would be ${SMALL_TRADE * 100}% or more of it` : '';
-        out.push(`Add rule held, but no entry was made: no cash was free, or the position was already as large as its weight allows${small}.`);
+        const small = cx.bt.run.smallTrades ? `, or its commission is ${SMALL_TRADE * 100}% or more of it` : '';
+        out.push(`Add rule held, but no entry was made: there was no free cash, or the position was at the limit of its weight${small}.`);
         break;
       }
       case 'long':
-        out.push('Buy rule held but already long.');
+        out.push('Buy rule held, but a long position was open.');
         break;
       case 'short-held':
-        out.push('Short rule held but already short.');
+        out.push('Short rule held, but a short position was open.');
         break;
       case 'rearm':
         out.push(
-          `${e.side === 'short' ? 'Short' : 'Buy'} rule held but waiting for the rule to stop holding after ${e.trade.exitT === row.t ? 'this' : 'the'} ${e.trade.reason}${e.trade.exitT === row.t ? '' : ` on ${when(e.trade.exitT)}`}.`,
+          `${e.side === 'short' ? 'Short' : 'Buy'} rule held, but after ${e.trade.exitT === row.t ? 'this' : 'the'} ${e.trade.reason}${e.trade.exitT === row.t ? '' : ` on ${when(e.trade.exitT)}`}, the rule must become false first.`,
         );
         break;
       case 'warmup':
-        if (e.side === 'short') out.push(`Short rule held, but the short sale waited: ${WARMUP_INPUT[e.input](e.n)} was still unknown.`);
-        else out.push(`${ranked ? 'Chosen, but the buy' : 'Buy rule held, but the buy'} waited: ${WARMUP_INPUT[e.input](e.n)} was still unknown.`);
+        if (e.side === 'short') out.push(`Short rule held, but the short sale waited: ${WARMUP_INPUT[e.input](e.n)} was unknown.`);
+        else out.push(`${ranked ? 'Selected, but the buy' : 'Buy rule held, but the buy'} waited: ${WARMUP_INPUT[e.input](e.n)} was unknown.`);
         break;
       case 'sell-first':
-        out.push('Buy rule held, but the sell rule held too, so no buy.');
+        out.push('Buy rule held, but the sell rule also held. Thus no buy.');
         break;
       case 'cover-first':
-        out.push('Short rule held, but the cover rule held too, so no short sale.');
+        out.push('Short rule held, but the cover rule also held. Thus no short sale.');
         break;
       case 'conflict':
-        out.push('Buy and short rules both held, so neither opened a position.');
+        out.push('The buy and short rules held together. Thus no position opened.');
         break;
       case 'ruined':
-        out.push(`Nothing more was traded after the ruin on ${when(cx.bt.run.ruin!.t)}.`);
+        out.push(`No trades occurred after the ruin on ${when(cx.bt.run.ruin!.t)}.`);
         break;
       case 'pending': {
         // An order for the other side closes the position held first: a flip, said as its two orders.
         const held = ix.state?.side ?? null;
         const order = { buy: held === 'short' ? 'buy to cover and buy' : 'buy', sell: 'sell', add: 'add', short: held === 'long' ? 'sell and sell short' : 'sell short', cover: 'buy to cover' }[e.side];
         // A margin call made at this close closes the position at the next open, whatever the block's fill.
-        if (ix.state?.marginCall) out.push(`${marginCall}: order pending to ${order} at the next open.`);
-        else out.push(`Order pending: ${order} at the next ${cx.atClose ? 'close' : 'open'}.`);
+        if (ix.state?.marginCall) out.push(`${marginCall}: an order to ${order} waits for the next open.`);
+        else out.push(`An order to ${order} waits for the next ${cx.atClose ? 'close' : 'open'}.`);
         break;
       }
       case 'no-cash':
-        if (e.side === 'short') out.push('Short rule held, but no short sale was made: there was no room left for it.');
-        else out.push('Buy rule held, but no buy was made: no cash was free.');
+        if (e.side === 'short') out.push('Short rule held, but no short sale was made: the positions were at their limit.');
+        else out.push('Buy rule held, but no buy was made: there was no free cash.');
         break;
       case 'kept':
         out.push(`Kept by the ranking, ${placeWords(row.rank!.place, row.rank!.eligible)}.`);
         break;
       case 'chosen':
-        out.push(`Chosen by the ranking, ${placeWords(row.rank!.place, row.rank!.eligible)}, but no buy followed: no cash was free.`);
+        out.push(`Selected by the ranking, ${placeWords(row.rank!.place, row.rank!.eligible)}, but no buy followed: there was no free cash.`);
         break;
       case 'ranked-out':
         out.push(`Ranked ${placeWords(row.rank!.place, row.rank!.eligible)}: only the best ${row.rank!.top} ${row.rank!.top === 1 ? 'is' : 'are'} held.`);
@@ -1128,10 +1128,10 @@ function words(cx: Ctx, ix: AssetIx, row: DebugRow): string {
 function movedWords(trade: Trade, entry: number): string {
   const add = trade.why?.adds?.[entry - 2];
   if (!add) return '';
-  const parts = [`average entry price now ${price(add.average)}`];
+  const parts = [`average entry price changed to ${price(add.average)}`];
   if (add.stopLoss !== null) parts.push(`stop loss moved to ${price(add.stopLoss)}`);
   if (add.takeProfit !== null) parts.push(`take profit moved to ${price(add.takeProfit)}`);
-  return ` ${parts.join('; ').replace(/^./, (c) => c.toUpperCase())}.`;
+  return ` ${parts.join(', ').replace(/^./, (c) => c.toUpperCase())}.`;
 }
 
 /** "Flat", or "Long" or "Short" with the entries made, when a position is built in several, and the shares that were bought or sold short. */
@@ -1288,10 +1288,10 @@ export function csvSize(bt: Backtest, asset: string): { bars: number; bytes: num
  */
 export function csvAsk(size: { bars: number; bytes: number }, shown: number): { text: string; all: boolean } | null {
   if (size.bytes <= CSV_ASK_BYTES) return null;
-  const about = `about ${Math.round(size.bytes / 1e6).toLocaleString('en-US')} MB (${size.bars.toLocaleString('en-US')} bars)`;
+  const about = `approximately ${Math.round(size.bytes / 1e6).toLocaleString('en-US')} MB (${size.bars.toLocaleString('en-US')} bars)`;
   const bars = `${shown.toLocaleString('en-US')} ${shown === 1 ? 'bar' : 'bars'}`;
-  if (size.bytes > CSV_MAX_BYTES) return { text: `The file with every bar would be ${about}, too large to save as one file. Save only the ${bars} shown?`, all: false };
-  return { text: `The file with every bar would be ${about}. Save every bar, or only the ${bars} shown?`, all: true };
+  if (size.bytes > CSV_MAX_BYTES) return { text: `The file with all bars is ${about}. This is too large to save as one file. Save only the ${bars} shown?`, all: false };
+  return { text: `The file with all bars is ${about}. Save all bars, or only the ${bars} shown?`, all: true };
 }
 
 /** The whole file at once. */

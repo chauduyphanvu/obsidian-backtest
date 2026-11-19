@@ -130,7 +130,7 @@ interface YahooChart {
 function yahooBars(json: string, now: number, weekly: boolean, factor: (r: YahooChart, i: number, c: number) => number): Bars {
   const body = JSON.parse(json);
   const result = body?.chart?.result?.[0];
-  if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo returned no data');
+  if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo sent no data');
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
   const splits = Object.values((result.events?.splits ?? {}) as Record<string, { date?: number; numerator?: number; denominator?: number }>).map((s) => ({
@@ -171,7 +171,7 @@ function yahooBars(json: string, now: number, weekly: boolean, factor: (r: Yahoo
 export function parseYahooInside(json: string, now: number, step: number): Bars {
   const body = JSON.parse(json);
   const result = body?.chart?.result?.[0];
-  if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo returned no data');
+  if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo sent no data');
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
   const days: unknown = result.meta?.tradingPeriods;
@@ -273,7 +273,7 @@ function tiingoRows(json: string, now: number, row: (r: Record<string, unknown>,
   const rows: unknown = JSON.parse(json);
   if (!Array.isArray(rows)) {
     const detail = (rows as { detail?: unknown } | null)?.detail;
-    throw new Error(typeof detail === 'string' ? detail : 'Tiingo returned no data');
+    throw new Error(typeof detail === 'string' ? detail : 'Tiingo sent no data');
   }
   const ny = newYork(now);
   const last = ny.minutes >= US_CLOSE ? ny.day : ny.day - DAY;
@@ -288,7 +288,7 @@ function tiingoRows(json: string, now: number, row: (r: Record<string, unknown>,
 /** Binance kline rows to bars, without the kline that has not closed yet. */
 export function parseBinance(json: string, now: number): Bars {
   const rows = JSON.parse(json);
-  if (!Array.isArray(rows)) throw new Error(rows?.msg ?? 'Binance returned no data');
+  if (!Array.isArray(rows)) throw new Error(rows?.msg ?? 'Binance sent no data');
   const bars = emptyBars();
   for (const r of rows) {
     if (r[6] >= now) break;
@@ -452,9 +452,9 @@ function readColumns(names: string[], rows: string[][]): Pick<Bars, 'columns' | 
   for (const c of numeric) {
     const same = numeric.filter((o) => o.name === c.name);
     if (same.length > 1) {
-      if (same[0] === c) unread.push({ name: c.name, why: `${same.length} columns would all be called ${c.name}: ${quotedList(same.map((o) => o.header))}. Rename all but one in the file` });
+      if (same[0] === c) unread.push({ name: c.name, why: `${same.length} columns have the name ${c.name}: ${quotedList(same.map((o) => o.header))}. In the file, give each of them a different header` });
     } else if (readable.length < MAX_COLUMNS) readable.push(c);
-    else unread.push({ name: c.name, why: `only the first ${MAX_COLUMNS} columns of a file can be read`, limit: true });
+    else unread.push({ name: c.name, why: `a rule can read only the first ${MAX_COLUMNS} columns of a file`, limit: true });
   }
   const out: Pick<Bars, 'columns' | 'unread'> = {};
   if (readable.length) out.columns = readable.map((c): Column => ({ name: c.name, header: c.header, v: rows.map((r) => columnCell(r[c.i])) }));
@@ -481,7 +481,7 @@ export function parseCsv(text: string): Bars {
   const ai = col(...CSV_HEADERS.adjClose);
   const missing = [ti < 0 && 'date', oi < 0 && 'open', hi < 0 && 'high', li < 0 && 'low', ci < 0 && 'close'].filter(Boolean);
   const noPrices = ti >= 0 && [oi, hi, li, ci].every((i) => i < 0) && !names.some((h, i) => i !== ti && looksLikePrice(h));
-  const lackPrices = new Error(`The CSV needs a header row with date, open, high, low and close columns, but has no ${missing.join(', ')} column`);
+  const lackPrices = new Error(`The CSV must have a header row with date, open, high, low and close columns, but it has no ${missing.join(', ')} column`);
   if (missing.length && !(noPrices && extraColumns(names).length > 0)) throw lackPrices;
 
   const fields = lines.slice(1).map((line) => splitLine(line, sep));
@@ -496,7 +496,7 @@ export function parseCsv(text: string): Bars {
       bars.t.push(r.t);
       kept.push(r.f);
     }
-    if (bars.t.length === 0) throw new Error(`The CSV has no usable rows: no date in the "${names[ti]}" column could be read. Dates should look like 2024-01-31`);
+    if (bars.t.length === 0) throw new Error(`The CSV has no rows with a date that the plugin can read in the "${names[ti]}" column. Write dates as 2024-01-31`);
     for (const k of ['o', 'h', 'l', 'c'] as const) bars[k] = bars.t.map(() => NaN);
     bars.v = bars.t.map(() => 0);
     const read = readColumns(names, kept);
@@ -518,11 +518,11 @@ export function parseCsv(text: string): Bars {
   }
   if (bars.t.length > 0) return { ...bars, ...readColumns(names, kept) };
 
-  if (dated.length === 0) throw new Error(`The CSV has no usable rows: no date in the "${names[ti]}" column could be read. Dates should look like 2024-01-31`);
+  if (dated.length === 0) throw new Error(`The CSV has no rows with a date that the plugin can read in the "${names[ti]}" column. Write dates as 2024-01-31`);
   for (const [name, key] of [[names[oi], 'o'], [names[hi], 'h'], [names[li], 'l'], [names[ci], 'c']] as const) {
-    if (dated.every((r) => !Number.isFinite(r[key]))) throw new Error(`The CSV has no usable rows: no number in the "${name}" column could be read`);
+    if (dated.every((r) => !Number.isFinite(r[key]))) throw new Error(`The CSV has no rows with a number that the plugin can read in the "${name}" column`);
   }
-  throw new Error('The CSV has no usable rows: every row has a price at or below zero, or a high or low that does not contain the open and close');
+  throw new Error('The CSV has no rows that the plugin can use. Each row has a price of zero or less, or a high or low that does not contain the open and close');
 }
 
 /** The pieces parseCsv reads a file with, for code that has to agree with it exactly. */
@@ -549,14 +549,14 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw =
     }
     // A throttled or broken answer is plain text or HTML; Yahoo's own explanations are JSON, and trying again won't change them.
     if (!text.trimStart().startsWith('{')) {
-      failure = new Error('Yahoo sent something other than price data');
+      failure = new Error('Yahoo did not send price data');
       continue;
     }
     try {
       if (days) return parseYahooInside(text, deps.now(), intervalMs(interval));
       return raw ? parseYahooRaw(text, deps.now()) : parseYahoo(text, deps.now(), interval === '1w');
     } catch (e) {
-      if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Check the ticker.`);
+      if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Make sure that the ticker is correct.`);
       throw e;
     }
   }
@@ -567,7 +567,7 @@ async function fetchBinance(ref: AssetRef, interval: string, since: number, have
   const bars = have ?? emptyBars();
   let start = bars.t.length ? bars.t[bars.t.length - 1] + 1 : since;
   for (let pages = 0; ; pages++) {
-    if (pages === 300) throw new Error('too much history for this interval; set a later "from" date');
+    if (pages === 300) throw new Error('there is too much history for this interval. Move the "from" date forward');
     // data-api.binance.vision serves public market data where api.binance.com is region-blocked.
     const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(ref.id)}&interval=${interval}&startTime=${start}&limit=1000`;
     const text = await deps.fetchText(url);
@@ -575,7 +575,7 @@ async function fetchBinance(ref: AssetRef, interval: string, since: number, have
     try {
       page = parseBinance(text, deps.now());
     } catch (e) {
-      if (/"code"\s*:\s*-1121\b/.test(text)) throw new NoPrices(`Binance has no market called ${ref.name}. Check the symbol, such as BTCUSDT.`);
+      if (/"code"\s*:\s*-1121\b/.test(text)) throw new NoPrices(`Binance has no market with the name ${ref.name}. Make sure that the symbol is correct, for example BTCUSDT.`);
       throw e;
     }
     for (let i = 0; i < page.t.length; i++) push(bars, page.t[i], page.o[i], page.h[i], page.l[i], page.c[i], page.v[i]);
@@ -591,15 +591,15 @@ export const withoutQueries = (text: string): string => text.replace(/\b(https?:
 function keyFor(service: KeyedService, ref: AssetRef, deps: DataDeps): string {
   const key = deps.secret?.(service)?.trim();
   if (!key) {
-    const where = deps.keyVariable ? `Set ${deps.keyVariable(service)} in the environment.` : `Choose the secret that holds it under "${KEY_SETTING[service]}" in the plugin settings.`;
-    throw new MissingKey(`${SERVICE[service]} needs an API key to load ${ref.name}. ${where}`);
+    const where = deps.keyVariable ? `Set ${deps.keyVariable(service)} in the environment.` : `Select the secret with the key in the plugin setting "${KEY_SETTING[service]}".`;
+    throw new MissingKey(`The plugin must have a ${SERVICE[service]} API key to load ${ref.name}. ${where}`);
   }
   return key;
 }
 
 /** Where the user put a service's key, for a message that says to check it. */
 const keyPlace = (service: KeyedService, deps: DataDeps): string =>
-  deps.keyVariable ? deps.keyVariable(service) : `the secret chosen under "${KEY_SETTING[service]}" in the plugin settings`;
+  deps.keyVariable ? deps.keyVariable(service) : `the secret in the plugin setting "${KEY_SETTING[service]}"`;
 
 /** Runs a request that carries `key`, so that no error it ends in holds the key or a web address's query. */
 async function keyed<T>(key: string, request: () => Promise<T>): Promise<T> {
@@ -627,15 +627,15 @@ async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps, raw 
   return keyed(key, async () => {
     const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ref.id)}/prices?startDate=${TIINGO_START}&resampleFreq=daily`;
     const text = await deps.fetchText(url, { Authorization: `Token ${key}` });
-    if (!/^\s*[[{]/.test(text)) throw new Error('Tiingo sent something other than price data');
+    if (!/^\s*[[{]/.test(text)) throw new Error('Tiingo did not send price data');
     try {
       return raw ? parseTiingoRaw(text, deps.now()) : parseTiingo(text, deps.now(), interval === '1w');
     } catch (e) {
       const detail = said(text, 'detail');
       if (detail === undefined) throw e;
-      if (/not\s*found/i.test(detail)) throw new NoPrices(`Tiingo has no prices for ${ref.name}. Check the ticker.`);
-      if (/token|api key|auth/i.test(detail)) throw new Error(`Tiingo did not accept the API key. Check ${keyPlace('tiingo', deps)}`);
-      throw new Error(`Tiingo said: ${detail}`);
+      if (/not\s*found/i.test(detail)) throw new NoPrices(`Tiingo has no prices for ${ref.name}. Make sure that the ticker is correct.`);
+      if (/token|api key|auth/i.test(detail)) throw new Error(`Tiingo did not accept the API key. Make sure that ${keyPlace('tiingo', deps)} is correct`);
+      throw new Error(`Tiingo sent this message: ${detail}`);
     }
   });
 }
@@ -656,12 +656,12 @@ async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
       const text = await deps.fetchText(
         `https://api.stlouisfed.org/fred/series/${path}?series_id=${encodeURIComponent(ref.id)}&api_key=${encodeURIComponent(key)}&file_type=json${query}`,
       );
-      if (!text.trimStart().startsWith('{')) throw new Error('FRED sent something other than series data');
+      if (!text.trimStart().startsWith('{')) throw new Error('FRED did not send series data');
       const error = said(text, 'error_message');
       if (error !== undefined) {
-        if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series called ${ref.name}. Check the series ID, such as T10Y2Y.`);
-        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Check ${keyPlace('fred', deps)}`);
-        throw new Error(`FRED said: ${error.replace(/\s+/g, ' ')}`);
+        if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series with the name ${ref.name}. Make sure that the series ID is correct, for example T10Y2Y.`);
+        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Make sure that ${keyPlace('fred', deps)} is correct`);
+        throw new Error(`FRED sent this message: ${error.replace(/\s+/g, ' ')}`);
       }
       return JSON.parse(text) as Record<string, unknown>;
     };
@@ -674,7 +674,7 @@ async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
       days.push(...got);
       if (got.length === 0 || days.length >= Number(page.count)) break;
     }
-    if (days.length === 0) throw new Error(`FRED gives no day ${ref.name} was published on, so its values can't be dated`);
+    if (days.length === 0) throw new Error(`FRED does not tell when it published ${ref.name}. Thus the plugin cannot find the dates of its values`);
     const asked = [`&realtime_start=${days[0]}&realtime_end=${days[0]}`];
     for (let i = 0; i < days.length; i += FRED_DAYS_AT_ONCE) {
       const end = i + FRED_DAYS_AT_ONCE < days.length ? days[i + FRED_DAYS_AT_ONCE - 1] : '9999-12-31';
@@ -716,7 +716,7 @@ async function fetchBars(ref: AssetRef, interval: string, since: number, cached:
     case 'fred':
       return fetchFred(ref, deps);
     case 'csv':
-      throw new Error('A CSV file is read from the vault, not downloaded');
+      throw new Error('The plugin reads a CSV file from the vault. It does not download it');
   }
 }
 
@@ -740,7 +740,7 @@ async function refresh(ref: AssetRef, interval: string, since: number, deps: Dat
   try {
     const got = await fetchBars(ref, interval, since, cached, deps, o.raw);
     const bars = keepFrom > -Infinity ? barsFrom(got.bars, keepFrom) : got.bars;
-    if (bars.t.length === 0) throw new Error('no bars returned');
+    if (bars.t.length === 0) throw new Error('the source sent no bars');
     const fetched = deps.now();
     await deps.cacheWrite(key, JSON.stringify({ fetched, since: Math.max(cached?.since ?? since, keepFrom), bars, ...(got.note ? { note: got.note } : {}) } satisfies Cached));
     return loaded(ref.source, bars, fetched, null, false, got.note);
@@ -751,18 +751,18 @@ async function refresh(ref: AssetRef, interval: string, since: number, deps: Dat
     if (o.fallback !== false && !(cached && deps.now() - cached.fetched < YAHOO_SAVED_FIRST) && tiingoStandsIn(ref, interval, deps)) {
       try {
         const t = await loadBars({ ...ref, source: 'tiingo' }, interval, since, deps, o.force, { freshForMs: o.freshForMs, fallback: false });
-        if (!t.stale) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}); using Tiingo's prices instead.` };
-        if (!cached) return { ...t, warning: `Couldn't load ${ref.name} from Yahoo (${why}) or Tiingo; using Tiingo's prices saved on ${isoDate(t.fetched)}.` };
-        tiingo = 'it has only an older saved copy';
+        if (!t.stale) return { ...t, warning: `Cannot load ${ref.name} from Yahoo (${why}). The plugin uses the prices from Tiingo.` };
+        if (!cached) return { ...t, warning: `Cannot load ${ref.name} from Yahoo (${why}) or Tiingo. The plugin uses the Tiingo prices saved on ${isoDate(t.fetched)}.` };
+        tiingo = 'it has only a previous saved copy';
       } catch (f) {
-        tiingo = message(f).replace(`Couldn't load ${ref.name} from tiingo: `, '');
+        tiingo = message(f).replace(`Cannot load ${ref.name} from tiingo: `, '');
       }
     }
     if (cached) {
-      return loaded(ref.source, cached.bars, cached.fetched, `Couldn't refresh ${ref.name} (${why}); using prices saved on ${isoDate(cached.fetched)}.`, true, cached.note ?? null);
+      return loaded(ref.source, cached.bars, cached.fetched, `Cannot download new prices for ${ref.name} (${why}). The plugin uses the prices saved on ${isoDate(cached.fetched)}.`, true, cached.note ?? null);
     }
     if (e instanceof MissingKey) throw new Error(e.message);
-    throw new Error(`Couldn't load ${ref.name} from ${ref.source}: ${why}${tiingo ? `. Tiingo could not stand in: ${tiingo}` : ''}`);
+    throw new Error(`Cannot load ${ref.name} from ${ref.source}: ${why}${tiingo ? `. The plugin also cannot use Tiingo: ${tiingo}` : ''}`);
   }
 }
 
@@ -784,7 +784,7 @@ export async function loadBars(
 ): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
-    if (text === null) throw new Error(`No file at ${ref.id}`);
+    if (text === null) throw new Error(`There is no file at ${ref.id}`);
     let bars: Bars;
     try {
       bars = parseCsv(text);

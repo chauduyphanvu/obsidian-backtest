@@ -83,8 +83,8 @@ export function orderRows(plan: AccountPlan, labels: string[]): OrderRow[] {
   return plan.orders.map((o) => {
     const steps = orderSteps(o);
     // A flip's two steps are written out, as the broker takes them one after the other.
-    let order = steps.length === 2 ? orderText(o, shareCount) : steps.length === 1 ? stepWord(o, steps[0]) : o.skipped ? 'Skip: small' : 'Nothing to do';
-    if (o.cut) order += ', cut to the cash';
+    let order = steps.length === 2 ? orderText(o, shareCount) : steps.length === 1 ? stepWord(o, steps[0]) : o.skipped ? 'Skip: small' : 'No order';
+    if (o.cut) order += ', made smaller for the cash';
     const from = o.parts.flatMap((x, i) => (Math.abs(x) >= 0.5 ? [`${labels[i]} ${signedMoney(x)}`] : []));
     if (Math.abs(o.drift) >= 0.5) from.push(`drift ${signedMoney(o.drift)}`);
     return {
@@ -102,9 +102,9 @@ export function orderRows(plan: AccountPlan, labels: string[]): OrderRow[] {
 
 /** The sentences under the orders: what the strategies manage, what netting spared, the cash after, what is left alone, and the plan's notes. */
 export function planLines(plan: AccountPlan): string[] {
-  const out = [`The strategies manage ${minusMoney(plan.managed)}: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: ${minusMoney(plan.cashAfter)}.`];
-  if (plan.saved >= 0.5) out.push(`Trading their orders as one, rather than each strategy on its own, spares ${money(plan.saved)} of trades and ${dollars(plan.savedCost)} of their costs.`);
-  if (plan.unmanaged.length) out.push(`Left as they are, as no strategy listed trades them: ${plan.unmanaged.map((x) => `${x.ticker} ${shareCount(x.shares)}`).join(', ')}.`);
+  const out = [`The strategies use ${minusMoney(plan.managed)}: the cash and the holdings of the tickers that they trade, at the last closes. Cash after the orders: ${minusMoney(plan.cashAfter)}.`];
+  if (plan.saved >= 0.5) out.push(`The plugin adds the orders of the strategies together. Compared with one order for each strategy, this saves ${money(plan.saved)} of trades and ${dollars(plan.savedCost)} of costs.`);
+  if (plan.unmanaged.length) out.push(`No orders for these holdings, because no strategy in the block trades them: ${plan.unmanaged.map((x) => `${x.ticker} ${shareCount(x.shares)}`).join(', ')}.`);
   return [...out, ...plan.notes];
 }
 
@@ -112,8 +112,8 @@ export function planLines(plan: AccountPlan): string[] {
 export function asOfLine(runs: { label: string; asOf: number }[]): string {
   const at = (t: number) => stamp(t, isIntraday([t]));
   const times = new Set(runs.map((r) => r.asOf));
-  if (times.size === 1) return `For the next open, from the strategies' last bar, ${at(runs[0].asOf)}.`;
-  return `For the next open, from each strategy's last bar: ${runs.map((r) => `${r.label} ${at(r.asOf)}`).join(', ')}.`;
+  if (times.size === 1) return `For the next open, from the last bar of the strategies, ${at(runs[0].asOf)}.`;
+  return `For the next open, from the last bar of each strategy: ${runs.map((r) => `${r.label} ${at(r.asOf)}`).join(', ')}.`;
 }
 
 // --- Fills -----------------------------------------------------------------------------------------------------------
@@ -195,52 +195,52 @@ export const readNone = (read: FillsRead): boolean => read.fills.length === 0 &&
 
 /** What was read from the broker's file and what was left out. */
 export function readLines(read: FillsRead): string[] {
-  const as = read.format ? `as ${/^[aeiou]/i.test(read.format) ? 'an' : 'a'} ${read.format} export` : 'by the names of its columns';
-  const out = [`Read ${plural(read.fills.length, 'purchase or sale', 'purchases and sales')} ${as}.`];
+  const as = read.format ? `as ${/^[aeiou]/i.test(read.format) ? 'an' : 'a'} ${read.format} export` : 'from the names of its columns';
+  const out = [`The plugin read ${plural(read.fills.length, 'buy or sell', 'buys and sells')} ${as}.`];
   const left = (Object.keys(LEFT_WORDS) as LeftOut[]).filter((k) => read.left[k] > 0).map((k) => plural(read.left[k], ...LEFT_WORDS[k]));
-  if (left.length) out.push(`Left out, as they are not purchases or sales of shares: ${left.join(', ')}.`);
+  if (left.length) out.push(`Not included, because they are not buys or sells of shares: ${left.join(', ')}.`);
   if (read.untraded.length) {
     const shown = read.untraded.slice(0, UNTRADED_SHOWN).map((u) => `${u.ticker} (${u.rows})`);
     const more = read.untraded.length - shown.length;
-    out.push(`Left out, as no strategy listed trades them: ${shown.join(', ')}${more > 0 ? ` and ${plural(more, 'other')}` : ''}.`);
+    out.push(`Not included, because no strategy in the block trades them: ${shown.join(', ')}${more > 0 ? ` and ${plural(more, 'other')}` : ''}.`);
   }
   if (read.unread.length) {
     const shown = read.unread.slice(0, UNREAD_SHOWN).map((u) => `line ${u.line}: ${u.why}`);
-    out.push(`${plural(read.unread.length, 'row')} could not be read: ${shown.join('; ')}${read.unread.length > UNREAD_SHOWN ? '; …' : ''}.`);
+    out.push(`The plugin cannot read ${plural(read.unread.length, 'row')}: ${shown.join('; ')}${read.unread.length > UNREAD_SHOWN ? '; …' : ''}.`);
   }
-  if (readNone(read)) out.push('As no row could be read as a purchase or a sale, nothing is compared. Check which column holds each part of a trade.');
+  if (readNone(read)) out.push('The plugin read no row as a buy or a sell. Thus it compares no trades. Make sure that each part of a trade has the correct column.');
   return out;
 }
 
 /** The sentence at the top of the fills: what not following the rules cost since the day the account started following them. */
 export function costHeadline(rec: Pick<Reconciliation, 'rows' | 'total'>, from: number): string {
   const since = isoDate(from);
-  if (rec.rows.length === 0) return `Neither the strategies nor you traded since ${since}.`;
-  if (Math.abs(rec.total) < 0.005) return `Not following the rules cost nothing since ${since}.`;
-  return rec.total > 0 ? `Not following the rules cost ${dollars(rec.total)} since ${since}.` : `Not following the rules made ${dollars(-rec.total)} since ${since}.`;
+  if (rec.rows.length === 0) return `From ${since}, you and the strategies did not trade.`;
+  if (Math.abs(rec.total) < 0.005) return `From ${since}, the differences between your trades and the strategies cost nothing.`;
+  return rec.total > 0 ? `From ${since}, the differences between your trades and the strategies cost ${dollars(rec.total)}.` : `From ${since}, the differences between your trades and the strategies made ${dollars(-rec.total)}.`;
 }
 
 /** The four parts the total is the sum of, each with what it is. */
 export function costParts(rec: Pick<Reconciliation, 'parts'>): { name: string; value: string; what: string }[] {
   return [
-    { name: 'Slippage', value: dollars(rec.parts.slippage), what: 'your prices against the strategies’ on the same day' },
+    { name: 'Slippage', value: dollars(rec.parts.slippage), what: 'your prices, compared with the prices of the strategies on the same day' },
     { name: 'Fees', value: dollars(rec.parts.fees), what: 'commissions and fees in your file' },
-    { name: 'Late fills', value: dollars(rec.parts.late), what: 'your prices against the strategies’ for fills on a later day' },
-    { name: 'Trades not made', value: dollars(rec.parts.skipped), what: 'what they would have made by the last close; a loss avoided counts below 0' },
+    { name: 'Late fills', value: dollars(rec.parts.late), what: 'your prices, compared with the prices of the strategies, for fills on a subsequent day' },
+    { name: 'Trades not made', value: dollars(rec.parts.skipped), what: 'the result of these trades to the last close, if you made them. A loss that you prevented counts below 0' },
   ];
 }
 
 /** What to keep in mind about the comparison: sizes, fills left out of it, trades still waiting. */
 export function matchNotes(rec: Reconciliation, from: number): string[] {
-  const out = ['The total is the sum of these parts, not a second run of the whole account: a trade of yours that matches none of the strategies’ counts only its fees.'];
-  if (!rec.sized) out.push('Without capital at start, sizes are not compared and trades not made are not counted in money.');
+  const out = ['The total is the sum of these parts. It is not a second run of the full account. If one of your trades is not the same as a trade of the strategies, only its fees count.'];
+  if (!rec.sized) out.push('This block has no capital at start. Thus the plugin does not compare sizes or show the trades not made in money.');
   const outside = rec.rows.filter((r) => r.outside).length;
-  if (outside) out.push(`${plural(outside, 'fill')} of yours ${outside === 1 ? 'is' : 'are'} more than 3% outside the day’s range as it traded, most likely from a split, and ${outside === 1 ? 'is' : 'are'} not compared on price.`);
+  if (outside) out.push(`${plural(outside, 'fill')} of yours ${outside === 1 ? 'is' : 'are'} more than 3% above or below the range of the day as it traded. The usual cause is a split. The plugin does not compare ${outside === 1 ? 'it' : 'them'} on price.`);
   const unpriced = rec.rows.filter((r) => r.unpriced && r.yours).length;
-  if (unpriced) out.push(`${plural(unpriced, 'fill')} ${unpriced === 1 ? 'is' : 'are'} not compared on price, as the prices that day as they traded are not known.`);
+  if (unpriced) out.push(`The plugin does not compare ${plural(unpriced, 'fill')} on price, because the prices of that day as they traded are unknown.`);
   const waiting = rec.rows.filter((r) => r.class === 'waiting').length;
-  if (waiting) out.push(`${plural(waiting, 'trade')} of the strategies ${waiting === 1 ? 'is' : 'are'} still waiting: a fill in the next days counts as late.`);
-  if (rec.before) out.push(`${plural(rec.before, 'fill')} before ${isoDate(from)} ${rec.before === 1 ? 'is' : 'are'} left out.`);
+  if (waiting) out.push(`${plural(waiting, 'trade')} of the strategies ${waiting === 1 ? 'is' : 'are'} pending. A fill in the next days counts as late.`);
+  if (rec.before) out.push(`The plugin does not include ${plural(rec.before, 'fill')} before ${isoDate(from)}.`);
   return out;
 }
 
@@ -254,11 +254,11 @@ function tradeWord(t: { side: Side; action?: ShortAction }): string {
 
 const CLASS_WORDS: Record<MatchRow['class'], string> = {
   'on time': 'On time',
-  partial: 'Partial',
+  partial: 'Part filled',
   oversized: 'Oversized',
   late: 'Late',
   skipped: 'Not made',
-  waiting: 'Waiting',
+  waiting: 'Pending',
   'off-plan': 'Off plan',
 };
 
@@ -270,10 +270,10 @@ export function matchCells(r: MatchRow): string[] {
   const known = (x: number) => (Number.isFinite(x) ? price(x) : 'unknown');
   const model = r.model ? `${tradeWord(r.model)}${r.model.quantity === null ? '' : ` ${shareCount(Number(r.model.quantity.toFixed(4)))}`} at ${known(r.model.price)}` : '–';
   const yours = r.yours ? `${tradeWord(r.yours)} ${shareCount(r.yours.quantity)} at ${price(r.yours.price)}` : '–';
-  let how = r.class === 'partial' ? 'Partial: the rest not made' : CLASS_WORDS[r.class];
+  let how = r.class === 'partial' ? 'Part filled: the remaining shares not made' : CLASS_WORDS[r.class];
   if (r.daysLate !== null) how += ` by ${plural(r.daysLate, 'trading day')}`;
-  if ((r.class === 'skipped' || r.class === 'partial') && r.move !== null && Number.isFinite(r.move)) how += `, would have ${r.move >= 0 ? 'made' : 'lost'} ${(Math.abs(r.move) * 100).toFixed(1)}%`;
-  const vs = r.bps !== null ? `${r.bps > 0 ? '+' : ''}${minus(r.bps.toFixed(1))} bps` : r.outside ? 'outside the day' : '';
+  if ((r.class === 'skipped' || r.class === 'partial') && r.move !== null && Number.isFinite(r.move)) how += `, ${r.move >= 0 ? 'profit' : 'loss'} of ${(Math.abs(r.move) * 100).toFixed(1)}% if made`;
+  const vs = r.bps !== null ? `${r.bps > 0 ? '+' : ''}${minus(r.bps.toFixed(1))} bps` : r.outside ? 'not in the day’s range' : '';
   const cost = r.class === 'waiting' ? '' : dollars(r.slippage + r.late + r.skipped + r.fees);
   return [isoDate((r.model ?? r.yours)!.day), r.ticker, how, model, yours, vs, cost];
 }
@@ -290,7 +290,7 @@ export function tickerCells(t: Reconciliation['tickers'][number]): string[] {
 const PICKS: readonly { role: FillRole; label: string; none?: string }[] = [
   { role: 'date', label: 'Date' },
   { role: 'ticker', label: 'Ticker' },
-  { role: 'side', label: 'Buy or sell', none: 'none: the quantity’s sign says' },
+  { role: 'side', label: 'Buy or sell', none: 'none: the sign of the quantity shows it' },
   { role: 'quantity', label: 'Quantity' },
   { role: 'price', label: 'Price' },
   { role: 'fees', label: 'Fees', none: 'none' },
@@ -312,14 +312,14 @@ export function picksText(header: string[], picks: Picks): { text: string } | { 
 function columnForm(parent: HTMLElement, text: string, saved: Partial<FillColumns>, save: (value: string) => Promise<void>): void {
   const guess = headerGuess(text, saved);
   if (!guess) {
-    h(parent, 'div', 'bt-note', 'No line of the file has more than one column. Is it the CSV file your broker exports?');
+    h(parent, 'div', 'bt-note', 'No line of the file has more than one column. Make sure that it is the CSV file from your broker.');
     return;
   }
   const { header } = guess;
   const labels = header.map((name, i) => (name === '' || header.indexOf(name) !== header.lastIndexOf(name) ? `${name || 'no name'} (column ${i + 1})` : name));
   const picks: Picks = { ...guess.at, fees: guess.fees[0] ?? -1 };
   const form = h(parent, 'div', 'bt-acct-form');
-  h(form, 'div', 'bt-note', 'Say which column holds each part of a trade. The choice is saved in the block as a fills columns line.');
+  h(form, 'div', 'bt-note', 'Select the column that holds each part of a trade. The plugin saves your selection in the block as a fills columns line.');
   const grid = h(form, 'div', 'bt-acct-fields');
   const button = h(form, 'button', 'bt-button mod-cta', 'Save these columns in the block');
   const said = h(form, 'div', 'bt-note');
@@ -327,13 +327,13 @@ function columnForm(parent: HTMLElement, text: string, saved: Partial<FillColumn
   const refresh = () => {
     const r = picksText(header, picks);
     button.disabled = 'missing' in r;
-    said.textContent = 'missing' in r ? `Choose the ${r.missing.join(', ')} ${r.missing.length === 1 ? 'column' : 'columns'}.` : `It will read: fills columns: ${r.text}`;
+    said.textContent = 'missing' in r ? `Select the ${r.missing.join(', ')} ${r.missing.length === 1 ? 'column' : 'columns'}.` : `The line will be: fills columns: ${r.text}`;
   };
   for (const p of PICKS) {
     const field = h(grid, 'label', 'bt-acct-field');
     h(field, 'span', 'bt-acct-label', p.label);
     const select = h(field, 'select', 'dropdown');
-    h(select, 'option', undefined, p.none ?? 'Choose a column').value = '-1';
+    h(select, 'option', undefined, p.none ?? 'Select a column').value = '-1';
     labels.forEach((label, i) => (h(select, 'option', undefined, label).value = String(i)));
     select.value = String(picks[p.role]);
     select.addEventListener('change', () => {
@@ -345,7 +345,7 @@ function columnForm(parent: HTMLElement, text: string, saved: Partial<FillColumn
     const r = picksText(header, picks);
     if ('missing' in r) return;
     button.disabled = true;
-    said.textContent = 'Saving…';
+    said.textContent = 'The plugin saves the columns…';
     save(r.text).then(
       () => (said.textContent = 'Saved. The block reads the file again with these columns.'),
       (e: unknown) => {
@@ -376,7 +376,7 @@ function drawOrders(root: HTMLElement, config: AccountConfig, runs: FollowedRun[
   h(root, 'div', 'bt-acct-heading', 'Orders for this account');
   h(root, 'div', 'bt-sub', asOfLine(strategies));
   const rows = orderRows(plan, runs.map((r) => r.label));
-  if (rows.length === 0) h(root, 'div', 'bt-note', 'The strategies hold nothing and the account holds none of their tickers: there is nothing to do.');
+  if (rows.length === 0) h(root, 'div', 'bt-note', 'The strategies hold no positions, and the account holds none of their tickers. There are no orders.');
   else {
     table(
       root,
@@ -395,7 +395,7 @@ function drawSplit(root: HTMLElement, entries: CompareEntry[], runs: FollowedRun
   try {
     aligned = alignCurves(runs.map((r) => ({ label: r.label, t: r.out.backtest.run.t, equity: r.out.backtest.run.equity, cash: cashIndex(r.out.backtest.run.cashReturn) })));
   } catch (e) {
-    h(root, 'div', 'bt-note', `How to split can't be worked out: ${message(e)}.`);
+    h(root, 'div', 'bt-note', `The plugin cannot calculate the split: ${message(e)}.`);
     return;
   }
   const write = host.weights;
@@ -433,7 +433,7 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   let raw: RawPrices | undefined;
   let asTraded = new Map<string, Bars>();
   if (wanted.length) {
-    const loading = say('Loading the prices as they traded…');
+    const loading = say('The plugin downloads the prices as they traded…');
     const got = await host.raw(wanted);
     if (stopped()) return;
     loading.remove();
@@ -457,7 +457,7 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   for (const line of matchNotes(rec, from)) say(line);
 
   if (rec.suggested.length) {
-    say('The median slippage of each strategy’s fills, as a line for its block, so its backtest pays what you pay:');
+    say('The median slippage of the fills of each strategy. Add this line to its block to make its backtest pay the same slippage as you:');
     const list = h(box, 'ul', 'bt-acct-suggested');
     for (const s of rec.suggested) {
       const li = h(list, 'li');
@@ -468,8 +468,8 @@ async function drawFills(box: HTMLElement, config: AccountConfig, runs: Followed
   }
 
   const every = h(box, 'details', 'bt-details bt-acct-every');
-  h(every, 'summary', undefined, `Every trade (${rec.rows.length.toLocaleString('en-US')})`);
-  table(every, 'bt-acct-trades', ['Day', 'Ticker', 'How', 'The strategies', 'Yours', 'Against theirs', 'Cost'], rec.rows.map(matchCells), (c) => c >= 5, (i) => `bt-acct-${rec.rows[i].class.replace(' ', '-')}`);
+  h(every, 'summary', undefined, `All trades (${rec.rows.length.toLocaleString('en-US')})`);
+  table(every, 'bt-acct-trades', ['Day', 'Ticker', 'How', 'The strategies', 'Yours', 'Compared with theirs', 'Cost'], rec.rows.map(matchCells), (c) => c >= 5, (i) => `bt-acct-${rec.rows[i].class.replace(' ', '-')}`);
 }
 
 /** Draws an `account` block into `parent` (which the caller has emptied). Returns a cleanup function. */
@@ -478,11 +478,11 @@ export function renderAccount(parent: HTMLElement, source: string, host: Account
   const { config, entries } = parsed;
   const errors = errorsBeforeRun(parsed);
   if (errors.length) {
-    renderCompareErrors(parent, errors, source, "This account can't be worked out yet");
+    renderCompareErrors(parent, errors, source, 'This account cannot run');
     return () => {};
   }
   let stopped = false;
-  renderCompareMessage(parent, `Running ${plural(entries.length, 'strategy', 'strategies')}…`);
+  renderCompareMessage(parent, `The plugin runs ${plural(entries.length, 'strategy', 'strategies')}…`);
   void (async () => {
     let runs: FollowedRun[];
     try {
@@ -497,7 +497,7 @@ export function renderAccount(parent: HTMLElement, source: string, host: Account
     parent.replaceChildren();
     const borrowed = borrowedError(parsed, runs);
     if (borrowed) {
-      renderCompareErrors(parent, [borrowed], source, "This account can't be worked out yet");
+      renderCompareErrors(parent, [borrowed], source, 'This account cannot run');
       return;
     }
     const root = h(parent, 'div', 'bt-root bt-acct');
@@ -506,7 +506,7 @@ export function renderAccount(parent: HTMLElement, source: string, host: Account
     drawOrders(root, config, runs);
     if (entries.length > 1) drawSplit(root, entries, runs, host);
     if (config.fills === null) return;
-    h(root, 'div', 'bt-acct-heading', 'Your fills against the signals');
+    h(root, 'div', 'bt-acct-heading', 'Your fills, compared with the signals');
     const box = h(root, 'div', 'bt-acct-fills');
     await drawFills(box, config, runs, host, () => stopped);
   })().catch((e: unknown) => {

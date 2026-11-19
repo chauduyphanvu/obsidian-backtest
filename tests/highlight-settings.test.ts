@@ -13,7 +13,7 @@ test('a parameter written as the number of entries is coloured as one, and has i
   const help = helpAt(lines, 2, 9);
   assert.equal(help?.doc.kind, 'parameter');
   assert.deepEqual([help!.from, help!.to], [9, 10]);
-  assert.match(help!.doc.text, /set to 3/);
+  assert.match(help!.doc.text, /Its value is 3/);
 });
 
 test('a bar size is one word, whether it starts with a digit or reads as a number', () => {

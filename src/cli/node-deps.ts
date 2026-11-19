@@ -25,7 +25,7 @@ export function nodeDeps(o: { vault: string; cacheDir: string; env: NodeJS.Proce
     if (path === o.cacheDir || path.startsWith(`${o.cacheDir}/`)) return path;
     const full = resolve(vault, path);
     const rel = relative(vault, full);
-    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`${path} is outside the vault`);
+    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`${path} is not in the vault`);
     return full;
   };
   const store = new PriceStore({

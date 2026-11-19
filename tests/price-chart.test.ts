@@ -260,17 +260,17 @@ test('exit reasons are worded as in the trades table', () => {
     ['stop loss', 'stop loss'],
     ['trailing stop', 'trailing stop'],
     ['take profit', 'take profit'],
-    ['open', 'still held'],
+    ['open', 'not closed'],
   ];
   for (const [reason, text] of words) assert.equal(exitWording(reason), text);
 });
 
 test('the summary line gives the trade count, the time held and the buy and hold return', () => {
-  assert.equal(summaryLine(12, 0.634, 2.213), '12 trades, held 63% of the time. Bought and held, it returned 221.3% over this period.');
-  assert.equal(summaryLine(2, 0.9, 12.5), '2 trades, held 90% of the time. Bought and held, it returned 1250% over this period.');
-  assert.equal(summaryLine(1, 0.5, -0.1234), '1 trade, held 50% of the time. Bought and held, it returned −12.3% over this period.');
-  assert.equal(summaryLine(0, 0, 0.05), 'No trades. Bought and held, it returned 5.0% over this period.');
-  assert.equal(summaryLine(3, 0.04, null), '3 trades, held 4.0% of the time.');
+  assert.equal(summaryLine(12, 0.634, 2.213), '12 trades. The strategy held the ticker 63% of the time. Buy and hold returned 221.3% in this period.');
+  assert.equal(summaryLine(2, 0.9, 12.5), '2 trades. The strategy held the ticker 90% of the time. Buy and hold returned 1250% in this period.');
+  assert.equal(summaryLine(1, 0.5, -0.1234), '1 trade. The strategy held the ticker 50% of the time. Buy and hold returned −12.3% in this period.');
+  assert.equal(summaryLine(0, 0, 0.05), 'No trades. Buy and hold returned 5.0% in this period.');
+  assert.equal(summaryLine(3, 0.04, null), '3 trades. The strategy held the ticker 4.0% of the time.');
 });
 
 const entry = (a: number, price: number) => ({ t: day(a), price, shares: 1, money: price, signalT: day(a - 1) });

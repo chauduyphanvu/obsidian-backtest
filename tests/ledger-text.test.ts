@@ -34,7 +34,7 @@ test('one try: SR0 is 0, so the chance is the probability that the Sharpe ratio 
   assert.equal(t.since, T0);
   assert.equal(t.deflated!.sr0, 0);
   assert.equal(t.deflated!.dsr, normCdf((shape.sharpe * Math.sqrt(shape.steps - 1)) / Math.sqrt(1 - shape.skew * shape.sharpe + ((shape.kurt - 1) / 4) * shape.sharpe ** 2)));
-  assert.match(triesWords(t), /^Only the run shown has been counted since 2026-11-17, so there are no other tries to allow for\. .* reflects a real edge is (about \d+%|over 99%)\. /);
+  assert.match(triesWords(t), /^The plugin counted only the run shown since 2026-11-17\. Thus no correction for other tries is necessary\. .* shows an edge is (approximately \d+%|more than 99%)\. /);
   assert.equal(triesNote(t), null);
 });
 
@@ -56,19 +56,19 @@ test('many tries raise the bar: SR0 and the chance come from the spread of their
   assert.ok(Math.abs(t.deflated!.bar - expected.sr0 * Math.sqrt(perYear)) < 1e-12);
   assert.ok(t.deflated!.sr0 > 0);
   const words = triesWords(t);
-  assert.match(words, /^5 tries of this block have been counted since 2026-11-17\. With no edge at all, the best of 5 tries like these would typically show a Sharpe ratio of about \d\.\d\d; the run shown has /);
-  assert.match(words, /rather than the luck of keeping the best try, is (about \d+%|over 99%|under 1%)\. /);
-  assert.match(triesNote(t)!, /^5 tries of this block counted so far\. Allowing for them, the chance that this Sharpe ratio reflects a real edge is .*\. See "How many tries" under "Was it luck\?"\.$/);
-  assert.equal(upperBound(1200), '1,200 is an upper bound: neighbouring variants are alike, so they make fewer independent tries than their count, and the chance above errs on the low side.');
+  assert.match(words, /^The plugin counted 5 tries of this block since 2026-11-17\. If there is no edge, the best of 5 tries of this type usually has a Sharpe ratio of approximately \d\.\d\d\. The run shown has /);
+  assert.match(words, /and not luck in the selection of the best try, is (approximately \d+%|more than 99%|less than 1%)\. /);
+  assert.match(triesNote(t)!, /^The plugin counted 5 tries of this block to date\. After a correction for them, the probability that this Sharpe ratio shows an edge is .*\. See "How many tries" in "Was it luck\?"\.$/);
+  assert.equal(upperBound(1200), '1,200 is the maximum number of different tries. Variants that are near each other give almost the same results. Thus the number of different tries is smaller, and the probability above is possibly too low.');
 });
 
 test('the count starts at its reset, and the verdict follows the chance', () => {
   const base: Tries = { n: 3, since: new Date(2026, 0, 2, 12).getTime(), sharpe: 1.234, deflated: { sr0: 0.05, dsr: 0.97, bar: 0.8 }, why: null };
-  assert.match(triesWords(base), /since 2026-01-02\. .*Sharpe ratio of about 0\.80; the run shown has 1\.23\. .* is about 97%\. That is strong evidence of an edge, as far as these tries can tell\.$/);
-  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.6, bar: 0.8 } }), /is about 60%\. That is not strong evidence: the result could be luck\.$/);
-  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.2, bar: 0.8 } }), /is about 20%\. The result is more likely luck than an edge\.$/);
-  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.999, bar: 0.8 } }), /is over 99%\./);
-  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.001, bar: -0.8 } }), /about −0\.80; .* is under 1%\./);
+  assert.match(triesWords(base), /since 2026-01-02\. .*Sharpe ratio of approximately 0\.80\. The run shown has 1\.23\. .* is approximately 97%\. This is a strong sign of an edge, for these tries\.$/);
+  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.6, bar: 0.8 } }), /is approximately 60%\. This is not a strong sign: the result can be luck\.$/);
+  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.2, bar: 0.8 } }), /is approximately 20%\. The probability of luck is higher than the probability of an edge\.$/);
+  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.999, bar: 0.8 } }), /is more than 99%\./);
+  assert.match(triesWords({ ...base, deflated: { sr0: 0.05, dsr: 0.001, bar: -0.8 } }), /approximately −0\.80\. .* is less than 1%\./);
   const bt = shown();
   const own = trialOf(bt.spec, bt)!;
   const l = addTrial(resetTrials(addTrial(emptyLedger(), 'old', 2, 252, 1), T0), own.hash, own.sharpe, own.perYear, T0 + 5);
@@ -80,33 +80,33 @@ test('the chance can\'t be told for a run that never traded, never moved, or has
   const idle = shown('universe: A\nbuy when false');
   const t = triesOf(addTrial(emptyLedger(), 'a1', 1, 252, T0), idle);
   assert.equal(t.why, 'no trades');
-  assert.equal(triesWords(t), '1 try of this block has been counted since 2026-11-17. The run shown never traded, so it is not one of them, and it has no Sharpe ratio to judge.');
+  assert.equal(triesWords(t), 'The plugin counted 1 try of this block since 2026-11-17. The run shown made no trades. Thus the count does not include it, and it has no Sharpe ratio to examine.');
   const none: Tries = { n: 0, since: null, sharpe: NaN, deflated: null, why: 'flat' };
-  assert.equal(triesWords(none), '0 tries of this block have been counted. The run shown barely moves against cash, so it has no Sharpe ratio to judge.');
-  assert.match(triesWords({ ...none, why: 'shape' }), /Can't tell: the run's returns are so lopsided or heavy-tailed/);
-  assert.match(triesWords({ ...none, why: 'short' }), /too few bars/);
-  assert.equal(triesNote({ ...none, n: 4 }), '4 tries of this block counted so far. See "How many tries" under "Was it luck?".');
+  assert.equal(triesWords(none), 'The plugin counted 0 tries of this block. The returns of the run shown are almost the same as the returns of cash. Thus it has no Sharpe ratio to examine.');
+  assert.match(triesWords({ ...none, why: 'shape' }), /The plugin cannot calculate this\. The returns of the run are too skewed or heavy-tailed/);
+  assert.match(triesWords({ ...none, why: 'short' }), /does not have sufficient bars/);
+  assert.equal(triesNote({ ...none, n: 4 }), 'The plugin counted 4 tries of this block to date. See "How many tries" in "Was it luck?".');
 });
 
 const check = (o: Partial<Pbo>): Pbo => ({ pbo: 0.3, short: null, variants: 40, leftOut: 0, steps: 1260, groups: 16, splits: 12_870, ...o });
 
 test('the overfitting check in words: the share, what it means, and that one sweep\'s figure swings', () => {
   const words = pboWords(check({}));
-  assert.match(words, /^The history was cut into 16 parts and split into two halves in all 12,870 ways\. In 30% of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other, one exactly in the middle counting as half\. /);
-  assert.match(words, /often did not hold up/);
+  assert.match(words, /^The plugin cut the history into 16 parts, and divided them into two halves in all 12,870 possible combinations\. In 30% of them, the variant with the best Sharpe ratio on one half ranked in the bottom half on the other half\. A variant at the middle position counts as half\. /);
+  assert.match(words, /frequently did not stay good/);
   assert.match(words, /Bailey, Borwein, López de Prado and Zhu/);
-  assert.match(words, /swings widely from one sweep to the next/);
-  assert.match(pboWords(check({ pbo: 0.05 })), /mostly held up/);
-  assert.match(pboWords(check({ pbo: 0.5 })), /no better on the half it had not seen than picking at random/);
-  assert.match(pboWords(check({ leftOut: 2 })), /2 variants that ran over a different number of bars are left out\.$/);
-  assert.match(pboWords(check({ leftOut: 1 })), /1 variant that ran over a different number of bars is left out\.$/);
+  assert.match(words, /changes much from one sweep to the next/);
+  assert.match(pboWords(check({ pbo: 0.05 })), /usually stayed good/);
+  assert.match(pboWords(check({ pbo: 0.5 })), /On the half that it did not see, the best variant did not do better than a random selection/);
+  assert.match(pboWords(check({ leftOut: 2 })), /The plugin did not include 2 variants that ran on a different number of bars\.$/);
+  assert.match(pboWords(check({ leftOut: 1 })), /The plugin did not include 1 variant that ran on a different number of bars\.$/);
 });
 
 test('the overfitting check says what it lacks when it can\'t be told', () => {
-  assert.equal(pboWords(check({ pbo: null, short: 'variants', variants: 3 })), 'This needs at least 5 variants that traded, and this sweep has 3.');
+  assert.equal(pboWords(check({ pbo: null, short: 'variants', variants: 3 })), 'This check must have a minimum of 5 variants that traded. This sweep has 3.');
   assert.equal(
     pboWords(check({ pbo: null, short: 'steps', steps: 250, groups: 16 })),
-    'This needs at least 20 bars in each of the 16 parts the history is cut into, 320 in all, and these runs have 250.',
+    'This check must have a minimum of 20 bars in each of the 16 parts of the history, 320 in total. These runs have 250.',
   );
 });
 
@@ -122,8 +122,8 @@ test('versions are listed newest first, each against the one before, with this v
   assert.deepEqual(rows.map((r) => r.current), [false, true, false]);
   assert.deepEqual(rows.map((r) => r.otherDefaults), [true, false, false]);
   assert.equal(rows[1].figures, '12.3% a year, worst drawdown −15.0%, Sharpe ratio 1.05, 8 trades');
-  assert.equal(rows[1].change, '1 line added, 1 line removed; return a year +2.3 points; Sharpe ratio +0.15');
-  assert.equal(rows[0].change, 'the same text with other default settings; return a year unchanged; Sharpe ratio unchanged');
+  assert.equal(rows[1].change, '1 line added, 1 line removed, return a year +2.3 points, Sharpe ratio +0.15');
+  assert.equal(rows[0].change, 'the same text with different default settings, return a year unchanged, Sharpe ratio unchanged');
   assert.equal(rows[2].change, null);
   assert.equal(rows[2].previous, null);
   assert.equal(rows[1].previous, l.versions[0]);
@@ -133,7 +133,7 @@ test('versions are listed newest first, each against the one before, with this v
 test('a fall and figures that were not numbers read plainly', () => {
   const before = version('a', 1, { cagr: 0.1, maxDrawdown: -0.2, sharpe: 1, trades: 10 }).versions[0];
   const after = version('a\nb\nc', 2, { cagr: 0.05, maxDrawdown: -0.3, sharpe: 0.4, trades: 1 }).versions[0];
-  assert.equal(changeText(before, after), '2 lines added; return a year −5.0 points; Sharpe ratio −0.60');
+  assert.equal(changeText(before, after), '2 lines added, return a year −5.0 points, Sharpe ratio −0.60');
   const unknown = version('a', 3, { cagr: NaN, maxDrawdown: NaN, sharpe: NaN, trades: 0 }).versions[0];
   assert.equal(figuresText(unknown.figures), '– a year, worst drawdown –, Sharpe ratio –, 0 trades');
   assert.equal(changeText(after, unknown), '2 lines removed');
@@ -151,7 +151,7 @@ test('the day the count began is the reader\'s day, late at night and early in t
   const own = trialOf(bt.spec, bt)!;
   for (const at of [new Date(2026, 10, 17, 23, 30).getTime(), new Date(2026, 10, 17, 0, 30).getTime()]) {
     const t = triesOf(addTrial(emptyLedger(), own.hash, own.sharpe, own.perYear, at), bt);
-    assert.match(triesWords(t), /^Only the run shown has been counted since 2026-11-17,/);
+    assert.match(triesWords(t), /^The plugin counted only the run shown since 2026-11-17\./);
   }
 });
 
@@ -185,6 +185,6 @@ test('a line drawn while the try it shows is still being counted ends with that 
     await adding;
     await new Promise((r) => setTimeout(r, 0));
     stop();
-    assert.match(el.textContent ?? '', /^3 tries of this block counted so far\./, `drawn ${ticks} ticks after the try`);
+    assert.match(el.textContent ?? '', /^The plugin counted 3 tries of this block to date\./, `drawn ${ticks} ticks after the try`);
   }
 });

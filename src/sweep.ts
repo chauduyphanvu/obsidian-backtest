@@ -14,11 +14,11 @@ export type Period = 'all' | 'before' | 'after';
 
 /** Every metric reads "higher is better"; drawdowns are negative, so a smaller loss is higher. `noun` is the label inside a sentence. */
 export const METRICS: Record<Metric, { label: string; noun: string; percent: boolean; explain: string }> = {
-  cagr: { label: 'Return per year', noun: 'return per year', percent: true, explain: 'the average yearly growth, compounded' },
-  totalReturn: { label: 'Total return', noun: 'total return', percent: true, explain: 'the gain over the whole run' },
-  maxDrawdown: { label: 'Worst drawdown', noun: 'worst drawdown', percent: true, explain: 'the deepest fall from a previous high; closer to 0 is better' },
-  sharpe: { label: 'Sharpe ratio', noun: 'Sharpe ratio', percent: false, explain: 'return above cash for each unit of ups and downs; higher is steadier' },
-  sortino: { label: 'Sortino ratio', noun: 'Sortino ratio', percent: false, explain: 'like Sharpe, but only falls count as risk' },
+  cagr: { label: 'Return per year', noun: 'return per year', percent: true, explain: 'the average yearly increase, compounded' },
+  totalReturn: { label: 'Total return', noun: 'total return', percent: true, explain: 'the change in value during the full run' },
+  maxDrawdown: { label: 'Worst drawdown', noun: 'worst drawdown', percent: true, explain: 'the largest decrease from a previous high. Nearer to 0 is better' },
+  sharpe: { label: 'Sharpe ratio', noun: 'Sharpe ratio', percent: false, explain: 'the return above cash for each unit of volatility. Higher is more stable' },
+  sortino: { label: 'Sortino ratio', noun: 'Sortino ratio', percent: false, explain: 'the same as the Sharpe ratio, but only decreases count as risk' },
 };
 
 export const MAX_RUNS = 2000;
@@ -86,7 +86,7 @@ export function sweepSize(spec: Spec): number {
 /** Why a sweep of `size` variants can't run, or null when it can. */
 export function sweepLimit(size: number, maxRuns = MAX_RUNS): string | null {
   if (size <= maxRuns) return null;
-  return `The ranges give ${size.toLocaleString('en-US')} variants, and the most this runs at once is ${maxRuns.toLocaleString('en-US')}. Use a larger step or a narrower range.`;
+  return `The ranges give ${size.toLocaleString('en-US')} variants. The maximum for one sweep is ${maxRuns.toLocaleString('en-US')}. Use a larger step or a smaller range.`;
 }
 
 /** Every combination of indices, the last parameter changing fastest. */

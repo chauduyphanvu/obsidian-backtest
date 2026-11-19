@@ -24,17 +24,17 @@ export interface RegimeDef {
 }
 
 export const STOCK_REGIMES: RegimeDef[] = [
-  { ticker: 'SPY', condition: 'close > sma(200)', title: 'SPY against its 200-day average', states: ['Above', 'Below'] },
-  { ticker: '^VIX', condition: 'close >= 20', title: 'The VIX', states: ['20 or higher', 'Under 20'] },
-  { ticker: '^TNX', condition: 'close > close[126]', title: 'The 10-year yield (^TNX) against its close 126 trading days earlier', states: ['Above', 'Below'], scaleWindow: 126 },
+  { ticker: 'SPY', condition: 'close > sma(200)', title: 'SPY compared with its 200-day average', states: ['Above', 'Below'] },
+  { ticker: '^VIX', condition: 'close >= 20', title: 'The VIX', states: ['20 or higher', 'Below 20'] },
+  { ticker: '^TNX', condition: 'close > close[126]', title: 'The 10-year yield (^TNX) compared with its close 126 trading days before', states: ['Above', 'Below'], scaleWindow: 126 },
 ];
 
 export const CRYPTO_REGIMES: RegimeDef[] = [
-  { ticker: 'binance:BTCUSDT', condition: 'close > sma(200)', title: 'Bitcoin against its 200-day average', states: ['Above', 'Below'] },
+  { ticker: 'binance:BTCUSDT', condition: 'close > sma(200)', title: 'Bitcoin compared with its 200-day average', states: ['Above', 'Below'] },
   {
     ticker: 'binance:BTCUSDT',
     condition: 'stdev(roc(1), 30) > median(stdev(roc(1), 30), 365)',
-    title: "Bitcoin's 30-day volatility against its median over 365 days",
+    title: 'The 30-day volatility of Bitcoin compared with its 365-day median',
     states: ['Above', 'Below'],
   },
 ];

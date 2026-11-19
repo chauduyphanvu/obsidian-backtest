@@ -11,7 +11,7 @@ export interface DraftHost {
   insert(source: string): void;
 }
 
-const PLACEHOLDER = 'Example: Buy SPY when it closes above its 200-day average, sell when it falls back below, 5 bps costs.';
+const PLACEHOLDER = 'Example: Buy SPY when it closes above its 200-day average. Sell when it closes below that average. 5 bps costs.';
 const FENCE = '```';
 
 export class DraftModal extends Modal {
@@ -27,10 +27,10 @@ export class DraftModal extends Modal {
   }
 
   onOpen(): void {
-    this.titleEl.textContent = 'Draft a strategy from a description';
+    this.titleEl.textContent = 'Write a strategy from a description';
     const root = h(this.contentEl, 'div', 'bt-llm-root');
     if (!this.host.configured()) {
-      h(root, 'p', 'bt-llm-hint', 'Set up a model in the plugin settings first: an API key for Anthropic, or the address and model name of an OpenAI-compatible server.');
+      h(root, 'p', 'bt-llm-hint', 'Before you start, set a model in the plugin settings. For Anthropic, set an API key. For an OpenAI-compatible server, set the address and the model name.');
       h(h(root, 'div', 'bt-llm-actions'), 'button', 'mod-cta', 'Open settings').addEventListener('click', () => {
         this.close();
         this.host.openSettings();
@@ -40,7 +40,7 @@ export class DraftModal extends Modal {
     const input = h(root, 'textarea', 'bt-llm-input');
     input.rows = 4;
     input.placeholder = PLACEHOLDER;
-    input.setAttribute('aria-label', 'Describe the strategy');
+    input.setAttribute('aria-label', 'Description of the strategy');
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
@@ -68,14 +68,14 @@ export class DraftModal extends Modal {
   private idle(hint?: string): void {
     const panel = this.reset();
     if (hint) h(panel, 'p', 'bt-llm-hint', hint);
-    h(h(panel, 'div', 'bt-llm-actions'), 'button', 'mod-cta', 'Draft').addEventListener('click', () => this.submit());
+    h(h(panel, 'div', 'bt-llm-actions'), 'button', 'mod-cta', 'Send').addEventListener('click', () => this.submit());
   }
 
   private submit(): void {
     const input = this.input!;
     const description = input.value.trim();
     if (!description) {
-      this.idle('Describe the strategy first.');
+      this.idle('Type a description of the strategy first.');
       input.focus();
       return;
     }
@@ -83,7 +83,7 @@ export class DraftModal extends Modal {
     const row = h(this.reset(), 'div', 'bt-llm-status');
     row.setAttribute('role', 'status');
     h(row, 'span', 'bt-llm-spinner');
-    const status = h(row, 'span', undefined, 'Writing a draft…');
+    const status = h(row, 'span', undefined, 'The model writes a draft…');
     input.disabled = true;
     this.host.draft(description, (text) => {
       if (ticket === this.ticket) status.textContent = text;
@@ -113,7 +113,7 @@ export class DraftModal extends Modal {
     }
 
     if (draft.errors.length > 0) {
-      h(panel, 'div', 'bt-error-title bt-llm-title', 'The draft still has problems. You can insert it and fix them in the note.');
+      h(panel, 'div', 'bt-error-title bt-llm-title', 'The model did not correct all the problems. You can insert the draft and correct the problems in the note.');
       const lines = draft.source.split('\n');
       const list = h(panel, 'ul', 'bt-errors');
       for (const e of draft.errors) {
@@ -130,13 +130,13 @@ export class DraftModal extends Modal {
       this.host.insert(`${FENCE}strategy\n${draft.source}\n${FENCE}\n`);
       this.close();
     });
-    h(actions, 'button', undefined, 'Try again').addEventListener('click', () => this.submit());
+    h(actions, 'button', undefined, 'Send again').addEventListener('click', () => this.submit());
   }
 
   private showFailure(message: string): void {
     const panel = this.reset();
-    h(panel, 'div', 'bt-error-title bt-llm-title', "Couldn't draft a strategy");
+    h(panel, 'div', 'bt-error-title bt-llm-title', 'Cannot write a strategy');
     h(panel, 'p', 'bt-llm-message', message);
-    h(h(panel, 'div', 'bt-llm-actions'), 'button', undefined, 'Try again').addEventListener('click', () => this.submit());
+    h(h(panel, 'div', 'bt-llm-actions'), 'button', undefined, 'Send again').addEventListener('click', () => this.submit());
   }
 }

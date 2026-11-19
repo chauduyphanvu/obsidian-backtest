@@ -393,17 +393,17 @@ const years = (months: number) => {
 /** Chooses the training and testing lengths, or explains why the history is too short. */
 export function walkPlan(t: number[], trainYears?: number, testYears?: number): { trainMonths: number; testMonths: number } {
   const span = ((t[t.length - 1] - t[0]) / YEAR) * 12;
-  const covers = `This run covers ${(span / 12).toFixed(1)} years.`;
+  const covers = `This run is ${(span / 12).toFixed(1)} years long.`;
   // A week's grace, so 2015-01-01 to 2019-12-31 counts as five years.
   const fits = (months: number) => span + 0.25 >= months;
   if (trainYears !== undefined || testYears !== undefined) {
     const train = Math.max(1, Math.round((trainYears ?? 4) * 12));
     const test = Math.max(1, Math.round((testYears ?? 1) * 12));
-    if (!fits(train + test)) throw new Error(`Training on ${years(train)} and testing on the next ${years(test)} needs at least ${years(train + test)} of prices. ${covers}`);
+    if (!fits(train + test)) throw new Error(`A selection period of ${years(train)} and a test period of ${years(test)} must have ${years(train + test)} of prices or more. ${covers}`);
     return { trainMonths: train, testMonths: test };
   }
   const plan = PLANS.find(([train, test]) => fits(train + 3 * test));
-  if (!plan) throw new Error(`Walk-forward needs about two years of prices or more: it picks values on one stretch, tests them on the next, and repeats. ${covers}`);
+  if (!plan) throw new Error(`Walk-forward must have approximately two years of prices or more. It selects values in one period, uses them in the next period, and then does the same again. ${covers}`);
   return { trainMonths: plan[0], testMonths: plan[1] };
 }
 
@@ -519,7 +519,7 @@ export async function walkForward(
   // The run being checked uses each parameter's value, which a slider may have set off the step grid: tried too.
   const value = (name: string) => tidy(spec.params.find((p) => p.name === name)!.value);
   const params = sweepParams(spec).map((p) => (p.values.includes(value(p.name)) ? p : { ...p, values: [...p.values, value(p.name)].sort((a, b) => a - b) }));
-  if (params.length === 0) throw new Error('Walk-forward needs a parameter with a range to choose from, such as fast = 50 in 20..100 step 10.');
+  if (params.length === 0) throw new Error('Walk-forward must have a parameter with a range, for example fast = 50 in 20..100 step 10.');
   const total = params.reduce((n, p) => n * p.values.length, 1);
   const refusal = sweepLimit(total, opts.maxRuns);
   if (refusal) throw new Error(refusal);
@@ -532,7 +532,7 @@ export async function walkForward(
   const t = declared.backtest.run.t;
   const plan = walkPlan(t, opts.trainYears, opts.testYears);
   const windows = walkWindows(t, plan.trainMonths, plan.testMonths);
-  if (windows.length === 0) throw new Error('The history is too short for one training and one test stretch.');
+  if (windows.length === 0) throw new Error('The history is too short for one selection period and one test period.');
 
   // Pass 1: score every variant on every training stretch, and on the whole run for the hindsight pick.
   const estimate = total + Math.min(total, windows.length + 1);

@@ -66,7 +66,7 @@ test('a cover rule reads the short\'s position, and a sell rule the long\'s: eac
   // The whole rules as the run reads them: with no position of its side, bars held is unknown.
   assert.deepEqual(rows.map((r) => r.sell), ['unknown', 'no', 'no', 'no', 'unknown', 'unknown', 'unknown']);
   assert.deepEqual(rows.map((r) => r.cover), ['unknown', 'unknown', 'unknown', 'unknown', 'no', 'no', 'yes']);
-  assert.equal(rows.at(-1)!.what, 'Order pending: buy to cover at the next open.');
+  assert.equal(rows.at(-1)!.what, 'An order to buy to cover waits for the next open.');
 });
 
 test('a flip is one event: the other side\'s rule closed the position and opened the other side at the same fill', () => {
@@ -78,7 +78,7 @@ test('a flip is one event: the other side\'s rule closed the position and opened
     'Bought at the open at 101.00.',
     'Short rule held: flipped to short, sold and sold short at the next open (2020-01-04) at 98.00.',
     'Flipped to short: sold and sold short at the open at 98.00.',
-    'Short rule held but already short.',
+    'Short rule held, but a short position was open.',
   ]);
   assert.deepEqual(rows.map(positionWords), ['Flat', 'Long, 99.0099 shares', 'Long, 99.0099 shares', 'Short, 99.0099 shares', 'Short, 99.0099 shares']);
   // With fill: close the decision and both fills are one bar, and the way back is a cover and a buy.
@@ -86,16 +86,16 @@ test('a flip is one event: the other side\'s rule closed the position and opened
   assert.deepEqual(close.map((r) => r.what), [
     'Short rule held: sold short at this close at 99.00.',
     'Buy rule held: flipped to long, bought to cover and bought at this close at 101.00.',
-    'Buy rule held but already long.',
+    'Buy rule held, but a long position was open.',
   ]);
 });
 
 test('an order from the last bar says a short sale, a cover, or a flip as its two orders', () => {
   const pending = (src: string, data: Record<string, Bars>) => rowsOf(run(src, data)).at(-1)!.what;
-  assert.equal(pending('universe: A\nshort when close < 11', { A: bars([12, 12, 10]) }), 'Order pending: sell short at the next open.');
-  assert.equal(pending('universe: A\nshort when true\ncover when close < 9', { A: bars([10, 10, 10, 8]) }), 'Order pending: buy to cover at the next open.');
-  assert.equal(pending(FLIP, { A: bars([101, 101, 99]) }), 'Order pending: sell and sell short at the next open.');
-  assert.equal(pending(FLIP, { A: bars([99, 99, 101]) }), 'Order pending: buy to cover and buy at the next open.');
+  assert.equal(pending('universe: A\nshort when close < 11', { A: bars([12, 12, 10]) }), 'An order to sell short waits for the next open.');
+  assert.equal(pending('universe: A\nshort when true\ncover when close < 9', { A: bars([10, 10, 10, 8]) }), 'An order to buy to cover waits for the next open.');
+  assert.equal(pending(FLIP, { A: bars([101, 101, 99]) }), 'An order to sell and sell short waits for the next open.');
+  assert.equal(pending(FLIP, { A: bars([99, 99, 101]) }), 'An order to buy to cover and buy waits for the next open.');
 });
 
 test('a short\'s stop, target and trailing stop name the cover, and the short rule then has to stop holding', () => {
@@ -104,13 +104,13 @@ test('a short\'s stop, target and trailing stop name the cover, and the short ru
   assert.deepEqual(rows.map((r) => r.what), [
     'Short rule held: sold short at the next open (2020-01-02) at 98.00.',
     'Sold short at the open at 98.00.',
-    'Take profit hit: bought to cover at 88.20. Short rule held but waiting for the rule to stop holding after this take profit.',
-    'Short rule held but waiting for the rule to stop holding after the take profit on 2020-01-03.',
+    'Take profit hit: bought to cover at 88.20. Short rule held, but after this take profit, the rule must become false first.',
+    'Short rule held, but after the take profit on 2020-01-03, the rule must become false first.',
     '',
-    'Order pending: sell short at the next open.',
+    'An order to sell short waits for the next open.',
   ]);
   const trail = rowsOf(run('universe: A\ncapital: 10000\nborrow fee: 0%\ntrailing stop: 5%\nshort when close < 100', { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [97, 97, 93, 94], [95, 99, 94, 98]]) }));
-  assert.equal(trail[3].what, 'Trailing stop hit: bought to cover at 97.65. Short rule held but waiting for the rule to stop holding after this trailing stop.');
+  assert.equal(trail[3].what, 'Trailing stop hit: bought to cover at 97.65. Short rule held, but after this trailing stop, the rule must become false first.');
   // The waiting is the same wherever the window starts.
   const bt = run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [95, 96, 85, 90], [90, 90, 90, 90], [91, 91, 91, 91], [101, 101, 101, 101], [99, 99, 99, 99]]) });
   const all = rowsOf(bt);
@@ -119,9 +119,9 @@ test('a short\'s stop, target and trailing stop name the cover, and the short ru
 
 test('the buy and short rules both holding while flat is said, and so is a short rule held back by the cover rule', () => {
   const both = rowsOf(run('universe: A\nbuy when true\nshort when true', { A: bars([10, 10, 10]) }));
-  assert.deepEqual(both.map((r) => r.what), Array(3).fill('Buy and short rules both held, so neither opened a position.'));
+  assert.deepEqual(both.map((r) => r.what), Array(3).fill('The buy and short rules held together. Thus no position opened.'));
   const vetoed = rowsOf(run('universe: A\nshort when true\ncover when true', { A: bars([10, 10, 10]) }));
-  assert.deepEqual(vetoed.map((r) => r.what), Array(3).fill('Short rule held, but the cover rule held too, so no short sale.'));
+  assert.deepEqual(vetoed.map((r) => r.what), Array(3).fill('Short rule held, but the cover rule also held. Thus no short sale.'));
 });
 
 test('a margin call: decided at a close, filled at the next open even with fill: close, then both sides wait to re-arm', () => {
@@ -129,9 +129,9 @@ test('a margin call: decided at a close, filled at the next open even with fill:
   for (const fill of ['', 'fill: close\n']) {
     const bt = run(fill + LEVERED, { A });
     const rows = rowsOf(bt);
-    assert.equal(rows[2].what, "Margin call (equity below 25% of the positions' value): sold at the next open (2020-01-04) at 65.00.");
-    assert.equal(rows[3].what, 'Margin call: sold at the open at 65.00. Buy rule held but waiting for the rule to stop holding after this margin call.');
-    assert.equal(rows[4].what, 'Buy rule held but waiting for the rule to stop holding after the margin call on 2020-01-04.');
+    assert.equal(rows[2].what, "Margin call (equity below 25% of the value of the positions): sold at the next open (2020-01-04) at 65.00.");
+    assert.equal(rows[3].what, 'Margin call: sold at the open at 65.00. Buy rule held, but after this margin call, the rule must become false first.');
+    assert.equal(rows[4].what, 'Buy rule held, but after the margin call on 2020-01-04, the rule must become false first.');
     // A window that starts after the call knows the rule is still waiting.
     for (let from = 0; from < rows.length; from++) assert.deepEqual(debugRows(bt, 'A', from, rows.length), rows.slice(from), `${fill}from ${from}`);
   }
@@ -140,7 +140,7 @@ test('a margin call: decided at a close, filled at the next open even with fill:
 test('a margin call made at the last close is an order pending for the next open, whatever the fill', () => {
   for (const fill of ['', 'fill: close\n']) {
     const rows = rowsOf(run(fill + LEVERED, { A: ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66]]) }));
-    assert.ok(rows.at(-1)!.what.endsWith("Margin call (equity below 25% of the positions' value): order pending to sell at the next open."), rows.at(-1)!.what);
+    assert.ok(rows.at(-1)!.what.endsWith('Margin call (equity below 25% of the value of the positions): an order to sell waits for the next open.'), rows.at(-1)!.what);
   }
 });
 
@@ -148,18 +148,18 @@ test('a ruin closes everything, and nothing more is traded after it', () => {
   const bt = run(LEVERED, { A: ohlc([[100, 100, 100, 100], [100, 100, 70, 70], [70, 70, 66, 66], [45, 65, 45, 60], [60, 80, 60, 80], [80, 90, 80, 90]]) });
   const rows = rowsOf(bt);
   assert.deepEqual(rows.slice(3).map((r) => r.what), [
-    'Equity fell to zero, so every position was closed and the run stopped: sold at 45.00.',
-    'Nothing more was traded after the ruin on 2020-01-04.',
-    'Nothing more was traded after the ruin on 2020-01-04.',
+    'The equity decreased to zero. Thus all positions closed and the run stopped: sold at 45.00.',
+    'No trades occurred after the ruin on 2020-01-04.',
+    'No trades occurred after the ruin on 2020-01-04.',
   ]);
   const short = rowsOf(run('universe: A\ncapital: 10000\nmargin rate: 0%\nborrow fee: 0%\nshort when true', { A: ohlc([[100, 100, 100, 100], [100, 100, 100, 100], [150, 150, 150, 150], [210, 210, 210, 210], [210, 210, 210, 210]]) }));
-  assert.equal(short[3].what, 'Equity fell to zero, so every position was closed and the run stopped: bought to cover at 210.00.');
+  assert.equal(short[3].what, 'The equity decreased to zero. Thus all positions closed and the run stopped: bought to cover at 210.00.');
 });
 
 test('a short built in entries: the entries and the shares sold short, resized by rebalancing', () => {
   const src = 'universe: A\ncapital: 10000\nborrow fee: 1%\nentries: 2\nstop loss: 10%\nshort when close < 100\nadd when close < last entry price\ncover when close > 120';
   const rows = rowsOf(run(src, { A: ohlc([[100, 100, 99, 99], [98, 99, 97, 98], [97, 97, 95, 95], [95, 95, 94, 94], [94, 94, 94, 94]]) }));
-  assert.equal(rows[3].what, 'Added entry 2 of 2 at the open at 95.00. Average entry price now 96.47; stop loss moved to 106.11. Short rule held but already short.');
+  assert.equal(rows[3].what, 'Added entry 2 of 2 at the open at 95.00. Average entry price changed to 96.47, stop loss moved to 106.11. Short rule held, but a short position was open.');
   assert.equal(positionWords(rows[4]), 'Short, 2 of 2 entries, 104.4562 shares');
   const resized = rowsOf(run('universe: A 50%\nrebalance: weekly\nshort when true', { A: bars(Array.from({ length: 20 }, (_, i) => 100 + i)) }));
   assert.match(positionWords(resized.at(-1)!), /^Short, sold [\d.]+ shares short$/);

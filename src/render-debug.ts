@@ -86,8 +86,8 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
   };
 
   const windowControls = h(controls, 'div', 'bt-debug-group');
-  const earlier = button(windowControls, '← Earlier', () => move(start - WINDOW));
-  const later = button(windowControls, 'Later →', () => move(start + WINDOW));
+  const earlier = button(windowControls, '← Previous bars', () => move(start - WINDOW));
+  const later = button(windowControls, 'Next bars →', () => move(start + WINDOW));
   const dateLabel = h(windowControls, 'label', 'bt-debug-date');
   h(dateLabel, 'span', undefined, 'Go to date');
   const date = h(dateLabel, 'input');
@@ -109,7 +109,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
   const filterLabel = h(options, 'label', 'bt-debug-filter');
   const check = h(filterLabel, 'input');
   check.type = 'checkbox';
-  h(filterLabel, 'span', undefined, 'Only bars where something happened or nearly happened');
+  h(filterLabel, 'span', undefined, 'Only bars where something occurred or almost occurred');
   check.addEventListener('change', () => {
     filter = check.checked;
     draw();
@@ -129,7 +129,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
         ask.hidden = true;
         resolve(value);
       };
-      if (question.all) button(row, 'Save every bar', answer('all'));
+      if (question.all) button(row, 'Save all bars', answer('all'));
       button(row, `Save the ${shown} ${shown === 1 ? 'bar' : 'bars'} shown`, answer('window'));
       button(row, 'Cancel', answer(null));
       ask.hidden = false;
@@ -150,7 +150,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
       const part = choice === 'window';
       const csv = await inSlices(csvSteps(bt, name, part ? shown : undefined), {
         onSlice: (p) => {
-          saving.textContent = `Making the file: ${p.done.toLocaleString('en-US')} of ${p.total.toLocaleString('en-US')} bars.`;
+          saving.textContent = `The plugin makes the file: ${p.done.toLocaleString('en-US')} of ${p.total.toLocaleString('en-US')} bars.`;
           saving.hidden = false;
         },
         stop: () => !life.open,
@@ -159,7 +159,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
       const title = `${bt.spec.name ?? 'Backtest'} rule values ${name}${part ? ` bars ${shown.from + 1} to ${shown.to}` : ''}`;
       if (csv !== null) await input.save(title, csv);
     } catch (e) {
-      saveError.textContent = `The file couldn't be saved: ${e instanceof Error ? e.message : String(e)}`;
+      saveError.textContent = `Cannot save the file: ${e instanceof Error ? e.message : String(e)}`;
       saveError.hidden = false;
     } finally {
       saving.hidden = true;
@@ -178,7 +178,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
     if (!done) {
       done = inSlices(prepareRows(bt, name), {
         onSlice: (p) => {
-          if (asset === name) status.textContent = `Working out the rule values: ${p.done} of ${p.total} parts.`;
+          if (asset === name) status.textContent = `The plugin calculates the rule values: ${p.done} of ${p.total} parts.`;
         },
         stop: () => !life.open,
       }).then((result) => {
@@ -214,7 +214,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
     count = debugRange(bt, asset).count;
     drawLegend();
     box.replaceChildren();
-    status.textContent = 'Working out the rule values.';
+    status.textContent = 'The plugin calculates the rule values.';
     void ensure(name).then((ok) => {
       if (ok && asset === name) draw();
     });
@@ -263,9 +263,9 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
     }
     const shorts = columns.some((c) => c.group === 'short' || c.group === 'cover');
     const dimmed = shorts
-      ? 'sell rule columns are dimmed where no long was held, and cover rule columns where no short was'
-      : 'sell rule columns are dimmed on the others';
-    h(legend, 'div', 'bt-debug-legend-key', `✓ yes, ✗ no, ? unknown, – not read (the part needs an open position and none was held, or, for an add rule, a position that can still take another entry). A shaded row is a bar where a position was held at the close; ${dimmed}.`);
+      ? 'Sell rule columns are grey where no long position was held, and cover rule columns are grey where no short position was held'
+      : 'Sell rule columns are grey on the other bars';
+    h(legend, 'div', 'bt-debug-legend-key', `✓ yes, ✗ no, ? unknown, – not read. A part is not read when it must have an open position and there was none. For an add rule, it must have a position that can have one more entry. A shaded row is a bar with a position held at the close. ${dimmed}.`);
   }
 
   if (picker) {
@@ -296,7 +296,7 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
 function drawTable(box: HTMLElement, columns: DebugColumn[], rows: DebugRow[], focus: number | null, intraday: boolean, filtered: boolean): void {
   box.replaceChildren();
   if (rows.length === 0) {
-    h(box, 'div', 'bt-note bt-debug-empty', filtered ? 'No bar in this window has anything that happened or nearly happened. Turn the filter off to see every bar.' : 'There are no bars to show.');
+    h(box, 'div', 'bt-note bt-debug-empty', filtered ? 'In this window, nothing occurred or almost occurred on a bar. Set the filter to off to see all bars.' : 'There are no bars to show.');
     return;
   }
   const table = h(box, 'table', 'bt-table bt-debug-table');
@@ -304,10 +304,10 @@ function drawTable(box: HTMLElement, columns: DebugColumn[], rows: DebugRow[], f
   h(head, 'th', 'bt-debug-sticky', intraday ? 'Time (UTC)' : 'Date').scope = 'col';
   h(head, 'th', 'bt-num', 'Close').scope = 'col';
   // What people open the table for comes straight after the close, before the rule columns that can run far off to the right.
-  h(head, 'th', 'bt-debug-what', 'What happened').scope = 'col';
+  h(head, 'th', 'bt-debug-what', 'What occurred').scope = 'col';
   const position = h(head, 'th', undefined, 'Position');
   position.scope = 'col';
-  position.title = 'The position at the end of the bar, after the bar\'s fills';
+  position.title = 'The position at the end of the bar, after the fills of the bar';
   for (const c of columns) {
     const th = h(head, 'th', `bt-debug-head bt-debug-head-${c.group}`);
     th.scope = 'col';
@@ -354,18 +354,18 @@ function drawCell(tr: HTMLElement, col: DebugColumn, row: DebugRow, n: number): 
     td.textContent = '–';
     const why =
       col.group === 'add' && row.readHeld
-        ? 'the position already had all its entries'
+        ? 'the position had all its entries'
         : col.group === 'cover' && row.readHeld
-          ? 'it needs a short position, and a long was held'
+          ? 'it must have a short position, and a long position was held'
           : col.group === 'sell' && row.readSide === 'short'
-            ? 'it needs a long position, and a short was held'
-            : 'it needs an open position, and none was held';
+            ? 'it must have a long position, and a short position was held'
+            : 'it must have an open position, and there was none';
     td.title = `${col.caption}: ${col.text}\nNot read: ${why}.`;
     return;
   }
   if (text.main) h(td, 'span', 'bt-debug-values', text.main);
   h(td, 'span', 'bt-debug-mark', MARK[cell.outcome]);
   if (text.detail) h(td, 'span', 'bt-debug-detail', text.detail);
-  const notInPlay = col.group === 'cover' ? 'No short was held, so the cover rule was not in play.' : row.readSide === 'short' ? 'No long was held, so the sell rule was not in play.' : 'No position was held, so the sell rule was not in play.';
+  const notInPlay = col.group === 'cover' ? 'No short position was held. Thus the cover rule did not apply.' : row.readSide === 'short' ? 'No long position was held. Thus the sell rule did not apply.' : 'No position was held. Thus the sell rule did not apply.';
   td.title = [`${col.caption}: ${col.text}`, text.main, MARK[cell.outcome], text.detail, idle ? notInPlay : ''].filter(Boolean).join('\n');
 }

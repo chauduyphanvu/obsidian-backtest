@@ -159,7 +159,7 @@ function fix(e: Edit, replaced: string, habit = false): Fix {
     to: e.to,
     insert: e.insert,
     label: `Change to ${word}${places}`,
-    hint: habit ? `Write ${word} instead of ${replaced}.` : `Did you mean ${word}?`,
+    hint: habit ? `Write ${word}, not ${replaced}.` : `Possible correction: ${word}.`,
     ...(e.also?.length ? { also: e.also } : {}),
   };
 }
@@ -311,7 +311,7 @@ function parameterName(ctx: Context): Fix | null {
   const line = ctx.lines[d.line - 1];
   const params = declaredParams(ctx.lines).map((p) => p.name);
   if (!params.length || d.from === undefined || d.to === undefined) return null;
-  if (/^Bars ago must be a whole number/.test(d.message)) {
+  if (/^The number in \[n\] must be a whole number/.test(d.message)) {
     const typed = textOf(ctx.lines, d.line, d.from, d.to);
     return /^[A-Za-z_]\w*$/.test(typed) ? pick(ctx, typed, params, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : null;
   }
@@ -341,7 +341,7 @@ export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Default
   if ((found = m(/^Unexpected character "(.)"$/))) return habit(ctx, found[1]);
   if ((found = m(/^Unexpected "(.+)"$/))) return unexpected(ctx, found[1]);
   if (m(/^"for .+?:" names (?:a ticker that is not|.+, which is not) in the universe$/)) return forTicker(ctx);
-  if ((found = m(/^"(entry|bars)" on its own is not a name\. Write "(?:entry|bars) (price|held)"$/))) return onItsOwn(ctx, found[1], found[2]);
+  if ((found = m(/^"(entry|bars)" is not a complete name\. Write "(?:entry|bars) (price|held)"$/))) return onItsOwn(ctx, found[1], found[2]);
   if (/^Not a setting or a rule/.test(d.message)) return notARule(ctx);
   const options = optionsOf(d.message);
   if (options) return settingValue(ctx, options);

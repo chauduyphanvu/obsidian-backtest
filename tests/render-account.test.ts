@@ -44,11 +44,11 @@ test('each order says what to do, how much, and which strategy it comes from', (
   assert.deepEqual(orderRows(plan, ['A', 'B']), [
     { ticker: 'TLT', order: 'Sell', shares: '20', price: '50.00', value: '$1,000', holding: '100 → 80', from: 'A +$4,000, drift −$5,000', side: -1 },
     { ticker: 'QQQ', order: 'Buy', shares: '25', price: '200.00', value: '$5,000', holding: '0 → 25', from: 'B +$5,000', side: 1 },
-    { ticker: 'SPY', order: 'Nothing to do', shares: '', price: '100.00', value: '', holding: '50 → 50', from: 'B −$5,000, drift +$5,000', side: 0 },
+    { ticker: 'SPY', order: 'No order', shares: '', price: '100.00', value: '', holding: '50 → 50', from: 'B −$5,000, drift +$5,000', side: 0 },
   ]);
   assert.deepEqual(planLines(plan), [
-    'The strategies manage $20k: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: $6,000.',
-    'Left as they are, as no strategy listed trades them: AAPL 10.',
+    'The strategies use $20k: the cash and the holdings of the tickers that they trade, at the last closes. Cash after the orders: $6,000.',
+    'No orders for these holdings, because no strategy in the block trades them: AAPL 10.',
   ]);
 });
 
@@ -58,15 +58,15 @@ test('a closing order sells all, a small resize is skipped, and buys cut to the 
   const small = accountOrders({ ...account, cash: 5, skipUnder: 0.05, holdings: [{ ticker: 'SPY', shares: 10 }] }, [strat('A', 1, 1000, [state('SPY', { shares: 9.9 })])]);
   assert.equal(orderRows(small, ['A'])[0].order, 'Skip: small');
   const cut = accountOrders({ ...account, cash: 1000 }, [strat('A', 1, 1000, [state('SPY', { pending: 'buy', targetWeight: 2, lastClose: 100 })])]);
-  assert.deepEqual(orderRows(cut, ['A']).map((r) => [r.order, r.shares]), [['Buy, cut to the cash', '10']]);
-  assert.match(planLines(cut).at(-1)!, /^The buys come to \$2,000, more than the cash and the sales bring \(\$1,000\), so each is cut to fit\.$/);
+  assert.deepEqual(orderRows(cut, ['A']).map((r) => [r.order, r.shares]), [['Buy, made smaller for the cash', '10']]);
+  assert.match(planLines(cut).at(-1)!, /^The buys cost \$2,000\. This is more than the cash and the sales can pay \(\$1,000\)\. Thus the plugin makes each buy smaller\.$/);
 });
 
 test('what trading the orders as one spares is said in money and in costs', () => {
   const A = strat('A', 0.5, 1000, [state('SPY', { pending: 'buy', targetWeight: 0.5 })]);
   const B = strat('B', 0.5, 1000, [state('SPY', { shares: 5, pending: 'sell' })]);
   const plan = accountOrders({ ...account, cash: 500, holdings: [{ ticker: 'SPY', shares: 5 }] }, [A, B]);
-  assert.equal(planLines(plan)[1], 'Trading their orders as one, rather than each strategy on its own, spares $500 of trades and $0.50 of their costs.');
+  assert.equal(planLines(plan)[1], 'The plugin adds the orders of the strategies together. Compared with one order for each strategy, this saves $500 of trades and $0.50 of costs.');
 });
 
 test('orders on the short side say so, a flip gives both steps, and short holdings read with a minus', () => {
@@ -94,8 +94,8 @@ test('orders on the short side say so, a flip gives both steps, and short holdin
     ],
   );
   assert.deepEqual(planLines(plan), [
-    'The strategies manage $10k: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: $6,000.',
-    'Left as they are, as no strategy listed trades them: GME −10.',
+    'The strategies use $10k: the cash and the holdings of the tickers that they trade, at the last closes. Cash after the orders: $6,000.',
+    'No orders for these holdings, because no strategy in the block trades them: GME −10.',
   ]);
   // Held long and flipped to a short of 50, and a short added to.
   const flip = accountOrders({ ...account, cash: 7000, holdings: [{ ticker: 'SPY', shares: 30 }] }, [strat('S', 1, 1000, [state('SPY', { shares: 10, pending: 'short', targetWeight: 0.5 })])]);
@@ -109,12 +109,12 @@ test('an account that borrows: cash below 0 reads with a minus', () => {
   const L = strat('L', 1, 1000, [state('SPY', { shares: 15 })], { borrows: true });
   const plan = accountOrders({ ...account, cash: -2000, holdings: [{ ticker: 'SPY', shares: 120 }] }, [L]);
   assert.deepEqual(orderRows(plan, ['L']).map((r) => [r.order, r.shares]), [['Buy', '30']]);
-  assert.equal(planLines(plan)[0], 'The strategies manage $10k: the cash and the holdings of the tickers they trade, at the last closes. Cash after the orders: −$5,000.');
+  assert.equal(planLines(plan)[0], 'The strategies use $10k: the cash and the holdings of the tickers that they trade, at the last closes. Cash after the orders: −$5,000.');
 });
 
 test('the orders are for the next open after the last bar, said once when every strategy agrees', () => {
-  assert.equal(asOfLine([{ label: 'A', asOf: T }, { label: 'B', asOf: T }]), "For the next open, from the strategies' last bar, 2026-11-13.");
-  assert.equal(asOfLine([{ label: 'A', asOf: T }, { label: 'B', asOf: T + 14.5 * 3_600_000 }]), "For the next open, from each strategy's last bar: A 2026-11-13, B 2026-11-13 14:30.");
+  assert.equal(asOfLine([{ label: 'A', asOf: T }, { label: 'B', asOf: T }]), "For the next open, from the last bar of the strategies, 2026-11-13.");
+  assert.equal(asOfLine([{ label: 'A', asOf: T }, { label: 'B', asOf: T + 14.5 * 3_600_000 }]), "For the next open, from the last bar of each strategy: A 2026-11-13, B 2026-11-13 14:30.");
 });
 
 test('money to the cent', () => {
@@ -167,33 +167,33 @@ const READ: FillsRead = {
   fills: [{ date: T, ticker: 'SPY', side: 'buy', quantity: 1, price: 1, fees: 0, line: 2 }],
   left: { dividends: 3, reinvestments: 1, transfers: 0, other: 2 },
   untraded: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((ticker, i) => ({ ticker, rows: 9 - i })),
-  unread: [5, 6, 7, 8].map((line) => ({ line, why: 'it names no ticker' })),
+  unread: [5, 6, 7, 8].map((line) => ({ line, why: 'it has no ticker' })),
   ignored: 4,
 };
 
 test('what was read from the file and what was left out, each kind counted', () => {
   assert.deepEqual(readLines(READ), [
-    'Read 1 purchase or sale as a Charles Schwab export.',
-    'Left out, as they are not purchases or sales of shares: 3 dividends, 1 reinvestment, 2 other rows.',
-    'Left out, as no strategy listed trades them: A (9), B (8), C (7), D (6), E (5), F (4) and 2 others.',
-    '4 rows could not be read: line 5: it names no ticker; line 6: it names no ticker; line 7: it names no ticker; ….',
+    'The plugin read 1 buy or sell as a Charles Schwab export.',
+    'Not included, because they are not buys or sells of shares: 3 dividends, 1 reinvestment, 2 other rows.',
+    'Not included, because no strategy in the block trades them: A (9), B (8), C (7), D (6), E (5), F (4) and 2 others.',
+    'The plugin cannot read 4 rows: line 5: it has no ticker; line 6: it has no ticker; line 7: it has no ticker; ….',
   ]);
   const plain = { ...READ, format: null, fills: [], left: { dividends: 0, reinvestments: 0, transfers: 0, other: 0 }, untraded: [], unread: [] };
-  assert.deepEqual(readLines(plain), ['Read 0 purchases and sales by the names of its columns.']);
+  assert.deepEqual(readLines(plain), ['The plugin read 0 buys and sells from the names of its columns.']);
 });
 
 test('a file of which no row could be read is not compared, and says so; a format starting with a vowel takes "an"', () => {
-  const none = { ...READ, fills: [], untraded: [], unread: [{ line: 2, why: 'the action "SLD" is not a purchase or a sale this reads' }] };
+  const none = { ...READ, fills: [], untraded: [], unread: [{ line: 2, why: 'the plugin cannot read the action "SLD" as a buy or a sell' }] };
   assert.equal(readNone(none), true);
   assert.equal(readNone(READ), false);
   // Rows of tickers no strategy trades were read, so the columns are right.
   assert.equal(readNone({ ...none, untraded: [{ ticker: 'A', rows: 1 }] }), false);
   assert.deepEqual(readLines({ ...none, format: null, left: { dividends: 0, reinvestments: 0, transfers: 0, other: 0 } }), [
-    'Read 0 purchases and sales by the names of its columns.',
-    '1 row could not be read: line 2: the action "SLD" is not a purchase or a sale this reads.',
-    'As no row could be read as a purchase or a sale, nothing is compared. Check which column holds each part of a trade.',
+    'The plugin read 0 buys and sells from the names of its columns.',
+    'The plugin cannot read 1 row: line 2: the plugin cannot read the action "SLD" as a buy or a sell.',
+    'The plugin read no row as a buy or a sell. Thus it compares no trades. Make sure that each part of a trade has the correct column.',
   ]);
-  assert.equal(readLines({ ...READ, format: 'Interactive Brokers Flex query' })[0], 'Read 1 purchase or sale as an Interactive Brokers Flex query export.');
+  assert.equal(readLines({ ...READ, format: 'Interactive Brokers Flex query' })[0], 'The plugin read 1 buy or sell as an Interactive Brokers Flex query export.');
 });
 
 function row(o: Partial<MatchRow>): MatchRow {
@@ -203,10 +203,10 @@ const model = (o: Partial<NonNullable<MatchRow['model']>> = {}) => ({ day: T, si
 const yours = (o: Partial<NonNullable<MatchRow['yours']>> = {}) => ({ day: T, side: 'buy' as const, quantity: 10, price: 100.5, fees: 1, lines: [2], ...o });
 
 test('the headline is the sum of the parts: a cost, a gain, nothing, or no trade at all', () => {
-  assert.equal(costHeadline({ rows: [row({})], total: 12.345 }, T), 'Not following the rules cost $12.35 since 2026-11-13.');
-  assert.equal(costHeadline({ rows: [row({})], total: -40 }, T), 'Not following the rules made $40.00 since 2026-11-13.');
-  assert.equal(costHeadline({ rows: [row({})], total: 0.001 }, T), 'Not following the rules cost nothing since 2026-11-13.');
-  assert.equal(costHeadline({ rows: [], total: 0 }, T), 'Neither the strategies nor you traded since 2026-11-13.');
+  assert.equal(costHeadline({ rows: [row({})], total: 12.345 }, T), 'From 2026-11-13, the differences between your trades and the strategies cost $12.35.');
+  assert.equal(costHeadline({ rows: [row({})], total: -40 }, T), 'From 2026-11-13, the differences between your trades and the strategies made $40.00.');
+  assert.equal(costHeadline({ rows: [row({})], total: 0.001 }, T), 'From 2026-11-13, the differences between your trades and the strategies cost nothing.');
+  assert.equal(costHeadline({ rows: [], total: 0 }, T), 'From 2026-11-13, you and the strategies did not trade.');
   assert.deepEqual(costParts({ parts: { slippage: 5, fees: 2, late: -1, skipped: 30 } }).map((p) => [p.name, p.value]), [
     ['Slippage', '$5.00'],
     ['Fees', '$2.00'],
@@ -220,11 +220,11 @@ test('each trade in the table: how it went, both sides, your price against their
   assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null, value: null }), yours: yours({ day: T + 2 * DAY }), daysLate: 2, late: 5, fees: 1 }))[2], 'Late by 2 trading days');
   assert.deepEqual(matchCells(row({ class: 'late', model: model({ quantity: null }), yours: yours(), daysLate: 1 }))[3], 'Buy at 100.00');
   const skipped = matchCells(row({ class: 'skipped', model: model({ side: 'sell' }), move: -0.031, skipped: -31 }));
-  assert.deepEqual(skipped.slice(2), ['Not made, would have lost 3.1%', 'Sell 10 at 100.00', '–', '', '−$31.00']);
-  assert.equal(matchCells(row({ class: 'partial', model: model({ quantity: 4 }), move: 0.05, skipped: 20 }))[2], 'Partial: the rest not made, would have made 5.0%');
+  assert.deepEqual(skipped.slice(2), ['Not made, loss of 3.1% if made', 'Sell 10 at 100.00', '–', '', '−$31.00']);
+  assert.equal(matchCells(row({ class: 'partial', model: model({ quantity: 4 }), move: 0.05, skipped: 20 }))[2], 'Part filled: the remaining shares not made, profit of 5.0% if made');
   assert.deepEqual(matchCells(row({ class: 'waiting', model: model() })).slice(-1), ['']);
   assert.deepEqual(matchCells(row({ class: 'off-plan', yours: yours({ day: T + DAY }), fees: 1 })), ['2026-11-14', 'SPY', 'Off plan', '–', 'Buy 10 at 100.50', '', '$1.00']);
-  assert.equal(matchCells(row({ model: model(), yours: yours({ price: 400 }), outside: true }))[5], 'outside the day');
+  assert.equal(matchCells(row({ model: model(), yours: yours({ price: 400 }), outside: true }))[5], 'not in the day’s range');
   assert.equal(matchCells(row({ model: model({ price: NaN }), yours: yours(), unpriced: true }))[3], 'Buy 10 at unknown');
 });
 
@@ -240,7 +240,7 @@ test('trades on the short side in the table: a short sale, a cover and a flip ea
 
 test('each ticker: how its trades went and what they cost, part by part', () => {
   const counts = { 'on time': 3, partial: 1, oversized: 0, late: 1, skipped: 0, waiting: 0, 'off-plan': 2 };
-  assert.deepEqual(tickerCells({ ticker: 'SPY', slippage: 4.5, bps: 3.04, fees: 2, late: -1, skipped: 0, counts }), ['SPY', '3 on time, 1 partial, 1 late, 2 off plan', '$4.50 (3.0 bps)', '$2.00', '−$1.00', '$0.00']);
+  assert.deepEqual(tickerCells({ ticker: 'SPY', slippage: 4.5, bps: 3.04, fees: 2, late: -1, skipped: 0, counts }), ['SPY', '3 on time, 1 part filled, 1 late, 2 off plan', '$4.50 (3.0 bps)', '$2.00', '−$1.00', '$0.00']);
   assert.equal(tickerCells({ ticker: 'SPY', slippage: 0, bps: null, fees: 0, late: 0, skipped: 0, counts })[2], '$0.00');
 });
 
@@ -256,11 +256,11 @@ test('the notes under the costs say what was not compared and why', () => {
     T,
   );
   assert.deepEqual(notes.slice(1), [
-    'Without capital at start, sizes are not compared and trades not made are not counted in money.',
-    '1 fill of yours is more than 3% outside the day’s range as it traded, most likely from a split, and is not compared on price.',
-    '2 fills are not compared on price, as the prices that day as they traded are not known.',
-    '1 trade of the strategies is still waiting: a fill in the next days counts as late.',
-    '2 fills before 2026-11-13 are left out.',
+    'This block has no capital at start. Thus the plugin does not compare sizes or show the trades not made in money.',
+    '1 fill of yours is more than 3% above or below the range of the day as it traded. The usual cause is a split. The plugin does not compare it on price.',
+    'The plugin does not compare 2 fills on price, because the prices of that day as they traded are unknown.',
+    '1 trade of the strategies is pending. A fill in the next days counts as late.',
+    'The plugin does not include 2 fills before 2026-11-13.',
   ]);
 });
 

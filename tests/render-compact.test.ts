@@ -92,9 +92,9 @@ test('a block is keyed by its note and its name, or by its place when it has no 
 // ---- fill: close
 
 test('the fine print says where a rule fills', () => {
-  assert.equal(fillSentence(parseSpec('universe: A\nbuy when true').spec!), 'A rule seen at a close fills at the next open.');
-  assert.equal(fillSentence(parseSpec('universe: A\nfill: next open\nbuy when true').spec!), 'A rule seen at a close fills at the next open.');
-  assert.equal(fillSentence(parseSpec('universe: A\nfill: close\nbuy when true').spec!), 'A rule seen at a close fills at that close.');
+  assert.equal(fillSentence(parseSpec('universe: A\nbuy when true').spec!), 'An order fills at the next open after its rule is true.');
+  assert.equal(fillSentence(parseSpec('universe: A\nfill: next open\nbuy when true').spec!), 'An order fills at the next open after its rule is true.');
+  assert.equal(fillSentence(parseSpec('universe: A\nfill: close\nbuy when true').spec!), 'An order fills at the close where its rule is true.');
 });
 
 test('with fill: close an order that filled at the last close is said, and nothing is waiting for the next open', () => {
@@ -160,7 +160,7 @@ test('a percentage parameter that is not a stop is listed without a needless dec
 
 test('a parameter that is a stop is kept in the list when the stops are not spelt out', () => {
   const src = 'universe: SPY, TLT\nstop = 12%\nbuy when close > sma(50)\nstop loss: stop\nfor TLT:\n  stop loss: 5%';
-  assert.match(summaryOf(src), /stops set per ticker, stop 12%$/);
+  assert.match(summaryOf(src), /stops per ticker, stop 12%$/);
 });
 
 test('a stop that names a parameter in a comment or another setting is not taken for a stop parameter', () => {

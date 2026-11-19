@@ -55,8 +55,8 @@ test('a parameter in a rule is a number; the step defaults to 1, or 1% for perce
 
 test('a parameter can set the number held by a ranking', () => {
   assert.equal(ok('universe: SPY, QQQ, TLT\nn = 2 in 1..3\nhold: top n by roc(20)').rank!.top, 2);
-  errorOf('universe: SPY, QQQ\nn = 50%\nhold: top n by close', /"top" needs a plain number, and "n" is a percentage/);
-  errorOf('universe: SPY\nk = 2\nstop loss: k\nbuy when true', /stop loss needs a percentage, and "k" is a plain number/);
+  errorOf('universe: SPY, QQQ\nn = 50%\nhold: top n by close', /"top" must be a number, but "n" is a percentage/);
+  errorOf('universe: SPY\nk = 2\nstop loss: k\nbuy when true', /Stop loss must be a percentage, but "k" is a number/);
   assert.deepEqual(ok('universe: SPY\nk = 2.5\nstop loss: k atr(10)\nbuy when true').stops.SPY.stopLoss, { k: 'atr', mult: 2.5, n: 10 });
 });
 
@@ -67,29 +67,29 @@ test('overrides replace declared values, even outside the range', () => {
   assert.deepEqual([spec.params[0].value, spec.params[0].declared], [30, 50]);
   assert.deepEqual(errorOf(BLOCK, /no parameter "slowest"/, { overrides: { slowest: 1 } }), {
     line: 1,
-    message: 'There is no parameter "slowest" to set. Declare it in the block first, such as slowest = 50',
+    message: 'There is no parameter "slowest" to set. First, add it to the block, for example slowest = 50',
   });
   // An override still has to make sense where it is used.
-  errorOf(BLOCK, /sma\(\): 2.5 is not a valid period/, { overrides: { fast: 2.5 } });
+  errorOf(BLOCK, /sma\(\): 2.5 is not a permitted period/, { overrides: { fast: 2.5 } });
 });
 
 test('declaration errors point at the part that is wrong', () => {
-  const twice = errorOf('universe: SPY\nx = 1\nx = 2\nbuy when true', /"x" is declared twice/);
+  const twice = errorOf('universe: SPY\nx = 1\nx = 2\nbuy when true', /"x" is also set on line 2/);
   assert.deepEqual([twice.line, twice.from, twice.to], [3, 0, 1]);
-  const order = errorOf('x = 5 in 10..1\nuniverse: SPY\nbuy when true', /starts above where it ends/);
+  const order = errorOf('x = 5 in 10..1\nuniverse: SPY\nbuy when true', /The first number of the range is larger than the second/);
   assert.deepEqual([order.line, order.from, order.to], [1, 9, 14]);
-  const outside = errorOf('x = 50 in 1..10\nuniverse: SPY\nbuy when true', /50 is outside the range 1..10/);
+  const outside = errorOf('x = 50 in 1..10\nuniverse: SPY\nbuy when true', /50 is not in the range 1..10/);
   assert.deepEqual([outside.from, outside.to], [4, 6]);
-  const step = errorOf('x = 5 in 1..10 step 0\nuniverse: SPY\nbuy when true', /step must be above 0/);
+  const step = errorOf('x = 5 in 1..10 step 0\nuniverse: SPY\nbuy when true', /step must be more than 0/);
   assert.deepEqual([step.from, step.to], [20, 21]);
-  errorOf('x = 5 in 1..1000\nuniverse: SPY\nbuy when true', /This range has 1000 values. The most is 200/);
+  errorOf('x = 5 in 1..1000\nuniverse: SPY\nbuy when true', /This range has 1000 values\. The maximum is 200/);
   errorOf('x = 5% in 1%..300% step 1%\nuniverse: SPY\nbuy when true', /This range has 300 values/);
   errorOf('x = 5 in\nuniverse: SPY\nbuy when true', /Write a parameter as x = 50/);
   // Any other value that is not a number is a definition, here of a name that does not exist.
   errorOf('x = fast\nuniverse: SPY\nbuy when true', /Unknown name "fast"/);
   const reserved = errorOf('close = 5\nuniverse: SPY\nbuy when true', /"close" is a built-in name/);
   assert.deepEqual([reserved.from, reserved.to], [0, 5]);
-  errorOf('universe: SPY\nfast = 2.5\nbuy when close > sma(fast)', /sma\(\): 2.5 is not a valid period/);
+  errorOf('universe: SPY\nfast = 2.5\nbuy when close > sma(fast)', /sma\(\): 2.5 is not a permitted period/);
 });
 
 test('a single "=" line closes the rule above it, while "==" continues it', () => {

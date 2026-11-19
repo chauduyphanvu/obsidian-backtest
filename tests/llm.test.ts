@@ -266,10 +266,10 @@ test('warnings of the parser come with the draft', async () => {
 test('onStatus reports the first draft and each repair', async () => {
   const seen: string[] = [];
   await draftStrategy('x', ANTHROPIC, fake([anthropicBody(reply(TWO_BAD)), anthropicBody(reply(BAD)), anthropicBody(reply(GOOD))]).post, { onStatus: (t) => seen.push(t) });
-  assert.deepEqual(seen, ['Writing a draft…', 'Fixing 2 problems…', 'Fixing 1 problem…']);
+  assert.deepEqual(seen, ['The model writes a draft…', 'The model corrects 2 problems…', 'The model corrects 1 problem…']);
   const once: string[] = [];
   await draftStrategy('x', ANTHROPIC, fake([anthropicBody(reply(GOOD))]).post, { onStatus: (t) => once.push(t) });
-  assert.deepEqual(once, ['Writing a draft…']);
+  assert.deepEqual(once, ['The model writes a draft…']);
 });
 
 test('each HTTP failure is a plain-English error', async () => {
@@ -277,11 +277,11 @@ test('each HTTP failure is a plain-English error', async () => {
     [401, '', /rejected the API key/],
     [403, '', /rejected the API key/],
     [404, '', /model or address/],
-    [429, '', /busy or over its limit/],
+    [429, '', /cannot accept more requests/],
     [500, '', /had a problem \(HTTP 500\)/],
     [503, '', /had a problem \(HTTP 503\)/],
-    [400, JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens is too large' } }), /refused the request \(HTTP 400\): max_tokens is too large/],
-    [422, 'not json', /refused the request \(HTTP 422\)\.$/],
+    [400, JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens is too large' } }), /rejected the request \(HTTP 400\): max_tokens is too large/],
+    [422, 'not json', /rejected the request \(HTTP 422\)\.$/],
   ];
   for (const [status, text, pattern] of cases) {
     for (const config of [ANTHROPIC, OPENAI]) {
@@ -295,9 +295,9 @@ test('a failed connection, an unreadable reply, a refusal, an empty reply and a 
   const down: HttpPost = async () => {
     throw new Error('net::ERR_CONNECTION_REFUSED');
   };
-  await assert.rejects(draftStrategy('x', OPENAI, down), /Could not reach the model service \(net::ERR_CONNECTION_REFUSED\)/);
-  await assert.rejects(draftStrategy('x', OPENAI, fake([{ status: 200, text: '<html>' }]).post), /could not read/);
-  await assert.rejects(draftStrategy('x', ANTHROPIC, fake([{ status: 200, text: JSON.stringify({ stop_reason: 'refusal', content: [] }) }]).post), /declined/);
+  await assert.rejects(draftStrategy('x', OPENAI, down), /Cannot connect to the model service \(net::ERR_CONNECTION_REFUSED\)/);
+  await assert.rejects(draftStrategy('x', OPENAI, fake([{ status: 200, text: '<html>' }]).post), /cannot read the reply/);
+  await assert.rejects(draftStrategy('x', ANTHROPIC, fake([{ status: 200, text: JSON.stringify({ stop_reason: 'refusal', content: [] }) }]).post), /did not write this strategy/);
   await assert.rejects(draftStrategy('x', OPENAI, fake([openaiBody('')]).post), /did not contain a strategy\.$/);
   await assert.rejects(draftStrategy('x', OPENAI, fake([{ status: 200, text: '{"choices":[]}' }]).post), /did not contain a strategy/);
   await assert.rejects(draftStrategy('x', ANTHROPIC, fake([anthropicBody("I can't trade options, but a strategy on the stock is possible.")]).post), /did not contain a strategy\. It said: "I can't trade options/);
@@ -348,7 +348,7 @@ test('the prompt tells the model not to combine buy when true with a stop or tar
 test('what the dialog and settings say is sent matches what is sent', () => {
   assert.equal(
     DRAFT_PRIVACY,
-    'Nothing from your notes or vault is sent. What is sent to the service you chose is your description, the plugin’s built-in guide to the language and, when a draft has problems, that draft and the problems found.',
+    'The plugin sends nothing from your notes or vault. It sends these items to the service that you selected: your description and the plugin instructions for the strategy language. If a draft has problems, the plugin also sends that draft and its problems.',
   );
   assert.doesNotMatch(DRAFT_PRIVACY, /only/i);
 });

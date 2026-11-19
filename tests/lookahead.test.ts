@@ -57,13 +57,13 @@ test('fill: close, a stock reading crypto reads the crypto bar of the day before
     assert.deepEqual(trades(close), [['STK', '2020-01-16', 'open']], ref);
     assert.equal(close.run.trades[0].why!.buyT, jan(16));
     const rule = boughtRows(close, 0).find((r) => r.code)!;
-    assert.match(rule.value, /read from CRY's bar of 2020-01-15/);
+    assert.match(rule.value, /read from the CRY bar of 2020-01-15/);
   }
   // Next open is unchanged: the signal at the close of the 15th, read from CRY's bar of the 15th, fills at the next open.
   const open = run('universe: STK\nbuy when close of binance:CRY > 150', data);
   assert.deepEqual(trades(open), [['STK', '2020-01-16', 'open']]);
   assert.equal(open.run.trades[0].why!.buyT, jan(15));
-  assert.match(boughtRows(open, 0).find((r) => r.code)!.value, /read from CRY's bar of 2020-01-15/);
+  assert.match(boughtRows(open, 0).find((r) => r.code)!.value, /read from the CRY bar of 2020-01-15/);
 });
 
 test('fill: close, crypto reading a stock reads the stock bar that ended before its own bar began', () => {
@@ -71,7 +71,7 @@ test('fill: close, crypto reading a stock reads the stock bar that ended before 
   const data = { STK: series(STK_T, (t) => (t >= jan(17) ? 200 : 100)), CRY: series(CRY_T, () => 50) };
   const close = run('universe: binance:CRY\nfill: close\nbuy when close of STK > 150', data);
   assert.deepEqual(trades(close), [['CRY', '2020-01-18', 'open']]);
-  assert.match(boughtRows(close, 0).find((r) => r.code)!.value, /read from STK's bar of 2020-01-17/);
+  assert.match(boughtRows(close, 0).find((r) => r.code)!.value, /read from the STK bar of 2020-01-17/);
   // A jump on Wednesday 15 January is read on Thursday the 16th.
   const midweek = { STK: series(STK_T, (t) => (t >= jan(15) ? 200 : 100)), CRY: series(CRY_T, () => 50) };
   assert.deepEqual(trades(run('universe: binance:CRY\nfill: close\nbuy when close of STK > 150', midweek)), [['CRY', '2020-01-16', 'open']]);
@@ -101,7 +101,7 @@ test('fill: close, a ranking across stock and crypto reads every ticker\'s previ
   assert.equal(sold.k === 'rank' && iso(sold.t), '2020-01-25');
   assert.equal(bt.run.trades[2].why!.rank!.decision.t, jan(27));
   assert.equal(bt.run.trades[2].why!.buyT, jan(24));
-  assert.match(boughtRows(bt, 1)[0].label, /ranking made at the close of 2020-01-16, which read its bar of 2020-01-15/);
+  assert.match(boughtRows(bt, 1)[0].label, /ranking at the close of 2020-01-16 selected it\. For this ticker, the ranking read the bar of 2020-01-15\./);
   // Next open reads every ticker's bar of the decision day, as before.
   const open = run('universe: STK, binance:CRY\ncapital: 1000\nhold: top 1 by close', data);
   assert.deepEqual(trades(open), [
@@ -173,14 +173,14 @@ test('fill: close notes say which reads moved to the bar before, and which assum
   const QQQ = series(STK_T, () => 100);
   const shifted = run('universe: STK\nfill: close\nbuy when close of binance:CRY > 150', { STK, CRY }).notes;
   assert.ok(shifted.some((n) => n.includes('previous bar') && n.includes('CRY for STK')), shifted.join('\n'));
-  assert.ok(!shifted.some((n) => n.includes('known at the moment')));
+  assert.ok(!shifted.some((n) => n.includes('known at the time')));
   const assumed = run('universe: STK\nfill: close\nbuy when close of QQQ > 150', { STK, QQQ }).notes;
-  assert.ok(assumed.some((n) => n.includes('QQQ for STK') && n.includes('known at the moment of the fill')), assumed.join('\n'));
+  assert.ok(assumed.some((n) => n.includes('QQQ for STK') && n.includes('known at the time of the fill')), assumed.join('\n'));
   const ranked = run('universe: STK, QQQ\nfill: close\nhold: top 1 by close', { STK, QQQ }).notes;
-  assert.ok(ranked.some((n) => n.includes('compares') && n.includes('known at the moment of the fill')), ranked.join('\n'));
+  assert.ok(ranked.some((n) => n.includes('compares') && n.includes('known at the time of the fill')), ranked.join('\n'));
   const mixed = run('universe: STK, binance:CRY\nfill: close\nhold: top 1 by close', { STK, CRY }).notes;
-  assert.ok(mixed.some((n) => n.includes('ranking reads every ticker\'s previous bar')), mixed.join('\n'));
-  assert.ok(!mixed.some((n) => n.includes('known at the moment')));
+  assert.ok(mixed.some((n) => n.includes('the score reads the previous bar of each ticker')), mixed.join('\n'));
+  assert.ok(!mixed.some((n) => n.includes('known at the time')));
   // Binance closes come at the same moment for every ticker, and next open never fills before a close it read.
   assert.ok(!run('universe: binance:CRY\nfill: close\nbuy when close of binance:ETH > 150', { CRY, ETH: CRY }).notes.some((n) => n.includes('ETH')));
   assert.ok(!run('universe: STK\nbuy when close of QQQ > 150', { STK, QQQ }).notes.some((n) => n.includes('QQQ')));

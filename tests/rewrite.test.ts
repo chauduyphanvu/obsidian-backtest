@@ -247,7 +247,7 @@ test('writeValuesInNote rejects, with a message fit to show, when the block has 
   const { note, process } = memoryNote(WRITE_NOTE.replace('fast = 20', 'fast = 21'));
   await assert.rejects(writeValuesInNote(process, 2, WRITE_SRC, { fast: 25 }), (e: unknown) => e instanceof Error && e.message === NOTE_CHANGED);
   assert.equal(note.text, WRITE_NOTE.replace('fast = 20', 'fast = 21'));
-  assert.equal(NOTE_CHANGED, 'The note has changed since this result was drawn, so nothing was written. Try again.');
+  assert.equal(NOTE_CHANGED, 'The note changed after the plugin showed this result. The plugin did not write to the note. Do the step again.');
 });
 
 test('writeValuesInNote rejects without touching the note when the block has no known place', async () => {

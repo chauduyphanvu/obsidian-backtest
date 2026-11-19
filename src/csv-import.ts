@@ -115,12 +115,12 @@ export type CsvInsert = { ok: true; text: string; note: string | null } | { ok: 
 
 /** How a row of a column is dated, in the words the helper window uses, for a file of days (see datingOf). */
 export const SIGNAL_DATING =
-  "A row counts as known at the end of the day it is dated. Date each row with the day whose close its value was computed from: a rule on Tuesday's close can use a row dated Tuesday, and its order fills at Wednesday's open.";
+  "A row counts as known at the end of the day it is dated. Give each row the date of the close that you calculated its value from. For example, a rule on the close of Tuesday can use a row with the date of Tuesday. Its order fills at the open of Wednesday.";
 
 /** How this file's rows are dated, by the rule the run reads them with (evaluate.ts rowDating). */
 function datingOf(bars: Bars): string {
   const { known, carry, daily } = rowDating(bars);
-  if (daily) return bars.unpriced ? SIGNAL_DATING.replace('dated.', 'dated, however far apart the rows are.') : SIGNAL_DATING;
+  if (daily) return bars.unpriced ? SIGNAL_DATING.replace('dated.', 'dated. The gaps between the rows do not change this.') : SIGNAL_DATING;
   const said = carry.replace(/^so /, '');
   return `A row counts as known ${known}. ${said[0].toUpperCase()}${said.slice(1)}.`;
 }
@@ -349,11 +349,11 @@ function leftOut(tally: Tally, of: number, verb: string): string | null {
   const total = tallyTotal(tally);
   if (total === 0) return null;
   const why = [
-    tally.date > 0 && `${tally.date.toLocaleString('en-US')} with a date that could not be read`,
+    tally.date > 0 && `${tally.date.toLocaleString('en-US')} with a date that the plugin cannot read`,
     tally.missing > 0 && `${tally.missing.toLocaleString('en-US')} with a price that is missing or not a number`,
     tally.zero > 0 && `${tally.zero.toLocaleString('en-US')} with a price at or below zero`,
     tally.shape > 0 && `${tally.shape.toLocaleString('en-US')} where the high or low does not contain the open and close`,
-    tally.duplicate > 0 && `${tally.duplicate.toLocaleString('en-US')} that repeat a date already read`,
+    tally.duplicate > 0 && `${tally.duplicate.toLocaleString('en-US')} with the date of a previous row`,
   ].filter(Boolean);
   return `${total.toLocaleString('en-US')} of ${plural(of, 'row')} ${verb}: ${why.join(', ')}.`;
 }
@@ -405,7 +405,7 @@ function gaps(times: number[]): string | null {
   if (big.length === 0) return null;
   const worst = big.reduce((a, b) => (b.s > a.s ? b : a));
   const days = Math.round(worst.s / DAY);
-  return `${plural(big.length, 'gap')} of more than ${Math.round(limit / DAY)} days between rows. The longest is ${days} days, from ${isoOf(times[worst.i])} to ${isoOf(times[worst.i + 1])}.`;
+  return `The file has ${plural(big.length, 'gap')} of more than ${Math.round(limit / DAY)} days between rows. The longest is ${days} days, from ${isoOf(times[worst.i])} to ${isoOf(times[worst.i + 1])}.`;
 }
 
 function orderNote(dates: number[]): string | null {
@@ -416,7 +416,7 @@ function orderNote(dates: number[]): string | null {
     else if (dates[i] < dates[i - 1]) down++;
   }
   if (down === 0) return null;
-  return `The rows are ${up === 0 ? 'newest first' : 'not in date order'}. They are sorted oldest first when the file is read.`;
+  return `The rows are ${up === 0 ? 'from the last date to the first' : 'not in date order'}. The plugin puts them in date order when it reads the file.`;
 }
 
 /** The first slashed or dashed date whose day and month are different numbers, so that reading it two ways gives two dates. */
@@ -439,9 +439,9 @@ function dateDoubts(t: Table, dateColumn: number, dates: number[]): string[] {
   const order = orderNote(dates);
   if (order) out.push(order);
   const values = t.rows.map((r) => r[dateColumn] ?? '');
-  if (ambiguousOf(values)) out.push(`The dates could be read two ways: ${slashedExample(firstSlashed(values)!)}. They were read month first. If the file is day first, say so below.`);
+  if (ambiguousOf(values)) out.push(`The plugin can read the dates as month first or as day first: ${slashedExample(firstSlashed(values)!)}. It read them month first. If the file is day first, select day first below.`);
   const slashes = slashedOrder(values);
-  if (slashes.dayFirst && slashes.monthFirst) out.push('The dates mix day first and month first, so the ones that cannot be read as month first were skipped.');
+  if (slashes.dayFirst && slashes.monthFirst) out.push('The dates are a mix of day first and month first. Thus the plugin did not read the rows with dates that cannot be month first.');
   return out;
 }
 
@@ -450,7 +450,7 @@ function timeDoubts(times: number[]): string[] {
   const out: string[] = [];
   const timed = times.find((x) => x % DAY !== 0);
   if (timed !== undefined) {
-    out.push(`Some dates have a time of day, such as ${isoOf(timed)}. Times are read as UTC. A file of daily prices should have plain dates, such as 2024-01-31.`);
+    out.push(`Some dates have a time of day, for example ${isoOf(timed)}. The plugin reads times as UTC. For a file of daily prices, use dates with no time, for example 2024-01-31.`);
   }
   const gap = gaps(times);
   if (gap) out.push(gap);
@@ -459,14 +459,14 @@ function timeDoubts(times: number[]): string[] {
 
 function doubtsOf(t: Table, cols: Cols, bars: { t: number[]; v: number[] }, tally: Tally, dates: number[]): string[] {
   const out: string[] = [];
-  const skipped = leftOut(tally, t.rows.length, 'were skipped');
+  const skipped = leftOut(tally, t.rows.length, 'were not read');
   if (skipped) out.push(skipped);
   out.push(...dateDoubts(t, cols.date, dates));
-  if (cols.volume < 0) out.push('The file has no volume column, so volume is 0 on every bar and a rule that reads volume cannot work.');
-  else if (bars.v.every((v) => v === 0)) out.push('Volume is 0 on every bar, so a rule that reads volume cannot work.');
+  if (cols.volume < 0) out.push('The file has no volume column. Thus volume is 0 on each bar, and a rule that reads volume cannot work.');
+  else if (bars.v.every((v) => v === 0)) out.push('Volume is 0 on each bar. Thus a rule that reads volume cannot work.');
   out.push(...timeDoubts(bars.t));
   if (bars.t.length <= STARTER_AVERAGE) {
-    out.push(`Only ${plural(bars.t.length, 'row')}. The trend rule in the starter strategy uses a ${STARTER_AVERAGE}-bar average and would never act on this file.`);
+    out.push(`The file has only ${plural(bars.t.length, 'row')}. The trend rule in the starter strategy uses a ${STARTER_AVERAGE}-bar average. Thus it cannot give an order on this file.`);
   }
   return out;
 }
@@ -480,12 +480,12 @@ const guessedPrices = (t: Table, guess: CsvMapping): number[] =>
 /** What was wrong with a file parseCsv could not read, in plain words. */
 function reasonFor(t: Table | null, named: CsvMapping, guess: CsvMapping, error: string): string {
   if (t === null) return 'The file is empty.';
-  if (t.rows.length === 0) return 'The file has a header row and nothing under it. Each row should hold one day of prices.';
+  if (t.rows.length === 0) return 'The file has a header row and no rows below it. Each row must hold one day of prices.';
   const missing = (['date', 'open', 'high', 'low', 'close'] as const).filter((r) => named[r] === null);
   if (missing.length > 0) {
     if (guess.date === null || guess.close === null) {
       const lacks = guess.date === null && guess.close === null ? 'a date or a price' : guess.date === null ? 'a date' : 'a closing price';
-      return `This does not look like a file of prices: no column looks like ${lacks}. A price file has one row for each day, with a date column and a close column at least.`;
+      return `The plugin found no column with ${lacks}. Thus this is possibly not a file of prices. A price file has one row for each day, with a minimum of a date column and a close column.`;
     }
     const only = missing.every((m) => m === 'open' || m === 'high' || m === 'low');
     // A file with a date and one column that looks like a price is read as a price file, which a file of signals with
@@ -494,21 +494,21 @@ function reasonFor(t: Table | null, named: CsvMapping, guess: CsvMapping, error:
     const signals = named.open === null && named.high === null && named.low === null && named.close === null && priceLike.length === 1;
     return (
       `The plugin reads columns named date, open, high, low and close. This file has no ${orList(missing)} column.` +
-      (only ? ' A file with only dates and closes can still be used: the open, high and low are filled from the close.' : ' Choose which column is which below.') +
-      (signals ? ` If "${t.header[priceLike[0]]}" holds something other than prices, give it another name, and the file is read as a file of signals.` : '')
+      (only ? ' The plugin can use a file with only dates and closes: it sets the open, high and low to the close.' : ' Select the correct columns below.') +
+      (signals ? ` If "${t.header[priceLike[0]]}" holds values that are not prices, give it a different name. Then the plugin reads the file as a file of signals.` : '')
     );
   }
   const cell = (i: number | null) => (i === null ? '' : (t.rows.find((r) => (r[i] ?? '') !== '')?.[i] ?? ''));
   const name = (i: number | null) => (i === null ? '' : t.header[i]);
   const first = readRows(t.rows, { date: named.date!, open: named.open!, high: named.high!, low: named.low!, close: named.close!, volume: -1, adj: -1 }, false, STRICT, false);
   if (first.tally.date === t.rows.length) {
-    return `No date in the "${name(named.date)}" column could be read. The first one is "${cell(named.date)}". Dates should look like 2024-01-31.`;
+    return `The plugin cannot read a date in the "${name(named.date)}" column. The first date is "${cell(named.date)}". Write dates as 2024-01-31.`;
   }
   if (first.tally.missing > 0 && first.tally.missing >= first.tally.zero + first.tally.shape) {
     const decimalComma = t.rows.some((r) => /^-?\d+,\d+$/.test(r[named.close!] ?? ''));
     return decimalComma
-      ? `The prices are written with a decimal comma, such as "${cell(named.close)}", and the plugin reads only a decimal point. A cleaned copy writes them with a point.`
-      : `No number in the "${name(named.close)}" column could be read. The first one is "${cell(named.close)}".`;
+      ? `The prices have a decimal comma, for example "${cell(named.close)}". The plugin reads only a decimal point. A cleaned copy writes them with a point.`
+      : `The plugin cannot read a number in the "${name(named.close)}" column. The first value is "${cell(named.close)}".`;
   }
   return error.replace(/^The CSV /, 'The file ');
 }
@@ -541,7 +541,7 @@ export function inspectCsv(text: string): CsvInspection {
     const dayFirst = slashedDatesAreDayFirst(t.rows.map((r) => r[named.date!] ?? ''));
     const dates = t.rows.map((r) => STRICT.date(r[named.date!] ?? '', dayFirst)).filter(Number.isFinite);
     const tally: Tally = { date: t.rows.length - dates.length, missing: 0, zero: 0, shape: 0, duplicate: dates.length - bars.t.length };
-    const skipped = leftOut(tally, t.rows.length, 'were skipped');
+    const skipped = leftOut(tally, t.rows.length, 'were not read');
     return {
       read: true,
       priced: false,
@@ -605,7 +605,7 @@ function unreadableOf(bars: Bars): string[] {
     if (u.limit) past.push(u.name);
     else out.push(`${u.why[0].toUpperCase()}${u.why.slice(1)}.`);
   }
-  if (past.length) out.push(`Only the first ${MAX_COLUMNS} columns of a file can be read. These were left out: ${past.join(', ')}.`);
+  if (past.length) out.push(`The plugin reads only the first ${MAX_COLUMNS} columns of a file. It did not read these: ${past.join(', ')}.`);
   return out;
 }
 
@@ -635,12 +635,12 @@ function extraColumnsOf(t: Table, used: Set<number>, parsed: Parsed[], read: Rea
   const past: string[] = [];
   for (const c of found) {
     const same = kept.find((k) => k.name === c.name);
-    if (same) notes.push(`The column "${c.header}" was left out: a rule would call it ${c.name}, as it does "${same.header}".`);
+    if (same) notes.push(`The plugin did not keep the column "${c.header}": a rule reads it as ${c.name}, the same name as "${same.header}".`);
     else if (kept.length === MAX_COLUMNS) past.push(c.header);
     else kept.push(c);
   }
-  if (past.length) notes.push(`Only the first ${MAX_COLUMNS} columns of a file can be read, so these were left out: ${past.join(', ')}.`);
-  if (kept.length) notes.push(`The other columns with numbers in them were kept, and a rule reads them by name: ${kept.map((c) => c.name).join(', ')}.`);
+  if (past.length) notes.push(`The plugin reads only the first ${MAX_COLUMNS} columns of a file. Thus it did not keep these: ${past.join(', ')}.`);
+  if (kept.length) notes.push(`The plugin kept the other columns with numbers. A rule reads them by name: ${kept.map((c) => c.name).join(', ')}.`);
   return { kept, notes };
 }
 const ROLES: [CsvRole | 'adjClose', string][] = [
@@ -660,15 +660,15 @@ const ROLES: [CsvRole | 'adjClose', string][] = [
 export function remapCsv(text: string, mapping: CsvMapping): CsvCleaned {
   const t = table(text);
   if (t === null || t.rows.length === 0) return { ok: false, reason: 'The file has no rows of prices.' };
-  if (mapping.date === null) return { ok: false, reason: 'Choose which column holds the date.' };
-  if (mapping.close === null) return { ok: false, reason: 'Choose which column holds the closing price.' };
+  if (mapping.date === null) return { ok: false, reason: 'Select the column that holds the date.' };
+  if (mapping.close === null) return { ok: false, reason: 'Select the column that holds the closing price.' };
   const chosen: [string, number][] = [];
   for (const [role, label] of ROLES) {
     const i = mapping[role];
     if (i === null) continue;
     if (i >= t.header.length) return { ok: false, reason: `The ${label} column is not in the file.` };
     const clash = chosen.find(([, j]) => j === i);
-    if (clash) return { ok: false, reason: `The ${clash[0]} and the ${label} are the same column. Choose a different column for one of them.` };
+    if (clash) return { ok: false, reason: `The ${clash[0]} and the ${label} are the same column. Select a different column for one of them.` };
     chosen.push([label, i]);
   }
 
@@ -689,20 +689,20 @@ export function remapCsv(text: string, mapping: CsvMapping): CsvCleaned {
   if (parsed.length === 0) {
     const worst = (Object.entries(tally) as [keyof Tally, number][]).reduce((a, b) => (b[1] > a[1] ? b : a))[0];
     const because = {
-      date: `No date in the "${t.header[mapping.date]}" column could be read.`,
-      missing: 'The price columns hold no numbers that could be read.',
-      zero: 'Every row has a price at or below zero.',
-      shape: 'In every row the high or low does not contain the open and close.',
-      duplicate: 'Every row repeats a date.',
+      date: `The plugin cannot read a date in the "${t.header[mapping.date]}" column.`,
+      missing: 'The price columns hold no numbers that the plugin can read.',
+      zero: 'All rows have a price at or below zero.',
+      shape: 'In all rows, the high or low does not contain the open and close.',
+      duplicate: 'All rows have a date that is also in a different row.',
     }[worst];
-    return { ok: false, reason: `No row could be read. ${because} Check the columns chosen.` };
+    return { ok: false, reason: `The plugin cannot read the rows. ${because} Make sure that you selected the correct columns.` };
   }
 
   const missing = (['open', 'high', 'low'] as const).filter((r) => mapping[r] === null);
   const notes: string[] = [];
   if (missing.length === 3) {
     notes.push(
-      'The file has no open, high or low, so each is set to the close. A buy then fills at the next close instead of the next open, a stop can only act at a close, and the average true range counts only moves from one close to the next.',
+      'The file has no open, high or low. Thus the plugin sets each of them to the close. As a result, a buy fills at the next close, not at the next open. A stop can close a position only at a close. The average true range counts only the moves from one close to the next.',
     );
   } else {
     const parts = [
@@ -712,13 +712,13 @@ export function remapCsv(text: string, mapping: CsvMapping): CsvCleaned {
     ].filter(Boolean);
     if (parts.length) notes.push(parts.join(' '));
   }
-  if (mapping.volume === null) notes.push('There is no volume column, so volume is 0 on every bar, as it is for any file without one.');
-  if (mapping.adjClose !== null) notes.push('Prices are scaled by the adjusted close, as the plugin does for a file that has an "Adj Close" column.');
+  if (mapping.volume === null) notes.push('There is no volume column. Thus volume is 0 on each bar, as for all files with no volume column.');
+  if (mapping.adjClose !== null) notes.push('The plugin adjusts the prices with the adjusted close, as it does for a file with an "Adj Close" column.');
   const extra = extraColumnsOf(t, new Set(chosen.map(([, i]) => i)), parsed, lenient);
-  if (changed.numbers) notes.push('Numbers written with a decimal comma or with thousands separators were rewritten with a decimal point.');
-  if (ambiguousOf(values)) notes.push(`Dates such as ${firstSlashed(values)} were read ${dayFirst ? 'day first' : 'month first'}.`);
+  if (changed.numbers) notes.push('In the copy, the plugin changed numbers with a decimal comma or a thousands separator to numbers with a decimal point.');
+  if (ambiguousOf(values)) notes.push(`The plugin read the dates ${dayFirst ? 'day first' : 'month first'}, for example ${firstSlashed(values)}.`);
   const dropped = tallyTotal(tally);
-  const left = leftOut(tally, t.rows.length, 'were left out');
+  const left = leftOut(tally, t.rows.length, 'are not in the copy');
   if (left) notes.push(left);
 
   notes.push(...extra.notes);
@@ -745,9 +745,9 @@ export function cleanedPath(path: string): string {
 
 const blankIn = (path: string): string | null =>
   /\s/.test(path)
-    ? `The path "${path}" has a space in it. A strategy reads a file path as one word, so a path with a space or a comma cannot be written there. Rename the file or its folder without spaces, such as with a dash, and open this window again.`
+    ? `The path "${path}" has a space in it. A strategy reads a file path as one word. Thus you cannot write a path with a space or a comma in a strategy. Rename the file or its folder with no spaces, for example with a dash. Then open this window again.`
     : path.includes(',')
-      ? `The path "${path}" has a comma in it. A strategy lists tickers separated by commas, so a path with a comma or a space cannot be written there. Rename the file or its folder without commas, and open this window again.`
+      ? `The path "${path}" has a comma in it. In a strategy, commas divide the tickers. Thus you cannot write a path with a comma or a space in a strategy. Rename the file or its folder with no commas. Then open this window again.`
       : null;
 
 const PROBE = 'a-probe-file';
@@ -765,7 +765,7 @@ export function csvTicker(path: string): CsvInsert {
   }
   const viaOf = parseSpec(`symbol: csv:${PROBE}.csv\nbuy when close of csv:${path} > sma(5)`);
   const ofOk = viaOf.errors.length === 0 && viaOf.spec?.extras.length === 1 && viaOf.spec.extras[0].id === path;
-  return { ok: true, text: `csv:${path}`, note: ofOk ? null : 'This path works on a universe or symbol line, but not after "of" in a rule, because of its characters.' };
+  return { ok: true, text: `csv:${path}`, note: ofOk ? null : 'This path works on a universe or symbol line. Because of its characters, it does not work after "of" in a rule.' };
 }
 
 /**
@@ -778,8 +778,8 @@ export function csvColumn(path: string, name: string, priced: boolean): CsvInser
   if (blank) return { ok: false, reason: blank };
   const viaOf = parseSpec(`symbol: csv:${PROBE}.csv\nbuy when column(${name}) of csv:${path} > 0`);
   if (viaOf.errors.length === 0 && viaOf.spec?.extras.length === 1 && viaOf.spec.extras[0].id === path) return { ok: true, text: `column(${name}) of csv:${path}`, note: null };
-  if (!priced) return { ok: false, reason: `This file has no prices, so a strategy can only read it by writing its path after "of", and the characters of "${path}" do not allow that. Rename the file.` };
-  return { ok: true, text: `column(${name})`, note: 'This path cannot be written after "of", so the file has to be the one the rule belongs to: put it on the universe or symbol line.' };
+  if (!priced) return { ok: false, reason: `This file has no prices. Thus a strategy can read it only with its path after "of". The characters of "${path}" do not let you write it there. Rename the file.` };
+  return { ok: true, text: `column(${name})`, note: 'You cannot write this path after "of". Thus the file must be the ticker of the rule: put it on the universe or symbol line.' };
 }
 
 /** A complete small block that trades this file on a trend rule, fenced, ending with a newline. */
@@ -795,7 +795,7 @@ buy  when close > sma(${STARTER_AVERAGE})
 sell when close < sma(${STARTER_AVERAGE})`;
   const { spec, errors } = parseSpec(text);
   if (errors.length > 0 || spec?.name !== `Trend on ${base}`) {
-    return { ok: false, reason: `A strategy cannot be written for "${path}". ${errors[0]?.message ?? 'The file name does not read as a strategy name.'}` };
+    return { ok: false, reason: `The plugin cannot write a strategy for "${path}". ${errors[0]?.message ?? 'The plugin cannot use the file name as a strategy name.'}` };
   }
   return { ok: true, text: `\`\`\`strategy\n${text}\n\`\`\`\n`, note: null };
 }

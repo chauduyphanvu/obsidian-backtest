@@ -76,13 +76,13 @@ export function renderTrades(root: HTMLElement, bt: Backtest, intraday: boolean)
       const rows = new Map<Trade, HTMLTableRowElement>();
       if (closed.length >= 2) {
         const read = h(d, 'div', 'bt-tab-read');
-        const idle = 'Every closed trade’s return, from the worst to the best. Point at one to read it; click it to find it in the list.';
+        const idle = 'The return of each closed trade, from the worst to the best. Move the pointer to a trade to see it. Click a trade to find it in the list.';
         read.textContent = idle;
         const chart = h(d, 'div', 'bt-chart bt-payoff');
         stop = onWidth(chart, (width) => drawPayoff(chart, read, idle, width, closed, intraday, rows));
       }
       const shown = all.slice(-MAX_TRADE_ROWS).reverse();
-      if (shown.length < all.length) h(d, 'div', 'bt-note', `Showing the latest ${shown.length} of ${all.length}.`);
+      if (shown.length < all.length) h(d, 'div', 'bt-note', `The list shows the last ${shown.length} of ${all.length} trades.`);
       const table = h(h(d, 'div', 'bt-scroll bt-trades'), 'table', 'bt-table');
       const head = h(h(table, 'thead'), 'tr');
       // A run that shorts says each trade's side, and its entry and exit are opened and closed rather than bought and sold.
@@ -170,7 +170,7 @@ function drawPayoff(chart: HTMLElement, read: HTMLElement, idle: string, width: 
     const t = sorted[at((e as MouseEvent).clientX)];
     const row = rows.get(t);
     if (!row) {
-      read.textContent = `${say(t)} · not in the list, which shows the latest ${MAX_TRADE_ROWS} trades.`;
+      read.textContent = `${say(t)} · not in the list. The list shows only the last ${MAX_TRADE_ROWS} trades.`;
       return;
     }
     row.scrollIntoView?.({ block: 'nearest' });
@@ -193,8 +193,8 @@ function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest
   const id = `bt-why-${++explained}`;
   const button = h(cell, 'button', 'bt-why');
   button.type = 'button';
-  button.setAttribute('aria-label', 'Explain this trade');
-  button.title = 'Explain this trade';
+  button.setAttribute('aria-label', 'Show the reasons for this trade');
+  button.title = 'Show the reasons for this trade';
   button.setAttribute('aria-expanded', 'false');
   button.setAttribute('aria-controls', id);
   let open: HTMLTableRowElement | null = null;
@@ -214,7 +214,7 @@ function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest
     try {
       renderExplanation(box, explainTrade(bt, trade));
     } catch (e) {
-      h(box, 'div', 'bt-warning', `This trade can't be explained: ${e instanceof Error ? e.message : String(e)}`);
+      h(box, 'div', 'bt-warning', `Cannot show the reasons for this trade: ${e instanceof Error ? e.message : String(e)}`);
     }
     row.after(open);
     button.setAttribute('aria-expanded', 'true');

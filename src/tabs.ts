@@ -34,7 +34,7 @@ export function tabify(host: HTMLElement): void {
   const more = h(bar, 'div', 'bt-tabs-more');
   more.setAttribute('role', 'tablist');
   more.setAttribute('aria-label', 'Tools for this result');
-  h(more, 'span', 'bt-tabs-more-label', 'Look deeper');
+  h(more, 'span', 'bt-tabs-more-label', 'More tools');
 
   const buttons = new Map<HTMLDetailsElement, HTMLButtonElement>();
   const sync = () => {

@@ -168,22 +168,22 @@ test('the note on a backfill comes with the series, fresh or saved, and is not a
 
 test('FRED: a series it does not know is final; a rejected key, another error and a broken answer are not', async () => {
   const missing = recording(async () => JSON.stringify({ error_code: 400, error_message: 'Bad Request.  The series does not exist.' }));
-  await assert.rejects(loadBars({ name: 'XYZ', source: 'fred', id: 'XYZ' }, '1d', 0, missing.d), { message: 'FRED has no series called XYZ. Check the series ID, such as T10Y2Y.' });
+  await assert.rejects(loadBars({ name: 'XYZ', source: 'fred', id: 'XYZ' }, '1d', 0, missing.d), { message: 'FRED has no series with the name XYZ. Make sure that the series ID is correct, for example T10Y2Y.' });
   const key = recording(async () =>
     JSON.stringify({ error_code: 400, error_message: 'Bad Request.  The value for variable api_key is not registered.  Read https://fred.stlouisfed.org/docs/api/api_key.html for more information.' }),
   );
   await assert.rejects(loadBars(FRED, '1d', 0, key.d), {
-    message: 'Couldn\'t load T10Y2Y from fred: FRED did not accept the API key. Check the secret chosen under "FRED API key" in the plugin settings',
+    message: 'Cannot load T10Y2Y from fred: FRED did not accept the API key. Make sure that the secret in the plugin setting "FRED API key" is correct',
   });
   const busy = recording(async () => JSON.stringify({ error_code: 429, error_message: 'Too Many Requests.   Exceeded Rate Limit' }));
-  await assert.rejects(loadBars(FRED, '1d', 0, busy.d), { message: "Couldn't load T10Y2Y from fred: FRED said: Too Many Requests. Exceeded Rate Limit" });
+  await assert.rejects(loadBars(FRED, '1d', 0, busy.d), { message: 'Cannot load T10Y2Y from fred: FRED sent this message: Too Many Requests. Exceeded Rate Limit' });
   const html = recording(async () => '<html>503</html>');
-  await assert.rejects(loadBars(FRED, '1d', 0, html.d), { message: "Couldn't load T10Y2Y from fred: FRED sent something other than series data" });
+  await assert.rejects(loadBars(FRED, '1d', 0, html.d), { message: 'Cannot load T10Y2Y from fred: FRED did not send series data' });
 });
 
 test('FRED without a key asks nothing and names the setting', async () => {
   const { d, seen } = recording(daily(5), { secret: () => null });
-  await assert.rejects(loadBars(FRED, '1d', 0, d), { message: 'FRED needs an API key to load T10Y2Y. Choose the secret that holds it under "FRED API key" in the plugin settings.' });
+  await assert.rejects(loadBars(FRED, '1d', 0, d), { message: 'The plugin must have a FRED API key to load T10Y2Y. Select the secret with the key in the plugin setting "FRED API key".' });
   assert.equal(seen.requests.length, 0);
 });
 
@@ -236,7 +236,7 @@ test('a run with Tiingo, FRED and Tiingo standing in for Yahoo puts the keys in 
     out.prices.map((p) => [p.name, p.source]),
     [['SPY', 'tiingo'], ['QQQ', 'tiingo'], ['T10Y2Y', 'fred'], ['DGS3MO', 'fred']],
   );
-  assert.deepEqual(out.warnings, ["Couldn't load QQQ from Yahoo (HTTP 503); using Tiingo's prices instead."]);
+  assert.deepEqual(out.warnings, ['Cannot load QQQ from Yahoo (HTTP 503). The plugin uses the prices from Tiingo.']);
   assert.deepEqual(leaks(seen, [out.spec, out.warnings, out.notes, out.prices, [...out.data], out.backtest.notes, runner.parse(block)]), []);
 });
 
@@ -269,8 +269,8 @@ test('no error from a keyed request carries a key, or the query of the address i
     assert.ok(!m.includes(FRED_KEY) && !m.includes(TIINGO_KEY), m);
     assert.ok(!/https?:\/\/\S*\?/.test(m), m);
   }
-  assert.ok(messages.includes("Couldn't load T10Y2Y from fred: net::ERR_CONNECTION_RESET at https://api.stlouisfed.org/fred/series/vintagedates"));
-  assert.ok(messages.includes("Couldn't load T10Y2Y from fred: FRED said: Something went wrong with …"));
+  assert.ok(messages.includes('Cannot load T10Y2Y from fred: net::ERR_CONNECTION_RESET at https://api.stlouisfed.org/fred/series/vintagedates'));
+  assert.ok(messages.includes('Cannot load T10Y2Y from fred: FRED sent this message: Something went wrong with …'));
 });
 
 test('a saved copy used after a failed refresh says why without the key', async () => {
@@ -283,7 +283,7 @@ test('a saved copy used after a failed refresh says why without the key', async 
     { now: () => NOW + DAY, cacheRead: async (k) => cache.get(k) ?? null },
   );
   const r = await loadBars(FRED, '1d', 0, later.d);
-  assert.equal(r.warning, "Couldn't refresh T10Y2Y (timeout https://api.stlouisfed.org/fred/series/vintagedates); using prices saved on 2025-03-12.");
+  assert.equal(r.warning, "Cannot download new prices for T10Y2Y (timeout https://api.stlouisfed.org/fred/series/vintagedates). The plugin uses the prices saved on 2025-03-12.");
 });
 
 test("a FRED series keeps the history its rules need counted in its own rows, as a CSV file does", async () => {
@@ -328,7 +328,7 @@ test('the settings save the names of the secrets, never a key, and the setting n
   assert.ok(!/secret|fallback/i.test(defaults), defaults);
   const tab = readFileSync(new URL('../src/settings.ts', import.meta.url), 'utf8');
   for (const name of Object.values(KEY_SETTING)) assert.ok(tab.includes(`.setName('${name}')`), name);
-  assert.ok(tab.includes(".setName('When Yahoo fails, use Tiingo')"));
+  assert.ok(tab.includes(".setName('Use Tiingo when Yahoo is not available')"));
 });
 
 test('a saved FRED series with its note is ready to run with no download', async () => {

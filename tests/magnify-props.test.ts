@@ -207,7 +207,7 @@ test('every explanation of a run looked inside agrees with its trade, with eithe
             if (why.exit.inside?.k === 'inside') {
               inside++;
               if (why.exit.atOpen) atOpen++;
-              assert.ok(ex.sections.find((s) => s.id === 'sold')!.rows.some((r) => r.label.includes(' 1h bar starting ')), where);
+              assert.ok(ex.sections.find((s) => s.id === 'sold')!.rows.some((r) => r.label.includes(' 1h bar that starts at ')), where);
             }
             if (why.exit.inside?.k === 'whole') whole++;
           }

@@ -26,15 +26,15 @@ export class BacktestSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl).setName('Defaults for new runs').setHeading();
-    this.field('Starting money', 'Used when a strategy has no capital line.', String(settings.capital), '10000', (v) => {
+    this.field('Start capital', 'The plugin uses this value when a strategy has no capital line.', String(settings.capital), '10000', (v) => {
       const n = Number(v);
-      return v.trim() !== '' && Number.isFinite(n) && n > 0 ? null : 'Enter an amount above 0.';
+      return v.trim() !== '' && Number.isFinite(n) && n > 0 ? null : 'Type a number that is more than 0.';
     }, (v) => (settings.capital = Number(v)), 'number');
-    this.field('Costs per trade', 'Used when a strategy has no costs line, such as 5 bps.', settings.costs, '0 bps', (v) => validateSetting('costs', v), (v) => (settings.costs = v.trim()));
-    this.field('Slippage per fill', 'How much worse each fill is than the price, such as 5 bps.', settings.slippage, '0 bps', (v) => validateSetting('slippage', v), (v) => (settings.slippage = v.trim()));
+    this.field('Costs per trade', 'The plugin uses this value when a strategy has no costs line. For example: 5 bps.', settings.costs, '0 bps', (v) => validateSetting('costs', v), (v) => (settings.costs = v.trim()));
+    this.field('Slippage per fill', 'Each fill is worse than the price by this value. For example: 5 bps.', settings.slippage, '0 bps', (v) => validateSetting('slippage', v), (v) => (settings.slippage = v.trim()));
     this.field(
       'Commission per order',
-      'Used when a strategy has no commission line, on top of the costs: 1 for a fixed amount per order, or 0.005 per share, min 1. 0 for none.',
+      'The plugin uses this value when a strategy has no commission line. The plugin adds it to the costs. For example: 1 (a fee of 1 for each order), or 0.005 per share, min 1. Type 0 for no commission.',
       settings.commission,
       '0',
       (v) => validateSetting('commission', v),
@@ -42,7 +42,7 @@ export class BacktestSettingTab extends PluginSettingTab {
     );
     this.field(
       'Interest on cash',
-      'A rate such as 4%, or a ticker whose price is a yield, such as ^IRX. Strategies can override it with a cash rate line.',
+      'A rate, for example 4%. Or a ticker with a price that is a yield, for example ^IRX. A cash rate line in a strategy overrides this value.',
       settings.cashRate,
       '0%',
       (v) => validateSetting('cashRate', v),
@@ -50,7 +50,7 @@ export class BacktestSettingTab extends PluginSettingTab {
     );
     this.field(
       'Borrow fee for shorts',
-      'A yearly fee on the value of each short position, such as 0.5%. Strategies can override it with a borrow fee line.',
+      'A yearly fee on the value of each short position, for example 0.5%. A borrow fee line in a strategy overrides this value.',
       settings.borrowFee,
       '0.5%',
       (v) => validateSetting('borrowFee', v),
@@ -58,15 +58,15 @@ export class BacktestSettingTab extends PluginSettingTab {
     );
     this.field(
       'Interest on borrowed money',
-      'A yearly rate on the money a strategy owes when it holds more than its equity, such as 6%. Strategies can override it with a margin rate line.',
+      'A yearly rate on the money that a strategy borrows when it holds more than its equity, for example 6%. A margin rate line in a strategy overrides this value.',
       settings.marginRate,
       '6%',
       (v) => validateSetting('marginRate', v),
       (v) => (settings.marginRate = v.trim()),
     );
     new Setting(containerEl)
-      .setName('Where plain tickers come from')
-      .setDesc('Used for tickers written without a prefix such as binance:. Tiingo needs its API key below.')
+      .setName('Price source for tickers without a prefix')
+      .setDesc('The service for tickers that you write without a prefix (for example binance:). For Tiingo, you must also set the "Tiingo API key" setting.')
       .addDropdown((d) =>
         d
           .addOptions({ yahoo: 'Yahoo', binance: 'Binance', tiingo: 'Tiingo' })
@@ -80,36 +80,36 @@ export class BacktestSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Prices').setHeading();
     this.field(
       'Keep saved prices for',
-      `Hours before saved prices are fetched again, from ${CACHE_HOURS_MIN} to ${CACHE_HOURS_MAX}.`,
+      `The plugin downloads saved prices again after this number of hours, from ${CACHE_HOURS_MIN} to ${CACHE_HOURS_MAX}.`,
       String(settings.cacheHours),
       '6',
       (v) => {
         const n = Number(v);
-        return v.trim() !== '' && Number.isInteger(n) && n >= CACHE_HOURS_MIN && n <= CACHE_HOURS_MAX ? null : `Enter a whole number of hours, from ${CACHE_HOURS_MIN} to ${CACHE_HOURS_MAX}.`;
+        return v.trim() !== '' && Number.isInteger(n) && n >= CACHE_HOURS_MIN && n <= CACHE_HOURS_MAX ? null : `Type a number of hours from ${CACHE_HOURS_MIN} to ${CACHE_HOURS_MAX}, with no decimals.`;
       },
       (v) => (settings.cacheHours = Number(v)),
       'number',
     );
     new Setting(containerEl)
       .setName('Saved prices')
-      .setDesc('Remove every price file this plugin has saved.')
+      .setDesc('Delete all the price files that the plugin saved.')
       .addButton((b) =>
-        b.setButtonText('Clear saved prices').onClick(async () => {
+        b.setButtonText('Delete saved prices').onClick(async () => {
           b.setDisabled(true);
           try {
             await this.host.clearPrices();
-            b.setButtonText('Cleared');
-            window.setTimeout(() => b.setButtonText('Clear saved prices').setDisabled(false), 2000);
+            b.setButtonText('Deleted');
+            window.setTimeout(() => b.setButtonText('Delete saved prices').setDisabled(false), 2000);
           } catch (e) {
             b.setDisabled(false);
-            new Notice(`Could not clear saved prices: ${e instanceof Error ? e.message : String(e)}`);
+            new Notice(`Cannot delete the saved prices: ${e instanceof Error ? e.message : String(e)}`);
           }
         }),
       );
-    const stored = 'Choose or add a secret in Obsidian’s keychain. Only the secret’s name is saved here.';
+    const stored = 'Select or add a secret in the Obsidian keychain. The plugin saves only the name of the secret.';
     new Setting(containerEl)
       .setName('Tiingo API key')
-      .setDesc(`Needed for tiingo: tickers, data: tiingo and the setting below. ${stored} It is sent to api.tiingo.com in a request header.`)
+      .setDesc(`The plugin uses this key for tiingo: tickers, data: tiingo and the setting "Use Tiingo when Yahoo is not available". ${stored} The plugin sends the key to api.tiingo.com in a request header.`)
       .addComponent((el) =>
         new SecretComponent(this.app, el).setValue(settings.tiingoSecret).onChange(async (name) => {
           settings.tiingoSecret = name ?? '';
@@ -118,7 +118,7 @@ export class BacktestSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('FRED API key')
-      .setDesc(`Needed for fred: series. ${stored} FRED takes it only in the web address of each request to api.stlouisfed.org.`)
+      .setDesc(`The plugin uses this key for fred: series. ${stored} The plugin sends the key in the URL of each request to api.stlouisfed.org, because FRED accepts the key only there.`)
       .addComponent((el) =>
         new SecretComponent(this.app, el).setValue(settings.fredSecret).onChange(async (name) => {
           settings.fredSecret = name ?? '';
@@ -126,9 +126,9 @@ export class BacktestSettingTab extends PluginSettingTab {
         }),
       );
     new Setting(containerEl)
-      .setName('When Yahoo fails, use Tiingo')
+      .setName('Use Tiingo when Yahoo is not available')
       .setDesc(
-        'When a US ticker cannot be loaded from Yahoo and its saved copy is more than 3 days old, or there is none, load it from Tiingo instead, and say so in the result. Not for tickers that start with ^ or end in a suffix such as .L, -USD or =X. Needs the Tiingo API key.',
+        'This setting applies when the plugin cannot download a US ticker from Yahoo and has no saved copy from the last 3 days. Then the plugin downloads the ticker from Tiingo. The result tells you this. Tickers that start with ^ or end with a suffix (for example .L, -USD or =X) are not included. You must also set the Tiingo API key.',
       )
       .addToggle((t) =>
         t.setValue(settings.tiingoFallback).onChange(async (v) => {
@@ -141,7 +141,7 @@ export class BacktestSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Write results to note properties')
       .setDesc(
-        "When a note's strategies have run, save their main figures to the note's properties so a Base can list them. Properties that start with bt_ belong to this plugin: it updates them, and removes ones that no strategy in the note produces any more. This edits your notes.",
+        'After the strategies in a note run, the plugin saves their primary figures to the properties of the note. A Base can then show them in a list. The plugin controls all properties that start with bt_. It updates them, and removes the bt_ properties that no strategy in the note makes. This setting changes your notes.',
       )
       .addToggle((t) =>
         t.setValue(settings.writeProperties).onChange(async (v) => {
@@ -151,18 +151,18 @@ export class BacktestSettingTab extends PluginSettingTab {
       );
     this.field(
       'Note for today’s orders',
-      'Vault path of the note to write them to, such as Trading/Orders.md. The note is rewritten each time you save. An existing note is replaced only if this plugin made it. Leave empty for none.',
+      'The vault path of the note for the orders, for example Trading/Orders.md. The plugin writes the full note again each time you save. The plugin replaces a note at this path only if the plugin made that note. Keep this field empty for no note.',
       settings.ordersNote,
       'Trading/Orders.md',
       () => null,
       (v) => (settings.ordersNote = v.trim()),
     );
-    this.field('Folder for saved results', 'Vault folder where saved results go.', settings.snapshotFolder, 'Backtests', () => null, (v) => (settings.snapshotFolder = v.trim() || 'Backtests'));
+    this.field('Folder for saved results', 'The vault folder for saved results.', settings.snapshotFolder, 'Backtests', () => null, (v) => (settings.snapshotFolder = v.trim() || 'Backtests'));
 
-    new Setting(containerEl).setName('Results and writing').setHeading();
+    new Setting(containerEl).setName('Results and editor').setHeading();
     new Setting(containerEl)
-      .setName('How results first appear')
-      .setDesc('Full shows everything. Compact shows one line per strategy that opens on a click, which suits a note with several strategies.')
+      .setName('Result view')
+      .setDesc('Full shows all of each result. Compact shows one line for each strategy. Click the line to open the result. Compact is good for a note with many strategies.')
       .addDropdown((d) =>
         d
           .addOptions({ full: 'Full', compact: 'Compact' })
@@ -173,8 +173,8 @@ export class BacktestSettingTab extends PluginSettingTab {
           }),
       );
     new Setting(containerEl)
-      .setName('Check for orders when Obsidian starts')
-      .setDesc("Runs every strategy in the vault shortly after start-up and shows how many orders are due in the status bar. This fetches prices for every strategy's tickers. Turning it off hides the count and stops the checks at once.")
+      .setName('Find orders when Obsidian starts')
+      .setDesc('After Obsidian starts, the plugin runs all strategies in the vault. Then the status bar shows the number of orders for today. For this, the plugin downloads the prices of the tickers in each strategy. When you set this to off, the plugin removes the count and stops the runs immediately.')
       .addToggle((t) =>
         t.setValue(settings.ordersOnStartup).onChange(async (v) => {
           settings.ordersOnStartup = v;
@@ -183,9 +183,9 @@ export class BacktestSettingTab extends PluginSettingTab {
         }),
       );
     new Setting(containerEl)
-      .setName('Look tickers up while writing')
+      .setName('Find tickers while you type')
       .setDesc(
-        "Suggests matching tickers and marks ones that do not exist. What you type where a ticker goes, and the Yahoo tickers named in strategy blocks on screen, are sent to Yahoo's search, one ticker at a time. Starting what you type with binance:, csv:, tiingo: or fred: keeps it from being sent, and so does a block whose tickers come from Tiingo. Binance's list of markets is downloaded without sending anything. Nothing else from your notes is sent.",
+        'Shows tickers for the text that you type, and identifies unknown tickers. The plugin sends the text that you type in the position of a ticker to Yahoo. It also sends the Yahoo tickers in the strategy blocks on the screen. It sends one ticker at a time. It does not send text that starts with binance:, csv:, tiingo: or fred:. It does not send the tickers of a block that uses Tiingo for its prices. The plugin downloads the list of Binance markets, and sends no text that you type. The plugin sends nothing more from your notes.',
       )
       .addToggle((t) =>
         t.setValue(settings.tickerLookup).onChange(async (v) => {
@@ -194,10 +194,10 @@ export class BacktestSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl).setName('Drafting from plain English').setDesc(DRAFT_PRIVACY).setHeading();
+    new Setting(containerEl).setName('Strategies from a description').setDesc(DRAFT_PRIVACY).setHeading();
     new Setting(containerEl)
       .setName('Provider')
-      .setDesc('The service that turns your description into a strategy.')
+      .setDesc('The service that writes a strategy from your description.')
       .addDropdown((d) =>
         d
           .addOptions({ anthropic: 'Anthropic', openai: 'OpenAI-compatible server' })

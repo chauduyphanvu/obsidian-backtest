@@ -34,7 +34,7 @@ test('the runner parses with its defaults and loads the cash-rate ticker with th
   // Never invested: 1000 earns 36.5% a year for two one-day steps.
   assert.ok(near(out.backtest.run.equity[2], 1000 * 1.001 * 1.001));
   assert.ok(near(out.backtest.interest, 1000 * 1.001 * 1.001 - 1000));
-  assert.equal(out.backtest.cashRateNote, 'Cash earns the bills rate');
+  assert.equal(out.backtest.cashRateNote, 'Cash receives the bills rate');
 });
 
 const parsed = (src: string) => {
@@ -195,5 +195,5 @@ test('a cash-rate ticker that cannot load says where the cash rate comes from', 
   // A block with no cash rate line reads it from the settings, so the ticker named in the message is nowhere in the block.
   const runner = new Runner(deps({ 'prices/a.csv': csv([10, 11, 12]) }), { cashRate: 'csv:rates/missing.csv' });
   const { spec } = runner.parse('universe: csv:prices/a.csv\nbuy when close > 1');
-  await assert.rejects(runner.run(spec!), /No file at rates\/missing\.csv\. It is the ticker the cash rate is read from: the block's "cash rate" line, or without one the plugin's "Interest on cash" setting\./);
+  await assert.rejects(runner.run(spec!), /There is no file at rates\/missing\.csv\. The cash rate comes from this ticker\. The ticker is in the "cash rate" line of the block\. If the block has no such line, it is in the plugin setting "Interest on cash"\./);
 });

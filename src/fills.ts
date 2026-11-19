@@ -278,7 +278,7 @@ export interface FillsRead {
 export type FillsResult = FillsRead | { ok: false; reason: string };
 
 const MISSING =
-  "No line of the file names the columns of a trade: a date, a symbol, a quantity and a price. Write which headers hold them in a 'fills columns' line, such as fills columns: date = Trade Date; ticker = Symbol; quantity = Qty; price = Price";
+  "No line of the file names the columns of a trade: a date, a symbol, a quantity and a price. In a 'fills columns' line, write the headers that hold them, for example fills columns: date = Trade Date; ticker = Symbol; quantity = Qty; price = Price";
 
 /**
  * Reads a broker's export of trades. Columns are found by their headers, never by their position, so a column added or
@@ -348,7 +348,7 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
           // A broker's own words are the only ones read in its file: a Flex query's "BUY (Ca.)" is a cancellation.
           if (!preset?.buy) side = BUY_WORDS.test(action) ? 'buy' : SELL_WORDS.test(action) ? 'sell' : null;
           if (side === null) {
-            unread.push({ line, why: `the action "${action}" is not a purchase or a sale this reads` });
+            unread.push({ line, why: `the plugin cannot read the action "${action}" as a buy or a sell` });
             continue;
           }
         }
@@ -361,7 +361,7 @@ export function readFills(text: string, traded: string[], saved: Partial<FillCol
       }
       const symbol = (cells[at.ticker] ?? '').trim();
       if (!symbol) {
-        unread.push({ line, why: 'it names no ticker' });
+        unread.push({ line, why: 'it has no ticker' });
         continue;
       }
       const ticker = spelled.get(tickerKey(symbol));
@@ -456,17 +456,17 @@ export function parseFillColumns(text: string): Partial<FillColumns> | string {
     if (!part.trim()) continue;
     const m = part.match(/^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$/s);
     const role = FILL_ROLES.find((r) => r === m?.[1].toLowerCase());
-    if (!m || !role) return `"${part.trim()}" does not say which column holds what. Write each as a part, =, and the header, such as price = Price ($); the parts are ${ROLE_FORMS}`;
+    if (!m || !role) return `"${part.trim()}" does not give a part and its column. Write each as a part, =, and the header, for example price = Price ($). The parts are ${ROLE_FORMS}`;
     if (role in out) return `${role} is named twice`;
     if (!m[2]) return `Write the header of the ${role} column after "${role} ="`;
     const headers = (role === 'fees' ? splitOutsideQuotes(m[2], '+') : [m[2]]).map(unquoted);
     const open = headers.find((h) => h === null);
-    if (open !== undefined) return `A header in quotes needs its closing quote: ${m[2].slice(m[2].indexOf('"'))}`;
+    if (open !== undefined) return `A header in quotation marks must have a closing quotation mark: ${m[2].slice(m[2].indexOf('"'))}`;
     if (headers.some((h) => !h)) return 'Write each fees header between the + signs';
     if (role === 'fees') out.fees = headers as string[];
     else out[role] = headers[0]!;
   }
-  if (Object.keys(out).length === 0) return `Name at least one column, such as date = Trade Date; the parts are ${ROLE_FORMS}`;
+  if (Object.keys(out).length === 0) return `Write one or more columns, for example date = Trade Date. The parts are ${ROLE_FORMS}`;
   return out;
 }
 

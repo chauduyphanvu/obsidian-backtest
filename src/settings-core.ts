@@ -74,18 +74,18 @@ export const DEFAULT_SETTINGS: Settings = {
 
 /** What each provider's three connection fields say, matching what the request code requires of them. */
 export function providerText(provider: Settings['llmProvider']): { address: { desc: string; placeholder: string }; model: { desc: string; placeholder: string }; key: string } {
-  const stored = 'Choose or add a secret in Obsidian’s keychain. Only the secret’s name is saved here.';
+  const stored = 'Select or add a secret in the Obsidian keychain. The plugin saves only the name of the secret.';
   if (provider === 'anthropic') {
     return {
-      address: { desc: 'Leave empty to use Anthropic’s own address. Enter another only to go through a proxy.', placeholder: 'https://api.anthropic.com' },
-      model: { desc: `Leave empty to use ${DEFAULT_MODEL.anthropic}.`, placeholder: DEFAULT_MODEL.anthropic },
-      key: `Required. ${stored}`,
+      address: { desc: 'Keep this field empty to use the Anthropic address. Type a different address only for a proxy.', placeholder: 'https://api.anthropic.com' },
+      model: { desc: `Keep this field empty to use ${DEFAULT_MODEL.anthropic}.`, placeholder: DEFAULT_MODEL.anthropic },
+      key: `You must set a key. ${stored}`,
     };
   }
   return {
-    address: { desc: 'Required. The address of your server, such as http://localhost:8000/v1.', placeholder: 'http://localhost:8000/v1' },
-    model: { desc: 'Required. The name of the model on your server.', placeholder: 'Model name' },
-    key: `${stored} Leave it empty for a server that needs no key.`,
+    address: { desc: 'You must type the address of your server, for example http://localhost:8000/v1.', placeholder: 'http://localhost:8000/v1' },
+    model: { desc: 'You must type the name of the model on your server.', placeholder: 'Model name' },
+    key: `${stored} Keep this field empty if your server does not use a key.`,
   };
 }
 
@@ -115,13 +115,13 @@ const BORROWING_BLOCK = `${VALID_BLOCK}\nshort when false`;
 /** Reads one text setting as the language would read it on its line, such as `costs:` or `borrow fee:`. */
 function read(key: TextKey, text: string): { spec: Spec } | { error: string } {
   const value = text.trim();
-  if (/[\r\n]/.test(value)) return { error: 'Use a single line.' };
-  if (!value) return { error: `Enter a value, such as ${EXAMPLE[key]}.` };
+  if (/[\r\n]/.test(value)) return { error: 'Use one line.' };
+  if (!value) return { error: `Type a value, for example ${EXAMPLE[key]}.` };
   // In a strategy a comment would be dropped; here the text is stored as it is.
-  if (/(^|\s)(#|\/\/)/.test(value)) return { error: 'Leave out comments here.' };
+  if (/(^|\s)(#|\/\/)/.test(value)) return { error: 'Do not write comments here.' };
   const block = key === 'borrowFee' || key === 'marginRate' ? BORROWING_BLOCK : VALID_BLOCK;
   const { spec, errors } = parseSpec(`${block}\n${SETTING_LINE[key]}: ${value}`);
-  return spec ? { spec } : { error: errors[0]?.message ?? 'This value cannot be read.' };
+  return spec ? { spec } : { error: errors[0]?.message ?? 'The plugin cannot read this value.' };
 }
 
 /** Checks one text setting the way the language would read it. Returns null when fine, else a plain message. */

@@ -55,7 +55,7 @@ export function valuesUsed(params: Param[]): string | null {
   const moved = params.filter((p) => tidy(p.value) !== tidy(p.declared));
   if (moved.length === 0) return null;
   const list = (value: (p: Param) => number) => moved.map((p) => `${p.name} ${formatParam(p, value(p))}`).join(', ');
-  return `These checks test the run shown, with ${list((p) => p.value)}. The block says ${list((p) => p.declared)}.`;
+  return `These checks examine the run shown, with ${list((p) => p.value)}. The values in the block are ${list((p) => p.declared)}.`;
 }
 
 /** Fills the section; returns what stops its count of tries from following the record. */
@@ -67,8 +67,8 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
     'p',
     'bt-luck-intro',
     ranged
-      ? 'Three checks that try to make a lucky result look lucky. They run extra backtests on the prices already loaded.'
-      : 'Two checks that try to make a lucky result look lucky. They run extra backtests on the prices already loaded. A third, walk-forward, needs a parameter with a range, such as fast = 50 in 20..100 step 10.',
+      ? 'These three checks look for signs that the result is luck. They run more backtests on the prices that are loaded.'
+      : 'These two checks look for signs that the result is luck. They run more backtests on the prices that are loaded. A third check, walk-forward, is available when a parameter has a range, for example fast = 50 in 20..100 step 10.',
   );
   const used = valuesUsed(bt.spec.params);
   const ours = used ? SHOWN : NOTE;
@@ -123,7 +123,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
   const randomChecks = async (): Promise<boolean> => {
     let b: BootstrapResult | null;
     try {
-      b = await step({ kind: 'reshuffle', seed, runs: RESHUFFLES }, 'Reshuffling history…');
+      b = await step({ kind: 'reshuffle', seed, runs: RESHUFFLES }, 'Reshuffled history…');
     } catch (e) {
       if (!life.gone) bootBlock(boot, lifeOf(boot), bt, message(e));
       return false;
@@ -135,7 +135,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
     try {
       r = await step({ kind: 'random', seed, runs: RANDOM_RUNS }, `Random entries: 0 of ${RANDOM_RUNS}`, (d, n) => `Random entries: ${d} of ${n}`);
       if (life.gone) return false;
-      randomBlock(random, lifeOf(random), bt, r && !(r.stopped && r.runs === 0) ? r : 'Stopped before the first try. Run the checks again to finish it.', RANDOM_RUNS);
+      randomBlock(random, lifeOf(random), bt, r && !(r.stopped && r.runs === 0) ? r : 'The check stopped before the first try. Run the checks again.', RANDOM_RUNS);
     } catch (e) {
       if (life.gone) return false;
       randomBlock(random, lifeOf(random), bt, message(e), RANDOM_RUNS);
@@ -158,7 +158,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
           if (life.gone) return;
           if (w) walkBlock(walk, lifeOf(walk), w, ours);
           else {
-            walkBlock(walk, lifeOf(walk), 'Stopped before the end. Run the checks again to finish it.', ours);
+            walkBlock(walk, lifeOf(walk), 'The check stopped before the end. Run the checks again.', ours);
             finished = false;
           }
         } catch (e) {
@@ -198,7 +198,7 @@ const how = (sec: HTMLElement, works: string, cannot: string) => {
   const p = h(sec, 'p', 'bt-note bt-luck-how');
   h(p, 'strong', undefined, 'How it works: ');
   p.append(works + ' ');
-  h(p, 'strong', undefined, "What it can't tell you: ");
+  h(p, 'strong', undefined, 'What it cannot tell you: ');
   p.append(cannot);
 };
 
@@ -243,48 +243,48 @@ export function triesOf(ledger: Ledger, bt: Backtest): Tries {
   return { ...base, deflated: { ...d, bar: d.sr0 * Math.sqrt(perYear) }, why: null };
 }
 
-const chance = (p: number) => (p > 0.995 ? 'over 99%' : p < 0.005 ? 'under 1%' : `about ${pct(p, 0)}`);
+const chance = (p: number) => (p > 0.995 ? 'more than 99%' : p < 0.005 ? 'less than 1%' : `approximately ${pct(p, 0)}`);
 const ratio = (x: number) => minus(x.toFixed(2));
 const sinceText = (t: Tries) => (t.since === null ? '' : ` since ${localDate(t.since)}`);
 const counted = (t: Tries) =>
-  t.n === 1 ? `1 try of this block has been counted${sinceText(t)}` : `${plural(t.n, 'try', 'tries')} of this block have been counted${sinceText(t)}`;
+  `The plugin counted ${plural(t.n, 'try', 'tries')} of this block${sinceText(t)}`;
 
 /** The verdict of "How many tries", in words. */
 export function triesWords(t: Tries): string {
   const cannot: Record<NonNullable<Tries['why']>, string> = {
-    'no trades': 'The run shown never traded, so it is not one of them, and it has no Sharpe ratio to judge.',
-    flat: 'The run shown barely moves against cash, so it has no Sharpe ratio to judge.',
-    short: 'The run shown has too few bars to judge its Sharpe ratio.',
-    shape: "Can't tell: the run's returns are so lopsided or heavy-tailed that its Sharpe ratio has no usable margin of error.",
+    'no trades': 'The run shown made no trades. Thus the count does not include it, and it has no Sharpe ratio to examine.',
+    flat: 'The returns of the run shown are almost the same as the returns of cash. Thus it has no Sharpe ratio to examine.',
+    short: 'The run shown does not have sufficient bars to examine its Sharpe ratio.',
+    shape: 'The plugin cannot calculate this. The returns of the run are too skewed or heavy-tailed, and the margin of error on its Sharpe ratio is not usable.',
   };
   if (!t.deflated) return `${counted(t)}. ${cannot[t.why ?? 'shape']}`;
   const d = t.deflated;
   const verdict =
     d.dsr >= 0.95
-      ? 'That is strong evidence of an edge, as far as these tries can tell.'
+      ? 'This is a strong sign of an edge, for these tries.'
       : d.dsr >= 0.5
-        ? 'That is not strong evidence: the result could be luck.'
-        : 'The result is more likely luck than an edge.';
+        ? 'This is not a strong sign: the result can be luck.'
+        : 'The probability of luck is higher than the probability of an edge.';
   if (t.n <= 1) {
-    return `Only the run shown has been counted${sinceText(t)}, so there are no other tries to allow for. Given the length and shape of its returns, the chance that its Sharpe ratio of ${ratio(t.sharpe)} reflects a real edge is ${chance(d.dsr)}. ${verdict}`;
+    return `The plugin counted only the run shown${sinceText(t)}. Thus no correction for other tries is necessary. For the length and shape of its returns, the probability that its Sharpe ratio of ${ratio(t.sharpe)} shows an edge is ${chance(d.dsr)}. ${verdict}`;
   }
   return (
-    `${counted(t)}. With no edge at all, the best of ${plural(t.n, 'try', 'tries')} like these would typically show a Sharpe ratio of about ${ratio(d.bar)}; the run shown has ${ratio(t.sharpe)}. ` +
-    `Allowing for that, the chance that its Sharpe ratio reflects a real edge, rather than the luck of keeping the best try, is ${chance(d.dsr)}. ${verdict}`
+    `${counted(t)}. If there is no edge, the best of ${plural(t.n, 'try', 'tries')} of this type usually has a Sharpe ratio of approximately ${ratio(d.bar)}. The run shown has ${ratio(t.sharpe)}. ` +
+    `After this correction, the probability that its Sharpe ratio shows an edge, and not luck in the selection of the best try, is ${chance(d.dsr)}. ${verdict}`
   );
 }
 
 /** Why the count overstates the tries. */
 export const upperBound = (n: number) =>
-  `${n.toLocaleString('en-US')} is an upper bound: neighbouring variants are alike, so they make fewer independent tries than their count, and the chance above errs on the low side.`;
+  `${n.toLocaleString('en-US')} is the maximum number of different tries. Variants that are near each other give almost the same results. Thus the number of different tries is smaller, and the probability above is possibly too low.`;
 
 /** The line under the result's figures; null when there is nothing to allow for. */
 export function triesNote(t: Tries): string | null {
   if (t.n <= 1) return null;
-  const see = 'See "How many tries" under "Was it luck?".';
+  const see = 'See "How many tries" in "Was it luck?".';
   return t.deflated
-    ? `${plural(t.n, 'try', 'tries')} of this block counted so far. Allowing for them, the chance that this Sharpe ratio reflects a real edge is ${chance(t.deflated.dsr)}. ${see}`
-    : `${plural(t.n, 'try', 'tries')} of this block counted so far. ${see}`;
+    ? `The plugin counted ${plural(t.n, 'try', 'tries')} of this block to date. After a correction for them, the probability that this Sharpe ratio shows an edge is ${chance(t.deflated.dsr)}. ${see}`
+    : `The plugin counted ${plural(t.n, 'try', 'tries')} of this block to date. ${see}`;
 }
 
 export const RESET = 'Start the count again';
@@ -303,7 +303,7 @@ function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => v
       const ask = h(row, 'button', 'bt-button', RESET);
       ask.addEventListener('click', () => {
         row.replaceChildren();
-        h(row, 'span', 'bt-ledger-ask', `Forget the ${plural(t.n, 'try', 'tries')} counted so far and count from now?`);
+        h(row, 'span', 'bt-ledger-ask', `Remove the ${plural(t.n, 'try', 'tries')} counted to date and start the count again from this run?`);
         const yes = h(row, 'button', 'bt-button mod-warning', 'Start again');
         const no = h(row, 'button', 'bt-button', 'Keep the count');
         no.addEventListener('click', () => draw(l));
@@ -317,8 +317,8 @@ function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => v
     }
     how(
       sec,
-      'every run shown in the note or the preview panel counts, with each slider position and each variant of a sweep or walk-forward, once for each set of rules and values that traded: two blocks that trade alike count once, however they are written. The deflated Sharpe ratio (Bailey and López de Prado, 2014) works out the best Sharpe ratio that this many tries with no edge would typically show, from how much their Sharpe ratios differ, and asks how likely the run shown is to be above it, given how long its history is and how lopsided and heavy-tailed its returns are.',
-      'tries made anywhere else are not counted: in another program, in an earlier copy of the block, or ideas dropped before they were run. Nor are the reshuffles and random entries of these checks, or the runs of the orders window and of compare and backtests blocks. The count belongs to the block: a new name line, or moving a block that has none, starts a new one.',
+      'The count includes each run shown in the note or the preview panel, each slider position, and each variant of a sweep or walk-forward. Each set of rules and values that traded counts one time. Two blocks that trade the same count one time, also when their text is different. The deflated Sharpe ratio (Bailey and López de Prado, 2014) calculates the best Sharpe ratio that this number of tries usually has with no edge. It uses the spread of their Sharpe ratios. Then it calculates the probability that the run shown is above this value. It uses the length of the history and the skew and heavy tails of the returns.',
+      'The count does not include tries in other places, for example in a different program or in a previous copy of the block. It also does not include ideas that you did not run, or the reshuffles and random entries of these checks. Runs of the orders window and of compare and backtests blocks are not in the count. The count is for one block only. A new name line starts a new count. If a block has no name line, a move of the block starts a new count.',
     );
   };
   const unwatch = follow(ledger, draw);
@@ -348,17 +348,17 @@ export function renderTriesNote(el: HTMLElement, ledger: BlockLedger, bt: Backte
  * how much the path and the drawdown depended on the order, not whether the return itself was luck.
  */
 export function reshuffleVerdict(r: BootstrapResult): string {
-  const lost = r.lossShare === 0 ? '' : ` ${pct(r.lossShare, r.lossShare < 0.01 ? 1 : 0)} of the reshuffled versions ended below the starting value.`;
+  const lost = r.lossShare === 0 ? '' : ` ${pct(r.lossShare, r.lossShare < 0.01 ? 1 : 0)} of the reshuffled versions had a last value below the initial value.`;
   const milder =
     r.actual.maxDrawdown > r.maxDrawdown.median
-      ? ' This run’s worst drawdown was milder than in most of them: expect deeper falls than the backtest shows.'
+      ? ' The worst drawdown of this run was smaller than in most of them. Deeper drawdowns than the backtest shows are possible.'
       : r.actual.maxDrawdown < r.maxDrawdown.lo
-        ? ' This run’s worst drawdown was deeper than in almost all of them: its losses came in a long streak that the reshuffling breaks up, so the reshuffled drawdowns understate the risk.'
+        ? ' The worst drawdown of this run was deeper than in almost all of them. Its losses came in a long series, and the reshuffle breaks this series into pieces. Thus the reshuffled drawdowns show the risk as smaller than it is.'
         : '';
   return (
-    'This shows how much the path and the drawdown depended on the order of the returns. ' +
-    `In ${plural(r.runs, 'reshuffle')} of this run’s own returns, the middle 90% made between ${pct(r.cagr.lo)} and ${pct(r.cagr.hi)} a year (this run: ${pct(r.actual.cagr)}), with worst drawdowns between ${pct(r.maxDrawdown.lo)} and ${pct(r.maxDrawdown.hi)} (this run: ${pct(r.actual.maxDrawdown)}).` +
-    `${milder}${lost} It says nothing about whether the average return will persist, because every version is made from this run’s own returns.`
+    'This check shows how much the sequence of the returns changed the path and the drawdown. ' +
+    `The plugin made ${plural(r.runs, 'reshuffle')} of the returns of this run. The middle 90% made between ${pct(r.cagr.lo)} and ${pct(r.cagr.hi)} a year (this run: ${pct(r.actual.cagr)}). Their worst drawdowns were between ${pct(r.maxDrawdown.lo)} and ${pct(r.maxDrawdown.hi)} (this run: ${pct(r.actual.maxDrawdown)}).` +
+    `${milder}${lost} It does not show if the average return will continue, because each version uses the returns of this run.`
   );
 }
 
@@ -369,7 +369,7 @@ function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult
     return;
   }
   if (bt.run.trades.length === 0) {
-    h(sec, 'p', 'bt-luck-verdict', 'The strategy made no trades, so there is nothing to reshuffle.');
+    h(sec, 'p', 'bt-luck-verdict', 'The strategy made no trades. Thus there is nothing to reshuffle.');
     return;
   }
   h(sec, 'p', 'bt-luck-verdict', reshuffleVerdict(r));
@@ -387,13 +387,13 @@ function bootBlock(el: HTMLElement, life: Life, bt: Backtest, r: BootstrapResult
     markLabel: 'This run',
     band: [r.maxDrawdown.lo, r.maxDrawdown.hi],
     noun: 'versions',
-    made: (a, b) => `fell ${a} to ${b} at worst`,
+    made: (a, b) => `worst drawdown ${a} to ${b}`,
   });
   const step = bt.spec.interval === '1d' ? 'daily' : bt.spec.interval === '1w' ? 'weekly' : 'bar-by-bar';
   how(
     sec,
-    `the run’s ${step} results are cut into pieces of ${plural(r.blockBars, 'bar')} (${r.blockBars > monthOfBars(bt.run.t) ? 'a typical holding, so a position stays in one piece' : 'about a month'}) and put back together in random order, ${plural(r.runs, 'time')}. Each piece keeps its own ups and downs; only the order changes.`,
-    'it only reuses pieces of this run, so it can’t show a market the run never saw, and swings longer than a piece are broken up. If these rules were picked because they looked good on this history, every reshuffle keeps that luck.',
+    `The plugin cuts the ${step} results of the run into pieces of ${plural(r.blockBars, 'bar')} (${r.blockBars > monthOfBars(bt.run.t) ? 'the length of a typical holding, thus a position stays in one piece' : 'approximately a month'}). Then it puts the pieces together again in a random sequence, ${plural(r.runs, 'time')}. Each piece keeps its increases and decreases. Only the sequence changes.`,
+    'It uses only pieces of this run. Thus it cannot show a market that the run did not see. It also breaks up price moves that are longer than a piece. If you selected these rules because they looked good on this history, each reshuffle keeps that luck.',
   );
 }
 
@@ -408,15 +408,15 @@ const andList = (items: string[]) => (items.length < 2 ? items.join('') : `${ite
 export function randomTimingWorks(spec: Pick<Backtest['spec'], 'commission' | 'entries' | 'margin'>, shorts = false): string {
   const borrows = spec.margin ? [...(shorts ? ['borrow fee'] : []), 'margin rate'] : [];
   const same = andList(['weights', 'costs', ...(spec.commission ? ['commission'] : []), 'slippage', ...(spec.entries ? ['entries'] : []), 'cash rate', ...borrows]);
-  const later = spec.entries ? ' A position built in entries keeps how many it made and puts the later ones the same number of bars after its first.' : '';
-  const kept = shorts ? 'how many trades each ticker made, whether each was long or short, and how long each was held' : 'how many trades each ticker made and how long each was held';
-  return `each try keeps ${kept}, with the same ${same}, and places those holdings at random dates.${later} Stops are off: the holding lengths already include their exits.`;
+  const later = spec.entries ? ' A position with more than one entry keeps its number of entries. Its subsequent entries are the same number of bars after its first entry.' : '';
+  const kept = shorts ? 'the number of trades of each ticker, the side of each trade (long or short), and how long each trade was held' : 'the number of trades of each ticker and how long each trade was held';
+  return `Each try keeps ${kept}, with the same ${same}. It puts those holdings at random dates.${later} Stops are off, because the holding lengths include their exits.`;
 }
 
 /** What a random-picks try keeps from the strategy. */
 export function randomPicksWorks(spec: Pick<Backtest['spec'], 'commission' | 'entries'>, trades: string, against: number): string {
   const same = andList(['rules', 'dates', 'number held', 'stops', 'costs', ...(spec.commission ? ['commission'] : []), ...(spec.entries ? ['entries'] : [])]);
-  return `each try runs the same ${same}, but ranks the tickers the rules allow at random instead of by the score. A random pick is kept for a while, so the tries trade about as often as the strategy (${trades} on average, against ${against}).`;
+  return `Each try uses the same ${same}. But it ranks the tickers that the rules let it hold in a random sequence, not by the score. Each random pick stays for some time. Thus the tries trade approximately as frequently as the strategy (${trades} on average, compared with ${against}).`;
 }
 
 /**
@@ -426,25 +426,25 @@ export function randomPicksWorks(spec: Pick<Backtest['spec'], 'commission' | 'en
 export function randomVerdict(r: RandomEntriesResult, picks: boolean, shorts: boolean, asked: number): string {
   const who = picks ? 'Random picks' : 'Random timing';
   const skip: Record<NonNullable<RandomEntriesResult['skip']>, string> = {
-    'no-trades': 'The strategy made no trades, so there is nothing to compare.',
-    'always-invested': `The strategy holds its tickers${shorts ? ', long or short,' : ''} the whole time, so there is no timing to vary.`,
-    'holds-everything': 'The ranking holds every ticker in the universe, so there is no pick to vary.',
+    'no-trades': 'The strategy made no trades. Thus there is nothing to compare.',
+    'always-invested': `The strategy holds its tickers${shorts ? ', long or short,' : ''} all the time. Thus there is no timing to change.`,
+    'holds-everything': 'The ranking holds all tickers in the universe. Thus there is no pick to change.',
   };
   if (r.skip) return skip[r.skip];
   const share = r.atLeast.cagr / r.runs;
   const shareRatio = r.atLeast.ratio / r.runs;
   const lines = [
-    `${who} did at least as well on return per year in ${r.atLeast.cagr} of ${plural(r.runs, 'try', 'tries')} (${pct(share, 0)}), and on return per year ÷ worst drawdown in ${r.atLeast.ratio} (${pct(shareRatio, 0)}).`,
+    `${who} had a return per year equal to or better than the strategy in ${r.atLeast.cagr} of ${plural(r.runs, 'try', 'tries')} (${pct(share, 0)}). On return per year ÷ worst drawdown, ${who.toLowerCase()} was equal or better in ${r.atLeast.ratio} (${pct(shareRatio, 0)}).`,
     share <= 0.05
-      ? `So few matched it that the ${picks ? 'ranking' : 'timing of the rules'} likely adds something, though a strategy picked from many tries can clear this bar by luck too.`
+      ? `Only a small number of tries were equal or better. Thus it is very possible that the ${picks ? 'ranking' : 'timing of the rules'} adds value. But a strategy that you selected from many tries can also have this result by luck.`
       : share <= 0.2
-        ? 'That is not rare enough to rule out luck.'
-        : `${who} often did as well, so this result does not show that the ${picks ? 'ranking' : 'timing of the rules'} adds anything.`,
+        ? 'This number is not sufficiently small to show that the result is not luck.'
+        : `${who} frequently had an equal or better result. Thus this result does not show that the ${picks ? 'ranking' : 'timing of the rules'} adds value.`,
   ];
   if (!picks && r.invested >= 0.9) {
-    lines.push(`The strategy is ${shorts ? 'in its tickers, long or short,' : 'invested'} ${pct(r.invested, 0)} of the time, so random timing is close to holding throughout, and this check can tell little either way.`);
+    lines.push(`The strategy is ${shorts ? 'in its tickers, long or short,' : 'invested'} ${pct(r.invested, 0)} of the time. Thus random timing is almost the same as holding all the time, and this check does not show much.`);
   }
-  if (r.stopped) lines.push(`Stopped after ${r.runs} of ${asked} tries.`);
+  if (r.stopped) lines.push(`The check stopped after ${r.runs} of ${asked} tries.`);
   return lines.join(' ');
 }
 
@@ -475,13 +475,13 @@ function randomBlock(el: HTMLElement, life: Life, bt: Backtest, r: RandomEntries
     how(
       sec,
       randomPicksWorks(bt.spec, plural(avg, 'trade'), r.strategy.trades),
-      'it tests the ranking only: when to be invested and which tickers are allowed come from your rules in both. Doing better than random picks in the past does not mean the ranking will keep doing it.',
+      'It examines only the ranking. Your rules set when to be invested and which tickers it can hold, in the strategy and in the tries. A result better than random picks on this history does not show that the ranking will continue to do better.',
     );
   } else {
     how(
       sec,
       randomTimingWorks(bt.spec, shorts),
-      `it tests when the rules ${shorts ? 'go in and out' : 'buy and sell'}, not which tickers they hold, and beating random timing in the past does not mean the rules will keep doing it.`,
+      `It examines when the rules ${shorts ? 'open and close positions' : 'buy and sell'}, not which tickers they hold. A result better than random timing on this history does not show that the rules will continue to do better.`,
     );
   }
 }
@@ -535,7 +535,7 @@ function drawHistogram(chart: HTMLElement, tip: HTMLElement, width: number, o: H
   const yMax = Math.ceil(maxCount / cStep) * cStep;
   const y = (c: number) => top + plotH - (c / yMax) * plotH;
 
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `${o.title} of ${values.length} ${o.noun}, with ${o.markLabel.toLowerCase()} marked` });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `${o.title} of ${values.length} ${o.noun}, with a line at ${o.markLabel.toLowerCase()}` });
   if (o.band) s(svg, 'rect', { x: x(o.band[0]), y: top, width: Math.max(1, x(o.band[1]) - x(o.band[0])), height: plotH, class: 'bt-luck-band' });
   for (let c = cStep; c <= yMax; c += cStep) {
     s(svg, 'line', { x1: left, x2: width - right, y1: y(c), y2: y(c), class: 'bt-grid' });
@@ -587,7 +587,7 @@ function drawHistogram(chart: HTMLElement, tip: HTMLElement, width: number, o: H
 // ---------------------------------------------------------------- walk-forward
 
 const span = (months: number) => (months % 12 === 0 ? plural(months / 12, 'year') : plural(months, 'month'));
-const unit = (months: number) => (months === 12 ? 'year' : months === 6 ? 'half-year' : months === 3 ? 'quarter' : `${months}-month stretch`);
+const unit = (months: number) => (months === 12 ? 'year' : months === 6 ? 'half-year' : months === 3 ? 'quarter' : `${months}-month period`);
 
 function stretch(from: number, to: number): string {
   const a = isoDate(from);
@@ -608,14 +608,14 @@ function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string, o
   const last = isoDate(w.t[w.t.length - 1]).slice(0, 4);
   const n = w.windows.length;
   const lines = [
-    `Picking the values with the best ${label} over each past ${span(w.trainMonths)} and using them for the next ${test} ${did('cagr', w.stats.cagr)} from ${first} to ${last}, with a worst drawdown of ${pct(w.stats.maxDrawdown)}.`,
-    `Over the same dates ${ours.noun} ${did('cagr', w.declared.stats.cagr)}, and the best values picked with hindsight (${valuesText(w.params, w.hindsight.values)}) ${did('cagr', w.hindsight.stats.cagr)}.`,
+    `The plugin selected the values with the best ${label} in the ${span(w.trainMonths)} before each ${test}, and used them for that ${test}. This method ${did('cagr', w.stats.cagr)} from ${first} to ${last}, with a worst drawdown of ${pct(w.stats.maxDrawdown)}.`,
+    `In the same period, ${ours.noun} ${did('cagr', w.declared.stats.cagr)}. The best values selected with hindsight (${valuesText(w.params, w.hindsight.values)}) ${did('cagr', w.hindsight.stats.cagr)}.`,
     w.changes === 0
-      ? 'The same values were picked every time.'
-      : `The pick changed ${plural(w.changes, 'time')} over ${plural(n, `test ${test}`, `test ${test === 'half-year' ? 'half-years' : `${test}s`}`)}${w.changes >= n / 2 ? ': the best values move around, a sign that much of what makes them best is noise' : ''}.`,
+      ? 'The plugin selected the same values each time.'
+      : `The selection changed ${plural(w.changes, 'time')} in ${plural(n, `test ${test}`, `test ${test === 'half-year' ? 'half-years' : `${test}s`}`)}${w.changes >= n / 2 ? '. The best values change frequently. This shows that the best values are the best mostly because of noise' : ''}.`,
   ];
-  if (w.failed > 0) lines.push(`${plural(w.failed, 'variant')} could not run and ${w.failed === 1 ? 'was' : 'were'} left out.`);
-  if (w.idle > 0) lines.push(`${plural(w.idle, 'variant')} never traded and ${w.idle === 1 ? 'was' : 'were'} never picked.`);
+  if (w.failed > 0) lines.push(`${plural(w.failed, 'variant')} did not run, and the plugin did not include ${w.failed === 1 ? 'it' : 'them'}.`);
+  if (w.idle > 0) lines.push(`${plural(w.idle, 'variant')} did not trade, and the plugin did not select ${w.idle === 1 ? 'it' : 'them'}.`);
   h(sec, 'p', 'bt-luck-verdict', lines.join(' '));
   legend(sec, [
     ['bt-luck-swatch-walk', 'Walk-forward'],
@@ -628,10 +628,10 @@ function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string, o
   observe(life, chart, (width) => drawWalk(chart, tip, width, w, ours));
 
   const more = h(sec, 'details', 'bt-details');
-  h(more, 'summary', undefined, `Values picked for each test ${test}`);
+  h(more, 'summary', undefined, `Values selected for each test ${test}`);
   const table = h(h(more, 'div', 'bt-scroll'), 'table', 'bt-table');
   const head = h(h(table, 'thead'), 'tr');
-  for (const [text, num] of [['Tested', 0], ['Values picked', 0], ['Return', 1], [ours.column, 1]] as const) h(head, 'th', num ? 'bt-num' : undefined, text);
+  for (const [text, num] of [['Test period', 0], ['Values selected', 0], ['Return', 1], [ours.column, 1]] as const) h(head, 'th', num ? 'bt-num' : undefined, text);
   const body = h(table, 'tbody');
   for (const x of w.windows) {
     const row = h(body, 'tr');
@@ -643,8 +643,8 @@ function walkBlock(el: HTMLElement, life: Life, w: WalkForwardResult | string, o
 
   how(
     sec,
-    `for each ${test} from ${first}, the values with the best ${label} over the ${span(w.trainMonths)} before it are picked from the ranges in the block and used for that ${test} only; the ${test === 'half-year' ? 'half-years' : `${test}s`} are joined into one line. Indicators may read earlier prices, but no pick sees the ${test} it is used in.`,
-    'it only picks among the ranges written in the block, so if those ranges were chosen by looking at the whole history, some hindsight remains. Switching from one set of values to the next is taken as free.',
+    `For each ${test} from ${first}, the plugin selects the values with the best ${label} in the ${span(w.trainMonths)} before it. It selects from the ranges in the block and uses the values for that ${test} only. Then it connects the ${test === 'half-year' ? 'half-years' : `${test}s`} into one line. Indicators can read prices from before the ${test}, but no selection uses prices from the ${test} where it applies.`,
+    'It selects only in the ranges in the block. If you selected those ranges when you looked at the full history, some hindsight stays. A change from one set of values to the next has no cost in this check.',
   );
 }
 
@@ -673,7 +673,7 @@ function drawWalk(chart: HTMLElement, tip: HTMLElement, width: number, w: WalkFo
   const [l0, l1] = [Math.log(lo) - pad, Math.log(hi) + pad];
   const y = (v: number) => top + (1 - (Math.log(Math.max(v, 1e-9)) - l0) / (l1 - l0)) * plotH;
 
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `Walk-forward value over time, against ${ours.noun} and the best values picked with hindsight` });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `Value of the walk-forward during the run, compared with ${ours.noun} and the best values selected with hindsight` });
   // On a log scale even steps crowd at the top: keep a tick only when it clears the last one kept.
   let lastY = Infinity;
   for (const v of moneyTicks(Math.exp(l0), Math.exp(l1))) {

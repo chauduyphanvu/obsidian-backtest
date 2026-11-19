@@ -98,7 +98,7 @@ test('random picks for a ranking in the worker give exactly what they give on th
 test('a job that fails in the worker sends its message, as the main thread would throw it', async () => {
   const data = prices(['A'], 200, 1);
   const out = await viaWorker('universe: A\nn = 5\nbuy when close > sma(n)', data, { kind: 'walk' });
-  assert.deepEqual(out, [{ type: 'error', id: 7, message: 'Walk-forward needs a parameter with a range to choose from, such as fast = 50 in 20..100 step 10.' }]);
+  assert.deepEqual(out, [{ type: 'error', id: 7, message: 'Walk-forward must have a parameter with a range, for example fast = 50 in 20..100 step 10.' }]);
 });
 
 test('the worker sends progress no more often than asked, with the sweep variants finished since the last message', async () => {

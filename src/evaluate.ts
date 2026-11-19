@@ -64,9 +64,9 @@ const NEEDS_VOLUME = ['mfi', 'obv', 'vwap', 'cmf'];
  */
 export function specEvaluator(spec: Spec, data: Map<string, Bars>): Evaluator {
   const roles: [string | undefined, string][] = [
-    ...spec.universe.map((a): [string, string] => [a.name, 'be in the universe, because it cannot be traded']),
+    ...spec.universe.map((a): [string, string] => [a.name, 'be in the universe, because the strategy cannot trade it']),
     [spec.benchmark?.name, 'be the benchmark, because it has no price to hold'],
-    [spec.cash.k === 'ticker' ? spec.cash.ref.name : undefined, 'give the cash rate, because it has no close to read a yield from'],
+    [spec.cash.k === 'ticker' ? spec.cash.ref.name : undefined, 'give the cash rate, because it has no close that gives a yield'],
   ];
   for (const [name, role] of roles) {
     if (name !== undefined && data.get(name)?.unpriced) {
@@ -106,17 +106,17 @@ export function rowDating(b?: Bars): { known: string; carry: string; daily: bool
   const t = b?.t ?? [];
   for (let i = 1; i < t.length; i++) if (t[i] > t[i - 1]) step = Math.min(step, t[i] - t[i - 1]);
   if (step < DAY) {
-    return { known: `at its time plus ${span(step)}, the shortest gap between its rows`, carry: 'so each row must carry the start of the interval its value was computed from', daily: false };
+    return { known: `at its time plus ${span(step)}, the shortest gap between its rows`, carry: 'the date of each row must be the start of the interval that its value comes from', daily: false };
   }
   if (b && !b.unpriced && Number.isFinite(step) && step > DAY) {
     const months = Math.max(1, Math.round(step / (30.4375 * DAY)));
     const after = step < 20 * DAY ? `${Math.round(step / DAY)} days` : months === 1 ? 'a month' : `${months} months`;
-    return { known: `when its bar ends, ${after} after the day it is dated`, carry: "so a value in its columns must come from that bar's close or before", daily: false };
+    return { known: `when its bar ends, ${after} after the day it is dated`, carry: 'a value in its columns must come from the close of that bar or before', daily: false };
   }
-  return { known: 'at the end of the day it is dated', carry: 'so each row must carry the day whose close its value was computed from', daily: true };
+  return { known: 'at the end of the day it is dated', carry: 'the date of each row must be the day of the close that its value comes from', daily: true };
 }
 
-const LOOKAHEAD = 'a row dated earlier than the data behind it lets the rules see the future.';
+const LOOKAHEAD = 'A row with a date before the data that it comes from lets the rules see the future.';
 
 /**
  * What the result says when a rule reads a column: when a row counts as known and so how it must be dated, because a wrong
@@ -140,10 +140,10 @@ export function columnNotes(spec: Spec, data?: Map<string, Bars>): string[] {
       const early = readers.filter((r) => apart(file, r));
       const same = readers.filter((r) => !apart(file, r));
       if (early.length) {
-        tail += ` With fill: close, a rule of ${list(early)} reads the latest row of ${file} that had ended when its own bar began, never the row of the same ${when}, because the order fills at the close, before that row is known.`;
+        tail += ` With fill: close, a rule of ${list(early)} reads the last row of ${file} that ended before its bar started. It does not read the row of the same ${when}, because the order fills at the close, before that row is known.`;
       }
       if (same.length) {
-        tail += ` With fill: close, a rule of ${list(same)} reads the row of ${file} of the same ${when}, and the result assumes that row is known at the moment of the fill, which is not true when it is worked out after that close.`;
+        tail += ` With fill: close, a rule of ${list(same)} reads the row of ${file} of the same ${when}. The result counts that row as known at the time of the fill. This is not correct if the row is calculated after that close.`;
       }
     }
     const key = `${dating.known}\u0000${dating.carry}\u0000${tail}`;
@@ -153,7 +153,7 @@ export function columnNotes(spec: Spec, data?: Map<string, Bars>): string[] {
   }
   return [...groups].map(([key, names]) => {
     const [known, carry] = key.split('\u0000');
-    return `A row of ${list(names)} counts as known ${known}, ${carry}: ${LOOKAHEAD}${tails.get(key)}`;
+    return `A row of ${list(names)} counts as known ${known}. Thus ${carry}. ${LOOKAHEAD}${tails.get(key)}`;
   });
 }
 
@@ -380,7 +380,7 @@ export class Evaluator {
       }
     }
     // The parser keeps position values out of lags, "of" and indicator inputs.
-    throw new Error(`Position values can't be used inside ${e.k}`);
+    throw new Error(`Position values cannot be in ${e.k}`);
   }
 
   /**
@@ -437,7 +437,7 @@ export class Evaluator {
 
   private bars(asset: string): Bars {
     const b = this.data.get(asset);
-    if (!b) throw new Error(`No data for ${asset}`);
+    if (!b) throw new Error(`There is no data for ${asset}`);
     return b;
   }
 
@@ -455,7 +455,7 @@ export class Evaluator {
       case 'bool':
         return each(() => (e.v ? 1 : 0));
       case 'series':
-        if (bars.unpriced) throw new Error(`${asset} has no prices, only columns, so its ${e.name} can't be read. Read a column with column(name) of ${asset}.`);
+        if (bars.unpriced) throw new Error(`${asset} has no prices, only columns. Thus a rule cannot read its ${e.name}. Read a column with column(name) of ${asset}.`);
         return { open: bars.o, high: bars.h, low: bars.l, close: bars.c, volume: bars.v }[e.name];
       case 'ind':
         return this.indicator(e, asset, bars);
@@ -464,7 +464,7 @@ export class Evaluator {
       case 'column':
         return this.column(asset, e.name, bars);
       case 'pos':
-        throw new Error('Position values need a position: use compile()');
+        throw new Error('Position values must have a position: use compile()');
       case 'math': {
         const a = this.eval(e.args[0], asset);
         if (e.fn === 'abs') return each((i) => Math.abs(a[i]));
@@ -518,22 +518,22 @@ export class Evaluator {
     const found = bars.columns?.find((c) => c.name === name);
     if (found) return found.v;
     const unread = bars.unread?.find((u) => u.name === name);
-    if (unread) throw new Error(`The CSV file ${asset} can't give the column ${name}: ${unread.why}.`);
+    if (unread) throw new Error(`The CSV file ${asset} cannot give the column ${name}: ${unread.why}.`);
     const have = bars.columns?.map((c) => c.name) ?? [];
     throw new Error(
-      `The CSV file ${asset} has no column called ${name}. ${have.length ? `Its columns are ${have.join(', ')}.` : 'It has no columns besides its prices.'} Only a column with numbers in it can be read.`,
+      `The CSV file ${asset} has no column with the name ${name}. ${have.length ? `Its columns are ${have.join(', ')}.` : 'It has only price columns.'} A rule can read only a column with numbers in it.`,
     );
   }
 
   private indicator(e: Extract<Expr, { k: 'ind' }>, asset: string, bars: Bars): number[] {
     // `sma(column(x), 5) of file` reads only the column; anything that reads the file's own prices has none to read.
     if (bars.unpriced && (e.src === null || OWN_PRICES.includes(e.fn))) {
-      throw new Error(`${asset} has no prices, only columns, so ${e.fn}() can't be worked out for it. Read a column with column(name) of ${asset}.`);
+      throw new Error(`${asset} has no prices, only columns. Thus the plugin cannot calculate ${e.fn}() for it. Read a column with column(name) of ${asset}.`);
     }
     const src = e.src ? this.eval(e.src, asset) : bars.c;
     const [a, b, c] = e.args;
     if (NEEDS_VOLUME.includes(e.fn) && !bars.v.some((x) => x > 0)) {
-      throw new Error(`${asset} has no volume, which ${e.fn}() needs. A FRED series and some indexes have none, and a CSV file needs a volume column.`);
+      throw new Error(`${asset} has no volume, but ${e.fn}() must have volume. A FRED series and some indexes have no volume. A CSV file must have a volume column.`);
     }
     switch (e.fn) {
       case 'sma':

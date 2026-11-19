@@ -85,19 +85,19 @@ export function addsRows(input: Pick<SplitInput, 'aligned' | 'labels' | 'weights
 /** What to know about the suggestions: how many months they rest on, what was left out, and why a method is missing or can't be used. */
 export function splitNotes(alloc: Allocation, labels: string[], decimals = 0): string[] {
   const out = [
-    `From ${plural(alloc.months, 'full month')} the strategies have in common. Each method's line works its weights out again at the start of every month from the months before it only, so its figures are ones that could have been had; the weights offered are those for the month to come.`,
+    `These weights use the ${plural(alloc.months, 'full month')} that all the strategies have. At the start of each month, each method calculates its weights again from only the months before. Thus its figures do not use data from the future. The weights shown are the weights for the next month.`,
   ];
-  if (alloc.months < VOLATILITY_MONTHS) out.push(`Inverse volatility needs ${VOLATILITY_MONTHS} full months, and minimum variance and maximum diversification ${COVARIANCE_MONTHS}.`);
-  else if (alloc.months < COVARIANCE_MONTHS) out.push(`Minimum variance and maximum diversification need ${COVARIANCE_MONTHS} full months.`);
+  if (alloc.months < VOLATILITY_MONTHS) out.push(`Inverse volatility must have ${VOLATILITY_MONTHS} full months. Minimum variance and maximum diversification must have ${COVARIANCE_MONTHS}.`);
+  else if (alloc.months < COVARIANCE_MONTHS) out.push(`Minimum variance and maximum diversification must have ${COVARIANCE_MONTHS} full months.`);
   if (alloc.shrinkage !== null) {
-    out.push(`How the strategies move together is estimated with the covariances pulled ${pct(alloc.shrinkage, 0)} of the way towards one average correlation (Ledoit and Wolf), which steadies estimates from few months.`);
+    out.push(`The plugin calculates how the strategies move together from their covariances. It moves the covariances ${pct(alloc.shrinkage, 0)} of the distance to one average correlation (Ledoit and Wolf). This makes estimates from a small number of months more stable.`);
   }
   if (alloc.suggestions.length && alloc.suggestions.every((s) => s.percents.every((p) => p === 0))) {
     const total = alloc.suggestions[0].weights.reduce((sum, w) => sum + w, 0);
-    out.push(`The weights add up to ${Number((total * 100).toPrecision(6))}%, less than the ${10 ** -decimals}% they are written in steps of, so no other set can be written.`);
+    out.push(`The total of the weights is ${Number((total * 100).toPrecision(6))}%. This is less than the ${10 ** -decimals}% step of the written weights. Thus no other set of weights can be written.`);
   }
   const still = alloc.still.map((i) => labels[i]);
-  if (still.length) out.push(`${still.join(', ')} barely moved over these months, so the methods that size by risk give ${still.length === 1 ? 'it' : 'them'} nothing.`);
+  if (still.length) out.push(`${still.join(', ')} almost did not move in these months. Thus the methods that size by risk give ${still.length === 1 ? 'it' : 'them'} a weight of 0.`);
   return out;
 }
 
@@ -129,9 +129,9 @@ export function renderSplit(root: HTMLElement, input: SplitInput): void {
     const use = input.use;
     button.addEventListener('click', () => {
       button.disabled = true;
-      said.textContent = 'Writing the weights into the block…';
+      said.textContent = 'The plugin writes the weights into the block…';
       use(percents).then(
-        () => (said.textContent = `Wrote ${percents.map((p) => `${p}%`).join(', ')} into the block.`),
+        () => (said.textContent = `The plugin wrote ${percents.map((p) => `${p}%`).join(', ')} into the block.`),
         (e: unknown) => {
           button.disabled = false;
           said.textContent = e instanceof Error ? e.message : String(e);
@@ -143,7 +143,7 @@ export function renderSplit(root: HTMLElement, input: SplitInput): void {
 
   if (input.labels.length < 2) return;
   h(box, 'div', 'bt-split-heading', 'What each strategy adds');
-  h(box, 'div', 'bt-note', 'The combined line at the weights written, less the same line without the strategy, its weight spread over the others in proportion. Above 0 is better for all three: more return, a shallower drawdown, a higher Sharpe ratio.');
+  h(box, 'div', 'bt-note', 'Each value is the combined line at the written weights, less the same line without the strategy. The weight of the strategy goes to the other strategies in proportion. Above 0 is better for all three: more return, a smaller drawdown, a higher Sharpe ratio.');
   const addsTable = h(h(box, 'div', 'bt-scroll'), 'table', 'bt-table bt-split-table');
   const addsHead = h(h(addsTable, 'thead'), 'tr');
   h(addsHead, 'th');

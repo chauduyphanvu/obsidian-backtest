@@ -84,20 +84,20 @@ export class OrdersModal extends Modal {
   }
 
   private progress(done: number, total: number): void {
-    const status = h(this.fresh(), 'div', 'bt-orders-status', total > 0 ? `Checking strategies… ${done} of ${total}` : 'Checking strategies…');
+    const status = h(this.fresh(), 'div', 'bt-orders-status', total > 0 ? `The plugin runs ${done} of ${total} strategies…` : 'The plugin runs the strategies…');
     status.setAttribute('role', 'status');
   }
 
   private failed(message: string): void {
     const root = this.fresh();
-    h(root, 'p', 'bt-orders-empty', `Couldn't check the strategies. ${message}`);
-    h(root, 'button', 'bt-orders-button', 'Try again').addEventListener('click', () => void this.load(false));
+    h(root, 'p', 'bt-orders-empty', `Cannot run the strategies. ${message}`);
+    h(root, 'button', 'bt-orders-button', 'Run again').addEventListener('click', () => void this.load(false));
   }
 
   private show(list: StrategyStatus[], accounts: AccountStatus[]): void {
     const root = this.fresh();
     if (list.length === 0) {
-      h(root, 'p', 'bt-orders-empty', 'No strategy blocks found. Add one with the command "Insert strategy block".');
+      h(root, 'p', 'bt-orders-empty', 'The vault has no strategy blocks. Add one with the command "Insert strategy block".');
       return;
     }
     const todo = todoRows(list);
@@ -108,13 +108,13 @@ export class OrdersModal extends Modal {
     this.holding(root, list, todo.length > 0);
     this.closeFills(root, list);
     this.problems(root, list);
-    h(root, 'p', 'bt-orders-foot', 'From backtests of your rules on the latest prices. Nothing here places an order.');
+    h(root, 'p', 'bt-orders-foot', 'From backtests of your rules on the last prices. The plugin does not send orders.');
   }
 
   private header(root: HTMLElement, list: StrategyStatus[], accounts: AccountStatus[]): void {
     const basis = basisOf(list);
     const head = h(root, 'div', 'bt-orders-head');
-    const asof = h(head, 'div', 'bt-orders-asof', basis === null ? 'No prices were loaded' : basis.text);
+    const asof = h(head, 'div', 'bt-orders-asof', basis === null ? 'The plugin loaded no prices' : basis.text);
     if (basis?.note) h(asof, 'div', 'bt-orders-muted', basis.note);
     const actions = h(head, 'div', 'bt-orders-actions');
     const button = (icon: string, label: string) => {
@@ -134,13 +134,13 @@ export class OrdersModal extends Modal {
       const outcome = await this.host.save(ordersMarkdown(list, this.host.now(), accounts));
       new Notice(
         outcome.kind === 'none'
-          ? "Choose a note for today's orders in the plugin's settings"
+          ? "Select a note for today's orders in the plugin settings"
           : outcome.kind === 'refused'
             ? notOurNoteMessage(outcome.path)
             : `Saved today's orders to ${outcome.path}`,
       );
     } catch (e) {
-      new Notice(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
+      new Notice(`Cannot save: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       button.disabled = false;
     }
@@ -166,7 +166,7 @@ export class OrdersModal extends Modal {
     if (groups.length === 0) {
       const section = h(root, 'section', 'bt-orders-section');
       this.heading(section, 'To do');
-      h(section, 'p', 'bt-orders-none', 'Nothing to do. No strategy has an order.');
+      h(section, 'p', 'bt-orders-none', 'No strategy has an order.');
       return;
     }
     for (const { when, heading, rows: group } of groups) {
@@ -201,11 +201,11 @@ export class OrdersModal extends Modal {
       const box = h(section, 'div', 'bt-orders-hold');
       this.link(box, { note: a.note, strategy: a.name });
       if (a.error !== null) {
-        h(box, 'div', 'bt-orders-muted', `Couldn't be worked out. ${a.error}`);
+        h(box, 'div', 'bt-orders-muted', `Cannot calculate the orders. ${a.error}`);
         continue;
       }
       if (a.orders.length === 0) {
-        h(box, 'div', 'bt-orders-muted', 'Nothing to trade');
+        h(box, 'div', 'bt-orders-muted', 'No orders');
         continue;
       }
       const list = h(box, 'ul', 'bt-orders-list');
@@ -253,7 +253,7 @@ export class OrdersModal extends Modal {
     if (held.length === 0) return;
     const section = h(root, 'details', 'bt-orders-section');
     section.open = !collapsed;
-    this.heading(section, `Holding (${held.length})`, 'summary');
+    this.heading(section, `Holdings (${held.length})`, 'summary');
     for (const s of held) {
       const box = h(section, 'div', 'bt-orders-hold');
       this.link(box, s);

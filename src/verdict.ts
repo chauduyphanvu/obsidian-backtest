@@ -59,12 +59,12 @@ export function yearsAhead(t: number[], equity: number[], benchmark: number[]): 
   };
 }
 
-/** The years sentence: "It beat buy and hold only in falling years: 2008, 2018 and 2022." Empty with under two whole years. */
+/** The years sentence: "It beat buy and hold only in down years: 2008, 2018 and 2022." Empty with under two full years. */
 export function yearsSentence(y: YearsAhead, bench: string): string {
   if (y.years < 2) return '';
-  if (y.ahead.length === 0) return `It did not beat ${bench} in any whole calendar year.`;
-  if (y.onlyFalling && y.ahead.length < y.years && y.ahead.length <= 4) return `It beat ${bench} only in falling years: ${listed(y.ahead.map((p) => p.key))}.`;
-  return `It beat ${bench} in ${y.ahead.length} of ${y.years} whole years.`;
+  if (y.ahead.length === 0) return `It did better than ${bench} in 0 of ${y.years} full years.`;
+  if (y.onlyFalling && y.ahead.length < y.years && y.ahead.length <= 4) return `It did better than ${bench} only in down years: ${listed(y.ahead.map((p) => p.key))}.`;
+  return `It did better than ${bench} in ${y.ahead.length} of ${y.years} full years.`;
 }
 
 export function verdict(bt: Backtest): Verdict {
@@ -72,12 +72,12 @@ export function verdict(bt: Backtest): Verdict {
   const b = bt.benchmark.stats;
   const bench = benchProse(bt.benchmark.label);
   if (run.ruin) {
-    return { lead: [{ text: `Ruined on ${stamp(run.ruin.t, isIntraday(run.t))}: its equity fell to zero and the run stopped there.` }], more: '' };
+    return { lead: [{ text: `The equity decreased to zero on ${stamp(run.ruin.t, isIntraday(run.t))}, and the run stopped.` }], more: '' };
   }
   if (tradeStats.count === 0 && tradeStats.open === 0) {
     return {
-      lead: [{ text: 'No rule opened a position, so the money stayed in cash.' }],
-      more: Number.isFinite(b.cagr) ? `${bench[0].toUpperCase()}${bench.slice(1)} made ${pct(b.cagr)} a year over the same time.` : '',
+      lead: [{ text: 'No rule opened a position. All the money stayed in cash.' }],
+      more: Number.isFinite(b.cagr) ? `${bench[0].toUpperCase()}${bench.slice(1)} made ${pct(b.cagr)} a year in the same period.` : '',
     };
   }
   const S = (text: string): Part => ({ text, mark: 'strategy' });
@@ -85,29 +85,29 @@ export function verdict(bt: Backtest): Verdict {
   const t = (text: string): Part => ({ text });
   const [sR, bR, sD, bD] = [pct(s.cagr), pct(b.cagr), fallText(s.maxDrawdown), fallText(b.maxDrawdown)];
   let lead: Part[];
-  if (!Number.isFinite(b.cagr)) lead = [S(`${sR} a year`), t(', and its worst fall was '), S(sD), t('.')];
+  if (!Number.isFinite(b.cagr)) lead = [S(`${sR} a year`), t('. Its worst drawdown was '), S(sD), t('.')];
   else {
     const ret = sR === bR ? 0 : s.cagr > b.cagr ? 1 : -1;
     const fall = sD === bD ? 0 : s.maxDrawdown > b.maxDrawdown ? 1 : -1;
     const tail: Part[] =
       fall === 0
-        ? [t(`${ret === 0 ? ', and' : ','} with the same worst fall, `), S(sD), t('.')]
+        ? [t(` Its worst drawdown was ${ret === 0 ? 'also ' : ''}the same: `), S(sD), t('.')]
         : fall > 0
-          ? [t(ret < 0 ? ' — but its worst fall was ' : ', and its worst fall was '), S(sD), t(', not '), B(bD), t('.')]
-          : [t(ret > 0 ? ' — but its worst fall was ' : ', and its worst fall was deeper: '), S(sD), t(ret > 0 ? ', against ' : ' against '), B(bD), t('.')];
-    lead = ret === 0 ? [S(`${sR} a year`), t(`, the same as ${bench}`), ...tail] : [S(`${sR} a year`), t(' against '), B(bR), t(` for ${bench}`), ...tail];
+          ? [t(ret < 0 ? ' But its worst drawdown was smaller: ' : ret > 0 ? ' Its worst drawdown was also smaller: ' : ' Its worst drawdown was smaller: '), S(sD), t(', compared with '), B(bD), t('.')]
+          : [t(ret > 0 ? ' But its worst drawdown was larger: ' : ret < 0 ? ' Its worst drawdown was also larger: ' : ' Its worst drawdown was larger: '), S(sD), t(', compared with '), B(bD), t('.')];
+    lead = ret === 0 ? [S(`${sR} a year`), t(`, the same as ${bench}.`), ...tail] : [S(`${sR} a year`), t(', compared with '), B(bR), t(` for ${bench}.`), ...tail];
   }
 
   const more: string[] = [];
   const time = bt.spec.margin
-    ? `with ${pct(s.exposure, 0)} gross exposure and ${pct(s.netExposure ?? NaN, 0)} net on average`
+    ? `The average exposure was ${pct(s.exposure, 0)} gross and ${pct(s.netExposure ?? NaN, 0)} net.`
     : s.exposure >= 0.995
-      ? 'while in the market all the time'
-      : `while in the market ${pct(s.exposure, 0)} of the time`;
+      ? 'The strategy was in the market all the time.'
+      : `The strategy was in the market ${pct(s.exposure, 0)} of the time.`;
   if (Number.isFinite(s.sharpe) && Number.isFinite(b.sharpe)) {
     const d = Math.round(s.sharpe * 100) / 100 - Math.round(b.sharpe * 100) / 100;
-    const word = Math.abs(d) < 0.005 ? 'The same' : d > 0 ? (d < 0.1 ? 'A slightly higher' : 'A higher') : d > -0.1 ? 'A slightly lower' : 'A lower';
-    more.push(`${word} Sharpe ratio, ${ratio(s.sharpe)} against ${ratio(b.sharpe)}, ${time}.`);
+    const word = `${ratio(Math.abs(d))} ${d > 0 ? 'higher' : 'lower'}`;
+    more.push(Math.abs(d) < 0.005 ? `The Sharpe ratio was the same: ${ratio(s.sharpe)}. ${time}` : `The Sharpe ratio was ${word}: ${ratio(s.sharpe)}, compared with ${ratio(b.sharpe)}. ${time}`);
   }
   const years = yearsSentence(yearsAhead(run.t, run.equity, bt.benchmark.equity), bench);
   if (years) more.push(years);
@@ -131,7 +131,7 @@ export interface Figure {
   textOnly?: boolean;
 }
 
-/** "3.3 pts lower", "30.7 pts shallower", "the same". `up` and `down` say which way the strategy is from the benchmark. */
+/** "3.3 pts lower", "30.7 pts smaller", "the same". `up` and `down` say which way the strategy is from the benchmark. */
 function apart(s: number, b: number, up: string, down: string, scale: number, digits: number, unit: string): string {
   if (!Number.isFinite(s) || !Number.isFinite(b)) return '';
   const d = Math.abs(s - b) * scale;
@@ -149,7 +149,7 @@ export function figures(bt: Backtest): Figure[] {
   const out: Figure[] = [
     { label: 'Return per year', s: s.cagr, b: b.cagr, sText: pct(s.cagr), bText: pct(b.cagr), delta: pts(s.cagr, b.cagr) },
     { label: 'Total return', s: s.totalReturn, b: b.totalReturn, sText: total(s.totalReturn), bText: total(b.totalReturn), delta: pts(s.totalReturn, b.totalReturn) },
-    { label: 'Worst drawdown', s: s.maxDrawdown, b: b.maxDrawdown, sText: pct(s.maxDrawdown), bText: pct(b.maxDrawdown), delta: pts(s.maxDrawdown, b.maxDrawdown, 'shallower', 'deeper') },
+    { label: 'Worst drawdown', s: s.maxDrawdown, b: b.maxDrawdown, sText: pct(s.maxDrawdown), bText: pct(b.maxDrawdown), delta: pts(s.maxDrawdown, b.maxDrawdown, 'smaller', 'larger') },
     { label: 'Sharpe ratio', s: s.sharpe, b: b.sharpe, sText: ratio(s.sharpe), bText: ratio(b.sharpe), delta: apart(Math.round(s.sharpe * 100) / 100, Math.round(b.sharpe * 100) / 100, 'higher', 'lower', 1, 2, '') },
     { label: 'Volatility', s: s.volatility, b: b.volatility, sText: pct(s.volatility), bText: pct(b.volatility), delta: pts(s.volatility, b.volatility) },
     // A block that can borrow may hold more than its equity, or short: its exposure is gross, with the net under it.
@@ -162,7 +162,7 @@ export function figures(bt: Backtest): Figure[] {
       b: NaN,
       sText: String(ts.count),
       bText: '',
-      delta: ts.count ? `${pct(ts.winRate, 0)} won, ${signedPct(ts.avgReturn)} on average` : ts.open ? 'none closed yet' : 'no rule opened a position',
+      delta: ts.count ? `${pct(ts.winRate, 0)} won, ${signedPct(ts.avgReturn)} on average` : ts.open ? 'no closed trades' : 'no rule opened a position',
       textOnly: true,
     },
   ];
@@ -194,7 +194,7 @@ export function moreFigures(bt: Backtest): Figure[] {
     const [p, q] = [get(mine), get(bench)];
     return { label, s: p?.ret ?? NaN, b: q?.ret ?? NaN, sText: p ? signedPct(p.ret) : '–', bText: q ? signedPct(q.ret) : '–', sNote: p ? periodName(p) : undefined, bNote: q ? periodName(q) : undefined, delta: '' };
   };
-  const below = (u: Underwater): [string, string | undefined] => (u.longestDays === 0 ? ['None', undefined] : [duration(u.longestDays), u.longestTo === null ? 'still below' : undefined]);
+  const below = (u: Underwater): [string, string | undefined] => (u.longestDays === 0 ? ['None', undefined] : [duration(u.longestDays), u.longestTo === null ? 'below at the end' : undefined]);
   const [sBelow, sBelowNote] = below(mine.underwater);
   const [bBelow, bBelowNote] = below(bench.underwater);
   return [
@@ -202,7 +202,7 @@ export function moreFigures(bt: Backtest): Figure[] {
     { label: 'Return per year ÷ worst drawdown', s: mine.calmar, b: bench.calmar, sText: ratio(mine.calmar), bText: ratio(bench.calmar), delta: '' },
     period('Best year', (d) => d.bestYear),
     period('Worst year', (d) => d.worstYear),
-    { label: 'Months with a gain', s: mine.positiveMonths, b: bench.positiveMonths, sText: pct(mine.positiveMonths, 0), bText: pct(bench.positiveMonths, 0), delta: '' },
+    { label: 'Months up', s: mine.positiveMonths, b: bench.positiveMonths, sText: pct(mine.positiveMonths, 0), bText: pct(bench.positiveMonths, 0), delta: '' },
     { label: 'Longest time below a previous high', s: mine.underwater.longestDays, b: bench.underwater.longestDays, sText: sBelow, bText: bBelow, sNote: sBelowNote, bNote: bBelowNote, delta: '' },
     period('Best month', (d) => d.bestMonth),
     period('Worst month', (d) => d.worstMonth),
@@ -217,12 +217,12 @@ export function tradesSentence(bt: Pick<Backtest, 'run'>): string {
   const lost = closed.filter((t) => t.ret <= 0);
   const avg = (list: typeof closed) => list.reduce((a, t) => a + t.ret, 0) / list.length;
   const parts = [`${won.length.toLocaleString('en-US')} of ${plural(closed.length, 'closed trade')} won.`];
-  if (won.length && lost.length) parts.push(`Winners made ${signedPct(avg(won))} on average, losers ${signedPct(avg(lost))}.`);
+  if (won.length && lost.length) parts.push(`The average trade with a profit made ${signedPct(avg(won))}. The average trade with a loss made ${signedPct(avg(lost))}.`);
   const total = closed.reduce((a, t) => a + t.pnl, 0);
   const best = [...closed].sort((x, y) => y.pnl - x.pnl).slice(0, 5);
   const top = best.reduce((a, t) => a + t.pnl, 0);
-  if (closed.length >= 10 && total > 0 && top > total) parts.push(`The five best made ${moneyText(top)}, more than the ${moneyText(total)} all closed trades made together.`);
-  else if (closed.length >= 10 && total > 0) parts.push(`The five best made ${moneyText(top)} of the ${moneyText(total)} all closed trades made.`);
+  if (closed.length >= 10 && total > 0 && top > total) parts.push(`The five best trades made ${moneyText(top)}. This is more than the ${moneyText(total)} that all closed trades made together.`);
+  else if (closed.length >= 10 && total > 0) parts.push(`The five best trades made ${moneyText(top)} of the ${moneyText(total)} that all closed trades made.`);
   return parts.join(' ');
 }
 

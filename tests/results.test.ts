@@ -76,7 +76,7 @@ test('a forced run runs again, and so does one after the kept results are droppe
 
 test('cached only runs nothing: a block with no kept result rejects', async () => {
   const { results, reads, client } = setup();
-  await assert.rejects(results.runSource(SRC, { cachedOnly: true }), { message: 'This strategy has not run yet.' });
+  await assert.rejects(results.runSource(SRC, { cachedOnly: true }), { message: 'This strategy did not run at this time.' });
   assert.equal(reads.length, 0);
   const out = await results.runSource(SRC);
   assert.equal(await results.runSource(SRC, { cachedOnly: true }), out);

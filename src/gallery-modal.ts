@@ -46,7 +46,7 @@ export class GalleryModal extends Modal {
     this.preview = h(body, 'div', 'bt-gallery-preview');
 
     const foot = h(root, 'div', 'bt-gallery-foot');
-    h(foot, 'span', 'bt-gallery-hint', 'Choose one, then insert it. Double-click or press Enter on a strategy to insert it at once.');
+    h(foot, 'span', 'bt-gallery-hint', 'Select a strategy. Then click Insert. To insert the selected strategy immediately, double-click it or push Enter.');
     h(foot, 'button', 'mod-cta', 'Insert').addEventListener('click', () => this.insert());
 
     this.select(0);

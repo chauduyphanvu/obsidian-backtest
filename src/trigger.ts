@@ -244,7 +244,7 @@ function planFor(data: Map<string, Bars>, apart: Apart | undefined, asset: strin
   if (!isValues(data.get(driver)!)) {
     if (now.has('open')) assumptions.push(`${who} opens at its last close`);
     if (now.has('high') || now.has('low')) assumptions.push(`${who} trades only between its open and its close`);
-    if (now.has('volume')) assumptions.push(`${its} volume is that of its last bar`);
+    if (now.has('volume')) assumptions.push(`${its} volume is the same as on its last bar`);
     if (now.has('column')) assumptions.push(`${its} columns keep their last values`);
   }
   for (const name of [asset, ...[...reads.keys()].filter((n) => n !== asset)]) {
@@ -252,15 +252,15 @@ function planFor(data: Map<string, Bars>, apart: Apart | undefined, asset: strin
     const b = data.get(name);
     if (!read || !b) continue;
     if (name !== asset && isValues(b)) {
-      if (name === driver) assumptions.push(`${name} publishes one new value by that close`);
-      else assumptions.push(b.unpriced ? `${name} has no new row by that close` : `${name} publishes no new value by that close`);
+      if (name === driver) assumptions.push(`${name} has one new value by that close`);
+      else assumptions.push(b.unpriced ? `${name} has no new row by that close` : `${name} has no new value by that close`);
       continue;
     }
     const times = added.get(name);
     if (!times || read.lag >= (name === driver ? times.length - 1 : times.length)) continue;
-    assumptions.push(name === driver ? `${name} is unchanged until that close` : `${name} is unchanged`);
+    assumptions.push(name === driver ? `${name} does not change until that close` : `${name} does not change`);
   }
-  if ([...reads.values()].some((r) => r.now.has('calendar'))) assumptions.push(`the next bar is dated ${stamp(next, intraday)}`);
+  if ([...reads.values()].some((r) => r.now.has('calendar'))) assumptions.push(`the date of the next bar is ${stamp(next, intraday)}`);
   return { driver, added, assumptions };
 }
 
@@ -704,7 +704,7 @@ export function condition(t: Pick<Trigger, 'fires' | 'last' | 'values'>, who: st
   const closes = t.values ? `${who}'s next value is` : `${who} closes`;
   if (t.fires.length > 1) return `if ${closes} ${t.fires.map((b) => where(b, t.last, t.values)).join(' or ')}`;
   const [b] = t.fires;
-  if (b.lo === null && b.hi === null) return t.values ? `whatever ${closes}` : 'whatever the next close';
+  if (b.lo === null && b.hi === null) return t.values ? `at all next values of ${who}` : 'at all prices of the next close';
   // Here the price shown is the last in the band, which still gives the order.
   if (b.hi === null && b.lo! <= t.last) return `unless ${closes} below ${priced(t.values ? b.lo! : atOrAbove(b.lo!), t.last, t.values)}`;
   if (b.lo === null && b.hi! >= t.last) return `unless ${closes} above ${priced(t.values ? b.hi! : atOrBelow(b.hi!), t.last, t.values)}`;
@@ -730,7 +730,7 @@ export function edgePrices(t: Pick<Trigger, 'fires' | 'last' | 'values'>): { edg
 export const shownPrice = (x: number, values?: true): string => (values ? shown(x) : minus(price(x)));
 
 /** When an order given at the next close fills. */
-export const fillPhrase = (closeFill: boolean): string => (closeFill ? 'at that close' : 'at the following open');
+export const fillPhrase = (closeFill: boolean): string => (closeFill ? 'at that close' : 'at the open after that close');
 
 /** A held ticker's levels by where they lie: below its last close a long's stop or a short's target, above it the other. */
 const belowAbove = (t: Pick<Trigger, 'short'>) => (t.short ? (['target', 'stop'] as const) : (['stop', 'target'] as const));
@@ -753,11 +753,11 @@ export function rulePhrase(t: Trigger): string | null {
   const close = `${t.values ? 'next value' : 'close'}${t.driver === t.ticker ? '' : ` of ${t.driver}`}`;
   if (t.side === 'rearm' || t.side === 'rearmShort') {
     const cond = condition(t, t.driver);
-    const [rule, again] = t.side === 'rearm' ? ['buy', 'bought'] : ['short', 'shorted'];
-    return `After a stop or target exit${t.marginCall ? ' or a margin call' : ''}, the ${rule} rule must stop holding before ${t.ticker} is ${again} again: ${cond ? `it does ${cond}` : `it holds at every ${close} ${range}`}`;
+    const [rule, again] = t.side === 'rearm' ? ['buy', 'buys'] : ['short', 'shorts'];
+    return `After a stop or target exit${t.marginCall ? ' or a margin call' : ''}, the ${rule} rule must become false before the strategy ${again} ${t.ticker} again: ${cond ? `it becomes false ${cond}` : `it stays true if the ${close} is ${range}`}`;
   }
   const cond = condition(t, who);
-  return cond ? `${VERB[t.side]} ${cond}` : `The ${t.side} rule gives no order at any ${close} ${range}`;
+  return cond ? `${VERB[t.side]} ${cond}` : `The ${t.side} rule gives no order if the ${close} is ${range}`;
 }
 
 /** The stop and target of a held ticker in a sentence; null when it has neither. A short's stop is above and its target below. */
@@ -767,10 +767,10 @@ export function levelsSentence(t: Pick<Trigger, 'levels' | 'ownLast' | 'short'>)
   const [below, above] = belowAbove(t);
   const [verb, verbs] = t.short ? ['cover', 'covers'] : ['sell', 'sells'];
   const [low, high] = [t.levels[below], t.levels[above]];
-  if (low !== null && low >= t.ownLast) return `The ${below} at ${priced(low, t.ownLast)} is above the last close, so it ${verbs} at the next open unless the price opens above it.`;
-  if (high !== null && high <= t.ownLast) return `The ${above} at ${priced(high, t.ownLast)} is below the last close, so it ${verbs} at the next open unless the price opens below it.`;
+  if (low !== null && low >= t.ownLast) return `The ${below} at ${priced(low, t.ownLast)} is above the last close. Thus the strategy ${verbs} at the next open, unless the price opens above it.`;
+  if (high !== null && high <= t.ownLast) return `The ${above} at ${priced(high, t.ownLast)} is below the last close. Thus the strategy ${verbs} at the next open, unless the price opens below it.`;
   const parts = [stop !== null ? `the stop at ${priced(stop, t.ownLast)}` : '', target !== null ? `the target at ${priced(target, t.ownLast)}` : ''].filter(Boolean);
-  const text = `${parts.join(' and ')} ${parts.length > 1 ? verb : verbs} during the bar if the price reaches ${parts.length > 1 ? 'them' : 'it'}.`;
+  const text = `${parts.join(' and ')} ${parts.length > 1 ? verb : verbs} during the bar if the price touches ${parts.length > 1 ? 'them' : 'it'}.`;
   return text[0].toUpperCase() + text.slice(1);
 }
 
@@ -784,7 +784,7 @@ function warmupText(ts: Trigger[]): string[] {
     if (same) same.verbs.push(verb);
     else out.push({ what, verbs: [verb] });
   }
-  return out.map((o) => `Can't ${o.verbs.join(' or ')} at the next close: ${o.what} is still unknown there.`);
+  return out.map((o) => `The strategy cannot ${o.verbs.join(' or ')} at the next close: ${o.what} is unknown at that close.`);
 }
 
 /** "A", "A and B", "A, B and C". */
@@ -806,21 +806,21 @@ export function tickerText(report: TriggerReport, ticker: string): { text: strin
   if (mine.length === 0 || mine.some((t) => t.blocked === 'pending' || t.blocked === 'csv')) return { text: '–', note: null };
   const decision = decisionPhrase(report);
   const first = mine[0];
-  if (first.blocked === 'ranking') return { text: decision ? `Bought only when the ranking picks it, next ${decision}.` : 'Bought only when the ranking picks it.', note: null };
+  if (first.blocked === 'ranking') return { text: decision ? `The strategy buys it only when the ranking selects it. The next ranking is ${decision}.` : 'The strategy buys it only when the ranking selects it.', note: null };
   const waiting = mine.filter((t) => t.blocked === 'warmup');
   if (waiting.length === mine.length) return { text: warmupText(waiting).join(' '), note: null };
   const out: string[] = [];
   for (const t of mine) {
     if (t.blocked) continue;
-    if (t.noRule) out.push(`No ${t.side} rule.`);
+    if (t.noRule) out.push(`The strategy has no ${t.side} rule.`);
     const phrase = rulePhrase(t);
     if (phrase) out.push(t.side === 'rearm' || t.side === 'rearmShort' || t.fires.length === 0 ? `${phrase}.` : `${phrase}, ${fillPhrase(report.closeFill)}.`);
   }
   out.push(...warmupText(waiting));
   const levels = levelsSentence(first);
   if (levels) out.push(levels);
-  if (decision && first.side !== 'rearm') out.push(`The ranking decides again ${decision}.`);
-  return { text: out.join(' '), note: first.assumptions.length > 0 ? `Assumes ${listed(first.assumptions)}.` : null };
+  if (decision && first.side !== 'rearm') out.push(`The ranking selects again ${decision}.`);
+  return { text: out.join(' '), note: first.assumptions.length > 0 ? `These prices are correct only if ${listed(first.assumptions)}.` : null };
 }
 
 /**

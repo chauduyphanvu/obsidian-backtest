@@ -43,7 +43,7 @@ export interface PriceInput {
 
 /** Up to this many tickers get a button each; more get a drop-down. */
 const MAX_BUTTONS = 12;
-const TOO_MANY = 'Too many trades to mark each one at this width; shaded bands show when it was held.';
+const TOO_MANY = 'There are too many trades to mark at this width. The shaded bands show when the strategy held the ticker.';
 
 interface View {
   name: string;
@@ -194,7 +194,7 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
 
   const shorted = held.some((w) => w.trade.side === 'short');
   const label = shorted ? 'held it long or short, and its trades' : 'held it and its buys and sells';
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `${view.name} price over time, with the periods the strategy ${label}` });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `${view.name} price, with the periods the strategy ${label}` });
 
   for (const short of [false, true]) {
     for (const p of heldIntervals(held.filter((w) => (w.trade.side === 'short') === short))) {
@@ -268,8 +268,8 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
       const short = trade.side === 'short';
       h(tip, 'div', 'bt-price-tip-sep');
       row(short ? 'Sold short' : 'Bought', boughtWording(trade, (time) => stamp(time, intraday), price));
-      row(short ? 'Bought to cover' : 'Sold', open ? 'still held' : `${stamp(trade.exitT, intraday)} at ${price(trade.exitPrice)}`);
-      row(open ? 'Return so far' : 'Return', signedPct(trade.ret));
+      row(short ? 'Bought to cover' : 'Sold', open ? 'not closed' : `${stamp(trade.exitT, intraday)} at ${price(trade.exitPrice)}`);
+      row(open ? 'Return to date' : 'Return', signedPct(trade.ret));
       if (!open) row('Reason', tradeExit(trade, input.trades));
     }
     tip.hidden = false;

@@ -162,7 +162,7 @@ test('a forward test from start to log: frozen text, a later run, new bars logge
   const rerun = runBacktest(parseSpec(forward!.source).spec!, new Map([['A', bars(moved)]]));
   const said = revisions(log, logRows(rerun));
   assert.equal(day(fresh[0].t), '2020-02-23');
-  assert.equal(said[0].message, "The log says Buy A on 2020-02-23; today's prices give no order there.");
+  assert.equal(said[0].message, "The log shows Buy A on 2020-02-23. Today's prices give no order on that day.");
   assert.ok(said.every((r) => r.t >= fresh[0].t), 'bars before the changed price agree');
 });
 

@@ -73,74 +73,74 @@ test('a series can come first where a function reads one, and the ones that read
   assert.equal(series('streak(volume)')!.k, 'series');
   for (const name of ['aroon_up', 'aroon_down', 'psar', 'cmf']) {
     assert.equal(series(`${name}()`), null, name);
-    assert.equal(failure(`${name}(close) > 0`), `${name}() periods must be plain numbers`, name);
+    assert.equal(failure(`${name}(close) > 0`), `The periods of ${name}() must be numbers or parameters`, name);
   }
 });
 
 test('wrong numbers of arguments and lengths out of range are refused in plain words', () => {
-  assert.equal(failure('sum() > 0'), 'sum() needs a period, as in sum(20)');
-  assert.equal(failure('dema() > 0'), 'dema() needs a period, as in dema(20)');
-  assert.equal(failure('rsquared() > 0'), 'rsquared() needs a period, as in rsquared(20)');
+  assert.equal(failure('sum() > 0'), 'sum() must have a period, for example sum(20)');
+  assert.equal(failure('dema() > 0'), 'dema() must have a period, for example dema(20)');
+  assert.equal(failure('rsquared() > 0'), 'rsquared() must have a period, for example rsquared(20)');
   // A first argument that is not needed for the periods is the series, so it takes 4 numbers or more to be too many.
-  assert.equal(failure('kama(10, 2, 30, 5, 6) > 0'), 'kama() takes at most 3 numbers');
-  assert.equal(failure('psar(0.02, 0.2, 1) > 0'), 'psar() takes at most 2 numbers');
-  assert.equal(failure('streak(5) > 0'), 'streak() takes no numbers, only a series, as in streak(close)');
-  assert.equal(failure('streak(close, 5) > 0'), 'streak() takes no arguments');
-  assert.equal(failure('kama(0) > 0'), 'kama(): 0 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('kama(10, 2, 0) > 0'), 'kama(): 0 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('cmf(1.5) > 0'), 'cmf(): 1.5 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('dema(10001) > 0'), 'dema(): 10001 is not a valid period. Use a whole number from 1 to 10000');
-  assert.equal(failure('aroon_up(0) > 0'), 'aroon_up(): 0 is not a valid period. Use a whole number from 1 to 10000');
+  assert.equal(failure('kama(10, 2, 30, 5, 6) > 0'), 'kama() can have a maximum of 3 numbers');
+  assert.equal(failure('psar(0.02, 0.2, 1) > 0'), 'psar() can have a maximum of 2 numbers');
+  assert.equal(failure('streak(5) > 0'), 'streak() must have only a series, not numbers, for example streak(close)');
+  assert.equal(failure('streak(close, 5) > 0'), 'streak() cannot have arguments');
+  assert.equal(failure('kama(0) > 0'), 'kama(): 0 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('kama(10, 2, 0) > 0'), 'kama(): 0 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('cmf(1.5) > 0'), 'cmf(): 1.5 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('dema(10001) > 0'), 'dema(): 10001 is not a permitted period. Use a whole number from 1 to 10000');
+  assert.equal(failure('aroon_up(0) > 0'), 'aroon_up(): 0 is not a permitted period. Use a whole number from 1 to 10000');
   // These need at least two bars: a line through one value says nothing.
-  for (const name of ['linreg', 'rsquared']) assert.equal(failure(`${name}(1) > 0`), `${name}(): 1 is not a valid period. Use a whole number from 2 to 10000`, name);
+  for (const name of ['linreg', 'rsquared']) assert.equal(failure(`${name}(1) > 0`), `${name}(): 1 is not a permitted period. Use a whole number from 2 to 10000`, name);
   // A length of 1 is fine where it means something.
   for (const name of ['sum', 'dema', 'tema', 'aroon_up', 'aroon_down', 'cmf', 'efficiency']) assert.deepEqual(parseSpec(`universe: A\nbuy when ${name}(1) > 0`).errors, [], name);
 });
 
 test('psar refuses a step above its maximum, and either of them 0 or below, with an example', () => {
-  const example = 'Use a step no larger than the maximum, as in psar(0.02, 0.2)';
-  assert.equal(failure('psar(0.3, 0.2) > 0'), `psar(): the step 0.3 is above the maximum 0.2. ${example}`);
+  const example = 'Use a step that is not more than the maximum, for example psar(0.02, 0.2)';
+  assert.equal(failure('psar(0.3, 0.2) > 0'), `psar(): the step 0.3 is more than the maximum 0.2. ${example}`);
   // The default maximum counts when only the step is written.
-  assert.equal(failure('psar(0.3) > 0'), `psar(): the step 0.3 is above the maximum 0.2. ${example}`);
-  assert.equal(failure('psar(0.5, 0.4) > 0', ''), `psar(): the step 0.5 is above the maximum 0.4. ${example}`);
-  assert.equal(failure('psar(0, 0.2) > 0'), 'psar(): 0 is not a valid step');
-  assert.equal(failure('psar(0.02, 0) > 0'), 'psar(): 0 is not a valid maximum');
+  assert.equal(failure('psar(0.3) > 0'), `psar(): the step 0.3 is more than the maximum 0.2. ${example}`);
+  assert.equal(failure('psar(0.5, 0.4) > 0', ''), `psar(): the step 0.5 is more than the maximum 0.4. ${example}`);
+  assert.equal(failure('psar(0, 0.2) > 0'), 'psar(): 0 is not a permitted step');
+  assert.equal(failure('psar(0.02, 0) > 0'), 'psar(): 0 is not a permitted maximum');
   // Equal is fine, and so is a step or maximum above 1.
   assert.deepEqual(parseSpec('universe: A\nbuy when psar(0.2, 0.2) > 0 and psar(0.5, 1.5) > 0').errors, []);
   // A parameter in the step is checked at the value it has.
-  assert.match(failure('psar(st) > 0', 'st = 0.4\n'), /^psar\(\): the step 0.4 is above the maximum 0.2/);
+  assert.match(failure('psar(st) > 0', 'st = 0.4\n'), /^psar\(\): the step 0.4 is more than the maximum 0.2/);
   assert.deepEqual(parseSpec('universe: A\nst = 0.02 in 0.01..0.2 step 0.01\nbuy when psar(st) > 0').errors, []);
 });
 
 test('sqrt, log and exp take one number, and if takes a condition and two numbers', () => {
-  assert.equal(failure('sqrt() > 0'), 'sqrt() takes 1 value, as in sqrt(stdev(20))');
-  assert.equal(failure('log(1, 2) > 0'), 'log() takes 1 value, as in log(close)');
-  assert.equal(failure('exp() > 0'), 'exp() takes 1 value, as in exp(slope(log(close), 90) * 252)');
-  assert.equal(failure('log(close > 1) > 0'), 'log() needs a number, not a condition');
+  assert.equal(failure('sqrt() > 0'), 'sqrt() must have 1 value, for example sqrt(stdev(20))');
+  assert.equal(failure('log(1, 2) > 0'), 'log() must have 1 value, for example log(close)');
+  assert.equal(failure('exp() > 0'), 'exp() must have 1 value, for example exp(slope(log(close), 90) * 252)');
+  assert.equal(failure('log(close > 1) > 0'), 'log() must have a number, not a condition');
   const example = 'if(close > sma(200), roc(126), 0)';
-  assert.equal(failure('if(close > 1, 2) > 0'), `if() takes a condition and two numbers, as in ${example}`);
-  assert.equal(failure('if() > 0'), `if() takes a condition and two numbers, as in ${example}`);
-  assert.equal(failure('if(close > 1, 2, 3, 4) > 0'), `if() takes a condition and two numbers, as in ${example}`);
-  assert.equal(failure('if(close, 1, 2) > 0'), `if() needs a condition first, not a number, as in ${example}`);
-  assert.equal(failure('if(close > 1, close > 2, 3) > 0'), `if() chooses between two numbers, not conditions, as in ${example}`);
-  assert.equal(failure('if(close > 1, 2, close > 3) > 0'), `if() chooses between two numbers, not conditions, as in ${example}`);
+  assert.equal(failure('if(close > 1, 2) > 0'), `if() must have a condition and two numbers, for example ${example}`);
+  assert.equal(failure('if() > 0'), `if() must have a condition and two numbers, for example ${example}`);
+  assert.equal(failure('if(close > 1, 2, 3, 4) > 0'), `if() must have a condition and two numbers, for example ${example}`);
+  assert.equal(failure('if(close, 1, 2) > 0'), `The first value of if() must be a condition, not a number, for example ${example}`);
+  assert.equal(failure('if(close > 1, close > 2, 3) > 0'), `The second and third values of if() must be numbers, not conditions, for example ${example}`);
+  assert.equal(failure('if(close > 1, 2, close > 3) > 0'), `The second and third values of if() must be numbers, not conditions, for example ${example}`);
   // The whole is a number, so a rule needs a comparison around it.
-  assert.match(failure('if(close > 1, 2, 3)'), /A rule needs a condition/);
+  assert.match(failure('if(close > 1, 2, 3)'), /A rule must have a condition/);
   assert.deepEqual(parseSpec('universe: A\nbuy when if(close > sma(200), roc(126), 0) > 5% and sqrt(stdev(20)) < log(close) + exp(1)').errors, []);
 });
 
 test('the position values go inside the pointwise functions in sell rules, and nowhere a buy rule can read them', () => {
   assert.deepEqual(problems('if(bars held > 3, close, entry price) < close'), []);
   assert.deepEqual(problems('sqrt(bars held) >= 2 and exp(entries made) > 1 and log(last entry price) > 0'), []);
-  assert.match(failure('if(bars held > 1, 1, 0) > 0'), /"bars held" only makes sense in a sell, cover or add rule/);
-  assert.match(problems('sma(if(bars held > 3, close, 1), 5) > 0')[0], /"bars held" can't go inside sma\(\)/);
-  assert.match(problems('if(bars held > 3, close, 1)[1] > 0')[0], /can't be read for an earlier bar/);
+  assert.match(failure('if(bars held > 1, 1, 0) > 0'), /You can use "bars held" only in a sell, cover or add rule/);
+  assert.match(problems('sma(if(bars held > 3, close, 1), 5) > 0')[0], /You cannot use "bars held" in sma\(\)/);
+  assert.match(problems('if(bars held > 3, close, 1)[1] > 0')[0], /for a previous bar with \[n\]/);
 });
 
 test('a function added after 0.7.0 can still name a parameter, which the block then means by it', () => {
   for (const name of [...NEW, ...POINTWISE]) {
     assert.deepEqual(parseSpec(`universe: A\n${name} = 5\nbuy when close > sma(${name})`).errors, [], name);
-    assert.match(parseSpec(`universe: A\n${name} = 5\nbuy when ${name}(close) > 0`).errors[0]?.message ?? '', new RegExp(`"${name}" is your parameter in this block, so ${name}\\(\\) can't be used here`), name);
+    assert.match(parseSpec(`universe: A\n${name} = 5\nbuy when ${name}(close) > 0`).errors[0]?.message ?? '', new RegExp(`"${name}" is a parameter in this block\\. Thus you cannot use ${name}\\(\\) here`), name);
     assert.ok(!RESERVED.has(name) && LATER_WORDS.has(name), name);
   }
 });
@@ -149,9 +149,9 @@ test('every function except the conditions is a number', () => {
   for (const name of NEW) {
     const { params } = INDICATORS[name];
     const call = `${name}(${params.map((d) => d ?? 20).join(', ')})`;
-    assert.match(failure(call), /A rule needs a condition/, name);
+    assert.match(failure(call), /A rule must have a condition/, name);
   }
-  for (const call of ['sqrt(close)', 'log(close)', 'exp(close)', 'if(close > 1, 2, 3)']) assert.match(failure(call), /A rule needs a condition/, call);
+  for (const call of ['sqrt(close)', 'log(close)', 'exp(close)', 'if(close > 1, 2, 3)']) assert.match(failure(call), /A rule must have a condition/, call);
 });
 
 // ---------------------------------------------------------------- how they are read
@@ -227,7 +227,7 @@ test('a rule that uses a function that is still unknown never fires', () => {
 
 test('cmf says so when the prices have no volume', () => {
   const none = market(60, 3, false);
-  assert.throws(() => at('cmf(14)', { A: none }), /^Error: A has no volume, which cmf\(\) needs/);
+  assert.throws(() => at('cmf(14)', { A: none }), /^Error: A has no volume, but cmf\(\) must have volume/);
   assert.throws(() => at('cmf(14) of IDX', { A: market(60), IDX: none }), /IDX has no volume/);
   assert.doesNotThrow(() => at('aroon_up(14)', { A: none }));
   assert.doesNotThrow(() => at('psar()', { A: none }));
@@ -434,12 +434,12 @@ test('every function completes, with its signature and what it does', () => {
 });
 
 test('the help says whether a function reads a series, needs volume, or reads the ticker\'s own bars', () => {
-  assert.match(docFor('cmf')!.text, /takes no series and needs volume/);
-  assert.match(docFor('aroon_up')!.text, /takes no series and reads the ticker’s own highs/);
-  assert.match(docFor('aroon_down')!.text, /reads the ticker’s own lows/);
-  assert.match(docFor('psar')!.text, /takes no series, and step may not be above max/);
-  assert.match(docFor('streak')!.text, /write another first, as in streak\(volume\)/);
-  assert.match(docFor('sum')!.text, /write another first, as in sum\(volume, 20\)/);
+  assert.match(docFor('cmf')!.text, /no series argument, the ticker must have volume, and a bar with no range adds 0/);
+  assert.match(docFor('aroon_up')!.text, /no series argument and reads the highs of the ticker/);
+  assert.match(docFor('aroon_down')!.text, /reads the lows of the ticker/);
+  assert.match(docFor('psar')!.text, /no series argument, and its speed increases by step at each new high or low, from step to max \(step cannot be more than max\)/);
+  assert.match(docFor('streak')!.text, /or the series you write first, as in streak\(volume\)/);
+  assert.match(docFor('sum')!.text, /or the series you write first, as in sum\(volume, 20\)/);
 });
 
 test('a misspelt new name is corrected to the right one', () => {
@@ -495,16 +495,16 @@ test('the bar-by-bar table gives the reason a new word is unknown', () => {
   const lg = bt('log(close - 104) > 1', moving);
   assert.equal(details(lg, 0)['log(close - 104) > 1'], 'the log of 0 or less');
   const ex = bt('exp(close * 10) > 1', moving);
-  assert.equal(details(ex, 5)['exp(close * 10) > 1'], 'too large a number');
+  assert.equal(details(ex, 5)['exp(close * 10) > 1'], 'a number that is too large');
   // A window where nothing changes has no efficiency and no fit, which is not the same as a window not yet full.
   for (const rule of ['efficiency(10) > 0.5', 'rsquared(10) > 0.5']) {
     const f = bt(rule, flat);
-    assert.equal(details(f, 60)[rule], 'every value in the window is the same', rule);
-    assert.equal(details(f, 2)[rule], 'still warming up', rule);
+    assert.equal(details(f, 60)[rule], 'all values in the window are the same', rule);
+    assert.equal(details(f, 2)[rule], 'its warm-up is not complete', rule);
   }
-  // if says why the value it picked is unknown: its condition's average is still warming up.
+  // if says why the value it picked is unknown: its condition's average is its warm-up is not complete.
   const c = bt('if(close > sma(50), 1, 0) > 0', moving);
-  assert.equal(details(c, 10)['if(close > sma(50), 1, 0) > 0'], 'still warming up');
+  assert.equal(details(c, 10)['if(close > sma(50), 1, 0) > 0'], 'its warm-up is not complete');
   assert.equal(details(c, 80)['if(close > sma(50), 1, 0) > 0'], '');
 });
 

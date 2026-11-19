@@ -72,7 +72,7 @@ interface Drawn {
 
 const EMPTY_TEXT = {
   'no-note': 'Open a note to see the result of its strategy block here. The result updates as you type.',
-  'no-block': 'This note has no strategy block yet. Type one, or run the command "Insert strategy block", and its result will appear here as you write.',
+  'no-block': 'This note has no strategy block. Type a block, or use the command "Insert strategy block". The result shows here while you type.',
 };
 
 export class LiveView extends ItemView {
@@ -232,7 +232,7 @@ export class LiveView extends ItemView {
       if (this.pending === selected) this.pending = null;
       return;
     }
-    // What runs is what is pending, also for "Try again" while a newer edit waits: that edit's run claims it back.
+    // What runs is what is pending, also for "Run again" while a newer edit waits: that edit's run claims it back.
     this.pending = selected;
     const id = ++this.runId;
     const signal = this.latest.start();
@@ -352,18 +352,18 @@ export class LiveView extends ItemView {
   private paint(): void {
     const { problem, result, top } = this;
     top.replaceChildren();
-    this.status.textContent = this.running ? 'Updating…' : '';
+    this.status.textContent = this.running ? 'The result updates…' : '';
     if (problem) {
       const box = h(top, 'div', 'bt-root');
       if (problem.kind === 'errors') drawErrors(box, problem.errors, problem.text);
       else {
-        h(box, 'div', 'bt-error-title', "The backtest couldn't run");
+        h(box, 'div', 'bt-error-title', 'The backtest did not run');
         h(box, 'div', 'bt-note', problem.message);
-        h(box, 'button', 'bt-button', 'Try again').addEventListener('click', problem.retry);
+        h(box, 'button', 'bt-button', 'Run again').addEventListener('click', problem.retry);
       }
-      if (result) h(top, 'div', 'bt-note bt-live-last', 'The result below is the last version that ran.');
+      if (result) h(top, 'div', 'bt-note bt-live-last', 'The result below this line is the last version that ran.');
     } else if (!result) {
-      h(top, 'div', 'bt-note', 'Running the strategy…');
+      h(top, 'div', 'bt-note', 'The plugin runs the strategy…');
     }
     if (result) {
       const stale = problem !== null;
@@ -375,7 +375,7 @@ export class LiveView extends ItemView {
   /** Writes parameter values into the block in the editor, if the block is still what the result was drawn from. */
   private async apply(reading: BlockReading, selected: Shown, values: Record<string, number>): Promise<void> {
     const { view } = reading;
-    if (view.file?.path !== reading.note) throw new Error('That note is no longer open in its editor. Open it again, then write the values.');
+    if (view.file?.path !== reading.note) throw new Error('That note is not open in an editor. Open the note again. Then write the values.');
     if (view.getMode() !== 'source') {
       // The editor of a note in reading mode is not saved, so the file is changed instead.
       const file = view.file;
@@ -385,7 +385,7 @@ export class LiveView extends ItemView {
     }
     const lines = view.editor.getValue().split('\n');
     const at = locateBlock(lines, selected.text, selected.index);
-    if (!at) throw new Error('The block has changed since this result was drawn. Wait for the panel to update, then write the values again.');
+    if (!at) throw new Error('The block changed after the plugin showed this result. Wait for the panel to update. Then write the values again.');
     const next = this.host.rewrite(selected.text, values);
     if (next === selected.text) return;
     view.editor.replaceRange(next, { line: at.first, ch: 0 }, { line: at.last, ch: lines[at.last].length });
@@ -394,7 +394,7 @@ export class LiveView extends ItemView {
 
 /** The problems with a block, in the words of the result shown in the note, without repeating the block itself. */
 export function drawErrors(root: HTMLElement, errors: Diagnostic[], text: string): void {
-  h(root, 'div', 'bt-error-title', errors.length === 1 ? "This strategy can't run yet" : `This strategy can't run yet: ${errors.length} problems`);
+  h(root, 'div', 'bt-error-title', errors.length === 1 ? 'This strategy cannot run' : `This strategy cannot run: ${errors.length} problems`);
   const lines = text.split('\n');
   const list = h(root, 'ul', 'bt-errors');
   for (const e of errors.slice(0, MAX_ERRORS)) {

@@ -41,8 +41,8 @@ export function renderCompareMessage(parent: HTMLElement, text: string): void {
   h(h(parent, 'div', 'bt-root'), 'div', 'bt-note', text);
 }
 
-/** The block's problems, each with its line; `title` names what can't run, as "This comparison can't run yet". */
-export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], source: string, title = "This comparison can't run yet"): void {
+/** The block's problems, each with its line; `title` names what cannot run, as "This comparison cannot run". */
+export function renderCompareErrors(parent: HTMLElement, errors: Diagnostic[], source: string, title = 'This comparison cannot run'): void {
   const root = h(parent, 'div', 'bt-root');
   h(root, 'div', 'bt-error-title', errors.length === 1 ? title : `${title}: ${errors.length} problems`);
   const lines = source.split('\n');
@@ -73,7 +73,7 @@ export function renderCompare(parent: HTMLElement, input: CompareInput): () => v
 
   const root = h(parent, 'div', 'bt-root');
   h(root, 'div', 'bt-title', 'Comparison');
-  h(root, 'div', 'bt-sub', `${stamp(t[0], intraday)} to ${stamp(t[t.length - 1], intraday)}, the dates every strategy covers. Each line is rescaled to start at ${money(input.capital)}.`);
+  h(root, 'div', 'bt-sub', `${stamp(t[0], intraday)} to ${stamp(t[t.length - 1], intraday)}, the dates that all strategies cover. Each line starts at ${money(input.capital)}.`);
 
   const legend = h(root, 'div', 'bt-legend bt-cmp-legend');
   for (const l of listed) {
@@ -118,9 +118,9 @@ export function combinedNote(lines: Pick<Line, 'mark'>[], weights: number[]): st
   const held = lines.flatMap((l, i) => (weights[i] > 0 ? [{ mark: l.mark, w: weights[i] }] : []));
   const out = held.every((x) => x.w === held[0].w) && held.length === lines.length ? `each strategy at ${share(held[0].w)}` : held.map((x) => `${x.mark} at ${share(x.w)}`).join(', ');
   const zero = lines.filter((_, i) => weights[i] === 0).map((l) => l.mark);
-  const listed = zero.length ? ` ${zero.join(', ')} ${zero.length === 1 ? 'is' : 'are'} listed at 0%: drawn, but not in Combined.` : '';
+  const listed = zero.length ? ` ${zero.join(', ')} ${zero.length === 1 ? 'is' : 'are'} at 0%: the chart shows ${zero.length === 1 ? 'it' : 'them'}, but Combined does not include ${zero.length === 1 ? 'it' : 'them'}.` : '';
   const cash = 1 - weights.reduce((a, w) => a + w, 0);
-  return `Combined: ${out}. It goes back to those weights on the first date of each month.${listed}${cash > 1e-9 ? ` The other ${share(cash)} is cash that earns nothing.` : ''}`;
+  return `Combined: ${out}. It rebalances to these weights on the first date of each month.${listed}${cash > 1e-9 ? ` The remaining ${share(cash)} is cash with no interest.` : ''}`;
 }
 
 /** The colour swatch and the number that stand for a line wherever its name is listed. */
@@ -158,15 +158,15 @@ function alike(root: HTMLElement, lines: Line[], aligned: Aligned): void {
   if (lines.length === 2) {
     const c = corr[0][1];
     const text = Number.isFinite(c)
-      ? `The returns of the two strategies have a correlation of ${ratio(c)} (1 means they move together, 0 means unrelated, and below 0 means they move against each other), so they ${
-          c >= 0.7 ? 'mostly moved together' : c >= 0.3 ? 'moved together to some extent' : c > -0.3 ? 'moved largely on their own' : 'tended to move in opposite directions'
+      ? `The returns of the two strategies have a correlation of ${ratio(c)}. A value of 1 shows that they move together, 0 that they are not related, and below 0 that they move in opposite directions. Thus they ${
+          c >= 0.7 ? 'moved together most of the time' : c >= 0.3 ? 'moved together some of the time' : c > -0.3 ? 'moved almost independently' : 'usually moved in opposite directions'
         }.`
-      : "A correlation can't be worked out here, because one of the strategies never changed in value.";
+      : 'The plugin cannot calculate a correlation here, because the value of one of the strategies did not change.';
     h(root, 'div', 'bt-cmp-sentence', text);
     return;
   }
 
-  h(root, 'div', 'bt-cmp-heading', 'How alike they move (1 = together, 0 = unrelated)');
+  h(root, 'div', 'bt-cmp-heading', 'Correlation (1 = they move together, 0 = not related)');
   const wrap = h(root, 'div', 'bt-scroll bt-cmp-scroll');
   const table = h(wrap, 'table', 'bt-table bt-cmp-corr');
   const head = h(h(table, 'thead'), 'tr');
@@ -195,7 +195,7 @@ function alike(root: HTMLElement, lines: Line[], aligned: Aligned): void {
       }
     });
   });
-  h(root, 'div', 'bt-note', 'Blue cells moved together and red cells moved against each other; the darker the cell, the stronger the link.');
+  h(root, 'div', 'bt-note', 'A blue cell shows two strategies that moved together. A red cell shows two strategies that moved in opposite directions. A darker cell shows a stronger link.');
 }
 
 /** Where each line's end label goes: as close to the line's end as possible, at least LABEL_GAP apart, inside [min, max]. */
@@ -224,7 +224,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, t: numbe
   const plotW = width - left - right;
   const hasCombined = lines.some((l) => l.combined);
 
-  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': 'Value over time of each strategy' });
+  const svg = s(chart, 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': 'Value of each strategy during the period' });
   const x = (time: number) => left + ((time - t[0]) / (t[n - 1] - t[0])) * plotW;
   const value = (l: Line, i: number) => l.values[i] * capital;
 

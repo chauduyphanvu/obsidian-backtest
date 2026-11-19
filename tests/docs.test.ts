@@ -98,10 +98,10 @@ const readme = readFileSync(new URL('../docs/reference.md', import.meta.url), 'u
 test('texts say what the reference says, in its words, where it states a rule', () => {
   const same: [string, string][] = [
     ['roc', 'as a fraction'],
-    ['%', 'counts as the number 0.05 wherever a number is expected'],
+    ['%', 'counts as the number 0.05 where you can write a number'],
     ['bps', 'hundredths of a percent'],
-    ['of', 'latest bar that had ended by the time this bar ended'],
-    ['of', 'does not have to be in the universe'],
+    ['of', 'last bar that ended at or before the end of this bar'],
+    ['of', 'in the universe or not'],
     ['bars held', 'completed bars since the buy filled'],
     ['bars held', 'it is 0 on the bar of the fill'],
     ['entry price', 'the price the position was bought at, slippage included'],
@@ -112,18 +112,18 @@ test('texts say what the reference says, in its words, where it states a rule', 
     ['month_start', 'the first bar of a month'],
     ['month_end', 'the last bar of a month'],
     ['weekday', '1 for Monday to 7 for Sunday'],
-    ['stop loss', 'above 0% and at most 99%'],
-    ['trailing stop', 'above 0% and at most 99%'],
-    ['take profit', 'above 0% and at most 1000%'],
-    ['cash rate', 'such as ^IRX'],
-    ['weighting', 'The period must be at least 2'],
-    ['risk per trade', 'cannot be used with weighting, or with a rebalance other than never'],
-    ['test from', 'lie after from and before to'],
-    ['to', 'whole day included'],
+    ['stop loss', 'more than 0% and a maximum of 99%'],
+    ['trailing stop', 'more than 0% and a maximum of 99%'],
+    ['take profit', 'more than 0% and a maximum of 1000%'],
+    ['cash rate', 'for example ^IRX'],
+    ['weighting', 'The minimum period is 2'],
+    ['risk per trade', 'You cannot use it with weighting, or with a rebalance other than never'],
+    ['test from', 'be after from and before to'],
+    ['to', 'all of that day included'],
     ['rebalance=weekly', 'Weeks start on Monday'],
     ['data=yahoo', 'SPY, BRK-B, BTC-USD'],
     ['data=binance', 'BTCUSDT'],
-    ['data', 'comes from Yahoo whatever data says'],
+    ['data', 'always comes from Yahoo'],
     ['borrow fee', 'between 0% and 100%'],
     ['margin rate', 'between 0% and 50%'],
     ['entry price', 'or for a short the price it was sold at'],
@@ -246,13 +246,13 @@ test('a parameter, wherever it is used, shows its declared value and range', () 
   const fast = tip(5, 1);
   assert.equal(fast.kind, 'parameter');
   assert.equal(fast.signature, 'fast = 50 in 20..100 step 10');
-  assert.match(fast.text, /set to 50, with a range of 20 to 100 in steps of 10/);
+  assert.match(fast.text, /Its value is 50, with a range of 20 to 100 in steps of 10/);
   assert.equal(tip(9, where(9, 'fast')).signature, fast.signature);
   assert.equal(tip(14, where(14, 'fast')).signature, fast.signature);
   const stop = tip(13, where(13, 'stop', 1));
-  assert.match(stop.text, /set to 8%, with no range/);
+  assert.match(stop.text, /Its value is 8%, with no range/);
   assert.match(stop.text, /counts as the number 0.08/);
-  assert.match(tip(9, where(9, 'lag') + 1).text, /set to 2, with no range/);
+  assert.match(tip(9, where(9, 'lag') + 1).text, /Its value is 2, with no range/);
 });
 
 test('nothing for a comment, a blank, a plain name or a ticker', () => {

@@ -112,7 +112,7 @@ test('hours that cannot be loaded leave the run as it would be without them, wit
   const out = await new Runner(d).loadPrices(spec!);
   assert.equal(out.data.has(insideKey('SPY', '1h')), false);
   assert.deepEqual(out.warnings, [
-    "Couldn't load the 1h bars of SPY from yahoo: 1h data not available for startTime=1731428841 and endTime=1794932841. The requested range must be within the last 730 days. SPY's bars were not looked inside.",
+    'Cannot load the 1h bars of SPY from yahoo: 1h data not available for startTime=1731428841 and endTime=1794932841. The requested range must be within the last 730 days. The run did not examine the bars of SPY with smaller bars.',
   ]);
   const old = parseSpec('universe: SPY\nfrom: 2020-01-01\nto: 2021-12-31\nmagnify: 1h\nbuy when true').spec!;
   const asked = d.asked.length;

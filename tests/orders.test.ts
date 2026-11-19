@@ -148,7 +148,7 @@ test('the to-do list puts every sell ahead of every buy', () => {
 test('a failed strategy has an error, no orders and no price date', () => {
   const f = failedStatus('n.md', 'S', "Couldn't load XYZ from yahoo: HTTP 404");
   assert.deepEqual(f, { note: 'n.md', strategy: 'S', asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: "Couldn't load XYZ from yahoo: HTTP 404", closeFill: false, stale: false });
-  assert.deepEqual(problemsOf(f), ["Couldn't run. Couldn't load XYZ from yahoo: HTTP 404"]);
+  assert.deepEqual(problemsOf(f), ["The strategy did not run. Couldn't load XYZ from yahoo: HTTP 404"]);
   assert.equal(basisOf([f]), null);
 });
 
@@ -156,7 +156,7 @@ test('order sizes are a share of the strategy with dollars second', () => {
   const order = (action: OrderRow['action'], weight: number, value: number): OrderRow => ({ ticker: 'A', action, when: 'next open', weight, value, lastClose: 1, since: null });
   assert.equal(orderSize(order('buy', 0.2, 2100)), '20% of the strategy, about $2,100');
   assert.equal(orderSize(order('buy', 1 / 3, 33_333)), '33.3% of the strategy, about $33.3k');
-  assert.equal(orderSize(order('sell', 0, 10_500)), 'Whole position, about $10.5k');
+  assert.equal(orderSize(order('sell', 0, 10_500)), 'Full position, about $10.5k');
 });
 
 const SAMPLE_NOW = local(2026, 11, 17);
@@ -196,25 +196,25 @@ test('the Markdown lists the orders, what is held, and the problems', () => {
       '',
       "# Today's orders, 2026-11-17",
       '',
-      'Based on the close of 2026-11-16. From backtests of your rules on the latest prices. Nothing here places an order.',
+      'Based on the close of 2026-11-16. From backtests of your rules on the last prices. The plugin does not send orders.',
       '',
       '## To do at the next open',
       '',
       '| Strategy | Action | Ticker | Size | Last close | Based on |',
       '| --- | --- | --- | --- | ---: | --- |',
-      '| [[Strategies/Trend\\|Trend following]] | Sell | SPY | Whole position, about $10.5k | 412.34 | Close of 2026-11-16 |',
+      '| [[Strategies/Trend\\|Trend following]] | Sell | SPY | Full position, about $10.5k | 412.34 | Close of 2026-11-16 |',
       '| [[Strategies/Rotation\\|Rotation]] | Buy | QQQ | 20% of the strategy, about $2,100 | 380.10 | Close of 2026-11-16 |',
       '',
-      '## Nothing to do',
+      '## No orders',
       '',
       '- [[Strategies/Idle|Strategy 2]]: In cash',
       '- [[Strategies/Old|Old one]]: In cash',
-      '- [[Strategies/Quiet|Quiet]]: Holding SPY 50% (+12.3%), QQQ 30% (−2.0%)',
+      '- [[Strategies/Quiet|Quiet]]: Holds SPY 50% (+12.3%), QQQ 30% (−2.0%)',
       '',
       '## Problems',
       '',
-      "- [[Strategies/Broken|Broken]]: Couldn't run. Couldn't load XYZ from yahoo: HTTP 404",
-      '- [[Strategies/Old|Old one]]: Prices end on 2026-11-01, so this may be out of date.',
+      "- [[Strategies/Broken|Broken]]: The strategy did not run. Couldn't load XYZ from yahoo: HTTP 404",
+      '- [[Strategies/Old|Old one]]: Prices end on 2026-11-01. Thus this result is possibly out of date.',
       "- [[Strategies/Old|Old one]]: Couldn't refresh SPY (HTTP 500); using prices saved on 2026-10-30.",
       '',
     ].join('\n'),
@@ -231,19 +231,19 @@ test('the Markdown with nothing to do, no problems, and no strategies', () => {
       '',
       "# Today's orders, 2026-11-17",
       '',
-      'Based on the close of 2026-11-16. From backtests of your rules on the latest prices. Nothing here places an order.',
+      'Based on the close of 2026-11-16. From backtests of your rules on the last prices. The plugin does not send orders.',
       '',
       '## To do',
       '',
       'No strategy has an order.',
       '',
-      '## Nothing to do',
+      '## No orders',
       '',
       '- [[a|A]]: In cash',
       '',
     ].join('\n'),
   );
-  assert.equal(ordersMarkdown([], SAMPLE_NOW), "---\nbacktest_orders: true\n---\n\n# Today's orders, 2026-11-17\n\nNo strategy blocks found.\n");
+  assert.equal(ordersMarkdown([], SAMPLE_NOW), "---\nbacktest_orders: true\n---\n\n# Today's orders, 2026-11-17\n\nThe vault has no strategy blocks.\n");
 });
 
 test('the Markdown heading is the reader\'s date, and a name cannot break the link', () => {
@@ -365,13 +365,13 @@ test('the Markdown groups the orders by timing and says once what fill: close me
       '',
       "# Today's orders, 2026-11-17",
       '',
-      'Based on the close of 2026-11-16. From backtests of your rules on the latest prices. Nothing here places an order.',
+      'Based on the close of 2026-11-16. From backtests of your rules on the last prices. The plugin does not send orders.',
       '',
       '## To do at the next open',
       '',
       '| Strategy | Action | Ticker | Size | Last close | Based on |',
       '| --- | --- | --- | --- | ---: | --- |',
-      '| [[Strategies/Trend\\|Trend following]] | Sell | SPY | Whole position, about $100 | 10.00 | Close of 2026-11-16 |',
+      '| [[Strategies/Trend\\|Trend following]] | Sell | SPY | Full position, about $100 | 10.00 | Close of 2026-11-16 |',
       '',
       '## To do at the next close',
       '',
@@ -387,7 +387,7 @@ test('the Markdown groups the orders by timing and says once what fill: close me
       '| --- | --- | --- | --- | ---: | --- |',
       '| [[Strategies/Close\\|Close mover]] | Bought | TLT | 50% of the strategy, about $100 | 10.00 | Close of 2026-11-16 |',
       '',
-      '## Nothing to do',
+      '## No orders',
       '',
       '- [[Strategies/Quiet|Quiet close]]: In cash',
       '',
@@ -459,15 +459,15 @@ test('a status carries its strategy\'s bar interval', () => {
 
 test('the bar an order rests on is named with its date, and its time of day when intraday', () => {
   assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 13), interval: '1d' }), 'close of 2026-11-13');
-  assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 9), interval: '1w' }), 'weekly bar starting 2026-11-09');
-  assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 13, 14, 5), interval: '5m' }), '5m bar starting 2026-11-13 14:05 UTC');
-  assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 13, 16), interval: '4h' }), '4h bar starting 2026-11-13 16:00 UTC');
+  assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 9), interval: '1w' }), 'weekly bar from 2026-11-09');
+  assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 13, 14, 5), interval: '5m' }), '5m bar from 2026-11-13 14:05 UTC');
+  assert.equal(barLabel({ asOf: Date.UTC(2026, 10, 13, 16), interval: '4h' }), '4h bar from 2026-11-13 16:00 UTC');
 });
 
 test('an intraday strategy\'s stale warning names the time', () => {
   const s = status('a.md', 'A', [], { interval: '1h', asOf: Date.UTC(2026, 10, 13, 14), stale: true });
-  assert.deepEqual(problemsOf(s), ['Prices end at 2026-11-13 14:00 UTC, so this may be out of date.']);
-  assert.deepEqual(problemsOf(status('a.md', 'A', [], { stale: true, asOf: Date.UTC(2026, 10, 13) })), ['Prices end on 2026-11-13, so this may be out of date.']);
+  assert.deepEqual(problemsOf(s), ['Prices end at 2026-11-13 14:00 UTC. Thus this result is possibly out of date.']);
+  assert.deepEqual(problemsOf(status('a.md', 'A', [], { stale: true, asOf: Date.UTC(2026, 10, 13) })), ['Prices end on 2026-11-13. Thus this result is possibly out of date.']);
 });
 
 test('the header names the oldest bar among the strategies with orders when they differ', () => {
@@ -475,23 +475,23 @@ test('the header names the oldest bar among the strategies with orders when they
   const newer = status('b.md', 'B', [['buy', 'Y']], { asOf: Date.UTC(2026, 10, 13) });
   const quietButOld = status('c.md', 'C', [], { asOf: Date.UTC(2026, 10, 2) });
   assert.deepEqual(basisOf([newer]), { text: 'Based on the close of 2026-11-13', note: null });
-  assert.deepEqual(basisOf([newer, older, quietButOld]), { text: 'Based on the close of 2026-11-12', note: 'This is the oldest among the orders. Each order shows its own.' });
+  assert.deepEqual(basisOf([newer, older, quietButOld]), { text: 'Based on the close of 2026-11-12', note: 'This bar is before the bars of the other orders. Each order shows its bar.' });
   assert.deepEqual(basisOf([newer, { ...newer, note: 'x.md' }]), { text: 'Based on the close of 2026-11-13', note: null });
 });
 
 test('with no orders the header names the oldest strategy that ran, and a failure is ignored', () => {
   const a = status('a.md', 'A', [], { asOf: Date.UTC(2026, 10, 12) });
   const b = status('b.md', 'B', [], { asOf: Date.UTC(2026, 10, 13) });
-  assert.deepEqual(basisOf([b, a, failedStatus('c.md', 'C', 'x')]), { text: 'Based on the close of 2026-11-12', note: 'This is the oldest among the strategies checked.' });
+  assert.deepEqual(basisOf([b, a, failedStatus('c.md', 'C', 'x')]), { text: 'Based on the close of 2026-11-12', note: 'This bar is before the last bars of the other strategies.' });
   assert.equal(basisOf([]), null);
 });
 
 test('an intraday header and row say which bar, with the time', () => {
   const s = status('a.md', 'A', [['buy', 'X']], { interval: '5m', asOf: Date.UTC(2026, 10, 13, 14, 5) });
-  assert.equal(basisOf([s])!.text, 'Based on the 5m bar starting 2026-11-13 14:05 UTC');
+  assert.equal(basisOf([s])!.text, 'Based on the 5m bar from 2026-11-13 14:05 UTC');
   const md = ordersMarkdown([s], SAMPLE_NOW);
-  assert.ok(md.includes('Based on the 5m bar starting 2026-11-13 14:05 UTC. From backtests'));
-  assert.ok(md.includes('| 5m bar starting 2026-11-13 14:05 UTC |'));
+  assert.ok(md.includes('Based on the 5m bar from 2026-11-13 14:05 UTC. From backtests'));
+  assert.ok(md.includes('| 5m bar from 2026-11-13 14:05 UTC |'));
 });
 
 test('the Markdown lists the oldest date in the header and each row\'s own', () => {
@@ -499,8 +499,8 @@ test('the Markdown lists the oldest date in the header and each row\'s own', () 
     [status('a.md', 'A', [['buy', 'X']], { asOf: Date.UTC(2026, 10, 12) }), status('b.md', 'B', [['sell', 'Y']], { asOf: Date.UTC(2026, 10, 13) })],
     SAMPLE_NOW,
   );
-  assert.ok(md.includes('Based on the close of 2026-11-12. This is the oldest among the orders. Each order shows its own. From backtests'));
-  assert.ok(md.includes('| Sell | Y | Whole position, about $100 | 10.00 | Close of 2026-11-13 |'));
+  assert.ok(md.includes('Based on the close of 2026-11-12. This bar is before the bars of the other orders. Each order shows its bar. From backtests'));
+  assert.ok(md.includes('| Sell | Y | Full position, about $100 | 10.00 | Close of 2026-11-13 |'));
   assert.ok(md.includes('| Buy | X | 50% of the strategy, about $100 | 10.00 | Close of 2026-11-12 |'));
 });
 
@@ -531,7 +531,7 @@ test('saving creates a missing note, replaces one with the marker and refuses an
 });
 
 test('the message for a note that is not ours names the note and what to do', () => {
-  assert.equal(notOurNoteMessage('Trading/Orders.md'), 'Trading/Orders.md already exists and was not made by Backtest Blocks. Choose another note in settings.');
+  assert.equal(notOurNoteMessage('Trading/Orders.md'), 'The note Trading/Orders.md is in the vault, but Backtest Blocks did not make it. Select a different note in the settings.');
 });
 
 // --- Running several at once ---------------------------------------------------------------------------------------
@@ -632,7 +632,7 @@ const SAMPLE_TRIGGERS = [
 test('the closes to watch: those that give an order unchanged or within 2%, nearest first, and every one with fill: close', () => {
   const rows = watchRows(reportOf(SAMPLE_TRIGGERS));
   assert.deepEqual(rows.map((r) => [r.ticker, r.side, r.now]), [['C', 'sell', true], ['G', 'add', false], ['A', 'buy', false]]);
-  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', when: 'at the following open', driver: 'A', lastClose: 100, distance: 101.501 / 100 - 1, now: false });
+  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', when: 'at the open after that close', driver: 'A', lastClose: 100, distance: 101.501 / 100 - 1, now: false });
   assert.deepEqual([watchClose(rows[2]), watchClose({ ...rows[2], driver: 'SPY' })], ['100.00', '100.00 (SPY)']);
   assert.equal(rows[0].phrase, 'Sells unless it closes above 102.00 (+2.0%)');
   const close = watchRows(reportOf(SAMPLE_TRIGGERS, true));
@@ -687,26 +687,26 @@ test('a scan gives each strategy the trigger prices of its result, and lists it 
 test('the Markdown lists the closes to watch after the orders, nearest first', () => {
   const list = [status('Strategies/Trend.md', 'Trend following', [], { asOf: SAMPLE_ASOF, watch: watchRows(reportOf(SAMPLE_TRIGGERS)) })];
   const text = ordersMarkdown(list, SAMPLE_NOW);
-  const at = text.indexOf('## Watch at the next close');
-  assert.ok(at > text.indexOf('## To do') && at < text.indexOf('## Nothing to do'));
+  const at = text.indexOf('## Monitor at the next close');
+  assert.ok(at > text.indexOf('## To do') && at < text.indexOf('## No orders'));
   assert.ok(
     text.includes(
       [
-        '## Watch at the next close',
+        '## Monitor at the next close',
         '',
         WATCH_NOTE,
         '',
-        '| Strategy | Ticker | Watch for | Last close | Based on |',
+        '| Strategy | Ticker | Trigger | Last close | Based on |',
         '| --- | --- | --- | ---: | --- |',
-        '| [[Strategies/Trend\\|Trend following]] | C | Sells unless it closes above 102.00 (+2.0%), at the following open | 100.00 | Close of 2026-11-16 |',
-        '| [[Strategies/Trend\\|Trend following]] | G | Adds if it closes between 98.00 (−2.0%) and 99.00 (−1.0%), at the following open | 100.00 | Close of 2026-11-16 |',
-        '| [[Strategies/Trend\\|Trend following]] | A | Buys if it closes above 101.50 (+1.5%), at the following open | 100.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Trend\\|Trend following]] | C | Sells unless it closes above 102.00 (+2.0%), at the open after that close | 100.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Trend\\|Trend following]] | G | Adds if it closes between 98.00 (−2.0%) and 99.00 (−1.0%), at the open after that close | 100.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Trend\\|Trend following]] | A | Buys if it closes above 101.50 (+1.5%), at the open after that close | 100.00 | Close of 2026-11-16 |',
         '',
       ].join('\n'),
     ),
     text,
   );
-  assert.ok(!ordersMarkdown([status('a.md', 'A', [], { asOf: SAMPLE_ASOF, watch: [] })], SAMPLE_NOW).includes('Watch at the next close'));
+  assert.ok(!ordersMarkdown([status('a.md', 'A', [], { asOf: SAMPLE_ASOF, watch: [] })], SAMPLE_NOW).includes('Monitor at the next close'));
   assert.deepEqual(watchList(list).map((w) => w.row.ticker), ['C', 'G', 'A']);
 });
 
@@ -719,7 +719,7 @@ test('a short waiting is a short sale at its target weight, and a cover a whole 
   // Shorted at day 1's open (10): 100 shares owed, worth 1,200 at the last close of 12, when the cover rule holds.
   const cover = statusFrom('n.md', 'S', run('universe: A\ncapital: 1000\nshort when true\ncover when close > 11', { A: bars([10, 10, 10, 12]) }), NOW);
   assert.deepEqual(cover.orders, [{ ticker: 'A', action: 'cover', when: 'next open', weight: 0, value: 1200, lastClose: 12, since: day(1) }]);
-  assert.deepEqual([actionWord(cover.orders[0]), orderSize(cover.orders[0]), cover.holdings], ['Buy to cover', 'Whole position, about $1,200', []]);
+  assert.deepEqual([actionWord(cover.orders[0]), orderSize(cover.orders[0]), cover.holdings], ['Buy to cover', 'Full position, about $1,200', []]);
 });
 
 test('a flip is two orders, the exit first: a sell and a short sale, or a cover and a buy, at the next open or made at the last close', () => {
@@ -790,7 +790,7 @@ test('sells and covers come first, then buys and short sales, so the cash and th
     ['buy', 'B'],
     ['short', 'X'],
   ]);
-  assert.equal(orderSize({ ticker: 'A', action: 'cover', when: 'next open', weight: 0, value: 10_500, lastClose: 1, since: null }), 'Whole position, about $10.5k');
+  assert.equal(orderSize({ ticker: 'A', action: 'cover', when: 'next open', weight: 0, value: 10_500, lastClose: 1, since: null }), 'Full position, about $10.5k');
 });
 
 test('the Markdown words short sales, covers, short holdings and the closes to watch for them', () => {
@@ -814,16 +814,16 @@ test('the Markdown words short sales, covers, short holdings and the closes to w
   assert.ok(
     text.includes(
       [
-        '| [[Strategies/Flip\\|Flip]] | Sell | SPY | Whole position, about $5,000 | 600.00 | Close of 2026-11-16 |',
-        '| [[Strategies/Flip\\|Flip]] | Buy to cover | QQQ | Whole position, about $2,500 | 500.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Flip\\|Flip]] | Sell | SPY | Full position, about $5,000 | 600.00 | Close of 2026-11-16 |',
+        '| [[Strategies/Flip\\|Flip]] | Buy to cover | QQQ | Full position, about $2,500 | 500.00 | Close of 2026-11-16 |',
         '| [[Strategies/Flip\\|Flip]] | Sell short | SPY | 50% of the strategy, about $5,000 | 600.00 | Close of 2026-11-16 |',
       ].join('\n'),
     ),
     text,
   );
-  assert.ok(text.includes('| [[Strategies/Flip\\|Flip]] | QQQ | Shorts if it closes below 99.50 (−0.5%), at the following open | 100.00 | Close of 2026-11-16 |'), text);
-  assert.ok(text.includes('| [[Strategies/Flip\\|Flip]] | TLT | Covers if it closes above 100.50 (+0.5%), at the following open | 100.00 | Close of 2026-11-16 |'), text);
-  assert.ok(text.includes('- [[Strategies/Pair|Pair]]: Holding SPY 50% (+12.3%), short QQQ 33.1% (+2.0%)'), text);
+  assert.ok(text.includes('| [[Strategies/Flip\\|Flip]] | QQQ | Shorts if it closes below 99.50 (−0.5%), at the open after that close | 100.00 | Close of 2026-11-16 |'), text);
+  assert.ok(text.includes('| [[Strategies/Flip\\|Flip]] | TLT | Covers if it closes above 100.50 (+0.5%), at the open after that close | 100.00 | Close of 2026-11-16 |'), text);
+  assert.ok(text.includes('- [[Strategies/Pair|Pair]]: Holds SPY 50% (+12.3%), short QQQ 33.1% (+2.0%)'), text);
 });
 
 test('the closes to watch leave out a short rule re-arming, as they do the buy rule\'s', () => {

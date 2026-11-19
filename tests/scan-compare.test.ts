@@ -94,8 +94,8 @@ test('each entry is the first strategy of its note, or the one it names, labelle
 test('an entry that cannot be resolved or run stops the comparison with its line', async () => {
   const { host } = notes({ Empty: 'no blocks', Trend: block(`name: First\n${GOOD}`), Bad: block('name: Bad\nuniverse: csv:x.csv\nbuy when true') }, ['csv:x.csv']);
   const first = async (text: string) => compareCurves(parseCompare(text).entries, host);
-  await assert.rejects(first('[[Trend]]\n[[Nowhere]]'), { message: 'Line 2: there is no note called "Nowhere".' });
+  await assert.rejects(first('[[Trend]]\n[[Nowhere]]'), { message: 'Line 2: there is no note with the name "Nowhere".' });
   await assert.rejects(first('[[Trend]]\n[[Empty]]'), { message: 'Line 2: "Empty" has no strategy block.' });
   await assert.rejects(first('[[Trend#Other]]\n[[Trend]]'), { message: 'Line 1: "Trend" has no strategy named "Other".' });
-  await assert.rejects(first('[[Trend]]\n[[Bad]]'), { message: 'Line 2: "Bad" couldn\'t run. No file at x.csv' });
+  await assert.rejects(first('[[Trend]]\n[[Bad]]'), { message: 'Line 2: "Bad" did not run. No file at x.csv' });
 });

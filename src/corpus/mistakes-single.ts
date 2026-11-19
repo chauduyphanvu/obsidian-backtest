@@ -83,8 +83,8 @@ universe: SPY
 buy when close > sma(100 * 2)
 sell when close < sma(100 * 2)`,
     errors: [
-      { line: 4, message: 'sma() needs a period, as in sma(20)' },
-      { line: 5, message: 'sma() needs a period, as in sma(20)' },
+      { line: 4, message: 'sma() must have a period, for example sma(20)' },
+      { line: 5, message: 'sma() must have a period, for example sma(20)' },
     ],
     fixed: `name: SPY 200-day trend
 universe: SPY
@@ -103,8 +103,8 @@ length = 20 * 5
 buy when close > sma(length)
 sell when close < sma(length)`,
     errors: [
-      { line: 6, message: '"length" is a definition, so sma() reads it as its series and still needs a period, as in sma(length, 20). A period must be a number or a parameter, such as length = 20' },
-      { line: 7, message: '"length" is a definition, so sma() reads it as its series and still needs a period, as in sma(length, 20). A period must be a number or a parameter, such as length = 20' },
+      { line: 6, message: '"length" is a definition. Thus sma() reads it as its series, and a period is also necessary, for example sma(length, 20). A period must be a number or a parameter, for example length = 20' },
+      { line: 7, message: '"length" is a definition. Thus sma() reads it as its series, and a period is also necessary, for example sma(length, 20). A period must be a number or a parameter, for example length = 20' },
     ],
     fixed: `name: SPY 100-day trend
 universe: SPY
@@ -123,7 +123,7 @@ universe: SPY
 buy when close > sma(200) and bars held >= 10
 sell when close < sma(200)`,
     errors: [
-      { line: 4, message: '"bars held" only makes sense in a sell, cover or add rule' },
+      { line: 4, message: 'You can use "bars held" only in a sell, cover or add rule' },
     ],
     fixed: `name: SPY trend held at least 10 bars
 universe: SPY
@@ -140,7 +140,7 @@ universe: SPY
 buy when close > sma(200)
 sell when (close < sma(20) and position return > 5%) for 3 bars`,
     errors: [
-      { line: 5, message: "\"position return\" can't be read over several bars: it only exists for the open position at this bar. Read it outside the window, as in sell when bars held > 5 and close < sma(20) for 3 bars" },
+      { line: 5, message: 'A rule cannot read "position return" for more than one bar. It is a value of the open position at this bar only. Read it in a condition with no window, for example sell when bars held > 5 and close < sma(20) for 3 bars' },
     ],
     fixed: `name: SPY trend exit with a profit
 universe: SPY
@@ -216,7 +216,7 @@ take profit: 20
 buy when close > sma(200)
 sell when close < sma(200)`,
     errors: [
-      { line: 3, message: 'take profit must be a percentage, such as 10%, or a multiple of the average true range, such as 2 atr(14)' },
+      { line: 3, message: 'Take profit must be a percentage (for example 10%) or a multiple of the average true range (for example 2 atr(14))' },
     ],
     fixed: `name: SPY trend with a target
 universe: SPY
@@ -252,7 +252,7 @@ universe: SPY
 buy when close > sma(200) for 5 days
 sell when close < sma(200)`,
     errors: [
-      { line: 4, message: 'Write "bars" after the number, as in close > sma(200) for 3 bars' },
+      { line: 4, message: 'Write "bars" after the number, for example close > sma(200) for 3 bars' },
     ],
     fixed: `name: SPY confirmed uptrend
 universe: SPY
@@ -290,7 +290,7 @@ buy when close > sma(200) and rsi(14) < 50
 add when close > last entry price * 1.03
 sell when close < entry price * 0.92`,
     errors: [
-      { line: 5, message: '"add when" needs an entries line that says how many entries a position is built in, such as entries: 3' },
+      { line: 5, message: '"add when" must have an entries line that gives the number of entries for each position, for example entries: 3' },
     ],
     fixed: `name: SPY scaling in
 universe: SPY

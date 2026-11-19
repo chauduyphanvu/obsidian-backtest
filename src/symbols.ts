@@ -84,7 +84,7 @@ interface BinanceList {
 
 function parseYahooSearch(text: string): Found {
   const body = JSON.parse(text);
-  if (!Array.isArray(body?.quotes)) throw new Error('Yahoo sent something other than search results');
+  if (!Array.isArray(body?.quotes)) throw new Error('Yahoo did not send a list of tickers');
   const out: Quote[] = [];
   for (const q of body.quotes) {
     // Options are not something a strategy here reads, and they would crowd the list.
@@ -97,7 +97,7 @@ function parseYahooSearch(text: string): Found {
 
 function parseBinancePrices(text: string): string[] {
   const rows = JSON.parse(text);
-  if (!Array.isArray(rows)) throw new Error('Binance sent something other than prices');
+  if (!Array.isArray(rows)) throw new Error('Binance did not send prices');
   const symbols = rows.map((r) => r?.symbol).filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{3,20}$/.test(s));
   if (symbols.length === 0) throw new Error('Binance sent no markets');
   return symbols;
@@ -242,7 +242,7 @@ export class SymbolLookup {
     const kept = this.searches.get(key);
     if (kept) return Promise.resolve(kept);
     return this.once(`yahoo|${key}`, 'yahoo', async () => {
-      let failure: unknown = new Error('no host answered');
+      let failure: unknown = new Error('no host sent an answer');
       for (const host of ['query2', 'query1']) {
         try {
           const text = await this.request('yahoo', `https://${host}.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=${SEARCH_LIMIT}&newsCount=0`);
@@ -273,7 +273,7 @@ export class SymbolLookup {
     const running = this.inflight.get(key);
     if (running) return running as Promise<T>;
     const now = this.deps.now();
-    if (now < this.failures[source].until || now - (this.failedAt.get(key) ?? -Infinity) < RETRY_AFTER_MS) return Promise.reject(new Error('not asked again yet'));
+    if (now < this.failures[source].until || now - (this.failedAt.get(key) ?? -Infinity) < RETRY_AFTER_MS) return Promise.reject(new Error('not sent again at this time'));
     const run = fn()
       .then(
         (value) => {
@@ -296,7 +296,7 @@ export class SymbolLookup {
   /** One request, once a slot is free and the last one is at least a moment behind. */
   private async request(source: LookupSource, url: string): Promise<string> {
     if (this.active >= AT_ONCE) {
-      if (this.waiting.length >= WAITING) throw new Error('too many requests waiting');
+      if (this.waiting.length >= WAITING) throw new Error('too many requests in the queue');
       await new Promise<void>((resolve) => this.waiting.push(resolve));
     } else {
       this.active++;
@@ -395,5 +395,5 @@ export function blockTickers(lines: string[], defaults: Partial<Defaults> = {}):
 
 /** What to tell the user about a ticker its source does not know. */
 export function unknownTickerMessage(ticker: string, source: LookupSource): string {
-  return source === 'yahoo' ? `Yahoo has no ticker called ${ticker}.` : `Binance has no market called ${ticker}.`;
+  return source === 'yahoo' ? `Yahoo has no ticker with the name ${ticker}.` : `Binance has no market with the name ${ticker}.`;
 }
