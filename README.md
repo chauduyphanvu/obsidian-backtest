@@ -20,17 +20,17 @@ The note shows this:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/result-dark.png">
-  <img src="docs/images/result-light.png" alt="The result of the block above: two sentences that compare it with buy and hold, the figures side by side, and a chart of the two with the large market drawdowns marked">
+  <img src="docs/images/result-light.png" alt="The result of the block above: a line with the position and how near the next order is, the rules, two sentences that compare it with buy and hold, the figures side by side with who did better, and a chart of the two with the large market drawdowns marked">
 </picture>
 
 ## What you get
 
+- **The position now, and the next order:** one line under the title, such as "Long SPY since 2026-04-09" and "Sells unless it closes above 730.27 · 0.01% away". It shows in amber when an order is near.
 - **A short verdict:** the result of the strategy, compared with buy and hold.
-- **The main figures side by side:** return per year, total return, worst drawdown (the largest decrease from a peak), Sharpe ratio, volatility, time invested and trades.
-- **A chart** of the strategy and buy and hold, with the large market crashes shaded.
-- **The positions at this time**, and the close that causes the next trade.
+- **The main figures side by side:** return per year, total return, worst drawdown (the largest decrease from a peak), Sharpe ratio, volatility, time invested and trades, each with a mark that shows who did better.
+- **A chart** of the strategy and buy and hold, with the large market crashes shaded. Move the pointer on a figure to see where it comes from on the chart.
 - **All the trades.** Click the arrow at the start of a trade row to see why that trade occurred.
-- **Tools to test the idea:** sliders for parameters, a sweep over a range of values, and a **Was it luck?** check.
+- **Tools to test the idea:** numbers that you drag in the rules, sliders, a sweep over a range of values that colours the sliders, and a **Was it luck?** check.
 - **More views:** the result in each market regime and crisis, a price chart with the trades, and the values of each rule, bar by bar.
 
 The full guide is [docs/reference.md](https://github.com/chauduyphanvu/obsidian-backtest/blob/main/docs/reference.md).
@@ -46,12 +46,12 @@ Obsidian 1.11.4 or later is necessary. Tested on desktop (macOS). The phone layo
 
 1. Open the command palette and run **Insert strategy block**. Select one of the ten starter strategies, or type a `strategy` block.
 2. Move the cursor out of the block. The result shows.
-3. If the plugin underlines a word, move the pointer to it to see the problem. One click corrects many problems.
-4. Change a number, or move a slider. The result changes.
+3. If the plugin underlines a word, move the pointer to it to see the problem. One click corrects many problems. A block that cannot run shows its problem on its line, with a button that corrects it.
+4. Drag a number in the rules, or move a slider. The result changes.
 
-Move the pointer to a word in a block to see what it means:
+Move the pointer to a word in a block to see what it means. On an indicator, you also see its value at the last close:
 
-<img src="docs/images/editor.png" alt="A strategy block in the editor: the words have colors, and the pointer on rsi shows its form, its meaning and an example">
+<img src="docs/images/editor.png" alt="A strategy block in the editor: the words have colors, and the pointer on sma shows its form, its meaning, an example, and its value on QQQ at the last close with a small chart">
 
 ## Write a strategy
 
@@ -119,7 +119,7 @@ Rules can read prices (`open`, `high`, `low`, `close`, `volume`), many indicator
 
 ### Parameters
 
-`fast = 50 in 20..100 step 10` makes a number that you can change with a slider. **Try other parameter values** runs the strategy for each value in the range:
+`fast = 50 in 20..100 step 10` makes a number that you can change with a slider, or by dragging it in the rules. **Try other values** runs the strategy for each value in the range:
 
 <img src="docs/images/sweep.png" alt="Try other parameter values on a moving average cross: the values tuned before a test date and tested after it, and a grid of return per year for each pair of values">
 
@@ -186,15 +186,16 @@ cash: 4,200
 [[Pullbacks#QQQ RSI pullback]] 40%
 ```
 
-**Forward tests:** Click **Start a forward test** below a result. The plugin copies the rules into a new note. After that, it counts only new prices.
+**Forward tests:** Click **Start a forward test** at the end of a result, or in its menu. The plugin copies the rules into a new note. After that, it counts only new prices.
 
 ## Today's orders
 
 Run **Show today's orders**, or click its ribbon icon. The plugin runs all the strategies in your vault and shows:
 
 - what to buy or sell at the next open or close;
-- which closes to monitor;
-- the orders for each account.
+- which closes to monitor, nearest first, with how near each one is;
+- the orders for each account;
+- the blocks that cannot run, with a button that corrects many problems.
 
 The status bar shows the number of orders. The plugin does not place orders. You place the trades yourself.
 
