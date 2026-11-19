@@ -129,7 +129,7 @@ p.bt-orders-muted {
   padding: 5px 7px;
   border-radius: 6px;
   background: var(--background-modifier-hover);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: var(--font-bold);
   letter-spacing: 0.06em;
   line-height: 1;
@@ -139,7 +139,7 @@ p.bt-orders-muted {
 .bt-orders-buy,
 .bt-orders-cover {
   background: color-mix(in srgb, var(--bt-strategy) 15%, transparent);
-  color: var(--bt-strategy);
+  color: var(--bt-strategy-ink);
 }
 .bt-orders-sell,
 .bt-orders-short {
@@ -212,7 +212,7 @@ p.bt-orders-muted {
   background: none;
   box-shadow: none;
   font: inherit;
-  color: var(--text-accent);
+  color: var(--bt-link);
   text-align: left;
   cursor: pointer;
 }
@@ -285,13 +285,18 @@ p.bt-orders-muted {
   border: none;
   background: none;
   box-shadow: none;
-  color: var(--text-accent);
+  color: var(--bt-link);
   font: inherit;
   cursor: pointer;
 }
 .bt-orders .bt-orders-help:hover {
   background: none;
   text-decoration: underline;
+}
+.bt-orders .bt-orders-link:focus-visible,
+.bt-orders .bt-orders-help:focus-visible {
+  border-radius: 3px;
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
 }
 
 /* In a narrow window the price goes under who and what. */

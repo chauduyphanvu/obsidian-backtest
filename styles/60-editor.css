@@ -34,15 +34,15 @@
   font-weight: var(--font-semibold);
 }
 .bt-diag-tip-error .bt-diag-tip-kind {
-  color: var(--text-error);
+  color: var(--bt-bad);
 }
 .bt-diag-tip-warning .bt-diag-tip-kind {
-  color: var(--text-warning);
+  color: var(--bt-warn-ink);
 }
 
 .bt-setting-error {
   margin-top: 4px;
-  color: var(--text-error);
+  color: var(--bt-bad);
   font-size: var(--font-ui-smaller);
 }
 .bt-setting-error:empty {

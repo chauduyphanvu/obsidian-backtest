@@ -7,17 +7,47 @@ body {
   --bt-t-comp: 220ms;
   --bt-t-layout: 300ms;
   --bt-t-arrive: 950ms;
-  /* Colours of meaning, kept apart from the strategy's blue and the benchmark's orange. */
-  --bt-good: #1a8f4e;
-  --bt-bad: #d23f3f;
+  /* The strategy is blue and its benchmark orange everywhere. A line or a dot is drawn in the colour itself, which has
+     3:1 or more against the page; text in that colour uses its ink, which has 4.5:1 or more on the page, on the
+     secondary background and on a 15% tint of the colour. */
+  --bt-strategy: #2a78d6;
+  --bt-benchmark: #eb6834;
+  --bt-strategy-ink: #1d5fb5;
+  --bt-benchmark-ink: #ad4318;
+  --bt-warning: #fab219;
+  --bt-critical: #d03b3b;
+  /* Colours of meaning, kept apart from the strategy's blue and the benchmark's orange; each is text-safe. */
+  --bt-good: #177a45;
+  --bt-bad: #c23636;
   --bt-warn-dot: #f2a50c;
   --bt-warn-ink: #8a5a00;
+  /* How much of each of the theme's code colours the rules keep, mixed with the text colour: the rest makes 4.5:1. */
+  --bt-tok-function: 50%;
+  --bt-tok-key: 55%;
+  --bt-tok-ticker: 60%;
+  --bt-tok-param: 65%;
+  --bt-tok-series: 85%;
+  --bt-tok-keyword: 82%;
+  --bt-tok-value: 85%;
+  /* A link in small text: the accent with some of the text colour. */
+  --bt-link: color-mix(in srgb, var(--text-accent) 80%, var(--text-normal));
 }
 .theme-dark {
+  --bt-strategy: #3987e5;
+  --bt-benchmark: #d95926;
+  --bt-strategy-ink: #6aa8f5;
+  --bt-benchmark-ink: #f08a5d;
   --bt-good: #45c07a;
   --bt-bad: #ef6b6b;
   --bt-warn-dot: #f5b331;
   --bt-warn-ink: #f3c467;
+  --bt-tok-function: 100%;
+  --bt-tok-key: 100%;
+  --bt-tok-ticker: 100%;
+  --bt-tok-param: 100%;
+  --bt-tok-series: 60%;
+  --bt-tok-keyword: 100%;
+  --bt-tok-value: 88%;
 }
 /* With "reduce motion" on, every change is a cut and the one repeating motion (an order near) is a still ring. */
 @media (prefers-reduced-motion: reduce) {
@@ -111,27 +141,12 @@ body {
 }
 
 .bt-root {
-  --bt-strategy: #2a78d6;
-  --bt-benchmark: #eb6834;
-  --bt-warning: #fab219;
-  --bt-critical: #d03b3b;
   font-size: var(--font-ui-small);
   color: var(--text-normal);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   padding: 14px 16px;
   margin: 0.5em 0;
-}
-.theme-dark .bt-root {
-  --bt-strategy: #3987e5;
-  --bt-benchmark: #d95926;
-}
-/* The editor's hover draws its line in the strategy's blue too. */
-.bt-diag-tip {
-  --bt-strategy: #2a78d6;
-}
-.theme-dark .bt-diag-tip {
-  --bt-strategy: #3987e5;
 }
 
 .bt-head {
@@ -226,6 +241,7 @@ body {
 .bt-svg,
 .bt-status,
 .bt-scrub,
+.bt-err-src,
 .bt-tabs-main,
 .bt-tabs-more,
 .bt-range,
@@ -386,33 +402,34 @@ body {
   width: fit-content;
 }
 
+/* The rules in the theme's code colours, each mixed with the text colour enough to read at 4.5:1. */
 .bt-tok-key {
-  color: var(--code-property);
+  color: color-mix(in srgb, var(--code-property) var(--bt-tok-key), var(--text-normal));
 }
 .bt-tok-keyword {
-  color: var(--code-keyword);
+  color: color-mix(in srgb, var(--code-keyword) var(--bt-tok-keyword), var(--text-normal));
 }
 .bt-tok-function {
-  color: var(--code-function);
+  color: color-mix(in srgb, var(--code-function) var(--bt-tok-function), var(--text-normal));
 }
 .bt-tok-series {
-  color: var(--code-tag);
+  color: color-mix(in srgb, var(--code-tag) var(--bt-tok-series), var(--text-normal));
 }
 .bt-tok-number,
 .bt-tok-value {
-  color: var(--code-value);
+  color: color-mix(in srgb, var(--code-value) var(--bt-tok-value), var(--text-normal));
 }
 .bt-tok-param {
-  color: var(--code-important);
+  color: color-mix(in srgb, var(--code-important) var(--bt-tok-param), var(--text-normal));
 }
 .bt-tok-ticker {
-  color: var(--code-string);
+  color: color-mix(in srgb, var(--code-string) var(--bt-tok-ticker), var(--text-normal));
 }
 .bt-tok-operator {
   color: var(--code-punctuation);
 }
 .bt-tok-comment {
-  color: var(--code-comment);
+  color: color-mix(in srgb, var(--code-comment) 50%, var(--text-normal));
   font-style: italic;
 }
 

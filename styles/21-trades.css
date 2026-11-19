@@ -117,7 +117,7 @@
   white-space: nowrap;
 }
 .bt-explain-yes {
-  color: var(--text-success);
+  color: var(--bt-good);
 }
 .bt-explain-unknown {
   font-style: italic;

@@ -43,7 +43,7 @@
   margin: 0 -1px;
   padding: 0 3px;
   border-radius: 4px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  background: color-mix(in srgb, currentColor 7%, transparent);
   box-shadow: inset 0 -1.5px 0 color-mix(in srgb, currentColor 55%, transparent);
   font-weight: var(--font-semibold);
   cursor: ew-resize;
@@ -53,16 +53,16 @@
 }
 .bt-scrub:hover,
 .bt-scrub.bt-scrub-active {
-  background: color-mix(in srgb, currentColor 24%, transparent);
+  background: color-mix(in srgb, currentColor 14%, transparent);
 }
 .bt-scrub:focus-visible {
   outline: 2px solid var(--background-modifier-border-focus);
   outline-offset: 1px;
 }
 .bt-scrub.bt-scrub-changed {
-  background: color-mix(in srgb, var(--bt-strategy) 20%, transparent);
+  background: color-mix(in srgb, var(--bt-strategy) 12%, transparent);
   box-shadow: inset 0 -1.5px 0 var(--bt-strategy);
-  color: var(--bt-strategy);
+  color: var(--bt-strategy-ink);
 }
 
 /* One line of fixed height: the key to the tracks, what differs from the block, or a problem; one shows at a time. */

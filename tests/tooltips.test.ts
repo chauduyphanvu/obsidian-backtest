@@ -24,7 +24,7 @@ test('charts and labelled regions carry no Obsidian tooltip', () => {
     const text = readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
     for (const m of text.matchAll(/'svg', \{[^}]*'aria-label'[^}]*\}/g)) assert.match(m[0], /class: 'bt-svg'/, `${f}: a labelled chart without bt-svg`);
   }
-  for (const selector of ['.bt-svg', '.bt-params', '.bt-debug-scroll', '.bt-dash-table', '.bt-csv-files', '.bt-gallery-list', '.bt-csv-filter', '.bt-llm-input', '.bt-debug-picker', '.bt-price-picker']) {
+  for (const selector of ['.bt-svg', '.bt-params', '.bt-status', '.bt-scrub', '.bt-err-src', '.bt-range', '.bt-tabs-main', '.bt-tabs-more', '.bt-debug-scroll', '.bt-dash-table', '.bt-csv-files', '.bt-gallery-list', '.bt-csv-filter', '.bt-llm-input', '.bt-debug-picker', '.bt-price-picker']) {
     assert.ok(quiet(selector), `${selector} has no --no-tooltip: true`);
   }
 });

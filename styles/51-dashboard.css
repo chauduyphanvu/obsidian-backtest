@@ -186,7 +186,7 @@
   height: 22px;
 }
 .bt-dash-running .bt-dash-sub {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* A strategy that could not run: the tag, the message cut short, and its fix. The cell gives no width to the table, so

@@ -120,7 +120,7 @@
   font-weight: 700;
 }
 .bt-sweep-cell-none {
-  fill: var(--text-faint);
+  fill: var(--text-muted);
 }
 .bt-sweep-declared-outline {
   fill: none;

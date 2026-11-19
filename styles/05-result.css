@@ -6,8 +6,8 @@
 .bt-root.bt-result,
 .bt-root.bt-dash {
   --bt-loss: #e34948;
-  --bt-ahead: color-mix(in srgb, var(--bt-strategy) 14%, transparent);
-  --bt-behind: color-mix(in srgb, var(--bt-benchmark) 13%, transparent);
+  --bt-ahead: color-mix(in srgb, var(--bt-strategy) 17%, transparent);
+  --bt-behind: color-mix(in srgb, var(--bt-benchmark) 16%, transparent);
   --bt-fall: color-mix(in srgb, var(--text-normal) 5%, transparent);
   --bt-chip-bg: var(--background-modifier-hover);
   --bt-warn-bg: color-mix(in srgb, var(--bt-warning) 20%, transparent);
@@ -152,7 +152,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 .bt-step {
@@ -436,7 +436,8 @@
   animation: bt-fade-in var(--bt-t-comp) var(--bt-ease) both;
 }
 .bt-near .bt-status-away {
-  background: color-mix(in srgb, var(--bt-warn-dot) 30%, transparent);
+  background: color-mix(in srgb, var(--bt-warn-dot) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bt-warn-dot) 55%, transparent);
   color: var(--bt-warn-ink);
 }
 .bt-status-chevron {
@@ -464,7 +465,7 @@
   line-height: 1.55;
 }
 .bt-status-note {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .bt-next-chart .bt-svg {
   width: 100%;
@@ -722,7 +723,7 @@
   gap: 6px;
 }
 .bt-vs-versus {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .bt-vs-key-dot {
   flex: none;
@@ -845,7 +846,7 @@
 .bt-vs-moved {
   flex-basis: 100%;
   padding-left: 23px;
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
@@ -1100,10 +1101,10 @@
   stroke-linejoin: round;
 }
 .bt-tag-ahead {
-  fill: var(--bt-strategy);
+  fill: var(--bt-strategy-ink);
 }
 .bt-tag-behind {
-  fill: var(--bt-benchmark);
+  fill: var(--bt-benchmark-ink);
 }
 .bt-line-ghost {
   fill: none;
@@ -1203,7 +1204,10 @@
   fill: var(--bt-fall);
 }
 .bt-axis.bt-fall-label {
-  font-size: 10.5px;
+  paint-order: stroke;
+  stroke: var(--background-primary);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 .bt-strip-bg {
   fill: var(--background-secondary);
@@ -1227,6 +1231,10 @@
 .bt-axis.bt-end-label {
   fill: var(--text-normal);
   font-weight: var(--font-semibold);
+  paint-order: stroke;
+  stroke: var(--background-primary);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 .bt-chart-legend {
   display: flex;
@@ -1469,18 +1477,23 @@
 .bt-root button.bt-err-ln.bt-err-folded:hover {
   background: var(--background-modifier-hover);
 }
+.bt-root button.bt-err-ln.bt-err-folded:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--background-modifier-border-focus);
+}
 .bt-err-folded .bt-err-code {
   font-family: var(--font-interface);
   font-size: var(--font-ui-smaller);
 }
 .bt-err-g {
   padding-right: 12px;
-  color: var(--text-faint);
+  color: var(--text-muted);
   text-align: right;
   user-select: none;
 }
+/* The line with a problem: a bar at its left and a light tint, light enough that its words keep 4.5:1. */
 .bt-err-ln.bt-err-bad {
-  background: color-mix(in srgb, var(--bt-warn-dot) 14%, transparent);
+  background: color-mix(in srgb, var(--bt-warn-dot) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--bt-warn-dot);
 }
 .bt-squig {
   text-decoration: underline wavy var(--bt-bad);

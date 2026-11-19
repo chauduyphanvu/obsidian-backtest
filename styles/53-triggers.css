@@ -6,7 +6,7 @@
   max-width: 34em;
 }
 .bt-root .bt-table td.bt-next-close-waiting {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .bt-next-close-note {
   display: block;

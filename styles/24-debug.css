@@ -136,7 +136,7 @@
   display: block;
 }
 .bt-debug-caption {
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 .bt-debug-heading {
@@ -159,13 +159,13 @@
   font-size: var(--font-ui-smaller);
 }
 .bt-debug-yes .bt-debug-mark {
-  color: var(--text-success);
+  color: var(--bt-good);
 }
 .bt-debug-unknown {
   font-style: italic;
 }
 .bt-debug-na {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .bt-debug-detail {
   display: block;
@@ -230,7 +230,7 @@
 .bt-debug-legend-caption {
   flex: none;
   min-width: 4.5em;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .bt-debug-legend-text {
   min-width: 0;
