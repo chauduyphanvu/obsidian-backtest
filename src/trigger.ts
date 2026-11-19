@@ -752,7 +752,7 @@ const actsAtOpen = (t: Pick<Trigger, 'levels' | 'ownLast' | 'short'>): boolean =
  * The rule's part, such as "Buys if it closes above 512.30 (+1.2%)", without when it fills; null for a trigger with no
  * price worked out, or a held ticker its stop or target closes at the next open.
  */
-export function rulePhrase(t: Trigger): string | null {
+export function rulePhrase(t: Trigger, write: PriceWriter = priced): string | null {
   if (t.blocked || t.noRule || actsAtOpen(t)) return null;
   const who = t.driver === t.ticker ? 'it' : t.driver;
   const range = `from ${priced(t.range.lo, t.last, t.values)} to ${priced(t.range.hi, t.last, t.values)}`;
@@ -762,7 +762,7 @@ export function rulePhrase(t: Trigger): string | null {
     const [rule, again] = t.side === 'rearm' ? ['buy', 'buys'] : ['short', 'shorts'];
     return `After a stop or target exit${t.marginCall ? ' or a margin call' : ''}, the ${rule} rule must become false before the strategy ${again} ${t.ticker} again: ${cond ? `it becomes false ${cond}` : `it stays true if the ${close} is ${range}`}`;
   }
-  const cond = condition(t, who);
+  const cond = condition(t, who, write);
   return cond ? `${VERB[t.side]} ${cond}` : `The ${t.side} rule gives no order if the ${close} is ${range}`;
 }
 

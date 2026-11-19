@@ -632,7 +632,7 @@ const SAMPLE_TRIGGERS = [
 test('the closes to watch: those that give an order unchanged or within 2%, nearest first, and every one with fill: close', () => {
   const rows = watchRows(reportOf(SAMPLE_TRIGGERS));
   assert.deepEqual(rows.map((r) => [r.ticker, r.side, r.now]), [['C', 'sell', true], ['G', 'add', false], ['A', 'buy', false]]);
-  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', when: 'at the open after that close', driver: 'A', lastClose: 100, distance: 101.501 / 100 - 1, now: false });
+  assert.deepEqual(rows[2], { ticker: 'A', side: 'buy', phrase: 'Buys if it closes above 101.50 (+1.5%)', plain: 'Buys if it closes above 101.50', when: 'at the open after that close', driver: 'A', lastClose: 100, distance: 101.501 / 100 - 1, now: false });
   assert.deepEqual([watchClose(rows[2]), watchClose({ ...rows[2], driver: 'SPY' })], ['100.00', '100.00 (SPY)']);
   assert.equal(rows[0].phrase, 'Sells unless it closes above 102.00 (+2.0%)');
   const close = watchRows(reportOf(SAMPLE_TRIGGERS, true));

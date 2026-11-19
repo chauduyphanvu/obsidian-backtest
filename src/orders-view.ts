@@ -1,5 +1,7 @@
 import { Modal, Notice, setIcon, type App } from 'obsidian';
-import { h } from './dom.ts';
+import { h, motionOK, reveal, revealBox, s } from './dom.ts';
+import { shortMessage } from './fixes.ts';
+import { awayText } from './render-now.ts';
 import { price, shareCount, signedPct } from './format.ts';
 import {
   ACCOUNTS_HEADING,
@@ -20,8 +22,10 @@ import {
   sortStatuses,
   todoGroups,
   todoRows,
-  WATCH_HEADING,
   WATCH_NOTE,
+  WATCH_RULE,
+  WATCH_TITLE,
+  WATCH_WITHIN,
   watchClose,
   watchList,
   type AccountStatus,
@@ -40,6 +44,12 @@ export interface OrdersHost {
   /** Writes the Markdown to the configured note, unless that note exists and this plugin did not make it. */
   save(markdown: string): Promise<SaveOutcome>;
   now(): number;
+  /**
+   * The fix for a strategy that did not run because its block has a problem, with the defaults of the settings: the
+   * button's words, the sentence that offers it, and what writes it into the note (rejects with a message fit to show).
+   * Null when there is none.
+   */
+  fix?(status: StrategyStatus): { label: string; text: string; write(): Promise<void> } | null;
 }
 
 export class OrdersModal extends Modal {
@@ -104,11 +114,25 @@ export class OrdersModal extends Modal {
     this.header(root, list, accounts);
     this.todo(root, todo);
     this.accounts(root, accounts);
-    this.watch(root, list);
-    this.holding(root, list, todo.length > 0);
-    this.closeFills(root, list);
+    const watching = this.watch(root, list);
     this.problems(root, list);
-    h(root, 'p', 'bt-orders-foot', 'From backtests of your rules on the last prices. The plugin does not send orders.');
+    this.holding(root, list);
+    this.closeFills(root, list);
+    const foot = h(root, 'div', 'bt-orders-foot');
+    h(foot, 'span', undefined, 'From backtests of your rules on the last prices. The plugin does not send orders.');
+    if (watching) {
+      // What the watch group's few words stand for, behind a link, for the reader who asks.
+      const how = h(foot, 'button', 'bt-orders-help', 'How the closes are found');
+      how.type = 'button';
+      how.setAttribute('aria-expanded', 'false');
+      const { box, inner } = revealBox(root, 'bt-orders-how');
+      h(inner, 'p', 'bt-orders-muted', WATCH_NOTE);
+      how.addEventListener('click', () => {
+        const open = how.getAttribute('aria-expanded') !== 'true';
+        how.setAttribute('aria-expanded', String(open));
+        reveal(box, open);
+      });
+    }
   }
 
   private header(root: HTMLElement, list: StrategyStatus[], accounts: AccountStatus[]): void {
@@ -117,15 +141,15 @@ export class OrdersModal extends Modal {
     const asof = h(head, 'div', 'bt-orders-asof', basis === null ? 'The plugin loaded no prices' : basis.text);
     if (basis?.note) h(asof, 'div', 'bt-orders-muted', basis.note);
     const actions = h(head, 'div', 'bt-orders-actions');
-    const button = (icon: string, label: string) => {
-      const b = h(actions, 'button', 'bt-orders-button');
+    const button = (icon: string, label: string, quiet: boolean) => {
+      const b = h(actions, 'button', quiet ? 'bt-orders-button bt-orders-quiet' : 'bt-orders-button');
       setIcon(h(b, 'span', 'bt-orders-icon'), icon);
       h(b, 'span', undefined, label);
       return b;
     };
-    button('refresh-cw', 'Refresh prices').addEventListener('click', () => void this.load(true));
-    const save = button('file-text', 'Save as note');
+    const save = button('file-text', 'Save as note', true);
     save.addEventListener('click', () => void this.save(save, list, accounts));
+    button('refresh-cw', 'Refresh prices', false).addEventListener('click', () => void this.load(true));
   }
 
   private async save(button: HTMLButtonElement, list: StrategyStatus[], accounts: AccountStatus[]): Promise<void> {
@@ -146,8 +170,14 @@ export class OrdersModal extends Modal {
     }
   }
 
-  private heading(parent: HTMLElement, text: string, tag: 'div' | 'summary' = 'div'): HTMLElement {
-    return h(parent, tag, 'bt-orders-heading', text);
+  /** A group: its heading, a few words of what it holds, and how many, with the count at the right. */
+  private group(root: HTMLElement, title: string, count: string, rule?: string): HTMLElement {
+    const section = h(root, 'section', 'bt-orders-section');
+    const head = h(section, 'div', 'bt-orders-heading');
+    h(head, 'span', 'bt-orders-heading-text', title);
+    if (rule) h(head, 'span', 'bt-orders-rule', rule);
+    h(head, 'span', 'bt-orders-count', count);
+    return section;
   }
 
   /** The strategy's name, as a link that opens its note. */
@@ -164,29 +194,31 @@ export class OrdersModal extends Modal {
   private todo(root: HTMLElement, rows: TodoRow[]): void {
     const groups = todoGroups(rows);
     if (groups.length === 0) {
-      const section = h(root, 'section', 'bt-orders-section');
-      this.heading(section, 'To do');
-      h(section, 'p', 'bt-orders-none', 'No strategy has an order.');
+      // No order is an answer, said as one.
+      const section = this.group(root, 'To do at the next open', '0 orders');
+      const empty = h(section, 'div', 'bt-orders-none');
+      checkIcon(empty);
+      const text = h(empty, 'span');
+      h(text, 'b', undefined, 'Nothing to send.');
+      text.append(' No rule gave an order at the last close.');
       return;
     }
     for (const { when, heading, rows: group } of groups) {
-      const section = h(root, 'section', 'bt-orders-section');
-      this.heading(section, heading);
+      const section = this.group(root, heading, group.length === 1 ? '1 order' : `${group.length} orders`);
       if (when === 'last close') h(section, 'p', 'bt-orders-muted', LAST_CLOSE_NOTE);
       const list = h(section, 'ul', when === 'last close' ? 'bt-orders-list bt-orders-done' : 'bt-orders-list');
-      // "Sell short" and "Buy to cover" need a wider first column than "Buy" and "Sell".
-      if (group.some(({ order }) => order.action === 'short' || order.action === 'cover')) list.classList.add('bt-orders-wide');
       for (const { status, order } of group) {
         const row = h(list, 'li', 'bt-orders-row');
         h(row, 'span', `bt-orders-action bt-orders-${order.action}`, actionWord(order));
         const what = h(row, 'div', 'bt-orders-what');
-        h(what, 'span', 'bt-orders-ticker', order.ticker);
-        h(what, 'span', undefined, orderSize(order));
-        const detail = h(row, 'div', 'bt-orders-detail');
-        this.link(detail, status);
-        h(detail, 'span', undefined, `Last close ${price(order.lastClose)}`);
-        h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
-        if (order.since !== null) h(detail, 'span', undefined, `Held since ${barTime(status, order.since)}`);
+        const who = h(what, 'div', 'bt-orders-who');
+        h(who, 'b', 'bt-orders-ticker', order.ticker);
+        h(who, 'span', 'bt-orders-sep', ' \u00b7 ');
+        this.link(who, status);
+        h(what, 'div', 'bt-orders-muted', orderSize(order));
+        const px = h(row, 'div', 'bt-orders-px');
+        h(px, 'span', undefined, `last ${price(order.lastClose)}`);
+        h(px, 'small', undefined, order.since !== null ? `held since ${barTime(status, order.since)}` : `the ${barLabel(status)}`);
       }
     }
   }
@@ -194,8 +226,7 @@ export class OrdersModal extends Modal {
   /** Each account block's orders in shares, the strategies' orders netted at the account's size; one with none says so. */
   private accounts(root: HTMLElement, accounts: AccountStatus[]): void {
     if (accounts.length === 0) return;
-    const section = h(root, 'section', 'bt-orders-section');
-    this.heading(section, ACCOUNTS_HEADING);
+    const section = this.group(root, ACCOUNTS_HEADING, accounts.length === 1 ? '1 account' : `${accounts.length} accounts`);
     h(section, 'p', 'bt-orders-muted', ACCOUNTS_NOTE);
     for (const a of accounts) {
       const box = h(section, 'div', 'bt-orders-hold');
@@ -209,65 +240,93 @@ export class OrdersModal extends Modal {
         continue;
       }
       const list = h(box, 'ul', 'bt-orders-list');
-      const badges = a.orders.map(accountOrderBadge);
-      if (badges.some((b) => b.action.length > 4)) list.classList.add('bt-orders-wide');
-      a.orders.forEach((o, k) => {
-        const badge = badges[k];
+      for (const o of a.orders) {
+        const badge = accountOrderBadge(o);
         const row = h(list, 'li', 'bt-orders-row');
         h(row, 'span', `bt-orders-action bt-orders-${badge.style}`, badge.action);
         const what = h(row, 'div', 'bt-orders-what');
-        h(what, 'span', 'bt-orders-ticker', o.ticker);
-        h(what, 'span', undefined, badge.text);
-        const detail = h(row, 'div', 'bt-orders-detail');
-        h(detail, 'span', undefined, `Last close ${price(o.price)}`);
-        h(detail, 'span', undefined, `Held ${shareCount(o.holding)}`);
-      });
+        h(h(what, 'div', 'bt-orders-who'), 'b', 'bt-orders-ticker', o.ticker);
+        h(what, 'div', 'bt-orders-muted', badge.text);
+        const px = h(row, 'div', 'bt-orders-px');
+        h(px, 'span', undefined, `last ${price(o.price)}`);
+        h(px, 'small', undefined, `held ${shareCount(o.holding)}`);
+      }
     }
   }
 
-  /** The closes at the next bar that would give an order, nearest first: what to keep an eye on before that close. */
-  private watch(root: HTMLElement, list: StrategyStatus[]): void {
+  /**
+   * The closes at the next bar that would give an order, nearest first: a row for each, with a bar that fills as the last
+   * close nears the price. Returns whether there were any.
+   */
+  private watch(root: HTMLElement, list: StrategyStatus[]): boolean {
     const rows = watchList(list);
-    if (rows.length === 0) return;
-    const section = h(root, 'section', 'bt-orders-section');
-    this.heading(section, WATCH_HEADING);
-    h(section, 'p', 'bt-orders-muted', WATCH_NOTE);
+    if (rows.length === 0) return false;
+    const section = this.group(root, WATCH_TITLE, rows.length === 1 ? '1 rule' : `${rows.length} rules`, WATCH_RULE);
     const items = h(section, 'ul', 'bt-orders-list bt-orders-watch');
-    if (rows.some(({ row }) => row.side === 'short' || row.side === 'cover')) items.classList.add('bt-orders-wide');
+    const bars: [HTMLElement, number][] = [];
     for (const { status, row } of rows) {
       const item = h(items, 'li', 'bt-orders-row');
       h(item, 'span', `bt-orders-action bt-orders-${row.side === 'add' ? 'buy' : row.side}`, { buy: 'Buy', sell: 'Sell', add: 'Add', short: 'Sell short', cover: 'Buy to cover' }[row.side]);
       const what = h(item, 'div', 'bt-orders-what');
-      h(what, 'span', 'bt-orders-ticker', row.ticker);
-      h(what, 'span', undefined, `${row.phrase}, ${row.when}`);
-      const detail = h(item, 'div', 'bt-orders-detail');
-      this.link(detail, status);
-      h(detail, 'span', undefined, `Last close ${watchClose(row)}`);
-      h(detail, 'span', undefined, `Based on the ${barLabel(status)}`);
+      const who = h(what, 'div', 'bt-orders-who');
+      h(who, 'b', 'bt-orders-ticker', row.ticker);
+      h(who, 'span', 'bt-orders-sep', ' \u00b7 ');
+      this.link(who, status);
+      h(what, 'div', 'bt-orders-muted', `${row.plain ?? row.phrase}, ${row.when}`);
+      const px = h(item, 'div', 'bt-orders-px');
+      h(px, 'span', undefined, `last ${watchClose(row)}`);
+      h(px, 'small', undefined, `the ${barLabel(status)}`);
+      const prox = h(item, 'div', 'bt-orders-prox');
+      if (row.now) {
+        const bar = h(prox, 'span', 'bt-orders-bar');
+        bar.setAttribute('aria-hidden', 'true');
+        bars.push([h(bar, 'i'), 1]);
+        h(prox, 'span', 'bt-orders-away', 'Gives the order if the close does not change');
+      } else if (Number.isFinite(row.distance)) {
+        const bar = h(prox, 'span', 'bt-orders-bar');
+        bar.setAttribute('aria-hidden', 'true');
+        bars.push([h(bar, 'i'), Math.max(0, Math.min(1, 1 - Math.abs(row.distance) / WATCH_WITHIN))]);
+        h(prox, 'span', 'bt-orders-away', awayText(row.distance) ?? '');
+      } else prox.remove();
     }
+    // The bars fill once, from empty, when the window opens.
+    const fill = () => {
+      for (const [bar, k] of bars) bar.style.setProperty('transform', `scaleX(${k.toFixed(3)})`);
+    };
+    if (motionOK()) window.requestAnimationFrame(() => window.requestAnimationFrame(fill));
+    else fill();
+    return true;
   }
 
-  /** Strategies with a position kept or no order at all; one with only orders is already covered above. */
-  private holding(root: HTMLElement, list: StrategyStatus[], collapsed: boolean): void {
-    const held = list.filter((s) => s.error === null && (s.holdings.length > 0 || s.orders.length === 0));
-    if (held.length === 0) return;
-    const section = h(root, 'details', 'bt-orders-section');
-    section.open = !collapsed;
-    this.heading(section, `Holdings (${held.length})`, 'summary');
-    for (const s of held) {
-      const box = h(section, 'div', 'bt-orders-hold');
-      this.link(box, s);
-      if (s.holdings.length === 0) {
-        h(box, 'div', 'bt-orders-muted', 'In cash');
-        continue;
-      }
-      const items = h(box, 'ul', 'bt-orders-held');
-      for (const p of s.holdings) {
-        const item = h(items, 'li');
-        h(item, 'span', 'bt-orders-ticker', p.ticker);
-        const since = `since ${barTime(s, p.since)}`;
-        h(item, 'span', 'bt-orders-muted', `${share(p.weight)} of the strategy, ${p.short ? 'short, ' : ''}${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`);
-      }
+  /** What each strategy holds, folded: those with a position, then those in cash. */
+  private holding(root: HTMLElement, list: StrategyStatus[]): void {
+    const ran = list.filter((s) => s.error === null);
+    if (ran.length === 0) return;
+    const held = ran.filter((s) => s.holdings.length > 0);
+    const cash = ran.filter((s) => s.holdings.length === 0 && s.orders.length === 0);
+    if (held.length + cash.length === 0) return;
+    const section = h(root, 'details', 'bt-orders-section bt-orders-holdings');
+    const summary = h(section, 'summary', 'bt-orders-heading');
+    h(summary, 'span', 'bt-orders-heading-text', 'Holdings');
+    const counts = [held.length ? `${held.length} ${held.length === 1 ? 'strategy holds' : 'strategies hold'}` : '', cash.length ? `${cash.length} in cash` : ''].filter(Boolean);
+    h(summary, 'span', 'bt-orders-rule', counts.join(', '));
+    const box = h(section, 'div', 'bt-orders-quiet');
+    for (const s of [...held, ...cash]) {
+      const line = h(box, 'div', 'bt-orders-quiet-row');
+      this.link(line, s);
+      h(
+        line,
+        'span',
+        'bt-orders-muted',
+        s.holdings.length === 0
+          ? 'In cash'
+          : s.holdings
+              .map((p) => {
+                const since = `since ${barTime(s, p.since)}`;
+                return `${p.short ? 'short ' : ''}${p.ticker} ${share(p.weight)}, ${p.gain === null ? since : `${signedPct(p.gain)} ${since}`}`;
+              })
+              .join('; '),
+      );
     }
   }
 
@@ -275,23 +334,52 @@ export class OrdersModal extends Modal {
   private closeFills(root: HTMLElement, list: StrategyStatus[]): void {
     const atClose = list.filter((s) => s.closeFill);
     if (atClose.length === 0) return;
-    const section = h(root, 'section', 'bt-orders-section');
-    this.heading(section, 'Strategies that fill at the close');
+    const section = this.group(root, 'Strategies that fill at the close', atClose.length === 1 ? '1 strategy' : `${atClose.length} strategies`);
     h(section, 'p', 'bt-orders-muted', CLOSE_FILL_NOTE);
     const items = h(section, 'ul', 'bt-orders-fills');
     for (const s of atClose) this.link(h(items, 'li'), s);
   }
 
+  /** One row for each problem: the block, the message cut short, and a button for the fix when there is one. */
   private problems(root: HTMLElement, list: StrategyStatus[]): void {
-    const found = list.flatMap((s) => problemsOf(s).map((text) => ({ s, text })));
+    const found = list.flatMap((s) => problemsOf(s).map((text, k) => ({ s, text, first: k === 0 })));
     if (found.length === 0) return;
-    const section = h(root, 'section', 'bt-orders-section');
-    this.heading(section, 'Problems');
-    const items = h(section, 'ul', 'bt-orders-problems');
-    for (const { s, text } of found) {
-      const item = h(items, 'li', s.error === null ? 'bt-orders-problem' : 'bt-orders-problem bt-orders-problem-error');
-      this.link(item, s);
-      h(item, 'div', 'bt-orders-muted', text);
+    const blocks = new Set(found.map((f) => f.s)).size;
+    const section = this.group(root, 'Problems', blocks === 1 ? '1 block' : `${blocks} blocks`);
+    const items = h(section, 'ul', 'bt-orders-list bt-orders-problems');
+    for (const { s, text, first } of found) {
+      const item = h(items, 'li', s.error === null ? 'bt-orders-row bt-orders-problem' : 'bt-orders-row bt-orders-problem bt-orders-problem-error');
+      h(item, 'span', 'bt-orders-action bt-orders-fix', s.error === null ? 'Check' : 'Fix');
+      const what = h(item, 'div', 'bt-orders-what');
+      const who = h(what, 'div', 'bt-orders-who');
+      this.link(who, s);
+      const fix = s.error !== null && first ? (this.host.fix?.(s) ?? null) : null;
+      const said = s.error !== null ? shortMessage(s.error).head : text;
+      h(what, 'div', 'bt-orders-muted', fix ? `${said} ${fix.text}` : said);
+      if (!fix) continue;
+      const px = h(item, 'div', 'bt-orders-px');
+      const button = h(px, 'button', 'bt-orders-button', fix.label);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        button.disabled = true;
+        fix.write().then(
+          () => {
+            button.textContent = 'Changed';
+            void this.load(false);
+          },
+          (e: unknown) => {
+            button.disabled = false;
+            new Notice(`Cannot change the block. ${e instanceof Error ? e.message : String(e)}`);
+          },
+        );
+      });
     }
   }
+}
+
+/** A check mark in a circle, for a group with nothing to do. */
+function checkIcon(parent: HTMLElement): void {
+  const svg = s(parent, 'svg', { width: 18, height: 18, viewBox: '0 0 18 18', 'aria-hidden': 'true' });
+  s(svg, 'circle', { cx: 9, cy: 9, r: 8, fill: 'currentColor', opacity: 0.15 });
+  s(svg, 'path', { d: 'M5.5 9.2l2.3 2.3 4.7-4.9', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
 }

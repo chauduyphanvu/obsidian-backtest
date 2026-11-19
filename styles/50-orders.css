@@ -1,12 +1,15 @@
+/* Today's orders: a group for each kind, each heading with a few words of its rule and a count; a row for each order,
+   watch or problem, with a tag for what to do. */
 .modal.bt-orders-modal {
-  width: 720px;
+  width: 640px;
   max-width: 94vw;
 }
 
 .bt-orders {
   container: bt-orders / inline-size;
-  --bt-orders-warning: #fab219;
-  --bt-orders-critical: #d03b3b;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   font-size: var(--font-ui-small);
   color: var(--text-normal);
 }
@@ -15,30 +18,30 @@
   margin: 20px 0;
   color: var(--text-muted);
 }
-.bt-orders-none,
 .bt-orders-muted {
   color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }
-.bt-orders-none {
-  margin: 6px 0;
+p.bt-orders-muted {
+  margin: 0;
 }
 
 .bt-orders-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--background-modifier-border);
 }
 .bt-orders-asof {
   color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
 }
 .bt-orders-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 .bt-orders .bt-orders-button {
   display: inline-flex;
@@ -46,6 +49,10 @@
   gap: 6px;
   flex: none;
   font-size: var(--font-ui-smaller);
+}
+.bt-orders .bt-orders-button.bt-orders-quiet {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
 }
 .bt-orders-icon {
   display: inline-flex;
@@ -56,71 +63,146 @@
 }
 
 .bt-orders-section {
-  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .bt-orders-heading {
-  font-size: var(--font-ui-medium);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
   font-weight: var(--font-semibold);
 }
-summary.bt-orders-heading {
-  cursor: pointer;
+.bt-orders-rule {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+}
+.bt-orders-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+  font-variant-numeric: tabular-nums;
 }
 .bt-orders-list,
-.bt-orders-held,
-.bt-orders-fills,
-.bt-orders-problems {
-  list-style: none;
+.bt-orders-fills {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin: 0;
   padding: 0;
+  list-style: none;
 }
 
-/* Two lines a row: what to do, then where it comes from. The word Buy or Sell carries the meaning; filled against outlined is a second cue. */
+/* Nothing to do is an answer, with a check mark. */
+.bt-orders-none {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+.bt-orders-none svg {
+  flex: none;
+  color: var(--bt-good);
+}
+.bt-orders-none b {
+  color: var(--text-normal);
+}
+
+/* A row: the tag, who and what, the price at the right; a watch row has the nearness under it. */
 .bt-orders-row {
   display: grid;
-  grid-template-columns: 3.6em minmax(0, 1fr);
-  align-items: baseline;
-  gap: 2px 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--background-modifier-border);
-}
-/* "Bought" and "Sold" are wider than "Buy" and "Sell". */
-.bt-orders-done .bt-orders-row {
-  grid-template-columns: 5em minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
 }
 .bt-orders-action {
-  padding: 0 6px;
-  border: 1px solid var(--text-normal);
-  border-radius: var(--radius-s);
-  font-size: var(--font-ui-smaller);
-  font-weight: var(--font-semibold);
-  text-align: center;
+  justify-self: start;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: var(--background-modifier-hover);
+  font-size: 10.5px;
+  font-weight: var(--font-bold);
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.bt-orders-buy,
+.bt-orders-cover {
+  background: color-mix(in srgb, var(--bt-strategy) 15%, transparent);
+  color: var(--bt-strategy);
 }
 .bt-orders-sell,
 .bt-orders-short {
-  background: var(--text-normal);
-  color: var(--background-primary);
+  background: color-mix(in srgb, var(--bt-bad) 14%, transparent);
+  color: var(--bt-bad);
 }
-/* A list with "Sell short" or "Buy to cover" in it, and "Sold short" or "Bought to cover" once done. */
-.bt-orders-wide .bt-orders-row {
-  grid-template-columns: 7.2em minmax(0, 1fr);
+.bt-orders-fix {
+  background: color-mix(in srgb, var(--bt-warn-dot) 20%, transparent);
+  color: var(--bt-warn-ink);
 }
-.bt-orders-done.bt-orders-wide .bt-orders-row {
-  grid-template-columns: 8.8em minmax(0, 1fr);
+.bt-orders-what {
+  min-width: 0;
 }
-.bt-orders-ticker {
-  display: inline-block;
-  min-width: 5.5em;
-  margin-right: 10px;
-  font-weight: var(--font-semibold);
+.bt-orders-who {
   overflow-wrap: anywhere;
 }
-.bt-orders-detail {
-  grid-column: 2;
+.bt-orders-ticker {
+  font-weight: var(--font-semibold);
+}
+.bt-orders-sep {
+  color: var(--text-muted);
+}
+.bt-orders-px {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0 12px;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bt-orders-px small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.bt-orders-prox {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.bt-orders-bar {
+  position: relative;
+  flex: 1 1 64px;
+  min-width: 48px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--background-secondary);
+  overflow: hidden;
+}
+.bt-orders-away {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.bt-orders-bar i {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bt-warn-dot) 35%, transparent), var(--bt-warn-dot));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 1s var(--bt-ease);
 }
 
 .bt-orders .bt-orders-link {
@@ -141,45 +223,85 @@ summary.bt-orders-heading {
 }
 
 .bt-orders-hold {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 0;
-  border-bottom: 1px solid var(--background-modifier-border);
-}
-.bt-orders-held li {
-  display: grid;
-  grid-template-columns: 5.5em minmax(0, 1fr);
-  align-items: baseline;
-  gap: 0 10px;
-}
-.bt-orders-held .bt-orders-ticker {
-  margin-right: 0;
+  border-top: 1px solid var(--background-modifier-border);
 }
 
-/* In a narrow window the ticker stops reserving a column and the size follows it directly. */
-@container bt-orders (max-width: 440px) {
-  .bt-orders-ticker {
-    min-width: 0;
-  }
-  .bt-orders-held li {
-    grid-template-columns: 3.2em minmax(0, 1fr);
-  }
+/* Holdings start folded, with their counts in the heading; the strategies in cash come last. */
+.bt-orders-holdings > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.bt-orders-holdings > summary::-webkit-details-marker {
+  display: none;
+}
+.bt-orders-holdings > summary::before {
+  content: '';
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 0 2px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform var(--bt-t-comp) var(--bt-ease);
+}
+.bt-orders-holdings[open] > summary::before {
+  transform: rotate(45deg);
+}
+.bt-orders-quiet {
+  animation: bt-rise-in var(--bt-t-comp) var(--bt-ease) both;
+}
+.bt-orders-quiet-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 6px 2px;
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .bt-orders-fills li {
   padding: 2px 0;
 }
 
-.bt-orders-problem {
-  margin-top: 8px;
-  padding: 6px 10px;
-  border-left: 3px solid var(--bt-orders-warning);
-  background: var(--background-secondary);
-}
-.bt-orders-problem-error {
-  border-left-color: var(--bt-orders-critical);
-}
-
 .bt-orders-foot {
-  margin: 20px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+}
+.bt-orders .bt-orders-help {
+  height: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--text-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.bt-orders .bt-orders-help:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+/* In a narrow window the price goes under who and what. */
+@container bt-orders (max-width: 440px) {
+  .bt-orders-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .bt-orders-px {
+    grid-column: 2;
+    align-items: flex-start;
+    text-align: left;
+  }
 }

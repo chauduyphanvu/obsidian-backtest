@@ -6,6 +6,7 @@ import { CsvModal } from './csv-modal.ts';
 import { DASHBOARD_TEMPLATE, findStrategies as findInNotes, type FoundStrategy } from './dashboard.ts';
 import { withoutQueries } from './data.ts';
 import { StrategySuggest, applyFixAtCursor, strategyEditor } from './editor.ts';
+import { applyFix, suggestion } from './fixes.ts';
 import { HOUR, isoDate } from './format.ts';
 import { makeForward, writeLog, type ForwardStart } from './forward.ts';
 import { GalleryModal } from './gallery-modal.ts';
@@ -24,7 +25,7 @@ import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
 import { renderForward, type ForwardHost } from './render-forward.ts';
 import { blockKeyPrefix, blockStateKey } from './render.ts';
 import { Results } from './results.ts';
-import { findBlock, setParamValues, setSettingInNote, setWeightsInNote, writeBlockInNote, writeInNote, writeValuesInNote } from './rewrite.ts';
+import { findBlock, fixBlockInNote, setParamValues, setSettingInNote, setWeightsInNote, writeBlockInNote, writeInNote, writeValuesInNote } from './rewrite.ts';
 import { JsonStore } from './store.ts';
 import { StrategyBlocks, type StrategyOptions } from './strategy-block.ts';
 import { SymbolLookup } from './symbols.ts';
@@ -464,6 +465,17 @@ export default class BacktestBlocks extends Plugin {
       accounts: () => scanAccounts(this.accountScan),
       now: () => Date.now(),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
+      fix: (status) => {
+        const source = status.source;
+        if (source === undefined) return null;
+        const defaults = defaultsFrom(this.settings);
+        const lines = source.split('\n');
+        for (const e of this.results.runner().parse(source).errors) {
+          const offered = suggestion(lines, e, defaults);
+          if (offered) return { label: offered.fix.label, text: offered.text, write: () => this.fixInNote(status.note, source, applyFix(lines, offered.fix).join('\n')) };
+        }
+        return null;
+      },
       save: async (markdown) => {
         if (!this.settings.ordersNote.trim()) return { kind: 'none' };
         const path = normalizePath(this.settings.ordersNote.trim().replace(/(\.md)?$/i, '.md'));
@@ -475,6 +487,19 @@ export default class BacktestBlocks extends Plugin {
         return { kind: 'saved', path };
       },
     }).open();
+  }
+
+  /** Writes a fixed block into its note, found by its text, for a list that does not know where the block is. */
+  private async fixInNote(path: string, source: string, text: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) throw new Error(`The note ${path} is not in the vault.`);
+    let written = false;
+    await this.app.vault.process(file, (note) => {
+      const next = fixBlockInNote(note, source, text);
+      written = next !== null;
+      return next ?? note;
+    });
+    if (!written) throw new Error('The block changed, or the note has two blocks with the same text. Open the note and fix the block there.');
   }
 
   private openCsv(): void {

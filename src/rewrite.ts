@@ -95,6 +95,15 @@ export function replaceBlockInNote(note: string, line: number, source: string, t
   return lines.join('\n');
 }
 
+/**
+ * The note with the one strategy block whose text is `source` replaced by `text`, for a fix made from a list of every
+ * block, which does not know where the block is. Null when no block, or more than one, has that text.
+ */
+export function fixBlockInNote(note: string, source: string, text: string): string | null {
+  const found = extractBlocks(note).filter((b) => b.source === source);
+  return found.length === 1 ? replaceBlockInNote(note, found[0].line, source, text) : null;
+}
+
 export const NOTE_CHANGED = 'The note changed after the plugin showed this result. The plugin did not write to the note. Do the step again.';
 
 /**

@@ -4,7 +4,7 @@ import type { Fill } from './dsl.ts';
 import { isFlip, type AssetState } from './engine.ts';
 import { DAY, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
-import { fillPhrase, nearest, rulePhrase, type TriggerReport } from './trigger.ts';
+import { fillPhrase, nearest, priceAlone, rulePhrase, type TriggerReport } from './trigger.ts';
 
 /**
  * When an order applies: at the next open (a pending order of a strategy that fills at the next open), at the next
@@ -91,6 +91,8 @@ export interface WatchRow {
   side: 'buy' | 'sell' | 'add' | 'short' | 'cover';
   /** The rule's part in words, such as "Buys if it closes above 512.30 (+1.2%)", and when its order fills, such as "at the following open". */
   phrase: string;
+  /** The same without the share of the last close, for a row that shows the distance apart: "Buys if it closes above 512.30". */
+  plain?: string;
   when: string;
   /**
    * The ticker whose close it is about (trigger.ts Trigger.driver), its last close, and the signed share of that to the
@@ -128,6 +130,8 @@ export interface StrategyStatus {
   stale: boolean;
   /** The closes to watch at the next bar, nearest first (watchRows); absent when no trigger prices were worked out. */
   watch?: WatchRow[];
+  /** The block's text, kept for a strategy that did not run, so its problem can be fixed from the list. */
+  source?: string;
 }
 
 const STALE_DAYS = 4;
@@ -186,7 +190,17 @@ export function watchRows(report: TriggerReport): WatchRow[] {
     const near = nearest(t);
     if (t.side === 'rearm' || t.side === 'rearmShort' || phrase === null || near === null) continue;
     if (!report.closeFill && !near.now && (t.values || !(Math.abs(near.distance) <= WATCH_WITHIN))) continue;
-    rows.push({ ticker: t.ticker, side: t.side, phrase, when: fillPhrase(report.closeFill), driver: t.driver, lastClose: t.last, distance: t.values ? NaN : near.distance, now: near.now });
+    rows.push({
+      ticker: t.ticker,
+      side: t.side,
+      phrase,
+      plain: rulePhrase(t, priceAlone) ?? phrase,
+      when: fillPhrase(report.closeFill),
+      driver: t.driver,
+      lastClose: t.last,
+      distance: t.values ? NaN : near.distance,
+      now: near.now,
+    });
   }
   return rows.sort((a, b) => nearness(a) - nearness(b) || compare(a.ticker, b.ticker));
 }
@@ -202,6 +216,9 @@ export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row
 }
 
 export const WATCH_HEADING = 'Monitor at the next close';
+/** The same group in the window, which says its rule in a few words and keeps WATCH_NOTE behind a link at its foot. */
+export const WATCH_TITLE = 'Watch at the next close';
+export const WATCH_RULE = `closes ${WATCH_WITHIN * 100}% or less from an order`;
 
 /** Said under the closes to watch. */
 export const WATCH_NOTE = `The closes at the next bar that make a rule give an order. The plugin calculates them from the rules as they are written. The list shows each close that is ${WATCH_WITHIN * 100}% or less from the last close. It also shows each rule that gives an order if the close does not change, and all closes of a strategy with fill: close. You must send the orders of that strategy before the close.`;
@@ -270,8 +287,8 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
   };
 }
 
-export function failedStatus(note: string, strategy: string, message: string): StrategyStatus {
-  return { note, strategy, asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: message, closeFill: false, stale: false };
+export function failedStatus(note: string, strategy: string, message: string, source?: string): StrategyStatus {
+  return { note, strategy, asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: message, closeFill: false, stale: false, ...(source === undefined ? {} : { source }) };
 }
 
 /** Strategies with orders first, those with a sell or a cover ahead of the others; then the rest. Each group by note, then name. */
@@ -432,7 +449,7 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
       const triggers = (await host.triggers?.(out)?.catch(() => null)) ?? null;
       status = statusFrom(f.note, f.name, out, Date.now(), undefined, triggers);
     } catch (e) {
-      status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e));
+      status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e), f.source);
     }
     onProgress(++done, found.length);
     return status;

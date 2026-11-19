@@ -154,3 +154,14 @@ test('a block that cannot run shows its own lines, the word marked, a short mess
   assert.equal(panel.byClass('bt-err-fix').length, 0);
   assert.match(panel.byClass('bt-err-msg')[0].textContent, /Did you mean sma/);
 });
+
+test('a fix from a list finds its block by its text, and refuses a note with two blocks of that text', async () => {
+  const { fixBlockInNote } = await import('../src/rewrite.ts');
+  const block = 'name: Typo\nbuy when close > smaa(200)';
+  const fixed = 'name: Typo\nbuy when close > sma(200)';
+  const note = `# Mine\n\n> [!note]\n> \`\`\`strategy\n> ${block.split('\n').join('\n> ')}\n> \`\`\`\n\n\`\`\`strategy\nname: Other\nbuy when true\n\`\`\`\n`;
+  assert.equal(fixBlockInNote(note, block, fixed), note.replace('smaa', 'sma'));
+  const twice = `\`\`\`strategy\n${block}\n\`\`\`\n\n\`\`\`strategy\n${block}\n\`\`\`\n`;
+  assert.equal(fixBlockInNote(twice, block, fixed), null);
+  assert.equal(fixBlockInNote('no blocks', block, fixed), null);
+});
