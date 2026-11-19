@@ -1,3 +1,115 @@
+/* Motion: one curve for things that arrive, one for things that move between two places, and four lengths of time. Motion
+   only shows a change of state or place; what the reader reads (hover read-outs) never animates. */
+body {
+  --bt-ease: cubic-bezier(0.2, 0.75, 0.2, 1);
+  --bt-ease-io: cubic-bezier(0.65, 0, 0.25, 1);
+  --bt-t-micro: 120ms;
+  --bt-t-comp: 220ms;
+  --bt-t-layout: 300ms;
+  --bt-t-arrive: 950ms;
+  /* Colours of meaning, kept apart from the strategy's blue and the benchmark's orange. */
+  --bt-good: #1a8f4e;
+  --bt-bad: #d23f3f;
+  --bt-warn-dot: #f2a50c;
+  --bt-warn-ink: #8a5a00;
+}
+.theme-dark {
+  --bt-good: #45c07a;
+  --bt-bad: #ef6b6b;
+  --bt-warn-dot: #f5b331;
+  --bt-warn-ink: #f3c467;
+}
+/* With "reduce motion" on, every change is a cut and the one repeating motion (an order near) is a still ring. */
+@media (prefers-reduced-motion: reduce) {
+  .bt-root,
+  .bt-root *,
+  .bt-root *::before,
+  .bt-root *::after,
+  .bt-orders *,
+  .bt-orders *::before,
+  .bt-orders *::after,
+  .bt-help *,
+  .bt-live-view * {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+  .bt-breathe::after {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* A box that opens and closes (dom.ts reveal): the space first, then the content. */
+.bt-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--bt-t-layout) var(--bt-ease),
+    opacity var(--bt-t-comp) var(--bt-ease);
+}
+.bt-reveal > .bt-reveal-in {
+  min-height: 0;
+  overflow: hidden;
+}
+.bt-reveal.bt-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+/* A box whose height eases around a change (dom.ts easeHeight). */
+.bt-easing {
+  overflow: hidden;
+  transition: height var(--bt-t-layout) var(--bt-ease);
+}
+@keyframes bt-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes bt-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+@keyframes bt-breathe {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+@keyframes bt-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+/* A shape that stands for content still on its way. */
+.bt-sk {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--background-secondary) 0%, var(--background-modifier-hover) 45%, var(--background-secondary) 90%);
+  background-size: 260% 100%;
+  animation: bt-shimmer 1.3s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bt-sk {
+    animation: none !important;
+  }
+}
+
 .bt-root {
   --bt-strategy: #2a78d6;
   --bt-benchmark: #eb6834;

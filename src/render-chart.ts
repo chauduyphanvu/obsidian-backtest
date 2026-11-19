@@ -441,40 +441,79 @@ function drawChart({ chart, legend, width, bt, span, id, read }: DrawInput): voi
   h(legend, 'span', 'bt-chart-note', 'Value on a log scale');
 }
 
-/** A small line of the strategy against its benchmark, for the folded result: no axes, both on one log scale. */
-export function sparkline(parent: HTMLElement, bt: Backtest, width = 96, height = 24): void {
+/** A strategy's value and its benchmark's, cut down to at most `n` points, for a small chart that has no room for more. */
+export interface SparkSeries {
+  /** The strategy's value; shorter than `benchmark` when the run lost all its equity before the end. */
+  strategy: number[];
+  benchmark: number[];
+  label: string;
+}
+
+/**
+ * The points of a sparkline: every k-th bar and the last one, from the first bar, with the strategy cut at a ruin. A
+ * loop, not Math.min(...) or slices of the whole run: a long intraday run has more values than a call takes arguments.
+ */
+export function sparkSeries(bt: Backtest, n = 120): SparkSeries {
   const { run, benchmark } = bt;
-  const n = run.t.length;
-  const ruined = run.ruin ? run.t.indexOf(run.ruin.t) : n;
-  // A loop, not Math.min(...): a long intraday run has more values than a call takes arguments.
+  const bars = run.t.length;
+  const ruined = run.ruin ? run.t.indexOf(run.ruin.t) : -1;
+  const end = ruined >= 0 ? ruined : bars;
+  const k = Math.max(1, Math.ceil(bars / n));
+  const strategy: number[] = [];
+  const bench: number[] = [];
+  for (let i = 0; i < bars; i += k) {
+    bench.push(benchmark.equity[i]);
+    if (i < end) strategy.push(run.equity[i]);
+  }
+  if ((bars - 1) % k !== 0) {
+    bench.push(benchmark.equity[bars - 1]);
+    if (end === bars) strategy.push(run.equity[bars - 1]);
+  }
+  return { strategy, benchmark: bench, label: benchmark.label };
+}
+
+let sparks = 0;
+
+/**
+ * A small chart of a strategy against its benchmark: both on one log scale, and the gap between them shaded in the colour
+ * of whichever is ahead, as in the value chart. No axes.
+ */
+export function drawSpark(parent: HTMLElement, series: SparkSeries, width = 68, height = 24): void {
+  const { strategy, benchmark } = series;
+  const n = benchmark.length;
   let [least, most] = [Infinity, 0];
-  for (const [series, end] of [[run.equity, ruined], [benchmark.equity, n]] as const) {
-    for (let i = 0; i < end; i++) {
-      const v = series[i];
+  for (const list of [strategy, benchmark]) {
+    for (const v of list) {
       if (!(v > 0)) continue;
       if (v < least) least = v;
       if (v > most) most = v;
     }
   }
+  const box = h(parent, 'span', 'bt-spark');
+  const svg = s(box, 'svg', { width, height, viewBox: `0 0 ${width} ${height}`, class: 'bt-svg', role: 'img', 'aria-label': `Value of the strategy and of ${series.label}` });
   if (n < 2 || most === 0) return;
   const lo = Math.log(least);
-  const hi = Math.log(most);
-  const span = hi - lo || 1;
-  const k = Math.max(1, Math.floor(n / (width * 1.5)));
-  const line = (series: number[], end: number) => {
-    let d = '';
-    for (let i = 0; i < end; i += k) {
-      const v = series[i];
-      if (!(v > 0)) continue;
-      d += `${d ? 'L' : 'M'}${((i / (n - 1)) * (width - 2) + 1).toFixed(1)},${(2 + (1 - (Math.log(v) - lo) / span) * (height - 4)).toFixed(1)}`;
-    }
-    const last = series[end - 1];
-    if (d && last > 0) d += `L${(((end - 1) / (n - 1)) * (width - 2) + 1).toFixed(1)},${(2 + (1 - (Math.log(last) - lo) / span) * (height - 4)).toFixed(1)}`;
-    return d;
-  };
-  const svg = s(h(parent, 'span', 'bt-spark'), 'svg', { width, height, class: 'bt-svg', role: 'img', 'aria-label': `Value of the strategy and of ${benchmark.label}` });
-  const b = line(benchmark.equity, n);
-  if (b) s(svg, 'path', { d: b, class: 'bt-line bt-line-benchmark bt-spark-line' });
-  const m = line(run.equity, ruined);
-  if (m) s(svg, 'path', { d: m, class: 'bt-line bt-line-strategy bt-spark-line' });
+  const span = Math.log(most) - lo || 1;
+  const x = (i: number) => ((i / (n - 1)) * (width - 2) + 1).toFixed(1);
+  const y = (v: number) => (2 + (1 - (Math.log(v) - lo) / span) * (height - 4)).toFixed(1);
+  const points = (list: number[]) => list.flatMap((v, i) => (v > 0 ? [`${x(i)},${y(v)}`] : []));
+  const b = points(benchmark);
+  const m = points(strategy);
+  // The gap: the shape between the two lines, cut by the benchmark's line into the part above it and the part below.
+  if (m.length > 1 && m.length === b.length) {
+    const id = `bt-spark-${++sparks}`;
+    const defs = s(svg, 'defs', {});
+    s(s(defs, 'clipPath', { id: `${id}-a` }), 'path', { d: `M1,-5L${b.join('L')}L${width - 1},-5Z` });
+    s(s(defs, 'clipPath', { id: `${id}-b` }), 'path', { d: `M1,${height + 5}L${b.join('L')}L${width - 1},${height + 5}Z` });
+    const between = `M${m.join('L')}L${[...b].reverse().join('L')}Z`;
+    s(svg, 'path', { d: between, class: 'bt-ahead', 'clip-path': `url(#${id}-a)` });
+    s(svg, 'path', { d: between, class: 'bt-behind', 'clip-path': `url(#${id}-b)` });
+  }
+  if (b.length > 1) s(svg, 'path', { d: `M${b.join('L')}`, class: 'bt-line bt-line-benchmark bt-spark-line' });
+  if (m.length > 1) s(svg, 'path', { d: `M${m.join('L')}`, class: 'bt-line bt-line-strategy bt-spark-line' });
+}
+
+/** A small line of the strategy against its benchmark, for the folded result: no axes, both on one log scale. */
+export function sparkline(parent: HTMLElement, bt: Backtest, width = 68, height = 24): void {
+  drawSpark(parent, sparkSeries(bt), width, height);
 }

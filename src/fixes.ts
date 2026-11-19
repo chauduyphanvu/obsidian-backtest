@@ -1,6 +1,7 @@
 import { FUNCTIONS, tickers } from './complete.ts';
 import { CALENDAR, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
 import { declaredDefinitions, declaredParams, NUMERIC_SETTINGS, RULE_HEADS, settingKey, tokenizeBlock } from './highlight.ts';
+import { shortOf } from './docs.ts';
 import { SOURCE_PREFIX } from './types.ts';
 
 /** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
@@ -346,6 +347,40 @@ export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Default
   const options = optionsOf(d.message);
   if (options) return settingValue(ctx, options);
   return parameterName(ctx);
+}
+
+/** A block's lines with a fix made, every edit of it in the block as it was before any of them. */
+export function applyFix(lines: string[], f: Fix): string[] {
+  return applied(lines, f);
+}
+
+/** The word a fix writes, as its button names it: "sma" for "Change to sma (2 places)". */
+export function fixWord(f: Fix): string {
+  return f.label.replace(/^Change to /, '').replace(/ \(\d+ places\)$/, '');
+}
+
+/**
+ * A parser message cut to what a reader needs first. "Unknown name" is followed by every name the language knows, which a
+ * model repairing a block can use but a person reads as a wall of text: `head` is the sentence that names the word, and
+ * `rest` the list, for a place that folds it away. Other messages are all head. A "Line 5: " in front stays with the head.
+ */
+export function shortMessage(message: string): { head: string; rest: string } {
+  const m = message.match(/^((?:Line \d+: )?Unknown name "[^"]+"\.) ([\s\S]+)$/);
+  return m ? { head: m[1], rest: m[2] } : { head: message, rest: '' };
+}
+
+/**
+ * The fix for a problem and a sentence that offers it: "Did you mean sma, the simple average of the last n closes?" when the
+ * fix writes a function's name, "Did you mean rebalance?" for another word, and the fix's own hint for a habit such as
+ * `&&`. Null when there is no fix.
+ */
+export function suggestion(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): { fix: Fix; text: string } | null {
+  const found = fixFor(lines, d, defaults);
+  if (!found) return null;
+  if (!found.hint.startsWith('Possible correction')) return { fix: found, text: found.hint };
+  const word = fixWord(found);
+  const short = FUNCTIONS.includes(word) ? shortOf(word) : '';
+  return { fix: found, text: short ? `Did you mean ${word}, the ${short}?` : `Did you mean ${word}?` };
 }
 
 /** The same suggestion as a sentence, for places that cannot offer a button. */
