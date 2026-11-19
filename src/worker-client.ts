@@ -744,8 +744,9 @@ export class BlockDrawing {
   }
 
   /** Loads the prices of `spec`, the block's text read with `overrides`, and runs it. Null when the runs were closed first. */
-  async run(spec: Spec, o: { force?: boolean; overrides?: Record<string, number> } = {}): Promise<RunOutput | null> {
+  async run(spec: Spec, o: { force?: boolean; overrides?: Record<string, number>; onPrices?: (bars: number) => void } = {}): Promise<RunOutput | null> {
     const { data, warnings, notes, prices } = await this.runner.loadPrices(spec, o.force ?? false);
+    o.onPrices?.(Math.max(0, ...[...data.values()].map((b) => b.t.length)));
     const backtest = await this.backtest(spec, data, o.overrides);
     if (!backtest) return null;
     const out = { spec, backtest, data, warnings, notes, prices };

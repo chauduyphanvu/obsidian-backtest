@@ -52,3 +52,31 @@ test('a sparkline keeps the first and the last bar and at most about n points', 
   assert.equal(series.benchmark.at(-1), bt.benchmark.equity.at(-1));
   assert.equal(series.strategy.at(-1), bt.run.equity.at(-1));
 });
+
+test('a result starts where the reader left the one it replaces: the tab, the span and the figures', async () => {
+  const { El } = await import('./page.ts');
+  const { renderResult, renderLoading } = await import('../src/render.ts');
+  const closes = Array.from({ length: 1400 }, (_, i) => 100 * (1 + i * 0.0005) + 3 * Math.sin(i / 9));
+  const src = 'name: Trend\nuniverse: A\n\nbuy when close > sma(20)\nsell when close < sma(20)';
+  const { spec } = parseSpec(src);
+  const data = new Map([['A', bars(closes)]]);
+  const out = { spec: spec!, backtest: runBacktest(spec!, data), data, warnings: [], prices: [] };
+  const root = new El('div');
+  const drawn = renderResult(root as unknown as HTMLElement, { source: src, out, notes: [], onRefresh: () => {}, initial: { tab: 'Years', span: 365.25 * 864e5, more: true } });
+  assert.deepEqual(drawn.view(), { tab: 'Years', span: 365.25 * 864e5, more: true });
+  assert.equal(root.byClass('bt-vs-toggle')[0].textContent, 'Fewer figures');
+  drawn.busy(true);
+  assert.ok(drawn.root.classList.contains('bt-busy'));
+  drawn.busy(false);
+  drawn.failed('Yahoo did not answer.', () => {});
+  assert.equal(root.byClass('bt-refresh-problem')[0].textContent, 'Cannot get new prices. Yahoo did not answer.Run again');
+  drawn.dispose();
+
+  const wait = new El('div');
+  const loading = renderLoading(wait as unknown as HTMLElement, { title: 'Trend', tickers: ['SPY', 'QQQ'], height: 640 });
+  assert.equal(wait.byClass('bt-title')[0].textContent, 'Trend');
+  assert.equal(wait.byClass('bt-loading-say')[0].textContent, 'The plugin loads the prices for SPY, QQQ…');
+  loading.prices(5512);
+  assert.equal(wait.byClass('bt-step-on')[0].textContent, 'Backtest of 5,512 bars');
+  assert.equal(wait.byClass('bt-step-done').length, 1);
+});

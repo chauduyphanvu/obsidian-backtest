@@ -20,6 +20,8 @@ let charts = 0;
 export interface ValueChart {
   /** Draws another run of the same block, keeping the span shown. */
   show(bt: Backtest): void;
+  /** The span of time shown, or 0 for the whole run. */
+  span(): number;
   stop(): void;
 }
 
@@ -47,7 +49,7 @@ const fallAt = (falls: Crisis[], time: number): Crisis | undefined =>
 /** How far below its previous high a value is, in words. */
 const below = (dd: number): string => (!Number.isFinite(dd) ? '' : dd > -0.0005 ? 'at a high' : `${pct(dd)} from its high`);
 
-export function renderValueChart(parent: HTMLElement): ValueChart {
+export function renderValueChart(parent: HTMLElement, o: { span?: number } = {}): ValueChart {
   const box = h(parent, 'div', 'bt-value');
   const read = h(box, 'div', 'bt-read');
   const date = h(read, 'span', 'bt-read-date');
@@ -65,7 +67,7 @@ export function renderValueChart(parent: HTMLElement): ValueChart {
   const id = ++charts;
 
   let bt: Backtest | null = null;
-  let span = 0;
+  let span = o.span ?? 0;
   let drawn = 0;
 
   const draw = () => {
@@ -99,6 +101,7 @@ export function renderValueChart(parent: HTMLElement): ValueChart {
       drawn = Math.floor(chart.clientWidth);
       draw();
     },
+    span: () => span,
     stop,
   };
 }

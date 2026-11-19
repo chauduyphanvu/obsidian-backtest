@@ -1,6 +1,7 @@
 import type { Backtest, Segment } from './backtest.ts';
 import { STOP_SETTINGS, type Commission, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
 import { colourLines, colourSource, h, s } from './dom.ts';
+import { debounce } from './result-cache.ts';
 import type { AssetState } from './engine.ts';
 import { hintFor } from './fixes.ts';
 import { DAY, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from './format.ts';
@@ -23,9 +24,63 @@ function source(el: HTMLElement, text: string): void {
   colourSource(h(el, 'pre', 'bt-source'), text.trim());
 }
 
-export function renderLoading(el: HTMLElement, text: string): void {
+/** What a block shows while its result is on its way, and the step it is on. */
+export interface Loading {
+  /** The prices are in: the backtest of `bars` bars runs now. */
+  prices(bars: number): void;
+}
+
+/**
+ * The shape of a result while it is on its way: its real name, where its status line, sentence, figures and chart will
+ * be, and the step it is on. It takes the height the block had when it was last drawn, so the note does not jump when the
+ * result comes; a block last folded waits as one line.
+ */
+export function renderLoading(el: HTMLElement, o: { title: string; tickers: string[]; height?: number; folded?: boolean }): Loading {
   el.replaceChildren();
-  h(h(el, 'div', 'bt-root'), 'div', 'bt-note', text);
+  const root = h(el, 'div', `bt-root bt-result bt-loading${o.folded ? ' bt-folded' : ''}`);
+  root.setAttribute('aria-busy', 'true');
+  const head = h(root, 'div', 'bt-head');
+  const top = h(head, 'div', 'bt-fold bt-fold-still');
+  chevron(top);
+  const text = h(top, 'span', 'bt-fold-text');
+  h(h(text, 'span', 'bt-title-row'), 'span', 'bt-title', o.title);
+  const names = o.tickers.join(', ');
+  const say = h(root, 'div', 'bt-loading-say', `The plugin loads the prices for ${names}…`);
+  say.setAttribute('aria-live', 'polite');
+  if (o.folded) {
+    const line = h(text, 'span', 'bt-fold-facts');
+    h(line, 'span', 'bt-sk bt-sk-spark');
+    h(line, 'span', 'bt-sk bt-sk-fact');
+    h(line, 'span', 'bt-sk bt-sk-fact');
+    return { prices: () => (say.textContent = 'The plugin runs the backtest…') };
+  }
+  h(text, 'span', 'bt-meta', o.tickers.join(' \u00b7 '));
+  if (o.height && o.height > 0) root.style.setProperty('height', `${Math.round(o.height)}px`);
+  const body = h(root, 'div', 'bt-body');
+  const steps = h(body, 'div', 'bt-steps');
+  steps.setAttribute('aria-hidden', 'true');
+  const step = (label: string, on: boolean) => {
+    const el = h(steps, 'span', on ? 'bt-step bt-step-on' : 'bt-step');
+    h(el, 'i');
+    return { el, label: h(el, 'span', undefined, label) };
+  };
+  const load = step(`Prices for ${names}`, true);
+  const run = step('Backtest', false);
+  h(body, 'span', 'bt-sk bt-sk-status');
+  const lead = h(body, 'div', 'bt-sk-group');
+  h(lead, 'span', 'bt-sk bt-sk-lead');
+  h(lead, 'span', 'bt-sk bt-sk-lead bt-sk-short');
+  const rows = h(body, 'div', 'bt-sk-group');
+  for (let i = 0; i < 4; i++) h(rows, 'span', 'bt-sk bt-sk-row');
+  h(body, 'span', 'bt-sk bt-sk-chart');
+  return {
+    prices: (bars) => {
+      load.el.className = 'bt-step bt-step-done';
+      run.el.className = 'bt-step bt-step-on';
+      run.label.textContent = `Backtest of ${bars.toLocaleString('en-US')} bars`;
+      say.textContent = 'The plugin runs the backtest…';
+    },
+  };
 }
 
 export function renderErrors(el: HTMLElement, errors: Diagnostic[], src: string): void {
@@ -163,6 +218,33 @@ export interface ResultView {
    * slider once let go, never while it is dragged. Null when the run has none to show.
    */
   triggers?: (out: RunOutput) => Promise<TriggerReport | null> | null;
+  /** Where to start: what the reader had set on the drawing this one replaces. */
+  initial?: ViewState;
+  /** A new result, not one drawn again: its lines draw in once. */
+  arrive?: boolean;
+  /** Told the card's height once it has settled, so the block can wait in that height next time it loads. */
+  onHeight?: (height: number, folded: boolean) => void;
+}
+
+/** What a reader set on a drawn result, so a drawing that replaces it starts from the same place. */
+export interface ViewState {
+  /** The tab or tool open, by its name. */
+  tab?: string | null;
+  /** The chart's span of time, or 0 for the whole run. */
+  span?: number;
+  /** All figures shown. */
+  more?: boolean;
+}
+
+export interface DrawnResult {
+  root: HTMLElement;
+  dispose(): void;
+  /** What the reader has set on it now. */
+  view(): ViewState;
+  /** New prices are on their way: a line runs along the top edge, and the card takes no clicks until they come. */
+  busy(on: boolean): void;
+  /** A refresh failed: the result on screen stays, with a line under its title that says why and runs it again. */
+  failed(message: string, retry: () => void): void;
 }
 
 /** Keys the remembered state of a block: its note and its name, or its place among the note's blocks when it has no name. */
@@ -381,11 +463,14 @@ function sourcePanel(parent: HTMLElement, text: string): void {
  * The result of a run. The title is a button that folds the result to one line (its growth, figures, what it holds, what
  * is due) and opens it again. The result itself is not built until the block is first open.
  */
-export function renderResult(el: HTMLElement, view: ResultView): () => void {
+export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   el.replaceChildren();
   const root = h(el, 'div', 'bt-root bt-result');
   const cleanups: (() => void)[] = [];
   const first = view.out;
+  const edge = h(root, 'div', 'bt-edge');
+  edge.setAttribute('aria-hidden', 'true');
+  h(edge, 'i');
 
   const head = h(root, 'div', 'bt-head');
   const fold = h(head, 'button', 'bt-fold');
@@ -401,7 +486,7 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
   const watch = h(titleRow, 'span', 'bt-chip bt-chip-watch');
   watch.hidden = true;
   const line = h(text, 'span', 'bt-fold-facts');
-  const refresh = h(head, 'button', 'bt-icon-button');
+  const refresh = h(head, 'button', 'bt-icon-button bt-refresh');
   refresh.type = 'button';
   refresh.setAttribute('aria-label', 'Refresh prices');
   refreshIcon(refresh);
@@ -452,11 +537,12 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
 
     const notes = h(body, 'div', 'bt-notes');
     const said = verdictView(body);
-    const figs = versusView(body);
+    const figs = versusView(body, { more: view.initial?.more ?? false });
     const figuresNote = h(body, 'div', 'bt-figures-note');
-    const chart = renderValueChart(body);
+    const chart = renderValueChart(body, { span: view.initial?.span ?? 0 });
     cleanups.push(chart.stop);
     const rest = h(body, 'div', 'bt-rest');
+    current = () => ({ tab: tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null), span: chart.span(), more: figs.more() });
 
     const paint = (out: RunOutput) => {
       sub.textContent = summary(out.spec, view.source);
@@ -495,7 +581,12 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
       }
     };
     paintAll(first, firstTriggers);
+    // The tab the reader had open on the drawing this one replaces.
+    const tab = view.initial?.tab;
+    const again = tab ? sectionsIn(rest.querySelector('.bt-sections')).find((d) => tabName(d) === tab) : undefined;
+    if (again) again.open = true;
   };
+  let current = (): ViewState => view.initial ?? {};
 
   let built = false;
   const setOpen = (open: boolean) => {
@@ -514,5 +605,39 @@ export function renderResult(el: HTMLElement, view: ResultView): () => void {
     view.remember?.set(open);
   });
   setOpen(view.remember?.get() ?? !view.compact);
-  return () => cleanups.forEach((stop) => stop());
+
+  // The height once it has settled: after a drawing, an opened tab or a fold, not while one of them eases.
+  if (view.onHeight) {
+    const told = debounce(() => {
+      const height = root.offsetHeight;
+      if (height > 0) view.onHeight!(height, root.classList.contains('bt-folded'));
+    }, 400);
+    const watch = new ResizeObserver(() => told());
+    watch.observe(root);
+    cleanups.push(() => {
+      watch.disconnect();
+      told.cancel();
+    });
+  }
+
+  let problem: HTMLElement | null = null;
+  return {
+    root,
+    dispose: () => cleanups.forEach((stop) => stop()),
+    view: () => current(),
+    busy(on) {
+      root.classList.toggle('bt-busy', on);
+      root.inert = on;
+      refresh.setAttribute('aria-busy', String(on));
+      if (on) problem?.remove();
+    },
+    failed(message, retry) {
+      problem?.remove();
+      problem = document.createElement('div');
+      problem.className = 'bt-refresh-problem';
+      h(problem, 'span', undefined, `Cannot get new prices. ${message}`);
+      h(problem, 'button', 'bt-button', 'Run again').addEventListener('click', retry);
+      head.after(problem);
+    },
+  };
 }

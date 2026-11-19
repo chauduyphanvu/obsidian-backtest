@@ -30,6 +30,188 @@
   }
 }
 
+/* A block whose next result is drawn out of sight first (strategy-block.ts), then put in place. */
+.bt-block {
+  position: relative;
+}
+.bt-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.bt-root.bt-result {
+  position: relative;
+}
+
+/* New prices on their way: a line runs along the top edge, the refresh icon turns, the card waits. */
+.bt-edge {
+  position: absolute;
+  top: -1px;
+  left: 14px;
+  right: 14px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms var(--bt-ease);
+}
+.bt-edge > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 34%;
+  border-radius: 2px;
+  background: var(--bt-strategy);
+}
+.bt-busy > .bt-edge {
+  opacity: 1;
+}
+.bt-busy > .bt-edge > i {
+  animation: bt-edge-run 1.15s var(--bt-ease-io) infinite;
+}
+@keyframes bt-edge-run {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.bt-busy .bt-refresh svg {
+  animation: bt-turn 0.9s linear infinite;
+}
+@keyframes bt-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.bt-busy > .bt-body {
+  opacity: 0.85;
+  transition: opacity var(--bt-t-comp) var(--bt-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bt-busy > .bt-edge > i {
+    width: 100%;
+    animation: none !important;
+    opacity: 0.6;
+  }
+  .bt-busy .bt-refresh svg {
+    animation: none !important;
+  }
+}
+.bt-refresh-problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: 8px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: var(--bt-warn-bg);
+  animation: bt-fade-in var(--bt-t-comp) var(--bt-ease) both;
+}
+
+/* The shape of a result while it is on its way. */
+.bt-loading > .bt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 8px;
+}
+.bt-loading > .bt-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.bt-root.bt-loading {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.bt-loading .bt-fold-still {
+  cursor: default;
+}
+.bt-loading-say {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.bt-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+.bt-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color var(--bt-t-comp) var(--bt-ease);
+}
+.bt-step > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+.bt-step-on {
+  color: var(--text-normal);
+}
+.bt-step-on > i {
+  background: var(--bt-strategy);
+  opacity: 1;
+  animation: bt-breathe 1.2s ease-in-out infinite;
+}
+.bt-step-done {
+  color: var(--text-muted);
+}
+.bt-step-done > i {
+  background: var(--bt-good);
+  opacity: 1;
+}
+.bt-sk-group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.bt-sk-status {
+  height: 34px;
+  border-radius: 10px;
+}
+.bt-sk-lead {
+  width: 86%;
+  height: 18px;
+}
+.bt-sk-lead.bt-sk-short {
+  width: 58%;
+}
+.bt-sk-row {
+  height: 10px;
+}
+.bt-sk-chart {
+  flex: 1 1 auto;
+  min-height: 140px;
+  border-radius: 10px;
+}
+.bt-sk-spark {
+  width: 68px;
+  height: 22px;
+  border-radius: 4px;
+}
+.bt-sk-fact {
+  width: 4.5em;
+  height: 10px;
+}
+
 .bt-result > .bt-body {
   display: flex;
   flex-direction: column;

@@ -91,12 +91,12 @@ export class Results {
     return hit && Date.now() - hit.asOf < freshForMs ? hit.out : undefined;
   }
 
-  async runSpec(drawing: BlockDrawing, spec: Spec, key: string, force = false): Promise<RunOutput | null> {
+  async runSpec(drawing: BlockDrawing, spec: Spec, key: string, force = false, onPrices?: (bars: number) => void): Promise<RunOutput | null> {
     if (!force) {
       const hit = this.kept(key, drawing.freshForMs);
       if (hit) return hit;
     }
-    const out = await drawing.run(spec, { force });
+    const out = await drawing.run(spec, { force, onPrices });
     if (out) this.results.set(key, { out, asOf: pricesAsOf(out.prices, Date.now()) });
     return out;
   }

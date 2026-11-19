@@ -68,9 +68,9 @@ function row(parent: HTMLElement, f: Figure): void {
 }
 
 /** The figures, with "More figures" opening the rest; it stays open or closed across the runs a slider shows. */
-export function versusView(parent: HTMLElement): { show(bt: Backtest): void } {
+export function versusView(parent: HTMLElement, o: { more?: boolean } = {}): { show(bt: Backtest): void; more(): boolean } {
   const box = h(parent, 'div', 'bt-vs');
-  let more = false;
+  let more = o.more ?? false;
   let shown: Backtest | null = null;
   const draw = () => {
     const bt = shown!;
@@ -103,5 +103,6 @@ export function versusView(parent: HTMLElement): { show(bt: Backtest): void } {
       shown = bt;
       draw();
     },
+    more: () => more,
   };
 }
