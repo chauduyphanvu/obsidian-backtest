@@ -145,9 +145,9 @@ test('the chart reads out the last bar, then the bar under the pointer, with the
   assert.equal(root.byClass('bt-read-fall')[0].hidden, true);
   hit.dispatch('pointerleave');
   assert.match(read('bt-read-date'), / · last bar$/);
-  // Which line is ahead is shaded, and the key says which shade is which.
+  // Which line is ahead is shaded, and the line under the chart says what the shading is.
   assert.ok(chart.all().some((e) => e.attrs.class === 'bt-ahead' || e.attrs.class === 'bt-behind'));
-  assert.ok(texts(root.byClass('bt-chart-key')).includes('Market drawdowns'));
+  assert.equal(root.byClass('bt-chart-note')[0].textContent, 'Shading: the gap between the two lines, and the large market drawdowns');
 });
 
 test('a run of three years can show its last year alone; the span stays when another run is drawn', () => {
@@ -315,9 +315,10 @@ test('a fall the strategy beat by less than the Years tab calls level is not cou
   assert.equal(ahead.preview, 'better in 1 of 1 drawdown');
 });
 
-test('“More figures” keeps the keyboard on it when it opens and closes the rest', () => {
+test('“All figures” keeps the keyboard on it when it opens and closes the rest', () => {
   const root = draw(run(TREND));
-  const button = () => root.byClass('bt-link-button').find((b) => /figures$/.test(b.textContent))!;
+  const button = () => root.byClass('bt-vs-toggle')[0];
+  assert.equal(button().textContent, 'All figures · 8 more');
   const page = globalThis.document as unknown as { activeElement: unknown };
   button().focus();
   button().dispatch('click');

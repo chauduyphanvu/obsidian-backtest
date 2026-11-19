@@ -80,3 +80,20 @@ test('a result starts where the reader left the one it replaces: the tab, the sp
   assert.equal(wait.byClass('bt-step-on')[0].textContent, 'Backtest of 5,512 bars');
   assert.equal(wait.byClass('bt-step-done').length, 1);
 });
+
+test('each figure says who did better, and "even" exactly when the words call the two the same', async () => {
+  const { figures } = await import('../src/verdict.ts');
+  const closes = Array.from({ length: 1500 }, (_, i) => 100 * (1 + i * 0.0004) * (1 - (i > 700 && i < 760 ? (i - 700) * 0.006 : i >= 760 ? 0.36 : 0)) + 4 * Math.sin(i / 11));
+  const { spec } = parseSpec('universe: A\nbuy when close > sma(50)\nsell when close < sma(50)');
+  const bt = runBacktest(spec!, new Map([['A', bars(closes)]]));
+  const byLabel = Object.fromEntries(figures(bt).map((f) => [f.label, f]));
+  const higherBetter = (f: { s: number; b: number; delta: string; judge?: string }) => (f.delta === 'the same' ? 'even' : f.s > f.b ? 'better' : 'worse');
+  assert.equal(byLabel['Return per year'].judge, higherBetter(byLabel['Return per year']));
+  assert.equal(byLabel['Worst drawdown'].judge, higherBetter(byLabel['Worst drawdown']));
+  assert.equal(byLabel.Volatility.judge, byLabel.Volatility.delta === 'the same' ? 'even' : byLabel.Volatility.s < byLabel.Volatility.b ? 'better' : 'worse');
+  assert.equal(byLabel['Time invested'].judge, undefined);
+  assert.equal(byLabel.Trades.judge, undefined);
+  // A run that holds the benchmark all the time is the same as it on every figure.
+  const all = runBacktest(parseSpec('universe: A\nbuy when true')!.spec!, new Map([['A', bars(closes)]]));
+  for (const f of figures(all).filter((x) => x.judge)) assert.equal(f.judge, 'even', f.label);
+});

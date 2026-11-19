@@ -129,6 +129,21 @@ export interface Figure {
   delta: string;
   /** Drawn without dots: a figure the benchmark has no counterpart of. */
   textOnly?: boolean;
+  /**
+   * Whether the strategy did better than its benchmark on this figure: "even" exactly when the verdict or the difference
+   * calls the two the same, so a mark never disagrees with the words beside it. Absent for a figure that is a choice
+   * rather than a result (time invested), for one with no benchmark, and for a value that is not known.
+   */
+  judge?: Judge;
+}
+
+export type Judge = 'better' | 'worse' | 'even';
+
+/** Better when the strategy's value is higher (`higher` 1) or lower (-1); even when `same`. */
+function judged(s: number, b: number, higher: 1 | -1, same: boolean): Judge | undefined {
+  if (!Number.isFinite(s) || !Number.isFinite(b)) return undefined;
+  if (same) return 'even';
+  return (s - b) * higher > 0 ? 'better' : 'worse';
 }
 
 /** "3.3 pts lower", "30.7 pts smaller", "the same". `up` and `down` say which way the strategy is from the benchmark. */
@@ -146,12 +161,18 @@ export function figures(bt: Backtest): Figure[] {
   const { stats: s, tradeStats: ts } = bt;
   const b = bt.benchmark.stats;
   const total = (x: number) => pct(x, Math.abs(x) >= 10 ? 0 : 1);
+  const sharpe = apart(Math.round(s.sharpe * 100) / 100, Math.round(b.sharpe * 100) / 100, 'higher', 'lower', 1, 2, '');
+  const row = (label: string, sv: number, bv: number, sText: string, bText: string, delta: string, higher: 1 | -1, same = delta === 'the same'): Figure => {
+    const judge = judged(sv, bv, higher, same);
+    return { label, s: sv, b: bv, sText, bText, delta, ...(judge ? { judge } : {}) };
+  };
   const out: Figure[] = [
-    { label: 'Return per year', s: s.cagr, b: b.cagr, sText: pct(s.cagr), bText: pct(b.cagr), delta: pts(s.cagr, b.cagr) },
-    { label: 'Total return', s: s.totalReturn, b: b.totalReturn, sText: total(s.totalReturn), bText: total(b.totalReturn), delta: pts(s.totalReturn, b.totalReturn) },
-    { label: 'Worst drawdown', s: s.maxDrawdown, b: b.maxDrawdown, sText: pct(s.maxDrawdown), bText: pct(b.maxDrawdown), delta: pts(s.maxDrawdown, b.maxDrawdown, 'smaller', 'larger') },
-    { label: 'Sharpe ratio', s: s.sharpe, b: b.sharpe, sText: ratio(s.sharpe), bText: ratio(b.sharpe), delta: apart(Math.round(s.sharpe * 100) / 100, Math.round(b.sharpe * 100) / 100, 'higher', 'lower', 1, 2, '') },
-    { label: 'Volatility', s: s.volatility, b: b.volatility, sText: pct(s.volatility), bText: pct(b.volatility), delta: pts(s.volatility, b.volatility) },
+    // The verdict calls returns the same when they read the same, and drawdowns when they read the same as falls.
+    row('Return per year', s.cagr, b.cagr, pct(s.cagr), pct(b.cagr), pts(s.cagr, b.cagr), 1, pct(s.cagr) === pct(b.cagr) || pts(s.cagr, b.cagr) === 'the same'),
+    row('Total return', s.totalReturn, b.totalReturn, total(s.totalReturn), total(b.totalReturn), pts(s.totalReturn, b.totalReturn), 1),
+    row('Worst drawdown', s.maxDrawdown, b.maxDrawdown, pct(s.maxDrawdown), pct(b.maxDrawdown), pts(s.maxDrawdown, b.maxDrawdown, 'smaller', 'larger'), 1, fallText(s.maxDrawdown) === fallText(b.maxDrawdown)),
+    row('Sharpe ratio', s.sharpe, b.sharpe, ratio(s.sharpe), ratio(b.sharpe), sharpe, 1),
+    row('Volatility', s.volatility, b.volatility, pct(s.volatility), pct(b.volatility), pts(s.volatility, b.volatility), -1),
     // A block that can borrow may hold more than its equity, or short: its exposure is gross, with the net under it.
     bt.spec.margin
       ? { label: 'Exposure, gross', s: s.exposure, b: 1, sText: pct(s.exposure, 0), sNote: `net ${pct(s.netExposure ?? NaN, 0)}`, bText: '100%', delta: pts(s.exposure, 1) }

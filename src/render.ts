@@ -605,18 +605,22 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
 
     const notes = h(body, 'div', 'bt-notes');
     const said = verdictView(body);
-    const figs = versusView(body, { more: view.initial?.more ?? false });
+    // A figure's row lights up the part of the chart it comes from.
+    let lit: (part: string | null) => void = () => {};
+    const figs = versusView(body, { more: view.initial?.more ?? false, link: (part) => lit(part) });
     const figuresNote = h(body, 'div', 'bt-figures-note');
     const chart = renderValueChart(body, { span: view.initial?.span ?? 0 });
+    lit = (part) => chart.highlight(part);
     cleanups.push(chart.stop);
     const rest = h(body, 'div', 'bt-rest');
     current = () => ({ tab: tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null), span: chart.span(), more: figs.more() });
 
-    const paint = (out: RunOutput) => {
+    // The run as written stays on the chart as a dashed line while a slider shows other values.
+    const paint = (out: RunOutput, arrive = false) => {
       meta.textContent = metaLine(out, view.source);
-      said.show(out.backtest);
-      figs.show(out.backtest);
-      chart.show(out.backtest);
+      said.show(out.backtest, { arrive });
+      figs.show(out.backtest, { arrive });
+      chart.show(out.backtest, { ghost: out === first ? null : first.backtest, arrive });
     };
     let stops: (() => void)[] = [];
     const stopRest = () => {
@@ -625,10 +629,10 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     };
     cleanups.push(stopRest);
 
-    const paintAll = (out: RunOutput, triggers: Promise<TriggerReport | null> | null) => {
+    const paintAll = (out: RunOutput, triggers: Promise<TriggerReport | null> | null, arrive = false) => {
       notes.replaceChildren();
       for (const text of notesOf(view, out)) h(notes, 'div', 'bt-warning', text);
-      paint(out);
+      paint(out, arrive);
       showStatus(out, triggers);
       stopRest();
       figuresNote.replaceChildren();
@@ -649,7 +653,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
         rest.classList.add('bt-stale');
       }
     };
-    paintAll(first, firstTriggers);
+    paintAll(first, firstTriggers, arrival);
     // The tab the reader had open on the drawing this one replaces.
     const tab = view.initial?.tab;
     const again = tab ? sectionsIn(rest.querySelector('.bt-sections')).find((d) => tabName(d) === tab) : undefined;
@@ -673,7 +677,10 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     setOpen(open);
     view.remember?.set(open);
   });
+  // A new result arrives once, and only if it is open when it comes: one opened later is simply there.
+  let arrival = view.arrive ?? false;
   setOpen(view.remember?.get() ?? !view.compact);
+  arrival = false;
 
   // The height once it has settled: after a drawing, an opened tab or a fold, not while one of them eases.
   if (view.onHeight) {
