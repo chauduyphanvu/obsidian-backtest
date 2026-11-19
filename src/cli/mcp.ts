@@ -6,30 +6,70 @@ import { MISTAKES } from '../corpus/mistakes.ts';
 import type { DataDeps } from '../data.ts';
 import { generatedFiles, wordList } from '../llm-files.ts';
 import { SYSTEM_PROMPT, userMessage } from '../llm.ts';
-import { checkSource, explainText, noBlock, problemLine, runNote, version, WORD_KINDS, wordNames, type Io } from './main.ts';
+import { checkSource, correctSource, explainText, noBlock, problemLine, runNote, version, WORD_KINDS, wordNames, type Io } from './main.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
 const text = (t: string) => ({ type: 'text' as const, text: t });
 
+/** Where run_backtest looked for a CSV file that is not there, and how to point it at the vault. */
+const csvFolder = (vault: string | undefined): string =>
+  vault === undefined
+    ? 'The server reads CSV files from the folder where it started, because the vault_path argument is not given. Give the vault folder in vault_path, and write the path of the file from that folder.'
+    : `The server reads CSV files from the vault_path folder, ${vault}. Make sure that it is the vault folder, and that the path of the file starts from it.`;
+
 /** The tools, resources and prompt; `depsFor` gives what a run reads from outside, with CSV files under `vault`. */
 export function createServer(depsFor: (vault: string | undefined) => DataDeps): McpServer {
   const server = new McpServer({ name: 'backtest-blocks', version: version() });
+
+  const fix = z.object({
+    label: z.string().describe('What the correction does, for example "Change to sma"'),
+    line: z.number().describe('The line, counted as for the problem'),
+    from: z.number().describe('The first column to replace, counted from 1 as for the problem'),
+    endLine: z.number().optional().describe('For a correction that reaches into the lines after "line", such as one that removes blank lines: the line where it ends'),
+    to: z.number().describe('The column after the last one to replace: on "endLine" when the correction has one, else on "line"'),
+    insert: z.string().describe('The text to write in place of the columns from "from" up to "to"'),
+  });
+  const problem = z.object({
+    file: z.string(),
+    block: z.string().nullable().describe('The name of the block, when it has one'),
+    line: z.number(),
+    column: z.number().nullable(),
+    severity: z.enum(['error', 'warning']),
+    message: z.string(),
+    suggestion: z.string().optional().describe('The correction in words, when there is one'),
+    fixes: z.array(fix).describe('Each correction that removes the problem: none, one, or two or three equally good ones'),
+  });
 
   server.registerTool(
     'check_strategy',
     {
       title: 'Examine a strategy block',
       description:
-        'Examines a Backtest Blocks strategy with the parser of the plugin. The input is one block without a fence, or a full note that contains ```strategy blocks. Returns each error and warning with its line. Examine each block that you write before you give it to the user. Correct the problems that it shows.',
+        'Examines a Backtest Blocks strategy with the parser of the plugin. The input is one block without a fence, or a full note that contains ```strategy blocks. Returns each error and warning with its line, and the corrections that the plugin has for it. corrected_source is the input with each correction made that is the only one for its problem. Examine each block that you write before you give it to the user. Correct the problems that it shows.',
       inputSchema: { source: z.string().describe('A strategy block (its lines, without the fence), or a Markdown note that contains ```strategy blocks') },
+      outputSchema: {
+        blocks: z.number(),
+        errors: z.number(),
+        warnings: z.number(),
+        problems: z.array(problem),
+        corrected_source: z
+          .string()
+          .optional()
+          .describe('The input with each correction made that is the only one for its problem, then examined again for problems that a correction showed. Absent when there is no such correction'),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ source }) => {
       const { blocks, problems } = checkSource(source, 'strategy');
       const errors = problems.filter((p) => p.severity === 'error').length;
+      const corrected = correctSource(source, 'strategy');
       const summary = blocks === 0 ? `Found ${noBlock('strategy')}.` : problems.length === 0 ? `${blocks === 1 ? 'The block has' : `All ${blocks} blocks have`} no problems.` : problems.map(problemLine).join('\n');
-      return { content: [text(summary)], structuredContent: { blocks, errors, warnings: problems.length - errors, problems } };
+      const more = corrected.fixed.length ? `\n\nThe source with each correction that is the only one for its problem:\n${corrected.text}` : '';
+      return {
+        content: [text(summary + more)],
+        structuredContent: { blocks, errors, warnings: problems.length - errors, problems, ...(corrected.fixed.length ? { corrected_source: corrected.text } : {}) },
+      };
     },
   );
 
@@ -49,7 +89,7 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps): 
     },
     async ({ source, block, vault_path, refresh }) => {
       const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, 'the block argument');
-      if ('code' in result) return { content: [text(result.message)], isError: true };
+      if ('code' in result) return { content: [text(/There is no file at /.test(result.message) ? `${result.message}\n${csvFolder(vault_path)}` : result.message)], isError: true };
       return { content: [text(runText(result.out))], structuredContent: runSummary(result.out) };
     },
   );

@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -63,7 +63,7 @@ test('check prints each problem at its line and column in the note, and fails', 
   const r = await call(['check', 'Broken.md']);
   assert.equal(r.code, 1);
   assert.deepEqual(r.out.split('\n'), [
-    'Broken.md:3:7: error: "01/31/2015" is not a date. Write it as 2015-01-31',
+    'Broken.md:3:7: error: "01/31/2015" is not a date in the form YYYY-MM-DD. For example, write 2015-01-31.',
     `Broken.md:4:18: error: ${r.out.split('\n')[1].split(': error: ')[1]}`,
   ]);
   assert.match(r.out.split('\n')[1], /^Broken\.md:4:18: error: Unknown name "moving_average"/);
@@ -89,7 +89,112 @@ test('check --json gives every problem with its place', async () => {
   const j = JSON.parse(r.out);
   assert.equal(j.blocks, 1);
   assert.equal(j.errors, 2);
-  assert.deepEqual({ ...j.problems[0], message: undefined }, { file: 'Broken.md', block: null, line: 3, column: 7, severity: 'error', message: undefined });
+  assert.deepEqual({ ...j.problems[0], message: undefined }, { file: 'Broken.md', block: null, line: 3, column: 7, severity: 'error', message: undefined, fixes: [] });
+});
+
+/** A note with five slips that each have one correction, and one with two equally near ones; the second block is in a callout. */
+const TYPOS = [
+  '# Typos',
+  '',
+  '```strategy',
+  'universe: SPY',
+  'from: 2015/01/31',
+  'rebalance: montly',
+  'buy when close > smaa(200) && rsi(2) < 10',
+  'sell when close < sam(200)',
+  '```',
+  '',
+  '> [!note]',
+  '> ```strategy',
+  '> universe: QQQ',
+  '> buy when close crosses over sma(50)',
+  '> ```',
+  '',
+].join('\n');
+
+test('check prints the correction under each problem that has one, and --json gives each correction placed in the note', async () => {
+  writeFileSync(join(vault, 'Typos.md'), TYPOS);
+  const r = await call(['check', 'Typos.md']);
+  assert.equal(r.code, 1);
+  const out = r.out.split('\n');
+  assert.equal(out[out.indexOf('Typos.md:6:12: error: rebalance must be one of: never, weekly, monthly, quarterly, yearly') + 1], '  Did you mean monthly?');
+  assert.equal(out[out.indexOf('Typos.md:7:28: error: Unexpected character "&"') + 1], '  Write and, not &&.');
+  assert.equal(out[out.findIndex((l) => l.startsWith('Typos.md:7:18: error: Unknown name "smaa".')) + 1], '  Did you mean sma, the simple average of the last n closes?');
+  assert.equal(out[out.findIndex((l) => l.startsWith('Typos.md:8:19: error: Unknown name "sam".')) + 1], '  Possible corrections: sma, sum.');
+  // A message that says what to write has no line under it.
+  assert.ok(out[out.indexOf('Typos.md:5:7: error: Write the date with dashes: 2015-01-31.') + 1].startsWith('Typos.md:6:'));
+
+  const j = JSON.parse((await call(['check', '--json', 'Typos.md'])).out);
+  const fixes = (line: number) => j.problems.filter((p: { line: number }) => p.line === line).map((p: { fixes: unknown[] }) => p.fixes);
+  assert.deepEqual(fixes(5), [[{ label: 'Change to 2015-01-31', line: 5, from: 7, to: 17, insert: '2015-01-31' }]]);
+  assert.deepEqual(fixes(8), [[{ label: 'Change to sma', line: 8, from: 19, to: 22, insert: 'sma' }, { label: 'Change to sum', line: 8, from: 19, to: 22, insert: 'sum' }]]);
+  // In a callout, the columns count the markers too.
+  assert.deepEqual(fixes(14), [[{ label: 'Change to crosses above', line: 14, from: 18, to: 30, insert: 'crosses above' }]]);
+  assert.equal(j.problems.find((p: { line: number }) => p.line === 6).suggestion, 'Did you mean monthly?');
+  // Without --fix nothing is written.
+  assert.equal(readFileSync(join(vault, 'Typos.md'), 'utf8'), TYPOS);
+});
+
+test('--json gives a correction that spans lines in a callout its end line, with the columns of each line past its own markers', async () => {
+  const note = ['> [!note]', '> ```strategy', '> universe: SPY', '> buy when close > sma(5)', '>', '>   and rsi(2) < 30', '> ```', ''];
+  writeFileSync(join(vault, 'Blank.md'), note.join('\n'));
+  const j = JSON.parse((await call(['check', '--json', 'Blank.md'])).out);
+  const [fix] = j.problems.flatMap((p: { fixes: unknown[] }) => p.fixes);
+  assert.deepEqual(fix, { label: 'Remove the blank line', line: 5, from: 2, endLine: 6, to: 3, insert: '' });
+  // A client that makes the change as given gets a block with no problem left.
+  const at = (line: number, column: number) => note.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0) + column - 1;
+  const text = note.join('\n');
+  writeFileSync(join(vault, 'Blank.md'), text.slice(0, at(fix.line, fix.from)) + fix.insert + text.slice(at(fix.endLine, fix.to)));
+  assert.deepEqual(JSON.parse((await call(['check', '--json', 'Blank.md'])).out).problems, []);
+});
+
+test('check --fix writes each correction that is the only one, in every block, and leaves a choice between two as it is', async () => {
+  writeFileSync(join(vault, 'Fix.md'), TYPOS);
+  const r = await call(['check', '--fix', 'Fix.md']);
+  assert.equal(r.code, 1);
+  assert.equal(
+    readFileSync(join(vault, 'Fix.md'), 'utf8'),
+    TYPOS.replace('2015/01/31', '2015-01-31').replace('montly', 'monthly').replace('smaa(200) &&', 'sma(200) and').replace('crosses over', 'crosses above'),
+  );
+  assert.deepEqual(r.out.split('\n').slice(0, 6), [
+    'Fix.md:5:7: fixed: Change to 2015-01-31',
+    'Fix.md:6:12: fixed: Change to monthly',
+    'Fix.md:7:18: fixed: Change to sma',
+    'Fix.md:7:28: fixed: Change to and',
+    'Fix.md:14:18: fixed: Change to crosses above',
+    `Fix.md:8:19: error: ${r.out.split('\n')[5].split(': error: ')[1]}`,
+  ]);
+  assert.equal(r.err, '2 blocks examined: 5 corrections written; 1 error, 0 warnings');
+
+  // A note with nothing to correct is not written, and says so.
+  const again = await call(['check', '--fix', '--json', 'Fix.md']);
+  const j = JSON.parse(again.out);
+  assert.deepEqual(j.fixed, []);
+  assert.equal(j.errors, 1);
+
+  // A correction can show the next problem: the misspelt function is read only once the line is a rule.
+  writeFileSync(join(vault, 'Rounds.md'), '```strategy\nuniverse: SPY\nbuy when close > sma(50)\nsel whn close < smaa(20)\n```\n');
+  assert.deepEqual((await call(['check', 'Rounds.md'])).out.split('\n'), ['Rounds.md:4:1: error: Unexpected "sel"', '  Did you mean sell when?']);
+  const rounds = await call(['check', '--fix', 'Rounds.md']);
+  assert.equal(rounds.code, 0, rounds.out);
+  assert.equal(readFileSync(join(vault, 'Rounds.md'), 'utf8'), '```strategy\nuniverse: SPY\nbuy when close > sma(50)\nsell when close < sma(20)\n```\n');
+  assert.equal(rounds.out, 'Rounds.md:4:1: fixed: Change to sell when\nRounds.md:4:19: fixed: Change to sma');
+  assert.equal(rounds.err, '1 block examined: 2 corrections written; no problems');
+
+  // Standard input has no file to write into.
+  const stdin = await call(['check', '--fix', '-'], 'universe: SPY\nbuy when close > smaa(20)');
+  assert.equal(stdin.code, 2);
+  assert.match(stdin.err, /cannot read a block from standard input/);
+});
+
+test('explain takes a window with its number, and the other names of a cross, with a note that the language says crosses', async () => {
+  assert.match((await call(['explain', 'for', '3', 'bars'])).out, /^condition for n bars\n/);
+  assert.match((await call(['explain', 'within 5 bars'])).out, /^condition within n bars\n/);
+  for (const word of ['crossover', 'cross over', 'Crosses Over']) {
+    const r = await call(['explain', word]);
+    assert.equal(r.code, 0);
+    assert.match(r.out, new RegExp(`^"${word}" is not a word of the language\\. The language uses crosses, crosses above and crosses below\\. This is the help for crosses\\.\\n\\na crosses b\\n`));
+  }
 });
 
 test('run backtests the block named, on a CSV file in the vault above the note', async () => {

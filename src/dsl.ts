@@ -830,6 +830,10 @@ class ExprParser {
         this.next();
         return 'xdn';
       }
+      const word = this.peek();
+      if ((word.s === 'over' || word.s === 'under') && word.t === 'id' && !this.ctx.params.has(word.s) && !this.ctx.defs.has(word.s)) {
+        throw new SpecError(span(t, word), `Write "crosses above" or "crosses below", not "crosses ${word.s}".`);
+      }
       return 'xany';
     }
     if (t.s === 'is') {
@@ -1308,13 +1312,22 @@ const cap = (text: string): string => text[0].toUpperCase() + text.slice(1);
 function parseDate(text: string, where: At): number {
   const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const ms = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
-  if (Number.isNaN(ms)) throw new SpecError(where, `"${text}" is not a date. Write it as 2015-01-31`);
-  return ms;
+  if (!Number.isNaN(ms)) return ms;
+  // Year first, the order is sure; with the year last, 01/02/2015 can be the first of February or the second of January.
+  const other = text.match(/^(\d{4})([/.])(\d{1,2})\2(\d{1,2})$/);
+  if (other) {
+    const [month, day] = [Number(other[3]), Number(other[4])];
+    const real = month >= 1 && month <= 12 && day >= 1 && new Date(Date.UTC(Number(other[1]), month - 1, day)).getUTCDate() === day;
+    const two = (n: number) => String(n).padStart(2, '0');
+    if (real) throw new SpecError(where, `Write the date with dashes: ${other[1]}-${two(month)}-${two(day)}.`);
+  }
+  throw new SpecError(where, `"${text}" is not a date in the form YYYY-MM-DD. For example, write 2015-01-31.`);
 }
 
 function parsePercent(text: string, where: At, what: string, max: number): number {
   const m = text.match(/^(\d+(?:\.\d+)?)\s*%/);
-  if (!m || Number(m[1]) <= 0 || Number(m[1]) > max) throw new SpecError(where, `${cap(what)} must be a percentage, for example 10%`);
+  if (!m) throw new SpecError(where, `${cap(what)} must be a percentage, for example 10%`);
+  if (Number(m[1]) <= 0 || Number(m[1]) > max) throw new SpecError(where, `${cap(what)} must be more than 0% and not more than ${max}%.`);
   return Number(m[1]) / 100;
 }
 
@@ -1384,7 +1397,8 @@ interface ParamLine {
   line: number;
 }
 
-function parseParam(p: ParamLine): Param {
+/** `report` takes a problem after which the parameter is still declared, so the lines that use it say nothing more. */
+function parseParam(p: ParamLine, report: (where: At, message: string) => void): Param {
   const m = p.value.match(PARAM_VALUE);
   const whole: At = { line: p.line, from: p.valueFrom, to: p.valueFrom + p.value.length };
   if (!m) throw new SpecError(whole, `Write a parameter as ${p.name} = 50. To try a range of values, write ${p.name} = 50 in 20..100 step 10`);
@@ -1395,7 +1409,7 @@ function parseParam(p: ParamLine): Param {
   const pieces = [m[1], m[2], m[3], m[4]];
   const percent = pieces.some((s) => s !== undefined && s.includes('%'));
   const num = (s: string) => Number(s.replace('%', '').trim()) / (percent ? 100 : 1);
-  const value = num(m[1]);
+  let value = num(m[1]);
   let range: Param['range'] = null;
   if (m[2] !== undefined) {
     const lo = num(m[2]);
@@ -1404,7 +1418,11 @@ function parseParam(p: ParamLine): Param {
     const bounds: At = { line: p.line, from: part(2).from, to: part(3).to };
     if (m[4] !== undefined && step <= 0) throw new SpecError(part(4), 'The step must be more than 0');
     if (lo > hi) throw new SpecError(bounds, `The first number of the range is larger than the second. Write the smaller number first, for example ${m[3]}..${m[2]}`);
-    if (value < lo || value > hi) throw new SpecError(part(1), `${m[1]} is not in the range ${m[2]}..${m[3]}`);
+    if (value < lo || value > hi) {
+      report(part(1), `${m[1]} is not in the range ${m[2]}..${m[3]}. Change the value or the range.`);
+      // Its uses read the nearer end of the range, so they report nothing of their own.
+      value = Math.min(hi, Math.max(lo, value));
+    }
     const count = Math.floor((hi - lo) / step + 1e-9) + 1;
     if (count > MAX_PARAM_VALUES) throw new SpecError(bounds, `This range has ${count} values. The maximum is ${MAX_PARAM_VALUES}. Use a larger step`);
     range = { lo, hi, step };
@@ -1429,6 +1447,7 @@ type Scope = ScopeItem[] | null;
 /** Something that takes the tokens of the lines after its first one: a rule, or a definition. */
 interface Open {
   toks: Tok[];
+  line: number;
 }
 
 interface RawRule extends Open {
@@ -1460,6 +1479,8 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const rawRules: RawRule[] = [];
   let scope: Scope = null;
   let open: Open | null = null;
+  /** The rule or definition that blank lines ended, while nothing else follows them. */
+  let cut: Open | null = null;
 
   /** Runs `fn`, which reports a problem by throwing; false when it did (one of a definition that already has its error is not reported again). */
   const guard = (fn: () => void): boolean => {
@@ -1506,9 +1527,13 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const text = stripped.trim();
     const lead = stripped.length - stripped.trimStart().length;
     if (!text) {
+      // A comment line ends a rule as well, but only a blank line is the slip that the message below names.
+      cut = raw.trim() ? null : (open ?? cut);
       open = null;
       return;
     }
+    const ended = cut;
+    cut = null;
     let m: RegExpMatchArray | null;
     const forName = /^for\s/i.test(text) && text.endsWith(':') ? text.slice(4, -1).trim() : '';
     if (forName) {
@@ -1546,6 +1571,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     } else if (open) {
       const into: Open = open;
       if (!guard(() => lex(text, line, lead, into.toks)) && 'state' in into) (into as Definition).state = 'bad';
+    } else if (ended && /^(and|or)\b/i.test(text)) {
+      errors.push({ line, message: `A blank line ends the ${'state' in ended ? 'definition' : 'rule'} on line ${ended.line}. Remove the blank line.` });
+      // The line is read as part of what it continues, as it is once the blank line is gone, so nothing else is reported for it.
+      open = ended;
+      if (!guard(() => lex(text, line, lead, ended.toks)) && 'state' in ended) (ended as Definition).state = 'bad';
     } else if ((m = text.match(PARAM_LINE))) {
       errors.push(diag({ line, from: lead, to: lead + m[1].length }, `"${m[1]}" is a built-in name. Use a different name, for example my_${m[1].toLowerCase()}`));
     } else if ((m = text.match(SETTING_NAME))) {
@@ -1563,7 +1593,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       const key = p.name.toLowerCase();
       if (params.has(key) || defs.has(key)) throw new SpecError(p.nameAt, `"${p.name}" is also set on line ${(params.get(key) ?? defs.get(key))!.line}`);
       if ('toks' in p) defs.set(key, p);
-      else params.set(key, parseParam(p));
+      else params.set(key, parseParam(p, (where, message) => errors.push(diag(where, message))));
     });
   }
   for (const [name, v] of Object.entries(opts.overrides ?? {})) {
@@ -1661,7 +1691,11 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
         const from = u.valueAt.from! + pm.index! + pm[0].length - pm[0].trimStart().length;
         const partAt: At = { line: u.line, from, to: from + part.length };
         const m = part.match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)\s*%)?$/);
-        if (!m) throw new SpecError(partAt, `Cannot read "${part}". Write a ticker and an optional weight, for example SPY 60%`);
+        if (!m) {
+          const path = part.match(/^csv:(.*?)(?:\s+\d+(?:\.\d+)?\s*%?)?$/i)?.[1] ?? '';
+          if (/\s/.test(path)) throw new SpecError(partAt, `The path "${path}" has a space. The universe line cannot read a path with a space. Change the name of the file or folder to a name with no spaces, for example ${path.replace(/\s+/g, '_')}.`);
+          throw new SpecError(partAt, `Cannot read "${part}". Write a ticker and an optional weight, for example SPY 60%`);
+        }
         const ref = parseRef(m[1], defaultSource, partAt);
         if (ref.source === 'fred') throw new SpecError(partAt, notPrices(ref, 'The strategy cannot trade it'));
         if (universe.some((a) => a.name.toLowerCase() === ref.name.toLowerCase())) throw new SpecError(partAt, `${ref.name} is in the list two times`);

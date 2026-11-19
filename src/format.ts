@@ -8,6 +8,9 @@ export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', '
 /** Whether any of these times falls inside a day, so a run's times need the time of day as well. */
 export const isIntraday = (t: readonly number[]): boolean => t.some((x) => x % DAY !== 0);
 
+/** A message as a whole sentence, with a full stop at its end when it has none, so that another sentence can follow it. */
+export const fullStop = (text: string): string => (/[.!?]$/.test(text) ? text : `${text}.`);
+
 export const minus = (text: string) => text.replace('-', '−');
 export const pct = (x: number, digits = 1) => (Number.isFinite(x) ? minus((x * 100).toFixed(digits)) + '%' : '–');
 export const signedPct = (x: number, digits = 1) => (x > 0 ? '+' : '') + pct(x, digits);

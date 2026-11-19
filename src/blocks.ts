@@ -74,13 +74,22 @@ function unquote(line: string, max = Infinity): { text: string; levels: number }
   return { text, levels };
 }
 
+const NAME_LINE = /^\s*name\s*:\s*(.+?)\s*$/i;
+
 /** A block's `name:` line as written, minus its comment; null when it has none. */
 export function blockName(text: string): string | null {
   for (const line of text.split('\n')) {
-    const m = line.replace(COMMENT, '').match(/^\s*name\s*:\s*(.+?)\s*$/i);
+    const m = line.replace(COMMENT, '').match(NAME_LINE);
     if (m) return m[1];
   }
   return null;
+}
+
+/** The text without the `name:` line that blockName reads. */
+export function withoutName(text: string): string {
+  const lines = text.split('\n');
+  const at = lines.findIndex((line) => NAME_LINE.test(line.replace(COMMENT, '')));
+  return at < 0 ? text : [...lines.slice(0, at), ...lines.slice(at + 1)].join('\n');
 }
 
 /** The name the parser reads; when the block has other problems, the `name:` line as written, minus its comment. */
@@ -94,21 +103,26 @@ function nameOf(source: string): string | null {
   return blockName(source);
 }
 
+/** A block as `fencedBlocks` finds it: its text, its opening fence's line, and its last line in the note. */
+export interface Fenced {
+  source: string;
+  line: number;
+  /** 0-based line of the closing fence, or of the block's last line when no fence closes it. */
+  end: number;
+}
+
 /**
  * The fenced code blocks of one language in a note, in order. Fences are read as the editor reads them: a fence
  * closes only on a line of fence characters at least as long as the one that opened it, so an example inside a
  * longer fence of another language is not a block. A block in a callout or quote has one `>` level taken off each
  * of its lines.
  */
-export function extractBlocks(markdown: string, lang = 'strategy'): Block[] {
-  const out: Block[] = [];
+export function fencedBlocks(markdown: string, lang: string): Fenced[] {
+  const out: Fenced[] = [];
   const lines = markdown.split(/\r?\n/);
   let open: { fence: string; levels: number; wanted: boolean; line: number; body: string[] } | null = null;
-  const finish = () => {
-    if (open?.wanted) {
-      const source = open.body.join('\n');
-      out.push({ name: nameOf(source), source, line: open.line });
-    }
+  const finish = (end: number) => {
+    if (open?.wanted) out.push({ source: open.body.join('\n'), line: open.line, end });
     open = null;
   };
 
@@ -122,14 +136,47 @@ export function extractBlocks(markdown: string, lang = 'strategy'): Block[] {
     const { text, levels } = unquote(lines[i], open.levels);
     if (levels < open.levels) {
       // The quote ended without closing the fence; this line belongs to whatever comes next.
-      finish();
+      finish(i - 1);
       i--;
     } else if (closesFence(text, open.fence)) {
-      finish();
+      finish(i);
     } else {
       open.body.push(text);
     }
   }
-  finish();
+  finish(lines.length - 1);
   return out;
+}
+
+/** The fenced code blocks of one language in a note, in order, with their names (see `fencedBlocks`). */
+export function extractBlocks(markdown: string, lang = 'strategy'): Block[] {
+  return fencedBlocks(markdown, lang).map(({ source, line }) => ({ name: nameOf(source), source, line }));
+}
+
+/**
+ * The strategy block the cursor on `line` (0-based) is in, from its opening fence to its closing fence, with its place
+ * among the note's strategy blocks; null when the cursor is in none. Only that block's name is read.
+ */
+export function blockAt(markdown: string, line: number): { block: Block; index: number } | null {
+  const blocks = fencedBlocks(markdown, 'strategy');
+  const index = blocks.findIndex((b) => line >= b.line && line <= b.end);
+  if (index < 0) return null;
+  const { source, line: at } = blocks[index];
+  return { block: { name: nameOf(source), source, line: at }, index };
+}
+
+/** Whether a note has a strategy block, without reading any block's settings. */
+export const hasStrategyBlock = (markdown: string): boolean => markdown.includes('strategy') && fencedBlocks(markdown, 'strategy').length > 0;
+
+/**
+ * The block of `lang` that a list or a link names, with its place among the note's blocks of that language: the one that
+ * opens on `line` while it is still that block (a block with no name goes by its note's name in a list), else the one
+ * called `name` in any capitals. Null when the note has neither.
+ */
+export function targetBlock(markdown: string, name: string | null, line: number | null, lang = 'strategy'): { block: Block; index: number } | null {
+  const blocks = extractBlocks(markdown, lang);
+  const called = (b: Block) => name !== null && b.name?.toLowerCase() === name.toLowerCase();
+  let index = blocks.findIndex((b) => b.line === line && (b.name === null || called(b)));
+  if (index < 0) index = blocks.findIndex(called);
+  return index < 0 ? null : { block: blocks[index], index };
 }

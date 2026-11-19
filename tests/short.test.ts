@@ -265,7 +265,7 @@ test('weights and size up to 200%, the margin terms, and their settings', () => 
   // A short below 100% still borrows its shares, so its cap is 1.
   assert.equal(spec('universe: SPY 50%\nshort when true')!.margin!.cap, 1);
   assert.match(errorsOf('universe: SPY 150%, TLT 60%\nbuy when true')[0], /^The total of the weights is 210\.0%\. It cannot be more than 200%/);
-  assert.match(errorsOf('universe: SPY, TLT\nsize: 201%\nbuy when true')[0], /Size must be a percentage/);
+  assert.match(errorsOf('universe: SPY, TLT\nsize: 201%\nbuy when true')[0], /^Size must be more than 0% and not more than 200%\.$/);
   // A ranking can hold more than its equity, but not go short yet.
   const ranked = spec('universe: SPY, QQQ, TLT\nsize: 150%\nhold: top 2 by roc(20)')!;
   assert.deepEqual([ranked.universe[0].weight, ranked.margin!.cap], [0.75, 1.5]);

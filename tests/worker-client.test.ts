@@ -3,6 +3,7 @@ import { test, type TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec, type Defaults } from '../src/dsl.ts';
+import { parseCsv } from '../src/data.ts';
 import { runBlock, runJob, serve, type Bench, type FromWorker, type Ran, type ToWorker } from '../src/jobs.ts';
 import { LIMITS, LimitError, runSize } from '../src/limits.ts';
 import { Latest, drawHeld } from '../src/live-core.ts';
@@ -535,6 +536,65 @@ test('a worker that fails while starting sends its run here, which checks the ma
   await assert.rejects(client.runs().run(request(block, {}, { size })), (e: unknown) => e instanceof LimitError && /The limit here is 200,000/.test(e.message));
   assert.equal(client.foreground(), true);
   assert.deepStrictEqual(await ranOf(client.runs().run(request(block))), direct(request(block)));
+});
+
+const CSV = 'date,open,high,low,close,score\n2024-01-02,1,1,1,1,0.4\n2024-01-03,2,2,2,2,0.5\n';
+/** Text of `bytes` characters, as long as a CSV file of that size: its length is what the limits read. */
+const sized = (bytes: number) => CSV + ' '.repeat(bytes - CSV.length);
+
+test('a CSV file is parsed in the worker of the single runs, never on the main thread, and gives what it gives here', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  assert.deepStrictEqual(await client.parseCsv(CSV, 'Data/x.csv'), parseCsv(CSV));
+  assert.deepEqual(w.log, ['csv 1']);
+  // A run and a sweep then go to their own workers as before: the CSV file went to the runs' worker.
+  const block = input();
+  await client.runs().run(request(block));
+  assert.equal(w.made(), 1);
+  // A file the worker cannot read rejects with the parse's own message.
+  await assert.rejects(client.parseCsv('date,close\n', 'Data/y.csv'), { message: 'The CSV has no rows' });
+});
+
+test('a CSV file over the limit of where it would be parsed is refused with its size and what makes it smaller', async (t) => {
+  const w = inProcess();
+  const client = track(t, { makeWorker: w.make });
+  const worker = LIMITS.csvBytes.worker;
+  await assert.rejects(
+    client.parseCsv(sized(worker + 1_000_000), 'Data/minutes.csv'),
+    (e: unknown) =>
+      e instanceof LimitError &&
+      e.kind === 'size' &&
+      !e.anyway &&
+      e.message === 'The file Data/minutes.csv is 101 MB. The limit is 100 MB. To make the file smaller, delete the rows from before the time that the strategy uses, or the columns that the strategy does not read.',
+  );
+  assert.equal(w.made(), 0);
+  // 62 MB, as a file of 1.1 million minute rows, fits a worker.
+  assert.ok(62_000_000 <= worker);
+  assert.deepStrictEqual(await client.parseCsv(sized(LIMITS.csvBytes.here + 1), 'Data/x.csv'), parseCsv(CSV));
+});
+
+test('when no worker can be made, a CSV file is parsed here, within the stricter limit of the main thread', async (t) => {
+  const client = track(t, { makeWorker: noWorker });
+  assert.deepStrictEqual(await client.parseCsv(CSV, 'Data/x.csv'), parseCsv(CSV));
+  assert.equal(client.foreground(), true);
+  await assert.rejects(
+    client.parseCsv(sized(62_000_000), 'Data/minutes.csv'),
+    (e: unknown) =>
+      e instanceof LimitError &&
+      e.message ===
+        'CSV files are read in the foreground here. Obsidian cannot do other work while the plugin reads a file. The file Data/minutes.csv is 62 MB. The limit here is 20 MB. To make the file smaller, delete the rows from before the time that the strategy uses, or the columns that the strategy does not read.',
+  );
+  // Just over the limit, the sizes are told apart.
+  await assert.rejects(client.parseCsv(sized(LIMITS.csvBytes.here + 100_000), 'Data/x.csv'), (e: unknown) => e instanceof LimitError && /is 20\.1 MB\. The limit here is 20 MB\./.test(e.message));
+  // A worker that fails while starting sends its file here, which checks the main thread's limit first.
+  const failing = track(t, {
+    makeWorker: (on) => {
+      setTimeout(() => on.error('Refused by the content security policy'));
+      return { post: () => {}, terminate: () => {} };
+    },
+  });
+  await assert.rejects(failing.parseCsv(sized(30_000_000), 'Data/x.csv'), (e: unknown) => e instanceof LimitError && /The limit here is 20 MB/.test(e.message));
+  assert.deepStrictEqual(await failing.parseCsv(CSV, 'Data/x.csv'), parseCsv(CSV));
 });
 
 test('closing a block\'s runs stops a waiting run and a running one, and the worker drops the prices only when no one uses them', async (t) => {

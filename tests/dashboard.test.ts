@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { extractBlocks } from '../src/blocks.ts';
+import { PriceError } from '../src/data.ts';
 import {
   COLUMNS,
   DASHBOARD_CONCURRENCY,
@@ -225,6 +226,8 @@ test('a failure keeps its reason, whether it was an Error or text', () => {
   });
   assert.equal(failedRow('n.md', 'S', 'boom').reason, 'boom');
   assert.equal(failedRow('n.md', 'S', new Error('Line 3: Unknown name')).reason, 'Line 3: Unknown name');
+  // Prices that did not load keep why, so the row can offer the next step.
+  assert.deepEqual(failedRow('n.md', 'S', new PriceError('There is no file at x.csv', { kind: 'csv', path: 'x.csv' }), 'universe: csv:x.csv').failure, { kind: 'csv', path: 'x.csv' });
 });
 
 // ---- sorting
@@ -328,7 +331,7 @@ test('clicking the sorted column reverses it and another column starts from its 
 
 // ---- running the strategies
 
-type Found = { note: string; name: string; source: string };
+type Found = { note: string; name: string; source: string; line?: number };
 const found = (name: string, note = `${name}.md`): Found => ({ note, name, source: `universe: ${name}\nbuy when true` });
 
 function fakeHost(list: Found[], opts: { fail?: string[]; gate?: () => Promise<void> } = {}) {
@@ -349,7 +352,8 @@ function fakeHost(list: Found[], opts: { fail?: string[]; gate?: () => Promise<v
         active--;
       }
     },
-    openNote: () => {},
+    openBlock: () => {},
+    newNote: () => {},
     now: () => NOW,
   };
   return { host, calls, peak: () => peak };
@@ -408,12 +412,45 @@ test('the folder takes out other notes, and the vault count says how many there 
   assert.match(emptyText({ folder: 'Nowhere', sort: 'name' }, none.state.inVault), /folder "Nowhere"/);
 });
 
-test('an empty vault says how to add a strategy', async () => {
+test('an empty vault says so, and offers a new strategy note', async () => {
   const { host } = fakeHost([]);
   const r = recorder();
   await runRound(host, { folder: null, sort: 'name' }, false, r.round);
   assert.deepEqual(r.events, ['list 0']);
-  assert.equal(emptyText({ folder: null, sort: 'name' }, 0), 'The vault has no strategy blocks. Add one with the command "Insert strategy block".');
+  assert.equal(emptyText({ folder: null, sort: 'name' }, 0), 'The vault has no strategy blocks.');
+
+  const { renderDashboard } = await import('../src/render-dashboard.ts');
+  const { El } = await import('./page.ts');
+  const made: string[] = [];
+  const root = new El('div');
+  renderDashboard(root as unknown as HTMLElement, '', { ...host, newNote: () => void made.push('note') });
+  for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
+  assert.equal(root.byClass('bt-note')[0].textContent, 'The vault has no strategy blocks.');
+  const button = root.all().find((e) => e.tag === 'button' && e.textContent === 'New strategy note')!;
+  button.dispatch('click');
+  assert.deepEqual(made, ['note']);
+  // A folder with no strategies is a different problem: no button.
+  const other = new El('div');
+  renderDashboard(other as unknown as HTMLElement, 'folder: Nowhere', fakeHost([found('A')]).host);
+  for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
+  assert.match(other.byClass('bt-note')[0].textContent, /folder "Nowhere"/);
+  assert.equal(other.all().filter((e) => e.tag === 'button' && e.textContent === 'New strategy note').length, 0);
+});
+
+test('every row keeps the line of its block, and its name opens the note there', async () => {
+  const { host } = fakeHost([{ ...found('A'), line: 4 }, { ...found('B'), line: 12 }, found('C')], { fail: ['B'] });
+  const r = recorder();
+  await runRound(host, { folder: null, sort: 'name' }, false, r.round);
+  assert.deepEqual(r.state.rows.map((x) => [x.state, x.line]), [['done', 4], ['failed', 12], ['done', undefined]]);
+
+  const { renderDashboard } = await import('../src/render-dashboard.ts');
+  const { El } = await import('./page.ts');
+  const opened: unknown[] = [];
+  const root = new El('div');
+  renderDashboard(root as unknown as HTMLElement, '', { ...host, openBlock: (note, name, line) => void opened.push([note, name, line]) });
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  for (const link of root.byClass('bt-dash-link')) link.dispatch('click');
+  assert.deepEqual(opened, [['A.md', 'A', 4], ['C.md', 'C', undefined], ['B.md', 'B', 12]]);
 });
 
 test('force is passed on to every run', async () => {
@@ -556,6 +593,12 @@ test('a note read without a strategy in it gives nothing, and blocks are named b
   ]);
   const list = await findStrategies(v.notes, v.host);
   assert.deepEqual(list.map((f) => [f.note, f.name]), [['Trading/b.md', 'b 1'], ['Trading/b.md', 'Second']]);
+});
+
+test('each strategy found keeps the line its block opens on', async () => {
+  const v = vault([{ path: 'n.md', types: ['code'], text: `# Two\n\n${STRATEGY}\n\ntext\n${STRATEGY}` }]);
+  const list = await findStrategies(v.notes, v.host);
+  assert.deepEqual(list.map((f) => [f.name, f.line]), [['n 1', 2], ['n 2', 8]]);
 });
 
 test('mayHoldStrategy: unknown metadata and any kind of section that can hold a fence say yes', () => {

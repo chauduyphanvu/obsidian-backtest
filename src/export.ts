@@ -107,16 +107,22 @@ const tradesText = (n: Backtest['tradeStats']) => (n.open > 0 ? `${n.count} clos
  * so the saved copy never runs again.
  */
 export function snapshotMarkdown(input: { name: string; source: string; backtest: Backtest; now: number }): string {
+  const day = isoDate(input.now);
+  const front = ['---', 'tags: [backtest/snapshot]', `created: ${day}`, '---'].join('\n');
+  return `${front}\n\n# ${input.name.trim() || 'Backtest'}\n\nSnapshot made on ${day}. ${resultMarkdown(input)}`;
+}
+
+/**
+ * One result in Markdown, to paste into a note: the dates, the strategy as text, the figures, the positions and the
+ * latest trades. No front matter and no title, so it fits under a heading of the note it goes into.
+ */
+export function resultMarkdown(input: { source: string; backtest: Backtest }): string {
   const { backtest: bt } = input;
   const { run, stats, tradeStats, benchmark, spec } = bt;
   const intraday = isIntraday(run.t);
-  const day = isoDate(input.now);
   const sections: string[] = [];
 
-  sections.push(['---', 'tags: [backtest/snapshot]', `created: ${day}`, '---'].join('\n'));
-  sections.push(
-    `# ${input.name.trim() || 'Backtest'}\n\nSnapshot made on ${day}. The run is from ${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}. Start capital: ${money(spec.capital)}. The run is compared with ${benchmark.label}.`,
-  );
+  sections.push(`The run is from ${stamp(run.t[0], intraday)} to ${stamp(run.t[run.t.length - 1], intraday)}. Start capital: ${money(spec.capital)}. The run is compared with ${benchmark.label}.`);
   sections.push(`## Strategy\n\nThis copy is text, not a strategy block. Thus it does not run again.\n\n${fenced(input.source.replace(/^\s*\n/, '').trimEnd(), 'text')}`);
 
   const b = benchmark.stats;

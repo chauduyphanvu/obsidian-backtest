@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Backtest, Stats } from '../src/backtest.ts';
 import type { Trade } from '../src/engine.ts';
-import { benchProse, fallText, figures, tradesSentence, verdict, yearsAhead, yearsSentence } from '../src/verdict.ts';
+import { FIGURE_HELP, benchProse, fallText, figures, moreFigures, tradesSentence, verdict, yearsAhead, yearsSentence } from '../src/verdict.ts';
 import { DAY, T0 } from './helpers.ts';
 
 const stats = (o: Partial<Stats>): Stats => ({ totalReturn: 1, cagr: 0.1, maxDrawdown: -0.2, volatility: 0.15, sharpe: 0.6, sortino: 0.8, exposure: 1, ...o });
@@ -109,4 +109,21 @@ test('the trades in a sentence: how many won, what winners and losers made, and 
   assert.equal(tradesSentence({ run: { trades } } as unknown as Backtest), '3 of 10 closed trades won. The average trade with a profit made +30.0%. The average trade with a loss made −2.0%. The five best trades made $8,600. This is more than the $7,600 that all closed trades made together.');
   assert.equal(tradesSentence({ run: { trades: [trade(0.1, 100)] } } as unknown as Backtest), '1 of 1 closed trade won.');
   assert.equal(tradesSentence({ run: { trades: [trade(0.1, 100, 'open')] } } as unknown as Backtest), '');
+});
+
+test('each figure has a meaning to show under its row, which says how the plugin works it out', () => {
+  const labels = (bt: Backtest) => [...figures(bt).filter((f) => !f.textOnly), ...moreFigures(bt)].map((f) => f.label);
+  for (const label of [...labels(result({}, {})), ...labels(result({}, {}, { margin: true }))]) assert.ok(FIGURE_HELP[label], label);
+  // The words give the plugin's own sums: returns above the cash rate, the bars of this run's year, calendar days.
+  assert.match(FIGURE_HELP['Sharpe ratio'], /subtracts the interest that cash earned at the cash rate/);
+  assert.match(FIGURE_HELP['Sharpe ratio'], /square root of the bars in one year/);
+  assert.match(FIGURE_HELP.Volatility, /square root of the bars in one year of this run/);
+  assert.match(FIGURE_HELP['Sortino ratio'], /only the bars that earned less than cash count as risk/);
+  assert.match(FIGURE_HELP['Return per year'], /365\.25 calendar days/);
+  assert.match(FIGURE_HELP['Longest time below a previous high'], /calendar days/);
+  // Short sentences, with no contractions.
+  for (const text of Object.values(FIGURE_HELP)) {
+    assert.doesNotMatch(text, /n't|'s /);
+    for (const sentence of text.split(/(?<=\.) /)) assert.ok(sentence.split(' ').length <= 25, sentence);
+  }
 });

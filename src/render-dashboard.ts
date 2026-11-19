@@ -18,6 +18,8 @@ import {
 } from './dashboard.ts';
 import { h, motionOK } from './dom.ts';
 import { shortMessage } from './fixes.ts';
+import { fullStop } from './format.ts';
+import type { ListFix } from './orders.ts';
 import { drawSpark } from './render-chart.ts';
 import { watchText } from './render-now.ts';
 import type { Diagnostic } from './dsl.ts';
@@ -89,7 +91,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
     const cell = h(tr, 'td', 'bt-dash-first');
     const link = h(cell, 'button', 'bt-dash-link');
     link.title = `Open ${row.note}`;
-    link.addEventListener('click', () => host.openNote(row.note));
+    link.addEventListener('click', () => host.openBlock(row.note, row.name, row.line));
     h(link, 'span', 'bt-dash-name', row.name);
     const sub = h(cell, 'span', 'bt-dash-sub', under);
     if (stale) h(sub, 'span', 'bt-dash-stale', ` \u00b7 ${stale}`);
@@ -108,22 +110,34 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
     cell.colSpan = COLUMNS.length - 1;
     const box = h(cell, 'div', 'bt-dash-msgtext');
     h(box, 'span', 'bt-orders-action bt-orders-fix', 'Fix');
-    const fix = host.fix?.(row) ?? null;
     const said = shortMessage(row.reason).head;
-    h(box, 'span', 'bt-dash-reason', fix ? `${said} ${fix.text}` : said);
-    if (!fix) return;
-    const button = h(box, 'button', 'bt-button', fix.label);
-    button.type = 'button';
-    button.addEventListener('click', () => {
-      button.disabled = true;
-      fix.write().then(
-        () => start(false),
-        (e: unknown) => {
-          button.disabled = false;
-          h(box, 'span', 'bt-dash-reason', `Cannot change the block. ${e instanceof Error ? e.message : String(e)}`);
-        },
-      );
-    });
+    const reason = h(box, 'span', 'bt-dash-reason', said);
+    // A run whose prices did not load can wait for a ticker search before its fix is known.
+    const show = (fix: ListFix | null) => {
+      if (!fix) return;
+      if (fix.text) reason.textContent = `${fullStop(said)} ${fix.text}`;
+      const { label, write, open } = fix;
+      if (!label || !(write || open)) return;
+      const button = h(box, 'button', 'bt-button', label);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        if (!write) {
+          open?.();
+          return;
+        }
+        button.disabled = true;
+        write().then(
+          () => start(false),
+          (e: unknown) => {
+            button.disabled = false;
+            h(box, 'span', 'bt-dash-reason', `Cannot change the block. ${e instanceof Error ? e.message : String(e)}`);
+          },
+        );
+      });
+    };
+    const asked = host.fix?.(row) ?? null;
+    if (asked instanceof Promise) void asked.then(show, () => {});
+    else show(asked);
   };
 
   const doneRowCells = (tr: HTMLElement, row: DoneRow): void => {
@@ -228,6 +242,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
         rows = found;
         if (found.length === 0) {
           message(emptyText(config, inVault));
+          if (inVault === 0) h(body, 'button', 'bt-button', 'New strategy note').addEventListener('click', () => host.newNote());
           summary.textContent = '';
           return;
         }

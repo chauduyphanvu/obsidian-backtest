@@ -12,13 +12,23 @@
   text-decoration-color: var(--text-warning);
 }
 
-/* CodeMirror puts the message inside its own tooltip box, which is the element that needs the frame. */
+/* CodeMirror puts the message inside its own tooltip box, which is the element that needs the frame. When the window has
+   not room for all of the box on its side of the line, CodeMirror makes the box shorter, and the rest scrolls. */
 .cm-editor .cm-tooltip:has(> .bt-diag-tip) {
   max-width: min(420px, 90vw);
+  overflow-y: auto;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   box-shadow: var(--shadow-s);
+}
+/* A hover card laid out out of sight, to learn its height before it opens. */
+.cm-editor .cm-tooltip.bt-measure {
+  position: fixed;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .bt-diag-tip {
   padding: 6px 9px;
@@ -53,9 +63,31 @@
   box-sizing: border-box;
   overflow-wrap: anywhere;
 }
-.bt-fix {
-  display: block;
+/* Each fix on its own line: the button, and what the word it writes is. */
+.bt-fix-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
   margin-top: 4px;
+}
+.bt-fix-detail {
+  color: var(--text-muted);
+}
+/* "Make 200 a parameter" stands apart from a problem or help above it. */
+.bt-param-offer:first-child {
+  margin-top: 0;
+}
+.bt-diag-tip-row + .bt-param-offer,
+.bt-help + .bt-param-offer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bt-param-offer .bt-fix-detail {
+  font-family: var(--font-monospace);
+}
+.bt-fix {
   padding: 1px 8px;
   height: auto;
   font-size: var(--font-ui-smaller);

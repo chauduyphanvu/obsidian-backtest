@@ -1,12 +1,13 @@
 // What the strategy holds now and what the next close could make it do, in the status line at the top of a result: the
 // position on the left, the nearest order on the right with how far the close is from it, and a panel that opens under
 // the line with the last closes drawn against the price of that order (one ticker) or each ticker's table (several).
+// While the prices are old, an amber part above the line says where they end and loads new ones on a click.
 
 import type { Backtest } from './backtest.ts';
 import { reveal, revealBox, h, s } from './dom.ts';
 import { walk, type Expr, type Spec } from './dsl.ts';
 import { specEvaluator } from './evaluate.ts';
-import { minus, pct } from './format.ts';
+import { minus, pct, stamp } from './format.ts';
 import { WATCH_WITHIN, watchRows } from './orders.ts';
 import { renderPositions } from './render-trades.ts';
 import type { RunOutput } from './runner.ts';
@@ -110,6 +111,16 @@ export function nextOrder(report: TriggerReport | null, out: { backtest: Backtes
   return said(report.triggers.length ? 'No order is near the last close' : '');
 }
 
+/**
+ * The status line's order alone, to paste somewhere: "SPY: sells if it closes below 730.27 (0.33% away). Prices to
+ * 2026-11-18." One ticker's rule is named by its ticker, as several tickers' rules already are.
+ */
+export function orderLine(order: NextOrder, several: boolean, pricesTo: string): string {
+  const t = order.trigger;
+  const text = t && !several ? `${t.ticker}: ${order.text[0].toLowerCase()}${order.text.slice(1)}` : order.text;
+  return `${text}${order.away ? ` (${order.away})` : ''}. Prices to ${pricesTo}.`;
+}
+
 /** What the left of the status line says: the position and, for one ticker held, since when and how it has done. */
 export interface Holding {
   /** Long, short, or several tickers with at least one held; null in cash. */
@@ -132,10 +143,22 @@ interface StatusInput {
 
 /**
  * The status line and the panel it opens. The left is drawn at once; the right keeps its height while the trigger
- * prices are worked out, so the result under it does not move when they come.
+ * prices are worked out, so the result under it does not move when they come. `age` says where the prices end while they
+ * are old (orders.ts pricesEnd), or null, and changes that part alone; a click on it runs `refresh`.
  */
-export function statusView(parent: HTMLElement, o: { open?: boolean } = {}): { show(input: StatusInput): void; open(): boolean } {
+export function statusView(
+  parent: HTMLElement,
+  o: { open?: boolean; copy?: Copy; refresh: () => void },
+): { show(input: StatusInput): void; open(): boolean; age(end: string | null): void } {
   const box = h(parent, 'div', 'bt-status-box');
+  // A button of its own: the line is a button too, and one cannot hold the other.
+  const old = h(box, 'button', 'bt-status-old');
+  old.type = 'button';
+  old.hidden = true;
+  h(old, 'span', 'bt-chip-warn');
+  const oldText = h(old, 'span', 'bt-status-old-text');
+  h(old, 'span', 'bt-status-old-act', 'Click to load new prices.');
+  old.addEventListener('click', o.refresh);
   const line = h(box, 'button', 'bt-status');
   line.type = 'button';
   const pos = h(line, 'span', 'bt-status-pos');
@@ -186,7 +209,7 @@ export function statusView(parent: HTMLElement, o: { open?: boolean } = {}): { s
         dot.classList.toggle('bt-breathe', order.close);
         if (order.text) h(next, 'span', `bt-status-order${order.quiet ? ' bt-quiet' : ''}`, order.text);
         if (order.away) h(next, 'span', 'bt-status-away', order.away);
-        fill = () => panelFor(inner, input, report, order);
+        fill = () => panelFor(inner, input, report, order, o.copy);
         sync();
         line.setAttribute('aria-label', [holding.text, holding.more, order.text, order.away].filter(Boolean).join('. '));
       };
@@ -194,25 +217,50 @@ export function statusView(parent: HTMLElement, o: { open?: boolean } = {}): { s
       else draw(null);
     },
     open: () => opened,
+    age(end) {
+      old.hidden = end === null;
+      oldText.textContent = end === null ? '' : `${end}. They can be old.`;
+      box.classList.toggle('bt-old', end !== null);
+      line.classList.toggle('bt-old', end !== null);
+    },
   };
 }
 
-/** The panel under the status line: for one ticker, the last closes against the order's price and the rule in words; for several, each ticker's row. */
-function panelFor(box: HTMLElement, input: StatusInput, report: TriggerReport | null, order: NextOrder): void {
+/** Puts text on the clipboard; `what` names it in the message that says so. */
+type Copy = (text: string, what: string) => void;
+
+/**
+ * The panel under the status line: for one ticker, the last closes against the order's price and the rule in words; for
+ * several, each ticker's row. Under the words, a button copies the order line when there is an order to name.
+ */
+function panelFor(box: HTMLElement, input: StatusInput, report: TriggerReport | null, order: NextOrder, copy?: Copy): void {
   box.replaceChildren();
   const bt = input.out.backtest;
   const wrap = h(box, 'div', 'bt-status-in');
-  if (bt.run.states.length > 1) {
+  const several = bt.run.states.length > 1;
+  const copyButton = (parent: HTMLElement) => {
+    if (!copy || order.quiet || !order.text) return;
+    const line = orderLine(order, several, stamp(bt.run.t[bt.run.t.length - 1], input.intraday));
+    const button = h(h(parent, 'div', 'bt-status-copy'), 'button', 'bt-chip-button', 'Copy');
+    button.type = 'button';
+    button.setAttribute('aria-label', 'Copy the order as text');
+    button.addEventListener('click', () => copy(line, 'the order'));
+  };
+  if (several) {
     renderPositions(wrap, bt, input.intraday, input.triggers);
+    copyButton(wrap);
     return;
   }
   const t = order.trigger;
   if (!t || !report) {
-    h(wrap, 'p', 'bt-status-say', order.text ? `${order.text}.` : 'The plugin cannot calculate the price of the next order.');
+    const side = h(wrap, 'div', 'bt-status-side');
+    h(side, 'p', 'bt-status-say', order.text ? `${order.text}.` : 'The plugin cannot calculate the price of the next order.');
+    copyButton(side);
     return;
   }
   const other = otherSide(input.out, t);
   nextChart(wrap, input.out, t, other);
+  const side = h(wrap, 'div', 'bt-status-side');
   const said: string[] = [];
   said.push(t.driver === t.ticker ? `The last close was ${shownPrice(t.last, t.values)}.` : `The last ${t.values ? 'value' : 'close'} of ${t.driver} was ${shownPrice(t.last, t.values)}.`);
   if (other) said.push(`The value of ${other.label} is now ${shownPrice(other.values[other.values.length - 1])}.`);
@@ -220,8 +268,9 @@ function panelFor(box: HTMLElement, input: StatusInput, report: TriggerReport | 
   said.push(`${capital(VERB[t.side])} ${condition(t, who, priceAlone)}, ${fillPhrase(report.closeFill)}.`);
   const levels = levelsSentence(t);
   if (levels) said.push(levels);
-  const p = h(wrap, 'p', 'bt-status-say', said.join(' '));
+  const p = h(side, 'p', 'bt-status-say', said.join(' '));
   if (t.assumptions.length) h(p, 'span', 'bt-status-note', ` These prices are correct only if ${t.assumptions.length === 1 ? t.assumptions[0] : `${t.assumptions.slice(0, -1).join(', ')} and ${t.assumptions[t.assumptions.length - 1]}`}.`);
+  copyButton(side);
 }
 
 const RULE_OF: Record<Side, 'buy' | 'sell' | 'add' | 'short' | 'cover' | null> = { buy: 'buy', sell: 'sell', add: 'add', short: 'short', cover: 'cover', rearm: null, rearmShort: null };

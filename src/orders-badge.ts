@@ -236,3 +236,53 @@ export class OrdersBadge {
     el.setAttribute('aria-label', view.tooltip);
   }
 }
+
+/** A scan of the vault that finished: what it found, and when. */
+export interface Scan {
+  statuses: StrategyStatus[];
+  at: number;
+}
+
+type Progress = (done: number, total: number) => void;
+
+/**
+ * The scan of the vault for today's orders that the status bar, the orders window and the pane share: one runs at a time,
+ * and a call while it runs gets its answer and its progress. A forced scan waits for one that is not forced, then runs.
+ */
+export class SharedScan {
+  private scan: (force: boolean, onProgress: Progress) => Promise<StrategyStatus[]>;
+  private now: () => number;
+  private running: { force: boolean; done: Promise<Scan>; listeners: Set<Progress>; progress: [number, number] | null } | null = null;
+  private last: Scan | null = null;
+
+  constructor(scan: (force: boolean, onProgress: Progress) => Promise<StrategyStatus[]>, now: () => number = Date.now) {
+    this.scan = scan;
+    this.now = now;
+  }
+
+  run(force: boolean, onProgress: Progress = () => {}): Promise<Scan> {
+    const running = this.running;
+    if (running && (running.force || !force)) {
+      running.listeners.add(onProgress);
+      if (running.progress) onProgress(...running.progress);
+      return running.done;
+    }
+    if (running) return running.done.catch(() => undefined).then(() => this.run(force, onProgress));
+    const mine = { force, listeners: new Set([onProgress]), progress: null as [number, number] | null };
+    const done = this.scan(force, (n, total) => {
+      mine.progress = [n, total];
+      for (const listen of mine.listeners) listen(n, total);
+    })
+      .then((statuses) => (this.last = { statuses, at: this.now() }))
+      .finally(() => {
+        if (this.running?.done === done) this.running = null;
+      });
+    this.running = Object.assign(mine, { done });
+    return done;
+  }
+
+  /** The last scan that finished, when that was less than `ms` ago. */
+  recent(ms: number): Scan | null {
+    return this.last && this.now() - this.last.at < ms ? this.last : null;
+  }
+}

@@ -25,6 +25,7 @@ import {
   tradeAt,
   useLog,
 } from '../src/price-chart.ts';
+import { keyTarget } from '../src/render-chart.ts';
 import { DAY, T0, bars, near } from './helpers.ts';
 
 /** A trade for `asset` from day `a` to day `b` after T0; the prices follow the days unless given. */
@@ -337,4 +338,40 @@ test('on a real run every entry of every trade gets its marker, on the bar it fi
   const b = data.get('AAA')!;
   for (const p of points) assert.ok(b.t.includes(p.t));
   assert.deepEqual(points, bt.run.trades.flatMap((t) => t.entries!.map((e) => ({ t: e.t, price: e.price }))));
+});
+
+test('the arrow keys move a chart’s read-out a bar, or with Shift a month found by date, and a year on a chart of over five years', () => {
+  // Weekdays from 2020-01-01 to the end of 2021.
+  const t: number[] = [];
+  for (let d = T0; d < Date.UTC(2022, 0, 1); d += DAY) if (![0, 6].includes(new Date(d).getUTCDay())) t.push(d);
+  const day = (i: number | null) => (i === null ? null : new Date(t[i]).toISOString().slice(0, 10));
+  const at = (date: string) => t.indexOf(Date.parse(date));
+  const key = (from: string | null, k: string, shift = false, first = 0) => day(keyTarget(t, first, from === null ? null : at(from), k, shift));
+  assert.equal(key('2020-03-10', 'ArrowRight'), '2020-03-11');
+  assert.equal(key('2020-03-09', 'ArrowLeft'), '2020-03-06');
+  assert.equal(key('2020-01-01', 'ArrowLeft'), '2020-01-01');
+  assert.equal(key('2021-12-31', 'ArrowRight'), '2021-12-31');
+  assert.equal(key('2020-03-10', 'Home'), '2020-01-01');
+  assert.equal(key('2020-03-10', 'End'), '2021-12-31');
+  // With no bar read yet, Right starts at the first bar and Left at the last.
+  assert.equal(key(null, 'ArrowRight'), '2020-01-01');
+  assert.equal(key(null, 'ArrowLeft'), '2021-12-31');
+  // A month on: 31 January goes to 29 February, a Saturday, so to the Monday after it; a month back from 31 March, to the Friday before.
+  assert.equal(key('2020-01-31', 'ArrowRight', true), '2020-03-02');
+  assert.equal(key('2020-03-31', 'ArrowLeft', true), '2020-02-28');
+  assert.equal(key('2020-06-15', 'ArrowRight', true), '2020-07-15');
+  assert.equal(key('2021-12-15', 'ArrowRight', true), '2021-12-31');
+  // The first bar shown bounds the keys, as a shorter span of the chart does.
+  const first = at('2021-01-04');
+  assert.equal(key('2021-01-04', 'ArrowLeft', false, first), '2021-01-04');
+  assert.equal(key('2021-06-01', 'Home', false, first), '2021-01-04');
+  assert.equal(key('2021-01-15', 'ArrowLeft', true, first), '2021-01-04');
+  // Keys the chart does not use are left alone.
+  assert.equal(keyTarget(t, 0, 3, 'ArrowUp', false), null);
+  assert.equal(keyTarget(t, 0, 3, 'a', false), null);
+  // Over more than five years, Shift moves a year.
+  const long = Array.from({ length: 8 * 365 }, (_, i) => T0 + i * DAY);
+  const i = long.indexOf(Date.UTC(2021, 5, 15));
+  assert.equal(new Date(long[keyTarget(long, 0, i, 'ArrowRight', true)!]).toISOString().slice(0, 10), '2022-06-15');
+  assert.equal(new Date(long[keyTarget(long, 0, i, 'ArrowLeft', true)!]).toISOString().slice(0, 10), '2020-06-15');
 });

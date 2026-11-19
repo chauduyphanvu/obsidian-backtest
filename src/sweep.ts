@@ -306,6 +306,8 @@ export interface SplitSummary {
   /** The values in the note; NaN when they have no result. */
   declaredBefore: number;
   declaredAfter: number;
+  /** The middle result of each part, over the variants counted. */
+  medianBefore: number;
   medianAfter: number;
   /** Variants that traded and have a result in both parts. */
   count: number;
@@ -326,6 +328,7 @@ export function splitSummary(result: SweepResult, metric: Metric): SplitSummary 
     chosenAfterRank: rankOf(both, chosenAfter, metric, 'after'),
     declaredBefore: declared ? metricOf(declared, metric, 'before') : NaN,
     declaredAfter: declared ? metricOf(declared, metric, 'after') : NaN,
+    medianBefore: median(both.map((p) => metricOf(p, metric, 'before'))),
     medianAfter: median(both.map((p) => metricOf(p, metric, 'after'))),
     count: both.length,
   };

@@ -340,3 +340,82 @@ test('a # or // inside the quotes of column("...") is part of the header, not a 
   // Outside the quotes a mark still starts a comment, even one that quotes a column.
   assert.deepEqual(rule('close > 1 # see column("a # b")').spec!.rules.s.buy, { k: 'cmp', op: '>', a: { k: 'series', name: 'close' }, b: { k: 'num', v: 1 } });
 });
+
+/** Every problem of a block, as line, columns and message. */
+const problems = (src: string) => parseSpec(src).errors.map((e) => [e.line, e.from, e.to, e.message]);
+
+test('"crosses over" and "crosses under" name the two words of the language, on the two words written', () => {
+  assert.deepEqual(problems('universe: SPY\nbuy when close crosses over sma(50)\nsell when close Crosses  Under sma(50)'), [
+    [2, 15, 27, 'Write "crosses above" or "crosses below", not "crosses over".'],
+    [3, 16, 30, 'Write "crosses above" or "crosses below", not "crosses under".'],
+  ]);
+  // A parameter or a definition of that name is a value that a crossing in either direction can cross.
+  ok('universe: SPY\nover = 100\nbuy when close crosses over\nsell when close < 90');
+  ok('universe: SPY\nunder = sma(50)\nbuy when close crosses under\nsell when close < 90');
+});
+
+test('a parameter outside its own range is one problem, on its own line, and the lines that use it say nothing', () => {
+  assert.deepEqual(problems('universe: SPY\nn = 400 in 100..300 step 20\nbuy when close > sma(n)\nsell when close < sma(n)'), [
+    [2, 4, 7, '400 is not in the range 100..300. Change the value or the range.'],
+  ]);
+  // A value under the range, which as a period would also be one that no function takes.
+  assert.deepEqual(problems('universe: SPY\nn = 0 in 5..20\nbuy when close > sma(n)'), [[2, 4, 5, '0 is not in the range 5..20. Change the value or the range.']]);
+  // A percentage that a stop reads.
+  assert.deepEqual(problems('universe: SPY\nstop = 50% in 5%..20% step 5%\nbuy when close > sma(50)\nstop loss: stop'), [
+    [2, 7, 10, '50% is not in the range 5%..20%. Change the value or the range.'],
+  ]);
+});
+
+test('an "and" or "or" line after a blank line names the blank line and the rule or definition it ends', () => {
+  const blank = (rule: number) => `A blank line ends the rule on line ${rule}. Remove the blank line.`;
+  assert.deepEqual(problems('universe: SPY\nbuy when close > sma(50)\n\n  and rsi(14) < 30\nsell when close < sma(50)'), [[4, undefined, undefined, blank(2)]]);
+  // Two blank lines, one of them with spaces in it, and a second gap further on.
+  assert.deepEqual(problems('universe: SPY\nbuy when close > sma(50)\n  and volume > 0\n \n\nor rsi(14) < 30\n\n  and close > 1'), [
+    [6, undefined, undefined, blank(2)],
+    [8, undefined, undefined, blank(2)],
+  ]);
+  assert.deepEqual(problems('universe: SPY\nup = close > sma(50)\n\n  and rsi(14) < 30\nbuy when up'), [
+    [4, undefined, undefined, 'A blank line ends the definition on line 2. Remove the blank line.'],
+  ]);
+  // The line is read as part of the rule, so its own mistakes show as they would without the blank line.
+  assert.deepEqual(
+    problems('universe: SPY\nbuy when close > 1\n\n  and clsoe > 2').map((p) => String(p[3]).slice(0, 21)),
+    [blank(2).slice(0, 21), 'Unknown name "clsoe".'],
+  );
+  // A comment line, a blank line after something that is not a rule, and a line that is not a continuation are not this mistake.
+  fails('universe: SPY\nbuy when close > 1\n# trend\n  and close > 2', /^Not a setting or a rule/, 4);
+  fails('universe: SPY\nfast = 50\n\n  and close > 2\nbuy when true', /^Not a setting or a rule/, 4);
+  fails('universe: SPY\nbuy when close > 1\n\norder close > 2', /^Not a setting or a rule/, 4);
+});
+
+test('a CSV path with a space in the universe says so, with or without a weight', () => {
+  const message =
+    'The path "My Data/spy prices.csv" has a space. The universe line cannot read a path with a space. Change the name of the file or folder to a name with no spaces, for example My_Data/spy_prices.csv.';
+  assert.deepEqual(problems('universe: csv:My Data/spy prices.csv\nbuy when true'), [[1, 10, 36, message]]);
+  assert.deepEqual(problems('universe: SPY 50%, csv:My Data/spy prices.csv 50%\nbuy when true').map((p) => p[3]), [message]);
+  // A weight without its % sign is not a space in the path.
+  fails('universe: csv:Data/spy.csv 50\nbuy when true', /^Cannot read "csv:Data\/spy\.csv 50"\. Write a ticker and an optional weight/, 1);
+});
+
+test('a date written year first with slashes or dots is given back with dashes; other shapes get the form', () => {
+  const at = (date: string) => problems(`universe: SPY\nfrom: ${date}\nbuy when true`).map((p) => p[3]);
+  assert.deepEqual(at('2015/01/01'), ['Write the date with dashes: 2015-01-01.']);
+  assert.deepEqual(at('2015.1.5'), ['Write the date with dashes: 2015-01-05.']);
+  assert.deepEqual(at('2016/02/29'), ['Write the date with dashes: 2016-02-29.']);
+  // The day and the month of 01/02/2015 can be in either order, and some dates do not exist.
+  for (const date of ['01/02/2015', '2015/13/01', '2015/02/30', '2015/01.01', 'yesterday']) {
+    assert.deepEqual(at(date), [`"${date}" is not a date in the form YYYY-MM-DD. For example, write 2015-01-31.`], date);
+  }
+  assert.deepEqual(problems('universe: SPY\nto: 2020.12.31\nbuy when true').map((p) => p[3]), ['Write the date with dashes: 2020-12-31.']);
+});
+
+test('a percentage outside its range says the range, with the real maximum of the setting', () => {
+  const at = (setting: string) => problems(`universe: SPY\n${setting}\nbuy when close > sma(50)`).map((p) => p[3]);
+  assert.deepEqual(at('stop loss: 150%'), ['Stop loss must be more than 0% and not more than 99%.']);
+  assert.deepEqual(at('trailing stop: 0%'), ['Trailing stop must be more than 0% and not more than 99%.']);
+  assert.deepEqual(at('take profit: 200000%'), ['Take profit must be more than 0% and not more than 100000%.']);
+  assert.deepEqual(at('size: 250%'), ['Size must be more than 0% and not more than 200%.']);
+  // Text that is not a percentage keeps its own message.
+  assert.deepEqual(at('size: lots'), ['Size must be a percentage, for example 10%']);
+  assert.match(String(at('stop loss: abc')[0]), /^Stop loss must be a percentage \(for example 10%\) or a multiple of the average true range/);
+});

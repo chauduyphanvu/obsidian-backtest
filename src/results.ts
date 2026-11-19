@@ -8,7 +8,7 @@ import type { Defaults, Spec } from './dsl.ts';
 import { HOUR } from './format.ts';
 import { LIMITS, WeighedCache, resultBytes, runSize } from './limits.ts';
 import { cacheKey, csvPaths, csvVersions, pricesAsOf } from './result-cache.ts';
-import { Runner, type RunOutput } from './runner.ts';
+import { Runner, type OnTicker, type RunOutput } from './runner.ts';
 import { triggerRun, watchable, type TriggerReport } from './trigger.ts';
 import { BlockDrawing, blockRuns, type BlockRuns } from './worker-client.ts';
 
@@ -91,12 +91,13 @@ export class Results {
     return hit && Date.now() - hit.asOf < freshForMs ? hit.out : undefined;
   }
 
-  async runSpec(drawing: BlockDrawing, spec: Spec, key: string, force = false, onPrices?: (bars: number) => void): Promise<RunOutput | null> {
+  /** Runs a parsed block, or gives its kept result. A run tells `on.ticker` as its prices come in and `on.prices` once they are all in. */
+  async runSpec(drawing: BlockDrawing, spec: Spec, key: string, force = false, on: { prices?: (bars: number) => void; ticker?: OnTicker } = {}): Promise<RunOutput | null> {
     if (!force) {
       const hit = this.kept(key, drawing.freshForMs);
       if (hit) return hit;
     }
-    const out = await drawing.run(spec, { force, onPrices });
+    const out = await drawing.run(spec, { force, onPrices: on.prices, onTicker: on.ticker });
     if (out) this.results.set(key, { out, asOf: pricesAsOf(out.prices, Date.now()) });
     return out;
   }

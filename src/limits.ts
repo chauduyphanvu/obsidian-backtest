@@ -1,6 +1,7 @@
 // How large one backtest may be and how long it may take, in one place, with the messages a refusal shows. Pure.
 
 import type { Backtest } from './backtest.ts';
+import { CSV_ASK_BYTES } from './debug.ts';
 import { ruleExprs, walk, type Spec } from './dsl.ts';
 import { isInsideKey } from './engine.ts';
 import { ResultCache } from './result-cache.ts';
@@ -51,6 +52,14 @@ export const LIMITS = {
   /** Results kept in memory, so a block drawn again does not run again: how many, and their total size in bytes. */
   keptResults: 40,
   keptBytes: 100_000_000,
+  /**
+   * The largest CSV file a block reads, in characters (bytes, for a file of numbers), by where its text is parsed. Here the
+   * window does not respond while a file is parsed, about 14 ms a megabyte: 0.83 s for 1.1 million minute rows, 62 MB. So
+   * the limit here is the size at which the rule table asks before it saves a file. In the worker the window stops only to
+   * take the bars back, about 1.4 ms a megabyte, so 0.14 s at the limit, where a file of minute rows has about twice the
+   * bars of the largest run: a later `from` date can still cut it to a run that fits.
+   */
+  csvBytes: { worker: 100_000_000, here: CSV_ASK_BYTES },
 } as const;
 
 /** What drives the cost of one backtest: see SizeLimits. */
@@ -139,6 +148,24 @@ export function sizeRefusal(size: RunSize, where: 'worker' | 'here'): string | n
   }
   return null;
 }
+
+/** `n` bytes in megabytes, with as many decimals as it takes not to read the same as `other`: "62 MB", "20.1 MB". */
+function megabytes(n: number, other: number): string {
+  const say = (d: number) => `${Number((n / 1e6).toFixed(d))} MB`;
+  for (let d = 0; d <= 3; d++) if (say(d) !== `${Number((other / 1e6).toFixed(d))} MB`) return say(d);
+  return say(3);
+}
+
+/** Why a CSV file of `bytes` characters at `path` is not parsed where `where` says, or null when it fits. */
+export function csvRefusal(path: string, bytes: number, where: 'worker' | 'here'): string | null {
+  const limit = LIMITS.csvBytes[where];
+  if (bytes <= limit) return null;
+  const lead = where === 'here' ? 'CSV files are read in the foreground here. Obsidian cannot do other work while the plugin reads a file. ' : '';
+  return `${lead}The file ${path} is ${megabytes(bytes, limit)}. ${where === 'here' ? 'The limit here is' : 'The limit is'} ${megabytes(limit, bytes)}. To make the file smaller, delete the rows from before the time that the strategy uses, or the columns that the strategy does not read.`;
+}
+
+/** Why the parse of the CSV file at `path` was stopped after `ms`. */
+export const csvTimeMessage = (path: string, ms: number): string => `The plugin stopped reading the file ${path} after ${duration(ms)}.`;
 
 /** Why a run was stopped after `ms`. With its size for a single backtest; without one for a step of a sweep or a luck check. */
 export function timeMessage(ms: number, size: RunSize | null): string {

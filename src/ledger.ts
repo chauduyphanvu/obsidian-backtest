@@ -2,6 +2,7 @@
 // and every version of its text. One record per block, kept in the plugin's folder by a JsonStore.
 
 import type { Backtest } from './backtest.ts';
+import { blockName, withoutName } from './blocks.ts';
 import type { Spec } from './dsl.ts';
 import { perStep, stepsPerYear } from './overfit.ts';
 import { hash, stable } from './result-cache.ts';
@@ -216,7 +217,11 @@ export function versionFigures(bt: Backtest): NewVersion['figures'] {
 export interface LedgerStore {
   get(key: string): Promise<Ledger | null>;
   update(key: string, change: (current: Ledger | null) => Ledger): Promise<Ledger>;
+  /** Moves the record of `from` to `to`, merged with any record `to` has. */
+  rename(from: string, to: string): Promise<void>;
   renamePrefix(from: string, to: string): Promise<void>;
+  /** The keys that start with `prefix` and have a record, or had one. */
+  listKeys(prefix: string): Promise<string[]>;
 }
 
 /** One block's record, as the drawings of the block use it. */
@@ -246,16 +251,52 @@ export function follow(ledger: BlockLedger, draw: (ledger: Ledger) => void): () 
   });
 }
 
+/** Whether a record holds anything: a try or a version. */
+const holdsSome = (ledger: Ledger | null): ledger is Ledger => ledger !== null && (Object.keys(ledger.trials).length > 0 || ledger.versions.length > 0);
+
+/** Whether a record is empty or began at `since` or later: its first try and its first version are no older. */
+const newSince = (ledger: Ledger | null, since: number): boolean =>
+  !holdsSome(ledger) || Math.min(...Object.values(ledger.trials).map((t) => t[2]), ...ledger.versions.map((v) => v.at)) >= since;
+
+/** A block's text as its versions are compared: without carriage returns or blank space at its end. */
+export const normalText = (text: string): string => text.replace(/\r/g, '').trimEnd();
+
+/**
+ * The key a block renamed by hand left its record under, for the block with key `key` and text `text`: only when its own
+ * record began at `since` or later (the start of the session, so tries made under the new name since then, such as by the
+ * drawing that asks, do not hide it), and exactly one of `others` (the records under the names of its note) is the key of
+ * none of the note's blocks now (`blockKeys`) and has a latest version whose text is `text` but for the `name:` line. A
+ * block deleted from the note leaves its record behind too, so a record with other text is no sign of a rename. Null
+ * otherwise.
+ */
+export function handRenamed(key: string, own: Ledger | null, others: readonly [string, Ledger | null][], blockKeys: readonly string[], since: number, text: string): string | null {
+  if (!newSince(own, since)) return null;
+  const now = new Set(blockKeys);
+  const unnamed = withoutName(normalText(text));
+  const left = others.filter(([k, ledger]) => {
+    const latest = ledger?.versions[ledger.versions.length - 1];
+    return k !== key && !now.has(k) && latest !== undefined && withoutName(normalText(latest.text)) === unnamed;
+  });
+  return left.length === 1 ? left[0][0] : null;
+}
+
+/** The name a record was kept under, as its latest version writes it; `fallback` when no version has one. */
+export function recordName(ledger: Ledger | null, fallback: string): string {
+  const latest = ledger?.versions[ledger.versions.length - 1];
+  return (latest && blockName(latest.text)) ?? fallback;
+}
+
 /** Every block's record, by the block's key (render.ts blockStateKey). */
 export class Ledgers {
   private store: LedgerStore;
   private now: () => number;
   private listeners = new Set<{ key: string; since: number; fn: (ledger: Ledger) => void }>();
   /**
-   * Keys moved this session, in order, so a block drawn before its note was renamed still writes to its new key. A block
-   * drawn after a rename follows only the later ones: a new note at the old path is another note.
+   * Keys moved this session, in order, so a block drawn before its note or its name changed still writes to its new key.
+   * A note's move takes every key that starts with its old one; a block's (`exact`) only its own key. A block drawn after
+   * a move follows only the later ones: a new note at the old path is another note.
    */
-  private moved: [string, string][] = [];
+  private moved: { from: string; to: string; exact: boolean }[] = [];
 
   constructor(store: LedgerStore, now: () => number = Date.now) {
     this.store = store;
@@ -264,15 +305,43 @@ export class Ledgers {
 
   /** Where the record of a block drawn as `key`, when `since` moves had been made, is kept now. */
   private current(key: string, since: number): string {
-    for (const [from, to] of this.moved.slice(since)) if (key.startsWith(from)) key = to + key.slice(from.length);
+    for (const { from, to, exact } of this.moved.slice(since)) if (exact ? key === from : key.startsWith(from)) key = to + key.slice(from.length);
     return key;
   }
 
   /** Moves every record whose key starts with `from` (a note or a folder that was renamed) to start with `to`. */
   async rename(from: string, to: string): Promise<void> {
     if (from === to) return;
-    this.moved.push([from, to]);
+    this.moved.push({ from, to, exact: false });
     await this.store.renamePrefix(from, to);
+  }
+
+  /**
+   * Moves the record of the one block with key `from` (a block given a new name) to `to`, merged with any record there.
+   * Keys that only start with `from`, such as that of a block whose name is longer, stay.
+   */
+  async move(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    this.moved.push({ from, to, exact: true });
+    await this.store.rename(from, to);
+    // A drawing under the new name now counts the tries it brought along.
+    const joined = await this.store.get(to);
+    if (joined) for (const w of this.listeners) if (this.current(w.key, w.since) === to) w.fn(joined);
+  }
+
+  /**
+   * The record a block renamed by hand left behind (handRenamed), with the name it was kept under: `prefix` starts the keys
+   * of the named blocks of the block's note, `blockKeys` gives the keys of the note's blocks now, and `text` is the block's.
+   */
+  async renamedFrom(key: string, prefix: string, blockKeys: () => Promise<readonly string[]>, since: number, text: string): Promise<{ key: string; name: string } | null> {
+    const own = await this.store.get(key);
+    // Most blocks have kept a record for longer, and need no look at the note or the other records.
+    if (!newSince(own, since)) return null;
+    const others: [string, Ledger | null][] = [];
+    for (const k of await this.store.listKeys(prefix)) if (k !== key) others.push([k, await this.store.get(k)]);
+    const found = handRenamed(key, own, others, await blockKeys(), since, text);
+    if (found === null) return null;
+    return { key: found, name: recordName(others.find(([k]) => k === found)![1], found.slice(prefix.length)) };
   }
 
   forBlock(key: string): BlockLedger {

@@ -4,7 +4,7 @@
 import { h } from './dom.ts';
 import type { Defaults } from './dsl.ts';
 import { minus, pct, plural } from './format.ts';
-import { defaultsHash, follow, lineDiff, MAX_VERSIONS, versionHash, type BlockLedger, type DiffLine, type Ledger, type Version, type VersionFigures } from './ledger.ts';
+import { defaultsHash, follow, lineDiff, MAX_VERSIONS, normalText, versionHash, type BlockLedger, type DiffLine, type Ledger, type Version, type VersionFigures } from './ledger.ts';
 
 export interface VersionsInput {
   ledger: BlockLedger;
@@ -88,8 +88,6 @@ export function versionRows(versions: readonly Version[], now: { hash: string; d
 export const RESTORE = 'Write this version to the block';
 export const RESTORED = 'Done: the block has the text of this version.';
 
-const normal = (text: string) => text.replace(/\r/g, '').trimEnd();
-
 /** Appends a collapsed "Versions" section. Returns a cleanup function. */
 export function renderVersions(parent: HTMLElement, input: VersionsInput): () => void {
   const details = h(parent, 'details', 'bt-details bt-versions');
@@ -150,7 +148,7 @@ function versionItem(li: HTMLElement, row: VersionRow, input: VersionsInput): vo
     toggle.textContent = label[shown.hidden ? 0 : 1];
   });
   const restore = input.restore;
-  if (!restore || normal(row.version.text) === normal(input.source)) return;
+  if (!restore || normalText(row.version.text) === normalText(input.source)) return;
   const put = h(actions, 'button', 'bt-button', RESTORE);
   const said = h(actions, 'span', 'bt-note');
   put.addEventListener('click', async () => {

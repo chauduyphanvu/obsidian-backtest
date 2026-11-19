@@ -145,12 +145,11 @@ export class JsonStore<T> {
   }
 
   /**
-   * Moves every record whose key starts with `from` to the key that starts with `to` instead, as `rename` does for one.
-   * A file is named by a hash of its key, so each file is read for the key it holds.
+   * Every key that starts with `prefix` and has a record in memory or a file. A file is named by a hash of its key, so each
+   * file is read for the key it holds, once.
    */
-  async renamePrefix(from: string, to: string): Promise<void> {
-    if (from === to) return;
-    const keys = new Set([...this.entries].filter(([k, e]) => e.value !== null && k.startsWith(from)).map(([k]) => k));
+  async listKeys(prefix: string): Promise<string[]> {
+    const keys = new Set([...this.entries].filter(([k, e]) => e.value !== null && k.startsWith(prefix)).map(([k]) => k));
     const dir = this.o.normalize(this.o.dir);
     if (await this.o.files.exists(dir)) {
       for (const path of (await this.o.files.list(dir)).files) {
@@ -166,10 +165,16 @@ export class JsonStore<T> {
             continue;
           }
         }
-        if (key.startsWith(from)) keys.add(key);
+        if (key.startsWith(prefix)) keys.add(key);
       }
     }
-    for (const key of keys) await this.rename(key, to + key.slice(from.length));
+    return [...keys];
+  }
+
+  /** Moves every record whose key starts with `from` to the key that starts with `to` instead, as `rename` does for one. */
+  async renamePrefix(from: string, to: string): Promise<void> {
+    if (from === to) return;
+    for (const key of await this.listKeys(from)) await this.rename(key, to + key.slice(from.length));
   }
 
   /** Writes every record changed since it was last written. */

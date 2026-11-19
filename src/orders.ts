@@ -1,8 +1,9 @@
 import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountOrder } from './account.ts';
 import type { CompareHost } from './compare.ts';
+import { priceFailure, type PriceFailure } from './data.ts';
 import type { Fill } from './dsl.ts';
 import { isFlip, type AssetState } from './engine.ts';
-import { DAY, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
+import { DAY, isIntraday as barsIntraday, isoDate, localDate, minus, money, price, shareCount, signedPct, stamp } from './format.ts';
 import type { RunOutput } from './runner.ts';
 import { fillPhrase, nearest, priceAlone, rulePhrase, type TriggerReport } from './trigger.ts';
 
@@ -115,6 +116,8 @@ export interface StrategyStatus {
   asOf: number;
   /** The strategy's bar size, such as "1d" or "5m". */
   interval: string;
+  /** The run's bars are shorter than a day, whatever `interval` says, as a CSV file of minute bars with no `interval:` line has. */
+  intraday?: true;
   orders: OrderRow[];
   /** Positions kept: held, with no order. */
   holdings: HoldingRow[];
@@ -132,6 +135,10 @@ export interface StrategyStatus {
   watch?: WatchRow[];
   /** The block's text, kept for a strategy that did not run, so its problem can be fixed from the list. */
   source?: string;
+  /** Why the prices of a strategy that did not run could not load, when a next step can put it right (data.ts). */
+  failure?: PriceFailure;
+  /** The 0-based line of its note that the block opens on, when the scan knew it. */
+  line?: number;
 }
 
 const STALE_DAYS = 4;
@@ -152,6 +159,9 @@ const isIntraday = (interval: string) => barMs(interval) < DAY;
 export function barTime(s: Pick<StrategyStatus, 'interval'>, t: number): string {
   return isIntraday(s.interval) ? `${stamp(t, true)} UTC` : isoDate(t);
 }
+
+/** Where a strategy's prices end: "Prices end on 2026-11-13", or "Prices end at 2026-11-13 14:05 UTC" for intraday bars. */
+export const pricesEnd = (s: { asOf: number; intraday?: boolean }): string => (s.intraday ? `Prices end at ${stamp(s.asOf, true)} UTC` : `Prices end on ${isoDate(s.asOf)}`);
 
 /** Which bar a decision rests on, such as "close of 2026-11-13". */
 export function barLabel(s: Pick<StrategyStatus, 'asOf' | 'interval'>): string {
@@ -208,6 +218,18 @@ export function watchRows(report: TriggerReport): WatchRow[] {
 /** The last close a row to watch is about, with the ticker named when its rule reads another's: "512.30", "512.30 (SPY)". */
 export const watchClose = (row: WatchRow): string => `${minus(price(row.lastClose))}${row.driver === row.ticker ? '' : ` (${row.driver})`}`;
 
+/**
+ * What a list of every block (today's orders, the dashboard) offers for a strategy that did not run: the sentence that
+ * says how to put it right, and a button that writes a correction into the block (`write`, after which the list runs
+ * again) or opens what puts it right, such as the settings (`open`). A sentence alone has neither.
+ */
+export interface ListFix {
+  label?: string;
+  text: string;
+  write?(): Promise<void>;
+  open?(): void;
+}
+
 /** Every strategy's rows to watch as one list, nearest first. */
 export function watchList(list: StrategyStatus[]): { status: StrategyStatus; row: WatchRow }[] {
   return list
@@ -223,12 +245,28 @@ export const WATCH_RULE = `closes ${WATCH_WITHIN * 100}% or less from an order`;
 /** Said under the closes to watch. */
 export const WATCH_NOTE = `The closes at the next bar that make a rule give an order. The plugin calculates them from the rules as they are written. The list shows each close that is ${WATCH_WITHIN * 100}% or less from the last close. It also shows each rule that gives an order if the close does not change, and all closes of a strategy with fill: close. You must send the orders of that strategy before the close.`;
 
+/**
+ * Whether a run's prices are probably out of date at `now` (StrategyStatus.stale), and the time of its last bar. The
+ * calendar-day rule of daily bars counts the reader's own days, which leaves room for a weekend and a holiday.
+ */
+export function pricesOld(out: Pick<RunOutput, 'spec' | 'backtest'>, now: number, staleDays = STALE_DAYS): { old: boolean; asOf: number } {
+  const { t } = out.backtest.run;
+  const { interval } = out.spec;
+  const asOf = t[t.length - 1];
+  const old = isIntraday(interval)
+    ? now - asOf > STALE_BARS * barMs(interval)
+    : barMs(interval) >= 7 * DAY
+      ? now - asOf > STALE_LONG_BARS * barMs(interval)
+      : localDay(now) - Math.floor(asOf / DAY) > staleDays;
+  return { old, asOf };
+}
+
 export function statusFrom(note: string, strategy: string, out: RunOutput, now: number, staleDays = STALE_DAYS, triggers: TriggerReport | null = null): StrategyStatus {
   const { run } = out.backtest;
   const { interval } = out.spec;
   const closeFill = out.spec.fill === 'close';
   const pending = pendingTiming(out.spec.fill);
-  const asOf = run.t[run.t.length - 1];
+  const { old, asOf } = pricesOld(out, now, staleDays);
   const equity = run.equity[run.equity.length - 1];
   const orders: OrderRow[] = [];
   const holdings: HoldingRow[] = [];
@@ -278,17 +316,28 @@ export function statusFrom(note: string, strategy: string, out: RunOutput, now: 
     warnings: out.warnings,
     error: null,
     closeFill,
-    stale: isIntraday(interval)
-      ? now - asOf > STALE_BARS * barMs(interval)
-      : barMs(interval) >= 7 * DAY
-        ? now - asOf > STALE_LONG_BARS * barMs(interval)
-        : localDay(now) - Math.floor(asOf / DAY) > staleDays,
+    stale: old,
+    ...(barsIntraday(run.t) ? { intraday: true as const } : {}),
     ...(triggers ? { watch: watchRows(triggers) } : {}),
   };
 }
 
-export function failedStatus(note: string, strategy: string, message: string, source?: string): StrategyStatus {
-  return { note, strategy, asOf: 0, interval: '1d', orders: [], holdings: [], equity: 0, warnings: [], error: message, closeFill: false, stale: false, ...(source === undefined ? {} : { source }) };
+export function failedStatus(note: string, strategy: string, message: string, source?: string, failure?: PriceFailure | null): StrategyStatus {
+  return {
+    note,
+    strategy,
+    asOf: 0,
+    interval: '1d',
+    orders: [],
+    holdings: [],
+    equity: 0,
+    warnings: [],
+    error: message,
+    closeFill: false,
+    stale: false,
+    ...(source === undefined ? {} : { source }),
+    ...(failure ? { failure } : {}),
+  };
 }
 
 /** Strategies with orders first, those with a sell or a cover ahead of the others; then the rest. Each group by note, then name. */
@@ -369,7 +418,7 @@ export function orderSize(o: OrderRow): string {
 export function problemsOf(s: StrategyStatus): string[] {
   const out: string[] = [];
   if (s.error !== null) out.push(`The strategy did not run. ${s.error}`);
-  if (s.stale) out.push(`Prices end ${isIntraday(s.interval) ? 'at' : 'on'} ${barTime(s, s.asOf)}. Thus this result is possibly out of date.`);
+  if (s.stale) out.push(`${pricesEnd(s)}. Thus this result is possibly out of date.`);
   out.push(...s.warnings);
   return out;
 }
@@ -395,6 +444,13 @@ export function ordersSavePlan(existing: string | null): 'create' | 'replace' | 
   const front = existing.match(FRONT_MATTER);
   const ours = front !== null && front[1].split(/\r?\n/).some((line) => MARKER_LINE.test(line));
   return ours ? 'replace' : 'refuse';
+}
+
+/** When the list in the pane was worked out, in local time: "Last check: 14:05", with the date first when that was not today. */
+export function lastCheckText(at: number, now: number): string {
+  const d = new Date(at);
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `Last check: ${localDate(at) === localDate(now) ? time : `${localDate(at)} ${time}`}`;
 }
 
 export const notOurNoteMessage = (path: string): string => `The note ${path} is in the vault, but Backtest Blocks did not make it. Select a different note in the settings.`;
@@ -423,8 +479,8 @@ const ORDERS_CONCURRENCY = 3;
 export interface ScanHost {
   /** Drops the kept results, so every strategy runs again. */
   clear(): void;
-  /** Every strategy block in the vault. */
-  find(): Promise<{ note: string; name: string; source: string }[]>;
+  /** Every strategy block in the vault, with the line each opens on when known. */
+  find(): Promise<{ note: string; name: string; source: string; line?: number }[]>;
   /** Runs a block's text (Results.runSource). */
   run(source: string, opts: { freshForMs?: number; background: boolean }): Promise<RunOutput>;
   /** The trigger prices of a result `run` gave (Results.triggers); absent, or null for a result, when there are none. */
@@ -449,10 +505,10 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
       const triggers = (await host.triggers?.(out)?.catch(() => null)) ?? null;
       status = statusFrom(f.note, f.name, out, Date.now(), undefined, triggers);
     } catch (e) {
-      status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e), f.source);
+      status = failedStatus(f.note, f.name, e instanceof Error ? e.message : String(e), f.source, priceFailure(e));
     }
     onProgress(++done, found.length);
-    return status;
+    return f.line === undefined ? status : { ...status, line: f.line };
   });
 }
 
@@ -468,12 +524,14 @@ export interface AccountStatus {
   /** The latest of its strategies' last bars; null when they did not run. */
   asOf: number | null;
   error: string | null;
+  /** The 0-based line of its note that the block opens on, when the scan knew it. */
+  line?: number;
 }
 
 /** What the scan of the vault's accounts needs from the plugin. */
 export interface AccountScanHost {
-  /** Every `account` block in the vault. */
-  find(): Promise<{ note: string; name: string; source: string }[]>;
+  /** Every `account` block in the vault, with the line each opens on when known. */
+  find(): Promise<{ note: string; name: string; source: string; line?: number }[]>;
   /** How the block in `note` finds and runs the strategies it lists; runs already kept are reused. */
   strategies(note: string): CompareHost<{ basename: string }>;
 }
@@ -486,7 +544,7 @@ export const ACCOUNTS_NOTE =
 export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus[]> {
   const found = await host.find();
   return mapLimit(found, ORDERS_CONCURRENCY, async (f) => {
-    const status: AccountStatus = { note: f.note, name: f.name, orders: [], asOf: null, error: null };
+    const status: AccountStatus = { note: f.note, name: f.name, orders: [], asOf: null, error: null, ...(f.line === undefined ? {} : { line: f.line }) };
     const parsed = parseAccount(f.source);
     const { config, entries } = parsed;
     const errors = errorsBeforeRun(parsed);

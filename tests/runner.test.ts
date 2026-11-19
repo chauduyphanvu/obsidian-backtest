@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
-import type { DataDeps } from '../src/data.ts';
+import { priceFailure, type DataDeps } from '../src/data.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { lookbackBars, Runner } from '../src/runner.ts';
+import { lookbackBars, Runner, type Waiting } from '../src/runner.ts';
 import { near } from './helpers.ts';
 
 const csv = (closes: number[]) => ['date,open,high,low,close', ...closes.map((c, i) => `2020-01-0${i + 1},${c},${c},${c},${c}`)].join('\n');
@@ -196,4 +196,39 @@ test('a cash-rate ticker that cannot load says where the cash rate comes from', 
   const runner = new Runner(deps({ 'prices/a.csv': csv([10, 11, 12]) }), { cashRate: 'csv:rates/missing.csv' });
   const { spec } = runner.parse('universe: csv:prices/a.csv\nbuy when close > 1');
   await assert.rejects(runner.run(spec!), /There is no file at rates\/missing\.csv\. The cash rate comes from this ticker\. The ticker is in the "cash rate" line of the block\. If the block has no such line, it is in the plugin setting "Interest on cash"\./);
+  // The longer message keeps why it failed, for the step the card offers.
+  await assert.rejects(runner.run(spec!), (e) => priceFailure(e)?.kind === 'csv');
+});
+
+test('loading prices tells how many tickers are in, of how many, and which are still on their way, in the block\'s order', async () => {
+  const files: Record<string, string> = { 'a.csv': csv([10, 11, 12]), 'b.csv': csv([20, 21, 22]), 'c.csv': csv([5, 5, 5]) };
+  // Each file comes when the test lets it, so the order they come in is the test's.
+  const gates = new Map<string, () => void>();
+  const d: DataDeps = {
+    ...deps(files),
+    readVaultFile: (path) => new Promise((resolve) => gates.set(path, () => resolve(files[path] ?? null))),
+  };
+  const runner = new Runner(d);
+  const { spec } = runner.parse('universe: csv:a.csv, csv:b.csv\nbenchmark: csv:c.csv\nbuy when close > 1');
+  const heard: [number, number, string[]][] = [];
+  const loading = runner.loadPrices(spec!, false, (done, total, waiting: Waiting[]) => heard.push([done, total, waiting.map((w) => `${w.name} ${w.source} ${w.id}`)]));
+  const turn = () => new Promise((r) => setTimeout(r, 0));
+  await turn();
+  gates.get('b.csv')!();
+  await turn();
+  gates.get('c.csv')!();
+  gates.get('a.csv')!();
+  await loading;
+  assert.deepEqual(heard, [
+    [0, 3, ['a csv a.csv', 'b csv b.csv', 'c csv c.csv']],
+    [1, 3, ['a csv a.csv', 'c csv c.csv']],
+    [2, 3, ['a csv a.csv']],
+    [3, 3, []],
+  ]);
+  // A ticker that fails is done too, so the count never waits for it.
+  const failing = new Runner(deps({ 'a.csv': csv([10, 11, 12]) }));
+  const counts: number[] = [];
+  const { spec: missing } = failing.parse('universe: csv:a.csv, csv:gone.csv\nbuy when close > 1');
+  await assert.rejects(failing.loadPrices(missing!, false, (done) => counts.push(done)));
+  assert.deepEqual(counts.slice(-1), [2]);
 });

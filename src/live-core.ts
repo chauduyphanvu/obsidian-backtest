@@ -8,6 +8,12 @@ export const PAUSE_DOWNLOAD = 1500;
 /** Moving to another block or note is not typing, so there is nothing to wait out beyond a quick pass over blocks. */
 export const PAUSE_SWITCH = 150;
 
+/** What the panel says when it has no block to show. Under the text for a note with no block is the button for a new strategy note. */
+export const EMPTY_TEXT = {
+  'no-note': 'Open a note to see the result of its strategy block here. The result updates as you type.',
+  'no-block': 'This note has no strategy block. Type a block in the note. The result shows here while you type.',
+};
+
 /** The strategy block the panel should show. `first` and `last` are 0-based lines of its content, as `findBlocks` reports them. */
 export interface Choice {
   /** Position among the note's strategy blocks. */

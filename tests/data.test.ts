@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { loadBars, parseBinance, parseCsv, parseYahoo, type DataDeps } from '../src/data.ts';
+import { loadBars, parseBinance, parseCsv, parseYahoo, priceFailure, PriceError, type DataDeps, type Retry } from '../src/data.ts';
 import { DAY } from './helpers.ts';
 
 const yahoo = (ts: number[], close: (number | null)[], adj: (number | null)[]) =>
@@ -278,6 +278,85 @@ test('an unknown ticker gets a plain message, no retry and no saved copy', async
   await assert.rejects(loadBars({ name: 'BTCUSD', source: 'binance', id: 'BTCUSD' }, '1h', 0, bad.d), {
     message: 'Binance has no market with the name BTCUSD. Make sure that the symbol is correct, for example BTCUSDT.',
   });
+});
+
+test('each failure a next step can put right carries its kind as data, which a copy of the error keeps', async () => {
+  const failureOf = async (p: Promise<unknown>) => {
+    try {
+      await p;
+    } catch (e) {
+      return { message: (e as Error).message, failure: priceFailure(e), copied: priceFailure(structuredClone({ message: (e as Error).message, failure: (e as PriceError).failure })) };
+    }
+    assert.fail('it loaded');
+  };
+  // A ticker the source does not know, named as the block names it.
+  const yahooUnknown = await failureOf(loadBars({ name: 'BRK.B', source: 'yahoo', id: 'BRK.B' }, '1d', 0, deps({ fetchText: async () => NOT_FOUND }).d));
+  assert.deepEqual(yahooUnknown.failure, { kind: 'ticker', ref: 'BRK.B', source: 'yahoo' });
+  assert.deepEqual(yahooUnknown.copied, yahooUnknown.failure);
+  const binance = await failureOf(loadBars({ name: 'BTCUSD', source: 'binance', id: 'BTCUSD' }, '1h', 0, deps({ fetchText: async () => JSON.stringify({ code: -1121, msg: 'Invalid symbol.' }) }).d));
+  assert.deepEqual(binance.failure, { kind: 'ticker', ref: 'BTCUSD', source: 'binance' });
+  // A key not set, and one the service does not accept, with the setting that chooses it.
+  const TIINGO = { name: 'SPY', source: 'tiingo' as const, id: 'SPY' };
+  const none = await failureOf(loadBars(TIINGO, '1d', 0, deps({ secret: () => null }).d));
+  assert.deepEqual(none.failure, { kind: 'key', service: 'tiingo', setting: 'Tiingo API key', rejected: false });
+  assert.equal(none.message, 'The plugin must have a Tiingo API key to load SPY. Select the secret with the key in the plugin setting "Tiingo API key".');
+  const rejected = await failureOf(loadBars(TIINGO, '1d', 0, deps({ secret: () => 'k', fetchText: async () => JSON.stringify({ detail: 'Invalid token.' }) }).d));
+  assert.deepEqual(rejected.failure, { kind: 'key', service: 'tiingo', setting: 'Tiingo API key', rejected: true });
+  assert.match(rejected.message, /^Cannot load SPY from tiingo: Tiingo did not accept the API key/);
+  const fred = await failureOf(loadBars({ name: 'T10Y2Y', source: 'fred', id: 'T10Y2Y' }, '1d', 0, deps({ secret: () => 'k', fetchText: async () => JSON.stringify({ error_message: 'Bad Request.  The value for variable api_key is not registered.' }) }).d));
+  assert.deepEqual(fred.failure, { kind: 'key', service: 'fred', setting: 'FRED API key', rejected: true });
+  // From the command line the setting is the environment variable.
+  const cli = await failureOf(loadBars(TIINGO, '1d', 0, deps({ secret: () => null, keyVariable: () => 'TIINGO_API_KEY' }).d));
+  assert.deepEqual(cli.failure, { kind: 'key', service: 'tiingo', setting: 'TIINGO_API_KEY', rejected: false });
+  // A CSV file that is not in the vault.
+  const csv = await failureOf(loadBars({ name: 'gold', source: 'csv', id: 'Data/gold.csv' }, '1d', 0, deps({}).d));
+  assert.deepEqual([csv.message, csv.failure], ['There is no file at Data/gold.csv', { kind: 'csv', path: 'Data/gold.csv' }]);
+  // No answer from the network and no saved copy; an HTTP error is an answer, and a saved copy stands in without a failure.
+  const offline = await failureOf(loadBars(SPY, '1d', 0, deps({ fetchText: async () => Promise.reject(new Error('net::ERR_INTERNET_DISCONNECTED')) }).d));
+  assert.deepEqual([offline.message, offline.failure], ['Cannot load SPY from yahoo: net::ERR_INTERNET_DISCONNECTED', { kind: 'offline' }]);
+  const tiingoOffline = await failureOf(loadBars(TIINGO, '1d', 0, deps({ secret: () => 'k', fetchText: async () => Promise.reject(new Error('fetch failed')) }).d));
+  assert.deepEqual(tiingoOffline.failure, { kind: 'offline' });
+  const status = await failureOf(loadBars(SPY, '1d', 0, deps({ fetchText: async () => Promise.reject(new Error('HTTP 503')) }).d));
+  assert.deepEqual([status.message, status.failure], ['Cannot load SPY from yahoo: HTTP 503', null]);
+  const saved = deps({});
+  await loadBars(SPY, '1d', 0, saved.d);
+  const later = deps({ now: () => Date.UTC(2024, 0, 12), cacheRead: saved.d.cacheRead, fetchText: async () => Promise.reject(new Error('net::ERR_INTERNET_DISCONNECTED')) });
+  assert.equal((await loadBars(SPY, '1d', 0, later.d)).stale, true);
+  // Any other error carries nothing, and nor does a look-alike.
+  assert.equal(priceFailure(new Error('x')), null);
+  assert.equal(priceFailure({ failure: { kind: 'other' } }), null);
+  assert.equal(priceFailure(null), null);
+});
+
+test('a failed Yahoo request tells whoever waits for the ticker when it goes out again, and each one that shares the download hears it', async () => {
+  const heard: Retry[] = [];
+  const also: Retry[] = [];
+  let tries = 0;
+  const { d } = deps({ fetchText: async () => (++tries < 3 ? Promise.reject(new Error('HTTP 429')) : GOOD) });
+  const first = loadBars(SPY, '1d', 0, d, false, { onRetry: (r) => heard.push(r) });
+  const second = loadBars(SPY, '1d', 0, d, false, { onRetry: (r) => also.push(r) });
+  await Promise.all([first, second]);
+  const told = [
+    { attempt: 2, of: 3, wait: 500 },
+    { attempt: 2, of: 3, wait: 0 },
+    { attempt: 3, of: 3, wait: 1500 },
+    { attempt: 3, of: 3, wait: 0 },
+  ];
+  assert.deepEqual(heard, told);
+  assert.deepEqual(also, told);
+});
+
+test('with a parse of its own the CSV text goes there; its errors still name the file, and other errors are kept as they are', async () => {
+  const text = 'date,open,high,low,close\n2024-01-02,1,1,1,1';
+  const given: string[] = [];
+  const away = deps({ readVaultFile: async () => text, parseCsv: async (t, path) => (given.push(path), parseCsv(t)) });
+  assert.equal((await loadBars({ name: 'x', source: 'csv', id: 'Data/x.csv' }, '1d', 0, away.d)).bars.t.length, 1);
+  assert.deepEqual(given, ['Data/x.csv']);
+  const failing = deps({ readVaultFile: async () => text, parseCsv: async () => Promise.reject(new Error('The CSV has no rows')) });
+  await assert.rejects(loadBars({ name: 'x', source: 'csv', id: 'Data/x.csv' }, '1d', 0, failing.d), { message: 'The CSV file Data/x.csv has no rows' });
+  class Refused extends Error {}
+  const refused = deps({ readVaultFile: async () => text, parseCsv: async () => Promise.reject(new Refused('The file Data/x.csv is 62 MB.')) });
+  await assert.rejects(loadBars({ name: 'x', source: 'csv', id: 'Data/x.csv' }, '1d', 0, refused.d), (e) => e instanceof Refused && e.message === 'The file Data/x.csv is 62 MB.');
 });
 
 test('loaded bars say where they came from, how far they run and when they were fetched', async () => {

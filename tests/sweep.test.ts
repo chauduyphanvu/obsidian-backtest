@@ -4,6 +4,7 @@ import { runBacktest, type Stats } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { makeRng } from '../src/rng.ts';
 import { grid, runSweep, splitSummary, summarize, sweepLimit, sweepParams, sweepSize, type SweepParam, type SweepPoint, type SweepResult } from '../src/sweep.ts';
+import { heatCentre, MAKE_ONE, NEEDS_RANGE, renderSweep, splitTiles, tint } from '../src/render-sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, near, DAY } from './helpers.ts';
 
@@ -177,9 +178,39 @@ test('with test from, the pick is made on the part before only, and its later re
   assert.equal(split.chosenAfterRank, 3);
   assert.ok(near(split.declaredBefore, 0) && near(split.declaredAfter, 0));
   assert.ok(near(split.medianAfter, 0));
+  // Before the split, most months do nothing, as the values in the note do.
+  assert.ok(near(split.medianBefore, 0));
   assert.equal(split.count, 12);
+  // Each tile's large number is a result from the date, and the line under it what the same values did before it.
+  assert.deepEqual(splitTiles(r, split, 'totalReturn', '2017-01-01'), [
+    { label: 'Chosen before 2017-01-01, result from 2017-01-01', value: '0.0%', sub: `m 3. Before: ${(100 * (1.01 ** 60 - 1)).toFixed(1)}%` },
+    { label: 'Values in the note, result from 2017-01-01', value: '0.0%', sub: 'm 6. Before: 0.0%' },
+    { label: 'Middle variant, result from 2017-01-01', value: '0.0%', sub: 'Half of 12 variants did better. Before: 0.0%' },
+  ]);
   // Without the split there is nothing to pick on.
   assert.equal(splitSummary(await runSweep(src.replace('test from: 2017-01-01\n', ''), new Map([['A', A]])), 'totalReturn'), null);
+});
+
+test('the heatmap colours from the values in the note: better in one colour, worse in the other, even when every result is a gain', () => {
+  const two: SweepParam[] = [
+    { name: 'a', percent: false, values: [1, 2, 3], declared: 2 },
+    { name: 'b', percent: false, values: [10, 20], declared: 10 },
+  ];
+  const r = result(two, [0.08, 0.1, 0.09, 0.12, 0.11, 0.2]);
+  assert.deepEqual(heatCentre(summarize(r, 'cagr')!), { value: 0.09, name: 'the values in the note' });
+  // The farthest cell, 0.11 above the centre, has the strongest tint; 0.01 below has the weakest of the other colour.
+  assert.equal(tint(0.2, 0.09, 0.11), 'color-mix(in srgb, var(--bt-sweep-gain) 62%, var(--background-primary))');
+  assert.equal(tint(0.08, 0.09, 0.11), 'color-mix(in srgb, var(--bt-sweep-loss) 15%, var(--background-primary))');
+  assert.equal(tint(0.09, 0.09, 0.11), 'var(--background-secondary)');
+  assert.equal(tint(0.1, 0.1, 0), 'var(--background-secondary)');
+  // A deeper drawdown is a lower number and worse: it takes the loss colour, as each metric reads higher as better.
+  r.points[0].stats!.maxDrawdown = -0.3;
+  const dd = summarize(r, 'maxDrawdown')!;
+  assert.equal(heatCentre(dd).value, -0.1);
+  assert.match(tint(-0.3, -0.1, 0.2), /--bt-sweep-loss\) 62%/);
+  // Values in the note that never trade have no result: the colours centre on the middle variant.
+  r.points[2].trades = 0;
+  assert.deepEqual(heatCentre(summarize(r, 'cagr')!), { value: 0.11, name: 'the middle variant' });
 });
 
 test('a 10 by 10 sweep over 4 tickers and 3000 bars takes a few seconds at most', async () => {
@@ -196,4 +227,43 @@ test('a 10 by 10 sweep over 4 tickers and 3000 bars takes a few seconds at most'
   assert.equal(r.points.length, 100);
   assert.ok(r.points.every((p) => p.error === null));
   assert.ok(ms < 5000, `took ${Math.round(ms)} ms`);
+});
+
+test('a block with no parameter that has a range still gets the section: what it needs, and a button for each number of its rules', async () => {
+  const { El } = await import('./page.ts');
+  const source = 'universe: A\ncosts: 5 bps\nfast = 20\n\nbuy when close > sma(fast)\nsell when close < sma(fast) or rsi(2) > 70';
+  const s = spec(source);
+  const backtest = runBacktest(s, new Map([['A', daily('2020-01-01', '2020-12-31', () => 1.001)]]));
+  const open = (rewrite?: (text: string) => Promise<void>) => {
+    const root = new El('div');
+    renderSweep(root as unknown as HTMLElement, { source, backtest, parse: (overrides) => parseSpec(source, { overrides }), rewrite });
+    const details = root.byClass('bt-sweep')[0];
+    assert.equal(details.attrs['data-bt-tab'], 'Try other values');
+    details.dispatch('toggle');
+    return details;
+  };
+
+  const written: string[] = [];
+  const section = open(async (text) => void written.push(text));
+  assert.equal(section.byClass('bt-sweep-intro')[0].textContent, MAKE_ONE);
+  assert.deepEqual(section.byClass('bt-sweep-chip').map((c) => c.textContent), ['rsi(2)', 'rsi(2) > 70']);
+  const buttons = section.byClass('bt-button');
+  assert.deepEqual(buttons.map((b) => b.textContent), ['Make 2 a parameter', 'Make 70 a parameter']);
+  buttons[1].dispatch('click');
+  assert.ok(buttons.every((b) => b.disabled));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(written, ['universe: A\ncosts: 5 bps\nfast = 20\nlevel = 70 in 40..140 step 10\n\nbuy when close > sma(fast)\nsell when close < sma(fast) or rsi(2) > level']);
+  assert.equal(section.byClass('bt-sweep-applied')[1].textContent, 'Done: the block uses the parameter level.');
+
+  // A write that fails says why, and the buttons can be used again.
+  const refused = open(() => Promise.reject(new Error('The note changed.')));
+  refused.byClass('bt-button')[0].dispatch('click');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(refused.byClass('bt-sweep-applied')[0].textContent, 'The note changed.');
+  assert.ok(refused.byClass('bt-button').every((b) => !b.disabled));
+
+  // Where the block cannot be edited, only the sentence.
+  const readOnly = open();
+  assert.equal(readOnly.byClass('bt-sweep-intro')[0].textContent, NEEDS_RANGE);
+  assert.equal(readOnly.byClass('bt-button').length, 0);
 });

@@ -210,6 +210,16 @@
   gap: 4px 10px;
   margin-top: 6px;
 }
+/* With no parameter that has a range: a number of the rules, with the code around it. */
+.bt-sweep-chip {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--bt-chip-bg);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
 .bt-sweep-picked-outline,
 .bt-sweep-picked-ring {
   fill: none;

@@ -1,15 +1,15 @@
 // The main thread's side of the background workers. There are two, each taking its jobs in turn: one for single
-// backtests (a block, a slider, a scan), so these never wait behind a sweep, and one for sweeps and luck checks. Each
-// block's prices are sent to a worker once and dropped when no block uses them, every job has a time budget, and the
-// same jobs run on the main thread instead when no worker can start. At the end, `BlockDrawing` holds what one drawing
-// of a block runs with.
+// backtests (a block, a slider, a scan) and the CSV files they read, so these never wait behind a sweep, and one for
+// sweeps and luck checks. Each block's prices are sent to a worker once and dropped when no block uses them, every job
+// has a time budget, and the same jobs run on the main thread instead when no worker can start. At the end,
+// `BlockDrawing` holds what one drawing of a block runs with.
 
 import type { Backtest } from './backtest.ts';
-import type { DataDeps } from './data.ts';
+import { parseCsv, type DataDeps } from './data.ts';
 import { parseSpec, type Defaults, type ParseResult, type Spec } from './dsl.ts';
 import { benchWith, jobOverrides, runBlock, runJob, stoppedResult, withInputs, type Bench, type Block, type FromWorker, type Job, type JobOf, type Kind, type Ran, type Results, type Sofar, type ToWorker } from './jobs.ts';
-import { LIMITS, LimitError, runSize, sizeRefusal, timeMessage, type RunSize } from './limits.ts';
-import { lookbackBars, Runner, type RunOutput } from './runner.ts';
+import { csvRefusal, csvTimeMessage, LIMITS, LimitError, runSize, sizeRefusal, timeMessage, type RunSize } from './limits.ts';
+import { lookbackBars, Runner, type OnTicker, type RunOutput } from './runner.ts';
 import { pause, type Parse } from './sweep.ts';
 import { computeTriggers, type TriggerReport, type TriggerRun } from './trigger.ts';
 import type { Bars } from './types.ts';
@@ -112,6 +112,12 @@ export interface BlockRuns {
 export interface JobClient {
   forBlock(input: JobInput): BlockJobs;
   runs(): BlockRuns;
+  /**
+   * The bars of a CSV file's text (data.ts parseCsv), parsed in the worker of the single runs, or here when none can
+   * start. Rejects with a LimitError for a file too large for where it would be parsed, and otherwise with the parse's
+   * own error.
+   */
+  parseCsv(text: string, path: string): Promise<Bars>;
   /** True once no worker could start, so everything runs on the main thread. */
   foreground(): boolean;
   shutdown(): void;
@@ -133,9 +139,6 @@ interface Lane {
 interface Common {
   id: number;
   lane: Lane;
-  /** The block's prices, and the id they have in the workers. */
-  prices: Map<string, Bars>;
-  data: number;
   /** Lower goes first; equal ones go in the order asked. */
   priority: number;
   /** Running on the main thread rather than in a worker. */
@@ -149,7 +152,14 @@ interface Common {
   mine: Set<Task>;
 }
 
-interface JobTask extends Common {
+/** A task that works on a block's prices. */
+interface Priced extends Common {
+  /** The block's prices, and the id they have in the workers. */
+  prices: Map<string, Bars>;
+  data: number;
+}
+
+interface JobTask extends Priced {
   type: 'job';
   input: JobInput;
   job: Job;
@@ -162,7 +172,7 @@ interface JobTask extends Common {
   reject: (e: Error) => void;
 }
 
-interface RunTask extends Common {
+interface RunTask extends Priced {
   type: 'run';
   block: Block;
   size: RunSize;
@@ -171,7 +181,7 @@ interface RunTask extends Common {
   reject: (e: Error) => void;
 }
 
-interface TriggersTask extends Common {
+interface TriggersTask extends Priced {
   type: 'triggers';
   spec: Spec;
   run: TriggerRun;
@@ -180,7 +190,15 @@ interface TriggersTask extends Common {
   reject: (e: Error) => void;
 }
 
-type Task = JobTask | RunTask | TriggersTask;
+interface CsvTask extends Common {
+  type: 'csv';
+  text: string;
+  path: string;
+  resolve: (r: Bars | null) => void;
+  reject: (e: Error) => void;
+}
+
+type Task = JobTask | RunTask | TriggersTask | CsvTask;
 
 const BACKGROUND = 1;
 
@@ -261,8 +279,17 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     else queue.splice(at, 0, task);
   }
 
-  /** Settles a single run that is too large for where it would run, or trigger prices of one too large for the main thread; true when it did. */
+  /**
+   * Settles a single run or a CSV file that is too large for where it would run or be parsed, or trigger prices of a run
+   * too large for the main thread; true when it did.
+   */
   function refused(task: Task, where: 'worker' | 'here'): boolean {
+    if (task.type === 'csv') {
+      const why = csvRefusal(task.path, task.text.length, where);
+      if (why === null) return false;
+      settle(task, null, new LimitError('size', why, false));
+      return true;
+    }
     if (task.type === 'triggers') {
       if (where === 'worker' || sizeRefusal(task.size, 'here') === null) return false;
       settle(task, null);
@@ -331,6 +358,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     kill(l);
     // Trigger prices only add to a result, so going past their time leaves them out rather than failing anything.
     if (task.type === 'triggers') settle(task, null);
+    else if (task.type === 'csv') settle(task, null, new LimitError('time', csvTimeMessage(task.path, task.budgetMs), false));
     else settle(task, null, new LimitError('time', timeMessage(task.budgetMs, task.type === 'run' ? task.size : null), task.type === 'run' && !task.anyway));
     next(l);
   }
@@ -338,6 +366,11 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
   function runThere(task: Task): void {
     const l = task.lane;
     const w = l.worker!;
+    if (task.type === 'csv') {
+      w.post({ type: 'csv', id: task.id, text: task.text });
+      arm(task);
+      return;
+    }
     if (!l.sent.has(task.data)) {
       w.post({ type: 'data', id: task.data, data: task.prices });
       l.sent.add(task.data);
@@ -363,6 +396,8 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
       };
     } else if (task.type === 'triggers') {
       work = async () => (task.stopped ? null : computeTriggers(task.spec, task.prices, task.run));
+    } else if (task.type === 'csv') {
+      work = async () => (task.stopped ? null : parseCsv(task.text));
     } else {
       const bench = benchOf(task);
       work = () =>
@@ -407,6 +442,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     if (m.type === 'error') settle(task, null, new Error(m.message));
     else if (m.type === 'ran') settle(task, { backtest: m.result, hereMs: null } satisfies RunResult);
     else if (m.type === 'triggered') settle(task, m.result);
+    else if (m.type === 'parsed') settle(task, m.bars);
     else settle(task, m.result);
     next(l);
   }
@@ -605,9 +641,34 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     };
   }
 
+  function parseCsvText(text: string, path: string): Promise<Bars> {
+    const { promise, resolve, reject } = deferred<Bars>();
+    const task: CsvTask = {
+      type: 'csv',
+      id: ++lastTask,
+      lane: short,
+      priority: 0,
+      here: false,
+      stopped: false,
+      settled: false,
+      // A file within its limit parses in seconds; this only ends a worker that stopped answering.
+      budgetMs: LIMITS.anywayMs,
+      mine: new Set(),
+      text,
+      path,
+      resolve,
+      reject,
+    };
+    task.mine.add(task);
+    enqueue(task);
+    pump(short);
+    return promise.then((bars) => bars ?? Promise.reject(new Error(`The plugin stopped reading the file ${path}.`)));
+  }
+
   return {
     forBlock,
     runs,
+    parseCsv: parseCsvText,
     foreground: () => noWorker,
     shutdown() {
       for (const l of [short, long]) {
@@ -654,6 +715,11 @@ export function blockJobs(input: JobInput): BlockJobs {
 /** The single runs of one block, or of one scan. The worker starts with the first run. */
 export function blockRuns(): BlockRuns {
   return client().runs();
+}
+
+/** Parses a CSV file's text in the worker of the single runs (JobClient.parseCsv): the plugin's DataDeps.parseCsv. */
+export function parseCsvInWorker(text: string, path: string): Promise<Bars> {
+  return client().parseCsv(text, path);
 }
 
 /** True once no worker could start, so runs happen on the main thread and cannot be stopped. */
@@ -743,9 +809,12 @@ export class BlockDrawing {
     return backtest;
   }
 
-  /** Loads the prices of `spec`, the block's text read with `overrides`, and runs it. Null when the runs were closed first. */
-  async run(spec: Spec, o: { force?: boolean; overrides?: Record<string, number>; onPrices?: (bars: number) => void } = {}): Promise<RunOutput | null> {
-    const { data, warnings, notes, prices } = await this.runner.loadPrices(spec, o.force ?? false);
+  /**
+   * Loads the prices of `spec`, the block's text read with `overrides`, and runs it. Null when the runs were closed first.
+   * `onTicker` hears of the prices as they come in, and `onPrices` of the bars once they are all in.
+   */
+  async run(spec: Spec, o: { force?: boolean; overrides?: Record<string, number>; onPrices?: (bars: number) => void; onTicker?: OnTicker } = {}): Promise<RunOutput | null> {
+    const { data, warnings, notes, prices } = await this.runner.loadPrices(spec, o.force ?? false, o.onTicker);
     o.onPrices?.(Math.max(0, ...[...data.values()].map((b) => b.t.length)));
     const backtest = await this.backtest(spec, data, o.overrides);
     if (!backtest) return null;

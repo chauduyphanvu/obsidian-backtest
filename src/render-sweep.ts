@@ -5,9 +5,11 @@ import type { Backtest, Stats } from './backtest.ts';
 import type { TrackPaint } from './render-params.ts';
 import { h, s } from './dom.ts';
 import type { Defaults } from './dsl.ts';
+import { applyFix } from './fixes.ts';
 import { minus, niceStep, ordinal, pct, plural, tidy } from './format.ts';
 import type { BlockLedger } from './ledger.ts';
 import type { Pbo } from './overfit.ts';
+import { ruleNumbers } from './rewrite.ts';
 import {
   METRICS,
   isDeclared,
@@ -21,6 +23,7 @@ import {
   type Metric,
   type Parse,
   type Period,
+  type SplitSummary,
   type SweepParam,
   type SweepPoint,
   type SweepResult,
@@ -44,6 +47,11 @@ export interface SweepInput {
   ledger?: BlockLedger;
   /** Told each sweep that finished or was stopped, with what it ran, for the slider tracks of the block's result. */
   onResult?: (paint: TrackPaint) => void;
+  /**
+   * Writes a whole new text of the block into the note, for a block with no parameter that has a range, to make a number of
+   * its rules one; absent where the block can't be edited. A rejection means nothing was written, and says why.
+   */
+  rewrite?: (text: string) => Promise<void>;
 }
 
 /** What a sweep found, cut down to what the slider tracks show: each variant's values and its return per year. */
@@ -170,21 +178,61 @@ export function observe(life: Life, el: HTMLElement, draw: (width: number) => vo
 
 // ---------------------------------------------------------------- section
 
-/** Appends a collapsed "Try other parameter values" section when a parameter has a range. Returns a cleanup function. */
+/**
+ * Appends a collapsed "Try other parameter values" section. Without a parameter that has a range, it says that the tool
+ * needs one, and offers to make a number of the rules a parameter. Returns a cleanup function.
+ */
 export function renderSweep(parent: HTMLElement, input: SweepInput): () => void {
-  const params = sweepParams(input.backtest.spec);
-  if (params.length === 0) return () => {};
-  const life: Life = { gone: false, observers: [] };
-  const jobs = blockJobs(input);
   const details = h(parent, 'details', 'bt-details bt-sweep');
   h(details, 'summary', undefined, 'Try other parameter values');
   tabInfo(details, 'Try other values');
+  const params = sweepParams(input.backtest.spec);
+  if (params.length === 0) {
+    details.addEventListener('toggle', () => noRange(h(details, 'div', 'bt-sweep-body'), input), { once: true });
+    return () => {};
+  }
+  const life: Life = { gone: false, observers: [] };
+  const jobs = blockJobs(input);
   details.addEventListener('toggle', () => build(h(details, 'div', 'bt-sweep-body'), input, params, life, jobs), { once: true });
   return () => {
     life.gone = true;
     jobs.close();
     for (const o of life.observers) o.disconnect();
   };
+}
+
+export const NEEDS_RANGE = 'This tool needs a parameter with a range, for example fast = 50 in 20..100 step 10.';
+export const MAKE_ONE = 'This tool needs a parameter with a range: make a number of the rules a parameter.';
+
+/** A block with no parameter that has a range: what the tool needs, and each number of its rules with a button that makes it one. */
+function noRange(body: HTMLElement, input: SweepInput): void {
+  const write = input.rewrite;
+  const lines = input.source.split('\n');
+  const offers = write ? ruleNumbers(lines, input.defaults) : [];
+  h(body, 'p', 'bt-sweep-intro', write && offers.length ? MAKE_ONE : NEEDS_RANGE);
+  if (!write) return;
+  const buttons: HTMLButtonElement[] = [];
+  for (const offer of offers) {
+    const row = h(body, 'div', 'bt-sweep-apply');
+    h(row, 'span', 'bt-sweep-chip', offer.context);
+    const button = h(row, 'button', 'bt-button', offer.fix.label);
+    button.type = 'button';
+    buttons.push(button);
+    const said = h(row, 'span', 'bt-sweep-applied');
+    said.setAttribute('aria-live', 'polite');
+    button.addEventListener('click', () => {
+      // One change at a time: after it the block's text, and so the place of every other number, is new.
+      for (const b of buttons) b.disabled = true;
+      said.textContent = '';
+      write(applyFix(lines, offer.fix).join('\n')).then(
+        () => (said.textContent = `Done: the block uses the parameter ${offer.name}.`),
+        (e: unknown) => {
+          for (const b of buttons) b.disabled = false;
+          said.textContent = e instanceof Error ? e.message : String(e);
+        },
+      );
+    });
+  }
 }
 
 function intro(params: SweepParam[], total: number): string {
@@ -320,17 +368,14 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
   const box = h(el, 'div', 'bt-sweep-split');
   h(box, 'div', 'bt-sweep-split-title', `Tuned before ${day}, then tested: ${METRICS[metric].noun} from ${day}`);
   const tiles = h(box, 'div', 'bt-sweep-split-tiles');
-  const tile = (label: string, value: number, sub: string) => {
+  for (const tile of splitTiles(result, split, metric, day)) {
     const t = h(tiles, 'div', 'bt-tile');
-    h(t, 'div', 'bt-tile-label', label);
-    h(t, 'div', 'bt-tile-value', fmtMetric(metric, value));
-    h(t, 'div', 'bt-tile-sub', sub);
-  };
+    h(t, 'div', 'bt-tile-label', tile.label);
+    h(t, 'div', 'bt-tile-value', tile.value);
+    h(t, 'div', 'bt-tile-sub', tile.sub);
+  }
   const p = result.params;
-  tile(`Best before ${day}`, split.chosenAfter, `${valuesText(p, split.chosen.values)}. Before: ${fmtMetric(metric, split.chosenBefore)}`);
   const declared = result.points.find((q) => isDeclared(result, q));
-  if (declared) tile('Values in the note', split.declaredAfter, `${valuesText(p, declared.values)}. Before: ${fmtMetric(metric, split.declaredBefore)}`);
-  tile('Middle variant', split.medianAfter, `half of ${split.count} did better`);
 
   const fell = split.chosenAfter < split.chosenBefore;
   const lines = [
@@ -339,6 +384,27 @@ function splitCallout(el: HTMLElement, result: SweepResult, metric: Metric, day:
     `The selection did not see the subsequent prices. Thus this result is the best indication here of the value of this method of selection.${declared ? ' The values in the note are only as clean as the method that you used to select them. If you selected them when you looked at the full run, their subsequent result is also not a correct test.' : ''}`,
   ];
   h(box, 'p', 'bt-sweep-split-text', lines.join(' '));
+}
+
+export interface Tile {
+  label: string;
+  value: string;
+  sub: string;
+}
+
+/**
+ * The tiles of the box for `test from`, alike: each large number is a result from the date, and the line under it says
+ * whose values they are and what they did before the date.
+ */
+export function splitTiles(result: SweepResult, split: SplitSummary, metric: Metric, day: string): Tile[] {
+  const p = result.params;
+  const before = (v: number) => `Before: ${fmtMetric(metric, v)}`;
+  const declared = result.points.find((q) => isDeclared(result, q));
+  return [
+    { label: `Chosen before ${day}, result from ${day}`, value: fmtMetric(metric, split.chosenAfter), sub: `${valuesText(p, split.chosen.values)}. ${before(split.chosenBefore)}` },
+    ...(declared ? [{ label: `Values in the note, result from ${day}`, value: fmtMetric(metric, split.declaredAfter), sub: `${valuesText(p, declared.values)}. ${before(split.declaredBefore)}` }] : []),
+    { label: `Middle variant, result from ${day}`, value: fmtMetric(metric, split.medianAfter), sub: `Half of ${plural(split.count, 'variant')} did better. ${before(split.medianBefore)}` },
+  ];
 }
 
 /**
@@ -702,10 +768,20 @@ function cellFormats(m: Metric): { fmt: (v: number) => string; unit: string }[] 
   ];
 }
 
-function tint(v: number, peak: number): string {
-  if (v === 0 || !(peak > 0)) return 'var(--background-secondary)';
-  const share = Math.round(TINT_MIN + (TINT_MAX - TINT_MIN) * Math.min(1, Math.abs(v) / peak));
-  return `color-mix(in srgb, var(${v > 0 ? '--bt-sweep-gain' : '--bt-sweep-loss'}) ${share}%, var(--background-primary))`;
+/** What the heatmap's colours are measured from: the values in the note, or the middle variant when those have no result. */
+export function heatCentre(sum: SweepSummary): { value: number; name: string } {
+  const own = sum.declared && sum.declared.trades > 0 ? metricOf(sum.declared, sum.metric, sum.period) : NaN;
+  return Number.isNaN(own) ? { value: sum.median, name: 'the middle variant' } : { value: own, name: 'the values in the note' };
+}
+
+/**
+ * A cell's colour: the gain colour above the centre and the loss colour below it, stronger the farther it is, at full
+ * strength at `reach`. Every metric reads higher is better (sweep.ts METRICS), so above the centre is better.
+ */
+export function tint(v: number, centre: number, reach: number): string {
+  if (v === centre || !(reach > 0)) return 'var(--background-secondary)';
+  const share = Math.round(TINT_MIN + (TINT_MAX - TINT_MIN) * Math.min(1, Math.abs(v - centre) / reach));
+  return `color-mix(in srgb, var(${v > centre ? '--bt-sweep-gain' : '--bt-sweep-loss'}) ${share}%, var(--background-primary))`;
 }
 
 function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, width: number, result: SweepResult, sum: SweepSummary, view: View, fixed: number[], pick: Picking | null): void {
@@ -729,7 +805,8 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
       if (!Number.isNaN(v)) values.push(v);
     }
   }
-  const peak = Math.max(0, ...values.map(Math.abs));
+  const centre = heatCentre(sum);
+  const reach = Math.max(0, ...values.map((v) => Math.abs(v - centre.value)));
 
   const rowLabels = rowP.values.map((v) => paramText(rowP, v));
   const labelW = Math.ceil(Math.max(rowP.name.length, ...rowLabels.map((t) => t.length)) * CHAR) + 12;
@@ -765,7 +842,7 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
       const x = labelW + c * cellW + 1;
       const y = top + r * cellH + 1;
       const rect = s(svg, 'rect', { x, y, width: cellW - 2, height: cellH - 2, rx: 2, class: 'bt-sweep-cell' });
-      rect.setAttribute('style', `fill: ${Number.isNaN(v) ? 'var(--background-secondary)' : tint(v, peak)}`);
+      rect.setAttribute('style', `fill: ${Number.isNaN(v) ? 'var(--background-secondary)' : tint(v, centre.value, reach)}`);
       // × for a variant that could not run, – for one that never traded, nothing for one not run (a stopped sweep).
       const text = !q ? '' : q.error ? '×' : !q.trades ? '–' : Number.isNaN(v) ? '' : format.fmt(v);
       s(svg, 'text', { x: x + (cellW - 2) / 2, y: y + cellH / 2 + 3, class: `bt-sweep-cell-text${Number.isNaN(v) ? ' bt-sweep-cell-none' : ''}${isBest(q) ? ' bt-sweep-cell-best' : ''}`, 'text-anchor': 'middle' }, text);
@@ -844,16 +921,22 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
   item('bt-sweep-swatch-declared', 'Values in the note');
   if (bestAt) item('bt-sweep-swatch-best', 'Best variant');
   const scale = h(legend, 'span', 'bt-key bt-sweep-scale');
-  const lo = Math.min(0, ...values);
-  const hi = Math.max(0, ...values);
-  h(scale, 'span', 'bt-key-value', lo < 0 ? fmtMetric(m, -peak) : fmtMetric(m, 0));
+  const lo = Math.min(centre.value, ...values);
+  const hi = Math.max(centre.value, ...values);
+  h(scale, 'span', 'bt-key-value', fmtMetric(m, lo));
   const ramp = h(scale, 'span', 'bt-sweep-ramp');
-  ramp.style.background = `linear-gradient(to right, ${lo < 0 ? `${tint(-peak, peak)}, ` : ''}var(--background-secondary)${hi > 0 ? `, ${tint(peak, peak)}` : ''})`;
-  h(scale, 'span', 'bt-key-value', hi > 0 ? fmtMetric(m, peak) : fmtMetric(m, 0));
+  const mid = hi > lo ? Math.round(((centre.value - lo) / (hi - lo)) * 100) : 50;
+  ramp.style.background = `linear-gradient(to right, ${tint(lo, centre.value, reach)} 0%, var(--background-secondary) ${mid}%, ${tint(hi, centre.value, reach)} 100%)`;
+  h(scale, 'span', 'bt-key-value', fmtMetric(m, hi));
   const failed =
     (result.points.some((q) => q.error !== null) ? ' × shows values that did not run.' : '') +
     (result.points.some((q) => q.error === null && q.trades === 0) ? ' – shows values that did not trade.' : '');
-  h(key, 'div', 'bt-note', `${METRICS[m].label} in each cell${format.unit}: blue for gains, red for losses, darker for larger values.${failed}${svgW > width ? ' Scroll to the right to see more.' : ''}`);
+  h(
+    key,
+    'div',
+    'bt-note',
+    `${METRICS[m].label} in each cell${format.unit}. Colour: better or worse than ${centre.name} (${fmtMetric(m, centre.value)}). Blue is better, red is worse, and a darker colour shows a larger difference.${failed}${svgW > width ? ' Scroll to the right to see more.' : ''}`,
+  );
 }
 
 function bestTable(el: HTMLElement, result: SweepResult, sum: SweepSummary, pick: Picking | null): void {

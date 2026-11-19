@@ -3,7 +3,7 @@ import { colourSource, h } from './dom.ts';
 import { blockOf, EMPTY, STARTERS, type Starter } from './gallery.ts';
 
 export interface GalleryHost {
-  /** Inserts the block, fences and a final newline included, at the cursor of the note being edited. */
+  /** Takes the chosen block, fences and a final newline included: puts it at the cursor of the note being edited, or makes a new note of it. */
   insert(block: string): void;
 }
 

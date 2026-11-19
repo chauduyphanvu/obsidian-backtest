@@ -81,6 +81,100 @@ test('a result starts where the reader left the one it replaces: the tab, the sp
   assert.equal(wait.byClass('bt-step-done').length, 1);
 });
 
+test('the loading card counts the tickers in, says when Yahoo is asked again, and after a few seconds names the one it waits for', async (t) => {
+  const { El } = await import('./page.ts');
+  const { loadingText, renderLoading } = await import('../src/render.ts');
+  const w = (name: string, retry: { attempt: number; of: number; wait: number } | null = null) => ({ name, source: 'yahoo' as const, id: name, retry });
+  assert.equal(loadingText(0, 1, [w('SPY')], false), null);
+  assert.equal(loadingText(7, 12, [w('EFA'), w('TLT')], false), 'Prices: 7 of 12.');
+  assert.equal(loadingText(7, 12, [w('EFA'), w('TLT')], true), 'Prices: 7 of 12. The plugin waits for EFA from Yahoo.');
+  assert.equal(loadingText(0, 1, [w('EFA', { attempt: 2, of: 3, wait: 500 })], false), 'Yahoo did not send prices for EFA. The plugin asks again in 1 second.');
+  assert.equal(loadingText(3, 4, [w('TLT'), w('EFA', { attempt: 3, of: 3, wait: 1500 })], true), 'Prices: 3 of 4. Yahoo did not send prices for EFA. The plugin asks again in 2 seconds.');
+  assert.equal(loadingText(0, 1, [w('EFA', { attempt: 3, of: 3, wait: 0 })], true), 'The plugin waits for EFA from Yahoo, try 3 of 3.');
+  assert.equal(loadingText(1, 2, [{ name: 'gold', source: 'csv', id: 'Data/gold.csv', retry: null }], true), 'Prices: 1 of 2. The plugin reads the file Data/gold.csv.');
+  assert.equal(loadingText(2, 3, [w('the 5m bars of SPY')], true), 'Prices: 2 of 3. The plugin waits for the 5m bars of SPY from Yahoo.');
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const wait = new El('div');
+  const loading = renderLoading(wait as unknown as HTMLElement, { title: 'Trend', tickers: ['SPY', 'EFA'] });
+  const say = () => wait.byClass('bt-loading-say')[0].textContent;
+  // A screen reader hears `say`; the same words show under the steps.
+  const shown = () => wait.byClass('bt-loading-line')[0].textContent;
+  assert.equal(shown(), '');
+  loading.tickers(0, 2, [w('SPY'), w('EFA')]);
+  loading.tickers(1, 2, [w('EFA')]);
+  assert.equal(say(), 'Prices: 1 of 2.');
+  assert.equal(shown(), 'Prices: 1 of 2.');
+  t.mock.timers.tick(3000);
+  assert.equal(say(), 'Prices: 1 of 2. The plugin waits for EFA from Yahoo.');
+  assert.equal(shown(), 'Prices: 1 of 2. The plugin waits for EFA from Yahoo.');
+  assert.equal(wait.byClass('bt-loading-line')[0].attrs['aria-hidden'], 'true');
+  loading.tickers(2, 2, []);
+  assert.equal(say(), 'Prices: 2 of 2.');
+  loading.prices(500);
+  assert.equal(say(), 'The plugin runs the backtest…');
+  assert.equal(shown(), '');
+  // A card replaced before it was slow, as by a failure, is left as it was.
+  const gone = new El('div');
+  renderLoading(gone as unknown as HTMLElement, { title: 'Trend', tickers: ['SPY', 'EFA'] }).tickers(1, 2, [w('EFA')]);
+  const goneSay = gone.byClass('bt-loading-say')[0];
+  gone.replaceChildren();
+  t.mock.timers.tick(3000);
+  assert.equal(goneSay.textContent, 'Prices: 1 of 2.');
+  // One ticker says nothing new until it is slow.
+  const one = new El('div');
+  const single = renderLoading(one as unknown as HTMLElement, { title: 'Trend', tickers: ['SPY'] });
+  single.tickers(0, 1, [w('SPY')]);
+  assert.equal(one.byClass('bt-loading-say')[0].textContent, 'The plugin loads the prices for SPY…');
+  t.mock.timers.tick(3000);
+  assert.equal(one.byClass('bt-loading-say')[0].textContent, 'The plugin waits for SPY from Yahoo.');
+  single.prices(500);
+  // Folded, the card waits as one line as before.
+  const folded = new El('div');
+  renderLoading(folded as unknown as HTMLElement, { title: 'Trend', tickers: ['SPY', 'EFA'], folded: true }).tickers(1, 2, [w('EFA')]);
+  assert.equal(folded.byClass('bt-loading-say')[0].textContent, 'The plugin loads the prices for SPY, EFA…');
+  assert.equal(folded.byClass('bt-loading-line').length, 0);
+});
+
+test('a run that failed offers the step that puts it right as the main button beside "Run again"', async () => {
+  const { El } = await import('./page.ts');
+  const { renderFailure } = await import('../src/render.ts');
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  const root = new El('div');
+  const el = root as unknown as HTMLElement;
+  const src = 'name: Berkshire\nuniverse: BRK.B\nbuy when true';
+  let retried = 0;
+  const done: string[] = [];
+  const message = 'Yahoo has no prices for BRK.B. Make sure that the ticker is correct.';
+  renderFailure(el, message, src, () => retried++, { text: 'Did you mean BRK-B?', button: { label: 'Change to BRK-B', run: async () => void done.push('written') } });
+  assert.equal(root.byClass('bt-title')[0].textContent, 'Berkshire');
+  assert.equal(root.byClass('bt-problem-message')[0].textContent, `${message} Did you mean BRK-B?`);
+  const buttons = () => root.all().filter((e) => e.tag === 'button');
+  assert.deepEqual(buttons().map((b) => [b.textContent, b.classes().includes('mod-cta')]), [['Change to BRK-B', true], ['Run again', false]]);
+  buttons()[0].dispatch('click');
+  await settle();
+  assert.deepEqual(done, ['written']);
+  buttons()[1].dispatch('click');
+  assert.equal(retried, 1);
+  // A step that fails says why, and can be tried again.
+  renderFailure(el, message, src, () => {}, { text: '', button: { label: 'Change to BRK-B', run: () => Promise.reject(new Error('Cannot change the block. The block changed.')) } });
+  assert.equal(root.byClass('bt-problem-message')[0].textContent, message);
+  buttons()[0].dispatch('click');
+  assert.equal(buttons()[0].disabled, true);
+  await settle();
+  assert.equal(root.byClass('bt-err-said')[0].textContent, 'Cannot change the block. The block changed.');
+  assert.equal(buttons()[0].disabled, false);
+  // A sentence alone keeps "Run again" as the only button, and no step is the card as it was.
+  renderFailure(el, 'Cannot load SPY from yahoo: net::ERR_INTERNET_DISCONNECTED', src, () => {}, { text: 'The plugin must have a connection to the internet to load the prices of a ticker the first time.', button: null });
+  assert.deepEqual(buttons().map((b) => b.textContent), ['Run again']);
+  assert.match(root.byClass('bt-problem-message')[0].textContent, /yahoo: net::ERR_INTERNET_DISCONNECTED\. The plugin must have a connection/);
+  // A message with no full stop of its own gets one before the sentence that follows it.
+  renderFailure(el, 'There is no file at Data/gold.csv', src, () => {}, { text: 'The CSV helper lists the CSV files of the vault.', button: null });
+  assert.equal(root.byClass('bt-problem-message')[0].textContent, 'There is no file at Data/gold.csv. The CSV helper lists the CSV files of the vault.');
+  renderFailure(el, 'Something else.', src, () => {});
+  assert.deepEqual([root.byClass('bt-problem-message')[0].textContent, buttons().map((b) => b.textContent)], ['Something else.', ['Run again']]);
+});
+
 test('each figure says who did better, and "even" exactly when the words call the two the same', async () => {
   const { figures } = await import('../src/verdict.ts');
   const closes = Array.from({ length: 1500 }, (_, i) => 100 * (1 + i * 0.0004) * (1 - (i > 700 && i < 760 ? (i - 700) * 0.006 : i >= 760 ? 0.36 : 0)) + 4 * Math.sin(i / 11));
@@ -155,6 +249,47 @@ test('a block that cannot run shows its own lines, the word marked, a short mess
   assert.match(panel.byClass('bt-err-msg')[0].textContent, /Did you mean sma/);
 });
 
+test('a problem with equally near corrections gets a button for each, and the one clicked is written', async () => {
+  const { renderErrors } = await import('../src/render.ts');
+  const { El } = await import('./page.ts');
+  const src = 'universe: SPY\nbuy when close > sam(200)\nsell when close < sma(200)';
+  const written: string[] = [];
+  const root = new El('div');
+  renderErrors(root as unknown as HTMLElement, parseSpec(src).errors, src, { fix: (text) => (written.push(text), Promise.resolve()) });
+  assert.equal(root.byClass('bt-err-msg')[0].textContent, 'Unknown name "sam". Possible corrections: sma, sum.');
+  const buttons = root.byClass('bt-err-fix');
+  assert.deepEqual(buttons.map((b) => b.textContent), ['Change to sma', 'Change to sum']);
+  // Neither is the one to choose, so neither is the call to action.
+  assert.ok(buttons.every((b) => !b.classes().includes('mod-cta')));
+  buttons[1].dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(written, [src.replace('sam', 'sum')]);
+  assert.ok(buttons.every((b) => b.disabled));
+  assert.equal(root.byClass('bt-squig-fixed')[0].textContent, 'sum');
+});
+
+test('a fix that is not a word, such as removing a blank line, keeps the line as it is until the block runs again', async () => {
+  const { renderErrors } = await import('../src/render.ts');
+  const { El } = await import('./page.ts');
+  const src = 'universe: SPY\nbuy when close > sma(200)\n\n  and rsi(14) < 30\nsell when close < sma(200)';
+  const written: string[] = [];
+  const root = new El('div');
+  renderErrors(root as unknown as HTMLElement, parseSpec(src).errors, src, { fix: (text) => (written.push(text), Promise.resolve()) });
+  assert.equal(root.byClass('bt-err-msg')[0].textContent, 'A blank line ends the rule on line 2. Remove the blank line.');
+  const [button] = root.byClass('bt-err-fix');
+  assert.equal(button.textContent, 'Remove the blank line');
+  button.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(written, [src.replace('\n\n', '\n')]);
+  assert.equal(root.byClass('bt-squig-fixed').length, 0);
+  // A parameter outside its range: two ways, and the message says them, so no sentence is added.
+  const range = 'universe: SPY\nn = 400 in 100..300 step 20\nbuy when close > sma(n)';
+  const box = new El('div');
+  renderErrors(box as unknown as HTMLElement, parseSpec(range).errors, range, { fix: () => Promise.resolve() });
+  assert.equal(box.byClass('bt-err-msg')[0].textContent, '400 is not in the range 100..300. Change the value or the range.');
+  assert.deepEqual(box.byClass('bt-err-fix').map((b) => b.textContent), ['Change to 300', 'Change the range to 100..400']);
+});
+
 test('a fix from a list finds its block by its text, and refuses a note with two blocks of that text', async () => {
   const { fixBlockInNote } = await import('../src/rewrite.ts');
   const block = 'name: Typo\nbuy when close > smaa(200)';
@@ -189,7 +324,8 @@ test('the dashboard has six columns, a shimmer for a running row, the near chip 
     ],
     run: (source: string) => (source === typo ? Promise.reject(new Error(parseSpec(typo).errors[0].message)) : source === good && fixed.length === 0 && host.calls++ === 1 ? late : Promise.resolve(out(source))),
     calls: 0,
-    openNote: () => {},
+    openBlock: () => {},
+    newNote: () => {},
     now: () => Date.UTC(2026, 10, 18, 22, 41),
     triggers: () => new Promise<null>((r) => (answer = r)),
     fix: () => ({ label: 'Change to sma', text: 'Did you mean sma?', write: async () => void fixed.push('done') }),
@@ -218,6 +354,36 @@ test('the dashboard has six columns, a shimmer for a running row, the near chip 
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(fixed, ['done']);
   release(out(good));
+});
+
+test('a dashboard row whose prices did not load gets its next step when it is known, and a button that opens what puts it right', async () => {
+  const { renderDashboard } = await import('../src/render-dashboard.ts');
+  const { El } = await import('./page.ts');
+  const { PriceError } = await import('../src/data.ts');
+  const src = 'name: Gold\nuniverse: csv:Data/gold.csv\nbuy when true';
+  let answer: (fix: { label: string; text: string; open(): void }) => void = () => {};
+  const opened: string[] = [];
+  const host = {
+    find: async () => [{ note: 'g.md', name: 'Gold', source: src }],
+    run: () => Promise.reject(new PriceError('There is no file at Data/gold.csv', { kind: 'csv', path: 'Data/gold.csv' })),
+    openBlock: () => {},
+    newNote: () => {},
+    now: () => Date.UTC(2026, 10, 18),
+    fix: (row: { failure?: unknown }) => (assert.deepEqual(row.failure, { kind: 'csv', path: 'Data/gold.csv' }), new Promise<{ label: string; text: string; open(): void }>((r) => (answer = r))),
+  };
+  const root = new El('div');
+  renderDashboard(root as unknown as HTMLElement, '', host);
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  const reason = () => root.byClass('bt-dash-reason')[0].textContent;
+  const buttons = () => root.byClass('bt-dash-msgtext')[0].all().filter((e) => e.tag === 'button');
+  assert.equal(reason(), 'There is no file at Data/gold.csv');
+  assert.equal(buttons().length, 0);
+  answer({ label: 'Use a CSV file', text: 'The CSV helper lists the CSV files of the vault.', open: () => void opened.push('csv') });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(reason(), 'There is no file at Data/gold.csv. The CSV helper lists the CSV files of the vault.');
+  buttons()[0].dispatch('click');
+  assert.deepEqual(opened, ['csv']);
+  assert.equal(buttons()[0].disabled, false);
 });
 
 test('the hover finds the part of a rule it is over, reads it on its ticker, and gives its value at the last bar', async () => {

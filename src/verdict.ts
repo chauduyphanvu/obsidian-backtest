@@ -192,6 +192,28 @@ export function figures(bt: Backtest): Figure[] {
   return out;
 }
 
+/**
+ * What each figure under the verdict is, how the plugin works it out, and how to read it beside buy and hold, by the
+ * figure's label. Its name is a button that shows this under its row.
+ */
+export const FIGURE_HELP: Record<string, string> = {
+  'Return per year': 'The growth for each year that gives the total return when it compounds over the run. The plugin counts years of 365.25 calendar days. A higher value than buy and hold is better.',
+  'Total return': 'The change in value from the start capital to the last close, after costs and commission, with the interest that cash earned. Buy and hold covers the same dates, so a higher value is better.',
+  'Worst drawdown': 'The largest decrease of the value from a previous high to a later low, measured at the closes. A value nearer to 0 than buy and hold is better: the strategy lost less at its worst time.',
+  'Sharpe ratio': 'For each bar, the plugin subtracts the interest that cash earned at the cash rate from the return. It divides their mean by their standard deviation and multiplies by the square root of the bars in one year. A higher value than buy and hold gives more return above cash for each unit of risk.',
+  Volatility: 'The standard deviation of the return of each bar, multiplied by the square root of the bars in one year of this run. A lower value than buy and hold shows a smoother line.',
+  'Time invested': 'The average part of the value that the strategy held in positions, measured at the closes. Buy and hold is always 100%. The rules decide this value, so it has no mark of better or worse.',
+  'Exposure, gross': 'The average value of all positions, long and short together, as a part of the equity at the closes. The net exposure under it subtracts the shorts. The rules decide this value, so it has no mark of better or worse.',
+  'Sortino ratio': 'The same as the Sharpe ratio, but it divides by the downside deviation: only the bars that earned less than cash count as risk. A higher value than buy and hold is better.',
+  'Return per year ÷ worst drawdown': 'The return per year divided by the size of the worst drawdown. A higher value than buy and hold gives more growth for each part of the largest decrease.',
+  'Best year': 'The calendar year with the largest return, from the full years of the run. Part years count only when the run has no full year. Buy and hold can have its best year in a different year.',
+  'Worst year': 'The calendar year with the smallest return, from the full years of the run. Part years count only when the run has no full year. A higher value than buy and hold is better.',
+  'Months up': 'The part of the calendar months that ended with a higher value than the month before. A month with no change does not count. A higher value than buy and hold shows more regular gains.',
+  'Longest time below a previous high': 'The longest time in calendar days from a high of the value until the value is at that high again. "below at the end" shows that the value did not get back to that high. A shorter time than buy and hold is better.',
+  'Best month': 'The calendar month with the largest return. The part months at the start and end of the run count. Compare it with buy and hold to see how large one month can be.',
+  'Worst month': 'The calendar month with the smallest return. The part months at the start and end of the run count. A higher value than buy and hold is better.',
+};
+
 /** "45 days" up to two months, then "1 year 3 months". */
 export function duration(days: number): string {
   if (days < 1) return 'less than a day';

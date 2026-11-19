@@ -4,6 +4,10 @@
   width: 640px;
   max-width: 94vw;
 }
+/* In the sidebar the list takes the pane's width, and its rows go narrow as in a narrow window. */
+.view-content.bt-orders-pane {
+  padding: 12px 14px 20px;
+}
 
 .bt-orders {
   container: bt-orders / inline-size;

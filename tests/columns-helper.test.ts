@@ -100,6 +100,9 @@ test('csvColumnNames reads the names from the first line alone, as parseCsv does
   assert.deepEqual(parseCsv(text).columns!.map((c) => c.name), ['score']);
   assert.deepEqual(csvColumnNames('date;Score;Model Score\n2024-01-02;1;2'), ['score', 'model_score']);
   assert.deepEqual(csvColumnNames(''), []);
+  assert.deepEqual(csvColumnNames('\n  \n'), []);
+  // A byte order mark, blank lines before the header and Windows line ends are read past, as parseCsv reads them.
+  assert.deepEqual(csvColumnNames('﻿\r\n\r\ndate,close,Score\r\n2024-01-02,1,2\r\n'), ['score']);
   assert.equal(csvColumnNames(`Date,Close,${Array.from({ length: 80 }, (_, i) => `c${i}`).join(',')}`).length, MAX_COLUMNS);
 });
 

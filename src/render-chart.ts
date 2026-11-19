@@ -53,6 +53,84 @@ const fallAt = (falls: Crisis[], time: number): Crisis | undefined =>
 /** How far below its previous high a value is; the panel under the chart says what the number is. */
 const below = (dd: number): string => (!Number.isFinite(dd) ? '' : dd > -0.0005 ? 'at a high' : pct(dd));
 
+/** A drawn chart as the arrow keys read it: the times of its bars and the bar its read-out shows. */
+export interface KeyReading {
+  /** Ascending. */
+  t: number[];
+  /** The first bar on screen. */
+  first: number;
+  /** The bar the read-out shows, or null when it shows none. */
+  at(): number | null;
+  /** Reads bar `i`, as the pointer on it does. */
+  show(i: number): void;
+  /** Gives the read-out back, as the pointer that leaves the chart does. */
+  rest(): void;
+}
+
+/** The last bar from `first` on at or before `time`, or `first` when there is none. */
+function barAt(t: number[], first: number, time: number): number {
+  let [a, b] = [first, t.length - 1];
+  if (t[b] <= time) return b;
+  while (b - a > 1) {
+    const mid = (a + b) >> 1;
+    if (t[mid] <= time) a = mid;
+    else b = mid;
+  }
+  return a;
+}
+
+/**
+ * The bar a key moves a chart's read-out to from bar `at`, or null for a key it does not use. Left and Right move one
+ * bar; with Shift they move one month, or one year when the bars shown span more than five years, found by date; Home and
+ * End go to the first and last bar. With no bar read yet, Right starts at the first bar and Left at the last.
+ */
+export function keyTarget(t: number[], first: number, at: number | null, key: string, shift: boolean): number | null {
+  const last = t.length - 1;
+  if (last < first) return null;
+  if (key === 'Home') return first;
+  if (key === 'End') return last;
+  const dir = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
+  if (dir === 0) return null;
+  if (at === null) return dir > 0 ? first : last;
+  let to = at + dir;
+  if (shift) {
+    const d = new Date(t[at]);
+    const [y, m, day] = [d.getUTCFullYear(), d.getUTCMonth() + dir * (t[last] - t[first] > 5 * YEAR ? 12 : 1), d.getUTCDate()];
+    // The same day and time in that month, or its last day when the month is shorter.
+    const time = Date.UTC(y, m, Math.min(day, new Date(Date.UTC(y, m + 1, 0)).getUTCDate())) + (t[at] - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), day));
+    const below = barAt(t, first, time);
+    const found = dir < 0 || t[below] >= time ? below : below + 1;
+    if ((found - at) * dir > 0) to = found;
+  }
+  return Math.min(last, Math.max(first, to));
+}
+
+/**
+ * Makes `el`, the box of a chart, a stop for the keyboard: while it has the focus, the arrow keys move the read-out from
+ * bar to bar (keyTarget), and Escape gives the read-out back. `reading` gives the drawing on screen, if any.
+ */
+export function readByKeys(el: HTMLElement, label: string, reading: () => KeyReading | null): void {
+  el.tabIndex = 0;
+  el.classList.add('bt-chart-keys');
+  el.setAttribute('role', 'application');
+  el.setAttribute('aria-label', label);
+  el.addEventListener('keydown', (e) => {
+    const r = reading();
+    if (!r || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'Escape') {
+      if (r.at() === null) return;
+      r.rest();
+    } else {
+      const i = keyTarget(r.t, r.first, r.at(), e.key, e.shiftKey);
+      if (i === null) return;
+      r.show(i);
+    }
+    // The row of tabs and Obsidian have arrow keys of their own.
+    e.preventDefault();
+    e.stopPropagation();
+  });
+}
+
 /** How long a change of the span takes. */
 const RANGE_MS = 420;
 /** How long the lines take to change to another run of the block. */
@@ -63,6 +141,7 @@ const ARRIVE_MS = 1700;
 export function renderValueChart(parent: HTMLElement, o: { span?: number } = {}): ValueChart {
   const box = h(parent, 'div', 'bt-value');
   const read = h(box, 'div', 'bt-read');
+  read.setAttribute('aria-live', 'polite');
   const row1 = h(read, 'div', 'bt-read-row');
   const when = h(row1, 'span', 'bt-read-when');
   const date = h(when, 'span', 'bt-read-date');
@@ -133,6 +212,7 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
   const readout = { date, fall, mine, ghost: ghostKey, theirs, state, stateMark, stateText };
   /** The mapping of the drawing on screen. */
   let last: Drawn | null = null;
+  readByKeys(chart, 'Chart of the value. Use the arrow keys to read the values.', () => last?.keys ?? null);
   // During a drag the value scale only grows, so the lines move and the axis does not jump from frame to frame.
   let keep: [number, number] | null = null;
   const draw = (o2: { from?: number; arrive?: boolean; settled?: boolean; run?: Backtest } = {}) => {
@@ -288,6 +368,7 @@ interface Drawn {
   ddMin: number;
   yLog: (l: number) => number;
   yDd: (v: number) => number;
+  keys: KeyReading;
 }
 
 function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, read, keep }: DrawInput): Drawn {
@@ -617,21 +698,21 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
     read.fall.textContent = f ? f.name : '';
     read.fall.hidden = !f;
   };
+  let shown: number | null = null;
   const hide = () => {
+    shown = null;
     for (const el of [cross, ...dots]) el.setAttribute('visibility', 'hidden');
     readAt(n - 1, false);
   };
-  const show = (clientX: number) => {
-    const box = svg.getBoundingClientRect();
-    const time = ta + ((clientX - box.left - left) / plotW) * (tb - ta);
-    let a = from;
-    let b = n - 1;
-    while (b - a > 1) {
-      const mid = (a + b) >> 1;
-      if (t[mid] <= time) a = mid;
-      else b = mid;
-    }
-    const i = time - t[a] <= t[b] - time ? a : b;
+  /** The bar nearest to the pointer. */
+  const nearest = (clientX: number) => {
+    const time = ta + ((clientX - svg.getBoundingClientRect().left - left) / plotW) * (tb - ta);
+    const a = barAt(t, from, time);
+    const b = Math.min(a + 1, n - 1);
+    return time - t[a] <= t[b] - time ? a : b;
+  };
+  const show = (i: number) => {
+    shown = i;
     const px = String(x(t[i]));
     cross.setAttribute('x1', px);
     cross.setAttribute('x2', px);
@@ -645,8 +726,8 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
     });
     readAt(i, true);
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
+  hit.addEventListener('pointermove', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointerdown', (e) => show(nearest((e as PointerEvent).clientX)));
   hit.addEventListener('pointerleave', hide);
   hide();
 
@@ -660,7 +741,7 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
     h(k, 'span', undefined, 'Held short');
   }
   h(legend, 'span', 'bt-chart-note bt-chart-scale', 'Value on a log scale');
-  return { ta, tb, left, plotW, logLo: l0, logHi: l1, ddMin, yLog, yDd };
+  return { ta, tb, left, plotW, logLo: l0, logHi: l1, ddMin, yLog, yDd, keys: { t, first: from, at: () => shown, show, rest: hide } };
 }
 
 /** A strategy's value and its benchmark's, cut down to at most `n` points, for a small chart that has no room for more. */

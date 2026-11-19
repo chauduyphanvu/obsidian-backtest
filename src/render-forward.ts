@@ -29,15 +29,15 @@ export interface ForwardHost {
   run(source: string, force: boolean): Promise<RunOutput>;
   /** Adds the rows to the note's log and brings `Checked through` up to the time (writeLog). */
   append(rows: LogRow[], checkedThrough: number): Promise<{ ok: true; added: number } | Refusal>;
-  /** Opens the note a link such as `Note name` points to. */
+  /** Opens what a link such as `Note name#Strategy name` points to. */
   open(target: string): void;
 }
 
-/** What a `from:` link shows and where it leads: `[[Note#Name|Label]]` reads "Note#Name" and opens "Note". */
+/** What a `from:` link shows and where it leads: `[[Note#Name|Label]]` reads "Note > Name" and opens "Note#Name". */
 export function linkParts(from: string): { label: string; target: string } {
   const inner = from.replace(/^\[\[|\]\]$/g, '');
   const link = inner.split('|')[0];
-  return { label: link.replace('#', ' > '), target: link.split('#')[0] };
+  return { label: link.replace('#', ' > '), target: link };
 }
 
 /** The two sentences about how the forward test compares with earlier stretches of as many bars, or why it does not yet. */

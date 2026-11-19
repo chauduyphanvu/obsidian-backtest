@@ -509,6 +509,11 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   },
 };
 
+/** The names of a function's numbers, as its signature writes them: `['n']` for sma, `['fast', 'slow']` for macd; none for a word that is not a function. */
+export function functionArgs(name: string): readonly string[] {
+  return FUNCTION_DOCS[name]?.args ?? [];
+}
+
 /** The call as written, with each default from INDICATORS: `rsi(n = 14)`, `sma(n)`, and a leading series or condition where the function needs one. */
 export function functionSignature(name: string): string {
   const def = INDICATORS[name];

@@ -22,9 +22,10 @@ function started(over: { started?: number; intraday?: boolean } = {}): string {
   return made.note;
 }
 
-test('a from link shows its note and strategy, drops an alias, and opens the note', () => {
+test('a from link shows its note and strategy, drops an alias, and opens the strategy', () => {
   // Written as Obsidian shows a link to a heading.
-  assert.deepEqual(linkParts('[[Trend following#Trend following]]'), { label: 'Trend following > Trend following', target: 'Trend following' });
+  assert.deepEqual(linkParts('[[Trend following#Trend following]]'), { label: 'Trend following > Trend following', target: 'Trend following#Trend following' });
+  assert.deepEqual(linkParts('[[Trend#Mixed # Case|Mine]]'), { label: 'Trend > Mixed # Case', target: 'Trend#Mixed # Case' });
   assert.deepEqual(linkParts('[[Research/Three sleeves|Sleeves]]'), { label: 'Research/Three sleeves', target: 'Research/Three sleeves' });
   assert.deepEqual(linkParts('[[Plain]]'), { label: 'Plain', target: 'Plain' });
 });
@@ -258,7 +259,7 @@ test('a forward block runs its rules, shows its figures, and its button logs the
   assert.ok(root.has('The plugin compares previous periods only if there are 3 times as many bars'), 'with 20 bars since and 50 before, the comparison waits');
 
   root.find('a', 'Swing note > Swing')!.click();
-  assert.deepEqual(x.calls.opened, ['Swing note']);
+  assert.deepEqual(x.calls.opened, ['Swing note#Swing']);
 
   const button = root.find('button', 'Add 2 new bars to the log')!;
   assert.ok(button);

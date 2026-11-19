@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec, type Param } from '../src/dsl.ts';
 import { acceptedScale, createRequester, differenceText, formatParam, sliderScale, sliderValues, type RequesterHandlers } from '../src/render-params.ts';
+import { around, paramFromNumber } from '../src/rewrite.ts';
 import type { RunOutput } from '../src/runner.ts';
 
 /** The parameter a line declares, as the parser reads it. */
@@ -38,6 +39,29 @@ test('a value with no range gets one from about half to double', () => {
 test('a long window steps in larger whole numbers so the slider stays usable', () => {
   assert.deepEqual(sliderScale(param('slow = 200')), { lo: 100, hi: 400, step: 5 });
   assert.deepEqual(sliderScale(param('slow = 1000')), { lo: 500, hi: 2000, step: 20 });
+});
+
+test('a number made a parameter gets the slider\'s half-to-double range, in at most 16 values', () => {
+  const made = (lines: string[], row: number, written: string) => paramFromNumber(lines, row, lines[row].indexOf(written))!.declaration;
+  const block = ['universe: SPY', 'stop loss: 8%', 'buy when close > sma(200) and rsi(14) < 30 and roc(126) > 2.5%'];
+  assert.deepEqual(sliderScale(param('n = 200')), { lo: 100, hi: 400, step: 5 });
+  assert.equal(made(block, 2, '200'), 'sma_n = 200 in 100..400 step 20');
+  assert.deepEqual(sliderScale(param('stop = 8%')), { lo: 4, hi: 16, step: 1 });
+  assert.equal(made(block, 1, '8%'), 'stop_loss = 8% in 4%..16% step 1%');
+  assert.equal(made(block, 2, '14'), 'rsi_n = 14 in 8..28 step 2');
+  // A percentage steps by 1% or more once 0.1% would give too many values, and stays on the grid through its value.
+  assert.equal(made(block, 2, '2.5%'), 'level = 2.5% in 1.5%..4.5% step 1%');
+  for (const v of [1, 2, 3, 10, 14, 20, 50, 126, 200, 252, 1000]) {
+    const { lo, hi, step } = around(v, false, 16);
+    assert.ok((hi - lo) / step + 1 <= 16 && lo <= v && v <= hi && Number.isInteger((v - lo) / step), `${v}: ${lo}..${hi} step ${step}`);
+  }
+});
+
+test('a level above the longest period gets the half-to-double range, and only a period stays within the longest one', () => {
+  const lines = ['universe: BTCUSD', 'buy when close > 50000 and close > sma(8000)'];
+  assert.equal(paramFromNumber(lines, 1, lines[1].indexOf('50000'))?.declaration, 'level = 50000 in 25000..100000 step 5000');
+  assert.equal(paramFromNumber(lines, 1, lines[1].indexOf('8000'))?.declaration, 'sma_n = 8000 in 4000..10000 step 500');
+  assert.deepEqual(sliderScale(param('level = 50000')), { lo: 25000, hi: 100000, step: 1000 });
 });
 
 test('zero and negative values get a range too', () => {

@@ -4,11 +4,11 @@ import { placeDiagnostic } from './diagnostics.ts';
 import { colourLines, colourSource, easeHeight, h, motionOK, reveal, revealBox, s } from './dom.ts';
 import { debounce } from './result-cache.ts';
 import type { AssetState } from './engine.ts';
-import { applyFix, fixWord, shortMessage, suggestion } from './fixes.ts';
-import { DAY, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from './format.ts';
+import { applyFix, fixWord, shortMessage, suggestions } from './fixes.ts';
+import { DAY, fullStop, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from './format.ts';
 import { commentStart, declaredParams, paramName, settingKey, tokenizeBlock } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
-import { pendingTiming, timingPhrase } from './orders.ts';
+import { pendingTiming, pricesEnd, pricesOld, timingPhrase } from './orders.ts';
 import { renderNextStep, type Action } from './render-actions.ts';
 import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderValueChart, sparkline } from './render-chart.ts';
@@ -17,7 +17,7 @@ import { renderMonths, renderYears } from './render-stats.ts';
 import { renderTrades } from './render-trades.ts';
 import { verdictView, versusView } from './render-versus.ts';
 import { sectionsIn, tabify, tabName } from './tabs.ts';
-import type { RunOutput } from './runner.ts';
+import type { RunOutput, Waiting } from './runner.ts';
 import type { Source } from './types.ts';
 import { watchable, type TriggerReport } from './trigger.ts';
 
@@ -28,8 +28,36 @@ function source(el: HTMLElement, text: string): void {
 
 /** What a block shows while its result is on its way, and the step it is on. */
 export interface Loading {
+  /** Prices come in: how many are in, of how many, and the ones still on their way (runner.ts OnTicker). */
+  tickers(done: number, total: number, waiting: Waiting[]): void;
   /** The prices are in: the backtest of `bars` bars runs now. */
   prices(bars: number): void;
+}
+
+/** After this long, the loading card names a ticker whose prices are still on their way. */
+const SLOW_MS = 3000;
+
+const seconds = (ms: number): string => {
+  const n = Math.max(1, Math.round(ms / 1000));
+  return n === 1 ? '1 second' : `${n} seconds`;
+};
+
+/**
+ * What the loading card says as prices come in, or null for nothing yet: how many tickers are in ("Prices: 7 of 12."), a
+ * Yahoo request that failed and when it goes out again, and, once the load is `slow`, the first ticker still on its way
+ * and where from, with the try it is on after a failure.
+ */
+export function loadingText(done: number, total: number, waiting: Waiting[], slow: boolean): string | null {
+  const said: string[] = [];
+  if (total > 1) said.push(`Prices: ${done} of ${total}.`);
+  const again = waiting.find((w) => w.retry !== null && w.retry.wait > 0);
+  const first = waiting[0];
+  if (again) said.push(`${PRICES_FROM[again.source]} did not send prices for ${again.name}. The plugin asks again in ${seconds(again.retry!.wait)}.`);
+  else if (slow && first) {
+    const tried = first.retry ? `, try ${first.retry.attempt} of ${first.retry.of}` : '';
+    said.push(first.source === 'csv' ? `The plugin reads the file ${first.id}.` : `The plugin waits for ${first.name} from ${PRICES_FROM[first.source]}${tried}.`);
+  }
+  return said.length ? said.join(' ') : null;
 }
 
 /**
@@ -47,14 +75,15 @@ export function renderLoading(el: HTMLElement, o: { title: string; tickers: stri
   const text = h(top, 'span', 'bt-fold-text');
   h(h(text, 'span', 'bt-title-row'), 'span', 'bt-title', o.title);
   const names = o.tickers.join(', ');
-  const say = h(root, 'div', 'bt-loading-say', `The plugin loads the prices for ${names}…`);
+  const start = `The plugin loads the prices for ${names}…`;
+  const say = h(root, 'div', 'bt-loading-say', start);
   say.setAttribute('aria-live', 'polite');
   if (o.folded) {
     const line = h(text, 'span', 'bt-fold-facts');
     h(line, 'span', 'bt-sk bt-sk-spark');
     h(line, 'span', 'bt-sk bt-sk-fact');
     h(line, 'span', 'bt-sk bt-sk-fact');
-    return { prices: () => (say.textContent = 'The plugin runs the backtest…') };
+    return { tickers: () => {}, prices: () => (say.textContent = 'The plugin runs the backtest…') };
   }
   h(text, 'span', 'bt-meta', o.tickers.join(' \u00b7 '));
   if (o.height && o.height > 0) root.style.setProperty('height', `${Math.round(o.height)}px`);
@@ -68,6 +97,21 @@ export function renderLoading(el: HTMLElement, o: { title: string; tickers: stri
   };
   const load = step(`Prices for ${names}`, true);
   const run = step('Backtest', false);
+  // What `say` tells a screen reader, shown under the steps.
+  const shown = h(body, 'div', 'bt-loading-line');
+  shown.setAttribute('aria-hidden', 'true');
+  let got: Parameters<Loading['tickers']> = [0, 0, []];
+  let slow = false;
+  const tell = () => {
+    const now = loadingText(...got, slow);
+    say.textContent = now ?? start;
+    shown.textContent = now ?? '';
+  };
+  const slowly = window.setTimeout(() => {
+    slow = true;
+    // A card that a failure or the result replaced first is not on the page any more.
+    if (say.isConnected) tell();
+  }, SLOW_MS);
   h(body, 'span', 'bt-sk bt-sk-status');
   const lead = h(body, 'div', 'bt-sk-group');
   h(lead, 'span', 'bt-sk bt-sk-lead');
@@ -76,11 +120,17 @@ export function renderLoading(el: HTMLElement, o: { title: string; tickers: stri
   for (let i = 0; i < 4; i++) h(rows, 'span', 'bt-sk bt-sk-row');
   h(body, 'span', 'bt-sk bt-sk-chart');
   return {
+    tickers: (...now) => {
+      got = now;
+      tell();
+    },
     prices: (bars) => {
+      window.clearTimeout(slowly);
       load.el.className = 'bt-step bt-step-done';
       run.el.className = 'bt-step bt-step-on';
       run.label.textContent = `Backtest of ${bars.toLocaleString('en-US')} bars`;
       say.textContent = 'The plugin runs the backtest…';
+      shown.textContent = '';
     },
   };
 }
@@ -170,38 +220,44 @@ export function problemLines(parent: HTMLElement, errors: Diagnostic[], text: st
   });
 }
 
-/** Under a problem's line: the message cut short, what to write instead, the fix button, and the rest of the message. */
+/** Under a problem's line: the message cut short, what to write instead, a button for each fix, and the rest of the message. */
 function problemNote(box: HTMLElement, row: HTMLElement, e: Diagnostic, lines: string[], o: { defaults?: Partial<Defaults>; fix?: WriteBlock }): void {
   const { box: diag, inner } = revealBox(box, 'bt-err-diag', true);
   const note = h(inner, 'div', 'bt-err-note');
   const msg = h(note, 'div', 'bt-err-msg');
   const { head, rest } = shortMessage(e.message);
   h(msg, 'b', undefined, head);
-  const offered = suggestion(lines, e, o.defaults);
-  if (offered) msg.append(` ${offered.text}`);
+  const offered = suggestions(lines, e, o.defaults);
+  if (offered?.text) msg.append(` ${offered.text}`);
   if (offered && o.fix) {
     const write = o.fix;
-    const button = h(note, 'button', 'bt-button mod-cta bt-err-fix', offered.fix.label);
-    button.type = 'button';
+    // One fix is the thing to do; equally good ones are choices, and none of them stands out.
+    const buttons = offered.fixes.map((f) => {
+      const button = h(note, 'button', offered.fixes.length === 1 ? 'bt-button mod-cta bt-err-fix' : 'bt-button bt-err-fix', f.label);
+      button.type = 'button';
+      return button;
+    });
     const said = h(note, 'div', 'bt-err-said');
     said.setAttribute('aria-live', 'polite');
-    button.addEventListener('click', () => {
-      button.disabled = true;
-      // The word changes where it was, flashes, and the note closes; the block then runs again from the note.
-      const word = row.querySelector('.bt-squig');
-      if (word) {
-        word.textContent = fixWord(offered.fix);
-        word.className = 'bt-squig-fixed';
-      }
-      row.classList.remove('bt-err-bad');
-      write(applyFix(lines, offered.fix).join('\n')).then(
-        () => reveal(diag, false),
-        (err: unknown) => {
-          button.disabled = false;
-          said.textContent = `Cannot change the block. ${err instanceof Error ? err.message : String(err)}`;
-        },
-      );
-    });
+    offered.fixes.forEach((f, i) =>
+      buttons[i].addEventListener('click', () => {
+        for (const b of buttons) b.disabled = true;
+        // A word that changes where it was flashes there, and the note closes; the block then runs again from the note.
+        const word = fixWord(f) === f.label ? null : row.querySelector('.bt-squig');
+        if (word) {
+          word.textContent = fixWord(f);
+          word.className = 'bt-squig-fixed';
+        }
+        row.classList.remove('bt-err-bad');
+        write(applyFix(lines, f).join('\n')).then(
+          () => reveal(diag, false),
+          (err: unknown) => {
+            for (const b of buttons) b.disabled = false;
+            said.textContent = `Cannot change the block. ${err instanceof Error ? err.message : String(err)}`;
+          },
+        );
+      }),
+    );
   }
   if (rest) {
     const names = h(note, 'details', 'bt-err-all');
@@ -210,16 +266,53 @@ function problemNote(box: HTMLElement, row: HTMLElement, e: Diagnostic, lines: s
   }
 }
 
-/** A run that failed, such as for prices it could not get: the card of a block that cannot run, with "Run again". */
-export function renderFailure(el: HTMLElement, message: string, src: string, onRetry: () => void): void {
+/**
+ * What a run that failed offers besides "Run again": a sentence after its message that says how to put it right, and
+ * the button that does it, such as "Change to BRK-B" or "Open settings"; null for a sentence alone. `run` rejects with a
+ * message fit to show.
+ */
+export interface NextAction {
+  text: string;
+  button: { label: string; run(): Promise<void> | void } | null;
+}
+
+/**
+ * A run that failed, such as for prices it could not get: the card of a block that cannot run, with "Run again", and with
+ * `next` the step that puts it right as the main button.
+ */
+export function renderFailure(el: HTMLElement, message: string, src: string, onRetry: () => void, next: NextAction | null = null): void {
   el.replaceChildren();
   const root = h(el, 'div', 'bt-root bt-result bt-problem');
   const head = h(root, 'div', 'bt-head');
   h(h(head, 'div', 'bt-problem-title'), 'span', 'bt-title', nameLine(src) ?? 'Backtest');
   h(head, 'span', 'bt-chip bt-chip-problem', 'The backtest did not run');
   const say = h(root, 'div', 'bt-problem-say');
-  h(say, 'span', 'bt-problem-message', message);
-  h(say, 'button', 'bt-button', 'Run again').addEventListener('click', onRetry);
+  const words = h(say, 'span', 'bt-problem-message', next?.text ? fullStop(message) : message);
+  if (next?.text) h(words, 'span', 'bt-problem-next', ` ${next.text}`);
+  const buttons = h(say, 'div', 'bt-problem-buttons');
+  const said = h(say, 'div', 'bt-err-said');
+  said.setAttribute('aria-live', 'polite');
+  const step = next?.button;
+  if (step) {
+    const main = h(buttons, 'button', 'bt-button mod-cta', step.label);
+    main.type = 'button';
+    main.addEventListener('click', () => {
+      main.disabled = true;
+      said.textContent = '';
+      Promise.resolve()
+        .then(() => step.run())
+        .then(
+          () => (main.disabled = false),
+          (e: unknown) => {
+            main.disabled = false;
+            said.textContent = e instanceof Error ? e.message : String(e);
+          },
+        );
+    });
+  }
+  const again = h(buttons, 'button', 'bt-button', 'Run again');
+  again.type = 'button';
+  again.addEventListener('click', onRetry);
   source(root, src);
 }
 
@@ -249,6 +342,30 @@ export function renderDefaultsChanged(el: HTMLElement, onRun: () => void): (chan
   return (changed) => {
     note.hidden = !changed;
   };
+}
+
+/**
+ * A line at the top of a result whose block was renamed by hand: its record of tries and its links still use the old name
+ * `name`, and its button runs `move`, which takes them to the new name. The line goes once the move is done; a move that
+ * fails gives its button back.
+ */
+export function renderRenamed(el: HTMLElement, name: string, move: () => Promise<void>): void {
+  const root = el.querySelector('.bt-root') ?? el;
+  root.querySelector('.bt-renamed')?.remove();
+  const line = document.createElement('div');
+  line.className = 'bt-defaults-changed bt-renamed';
+  h(line, 'span', 'bt-defaults-changed-text', `This block has a new name. Its record of tries and its links still use the old name "${name}".`);
+  const button = h(line, 'button', 'bt-button', 'Move them to the new name');
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    move().then(
+      () => line.remove(),
+      () => {
+        button.disabled = false;
+      },
+    );
+  });
+  root.prepend(line);
 }
 
 /** The parameters (in lower case) that a stop setting takes as its whole level, as in `stop loss: stop`. */
@@ -352,6 +469,8 @@ export interface ResultView {
   nextStep?: (out: RunOutput) => Action | null;
   /** Opens the menu of what can be done with the run on screen (saves, a forward test) under `at`, the ⋯ button. */
   menu?: (at: HTMLElement, out: RunOutput) => void;
+  /** Puts text on the clipboard, such as the order line of the status panel; `what` names it ("the order"). */
+  copy?: (text: string, what: string) => void;
   /** Told the card's height once it has settled, so the block can wait in that height next time it loads. */
   onHeight?: (height: number, folded: boolean) => void;
 }
@@ -375,12 +494,29 @@ export interface DrawnResult {
   busy(on: boolean): void;
   /** A refresh failed: the result on screen stays, with a line under its title that says why and runs it again. */
   failed(message: string, retry: () => void): void;
+  /** Reads the age of the prices on screen again at `now`, and changes only what says that they are old. */
+  checkAge(now: number): void;
+  /** Opens the result, or folds it to one line, as a click on its title does. */
+  setOpen(open: boolean): void;
+}
+
+/**
+ * Where a run's prices end, "Prices end on 2026-11-12", while they are probably out of date at `now` (orders.ts
+ * pricesOld, as today's orders reads them); null while they are not, and for a run that stops at a `to` date of its own.
+ */
+export function oldPrices(out: RunOutput, now: number): string | null {
+  if (!watchable(out.spec)) return null;
+  const { old, asOf } = pricesOld(out, now);
+  return old ? pricesEnd({ asOf, intraday: isIntraday(out.backtest.run.t) }) : null;
 }
 
 /** Keys the remembered state of a block: its note and its name, or its place among the note's blocks when it has no name. */
 export function blockStateKey(notePath: string, name: string | null, index: number): string {
-  return `${blockKeyPrefix(notePath, false)}${name ? `name:${name.toLowerCase()}` : `block:${index}`}`;
+  return name ? `${blockNameKeyPrefix(notePath)}${name.toLowerCase()}` : `${blockKeyPrefix(notePath, false)}block:${index}`;
 }
+
+/** The start of the key of every named block in the note at `path`. */
+export const blockNameKeyPrefix = (path: string): string => `${blockKeyPrefix(path, false)}name:`;
 
 /** The start of the key of every block in the note at `path`, or with `folder`, in every note under the folder at `path`. */
 export function blockKeyPrefix(path: string, folder: boolean): string {
@@ -677,6 +813,15 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
 
   // The top line follows the run on screen: what it holds, what is due, and how near the next order is once that is known.
   let onHead: Backtest | null = null;
+  let oldMark: HTMLElement | null = null;
+  let status: ReturnType<typeof statusView> | null = null;
+  const markOld = (end: string | null) => {
+    if (oldMark) {
+      oldMark.hidden = end === null;
+      oldMark.title = end === null ? '' : `${end}. They can be old.`;
+    }
+    status?.age(end);
+  };
   const showHead = (out: RunOutput): Promise<TriggerReport | null> | null => {
     const bt = out.backtest;
     onHead = bt;
@@ -706,6 +851,10 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     h(held, 'span', 'bt-fold-held-text', holding.text);
     if (holding.more) held.title = holding.more;
     if (facts.order) h(state, 'span', 'bt-chip bt-fold-order', facts.order);
+    oldMark = h(state, 'span', 'bt-chip bt-chip-old');
+    h(oldMark, 'span', 'bt-chip-warn');
+    oldMark.append('Old prices');
+    markOld(oldPrices(out, Date.now()));
     const watch = h(state, 'span', 'bt-chip bt-chip-watch');
     watch.hidden = true;
     const asked = view.triggers?.(out) ?? null;
@@ -725,9 +874,10 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   const firstTriggers = showHead(first);
 
   const build = () => {
-    const status = statusView(body);
-    const showStatus = (out: RunOutput, triggers: Promise<TriggerReport | null> | null) =>
-      status.show({
+    const shown = statusView(body, { copy: view.copy, refresh: view.onRefresh });
+    status = shown;
+    const showStatus = (out: RunOutput, triggers: Promise<TriggerReport | null> | null) => {
+      shown.show({
         out,
         holding: holdingFacts(out),
         due: compactFacts(out).order,
@@ -735,6 +885,8 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
         intraday: isIntraday(out.backtest.run.t),
         ended: watchable(out.spec) ? null : stamp(out.backtest.run.t[out.backtest.run.t.length - 1], isIntraday(out.backtest.run.t)),
       });
+      shown.age(oldPrices(out, Date.now()));
+    };
     const tuned = !!view.params && first.spec.params.length > 0;
     const scrubs = tuned ? new Map<string, HTMLElement>() : undefined;
     const well = sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)), scrubs);
@@ -828,8 +980,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   };
   // Opening makes the space first and the content fades in after it; closing fades the content, then closes the space.
   let folding = 0;
-  fold.addEventListener('click', () => {
-    const open = fold.getAttribute('aria-expanded') !== 'true';
+  const turn = (open: boolean) => {
     view.remember?.set(open);
     if (folding) window.clearTimeout(folding);
     folding = 0;
@@ -846,7 +997,9 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       root.classList.remove('bt-closing');
       easeHeight(root, () => setOpen(false));
     }, FADE_MS);
-  });
+  };
+  const isOpen = () => fold.getAttribute('aria-expanded') === 'true';
+  fold.addEventListener('click', () => turn(!isOpen()));
   cleanups.push(() => {
     if (folding) window.clearTimeout(folding);
   });
@@ -887,6 +1040,11 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       h(problem, 'span', undefined, `Cannot get new prices. ${message}`);
       h(problem, 'button', 'bt-button', 'Run again').addEventListener('click', retry);
       head.after(problem);
+    },
+    checkAge: (now) => markOld(oldPrices(onScreen, now)),
+    setOpen: (open) => {
+      // A fold on its way counts as folded already.
+      if (open !== (isOpen() && !root.classList.contains('bt-closing'))) turn(open);
     },
   };
 }

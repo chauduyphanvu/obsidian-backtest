@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import { test } from 'node:test';
+import type { EditorView } from '@codemirror/view';
 import { complete, hitCompletions, localTickers, tickerPosition, tickers } from '../src/complete.ts';
 import { shortOf } from '../src/docs.ts';
 import { SETTINGS } from '../src/dsl.ts';
 import { lineKind, lineKinds, tokenize, tokenizeBlock } from '../src/highlight.ts';
+
+// The plugin's own `obsidian` package holds only types, so the one class src/editor.ts needs from it is stood in for.
+const STUB = 'data:text/javascript,' + encodeURIComponent('export class EditorSuggest {}');
+registerHooks({
+  resolve: (specifier, context, next) => (specifier === 'obsidian' ? { url: STUB, shortCircuit: true } : next(specifier, context)),
+});
 
 const BLOCK = `name: Three sleeves
 universe: SPY 50%, binance:BTCUSDT 20%, csv:Data/gold.csv 30%
@@ -295,4 +303,107 @@ test('hits become completions with the name and exchange as the detail, and repe
     { label: 'SPYM', insert: 'SPYM', detail: 'SPDR Portfolio S&P 500 · NYSEArca · ETF', hit: true },
     { label: 'binance:BTCUSDT', insert: 'binance:BTCUSDT', detail: 'BTC / USDT · Binance', hit: true },
   ]);
+});
+
+/**
+ * What a hover card reads of its editor to place itself, on the stand-in page, where every box is 300 px tall and the
+ * editor's top is at 0: the line under the pointer starts at `lineTop`.
+ */
+function placing(El: typeof import('./page.ts').El, lineTop = 400) {
+  return {
+    dom: Object.assign(new El('div'), { ownerDocument: document }),
+    scrollDOM: new El('div'),
+    coordsAtPos: () => ({ top: lineTop, bottom: lineTop + 20, left: 0, right: 10 }),
+  };
+}
+
+test('the hover card opens above its line when the editor has room for all of it there, else under the line', async () => {
+  const { EditorState } = await import('@codemirror/state');
+  const { docFor } = await import('../src/docs.ts');
+  const { tooltipFor } = await import('../src/editor.ts');
+  const { El } = await import('./page.ts');
+  const placed = (lineTop: number, value?: Promise<null>) => {
+    const view = { ...placing(El, lineTop), state: EditorState.create({ doc: 'buy when close > sma(200)' }), dispatch: () => {} } as unknown as EditorView;
+    const tip = tooltipFor(view, [], { from: 17, to: 20, doc: docFor('sma')! }, () => [], value);
+    // The card is laid out to learn its height, and taken out of the editor again.
+    assert.equal((view.dom as unknown as { children: unknown[] }).children.length, 0);
+    return tip;
+  };
+  assert.equal(placed(299).above, false);
+  assert.equal(placed(300).above, true);
+  // A value panel on its way waits hidden and empty, as before.
+  const box = (placed(300, new Promise(() => {})).create({} as EditorView).dom as unknown as { byClass(c: string): { hidden: boolean; children: unknown[] }[] }).byClass('bt-hover-value')[0];
+  assert.deepEqual([box.hidden, box.children.length], [true, 0]);
+});
+
+test('the hover card has a button for each fix, with what its word is, and a click makes that one change', async () => {
+  const { EditorState } = await import('@codemirror/state');
+  const { analyzeBlock } = await import('../src/diagnostics.ts');
+  const { fixesFor } = await import('../src/fixes.ts');
+  // CodeMirror reads the page's document when it loads, so the stand-in page comes after it.
+  const { changeFor, tooltipFor } = await import('../src/editor.ts');
+  const { El } = await import('./page.ts');
+  const card = (note: string[]) => {
+    const sent: unknown[] = [];
+    const view = { ...placing(El), state: EditorState.create({ doc: note.join('\n') }), dispatch: (t: unknown) => sent.push(t) } as unknown as EditorView;
+    // The block's lines start on the note's third line, which is 0-based line 2.
+    const lines = note.slice(2, -1);
+    const block = { first: 2, lines, analysis: analyzeBlock(lines), defaults: {} };
+    const d = block.analysis.diagnostics.find((x) => x.severity === 'error')!;
+    const changes = fixesFor(lines, d.origin!).map((f) => changeFor(view, block, f)!);
+    const start = view.state.doc.line(block.first + d.line + 1).from;
+    const problem = { from: start + d.from, to: start + d.to, severity: d.severity, message: d.message, block, diagnostic: d };
+    const dom = tooltipFor(view, [problem], null, () => changes).create(view).dom as unknown as InstanceType<typeof El>;
+    return { changes, dom, sent };
+  };
+
+  const tie = card(['# Note', '```strategy', 'universe: SPY', 'buy when close > sam(200)', '```']);
+  // "# Note", the fence and the universe line come first: 7 + 12 + 14 characters, then "buy when close > ".
+  assert.deepEqual(tie.changes, [
+    { edits: [{ from: 50, to: 53, insert: 'sma' }], label: 'Change to sma', detail: 'simple average of the last n closes' },
+    { edits: [{ from: 50, to: 53, insert: 'sum' }], label: 'Change to sum', detail: 'sum of the last n values' },
+  ]);
+  assert.deepEqual(tie.dom.byClass('bt-fix').map((b) => b.textContent), ['Change to sma', 'Change to sum']);
+  assert.deepEqual(tie.dom.byClass('bt-fix-detail').map((b) => b.textContent), ['simple average of the last n closes', 'sum of the last n values']);
+  tie.dom.byClass('bt-fix')[1].dispatch('click');
+  assert.deepEqual(tie.sent, [{ changes: [{ from: 50, to: 53, insert: 'sum' }], userEvent: 'input.fix' }]);
+
+  // Removing a blank line reaches from its start to the start of the next line; a fix that writes no word has no detail.
+  const blank = card(['# Note', '```strategy', 'universe: SPY', 'buy when close > 1', '', '  and close < 2', '```']);
+  assert.deepEqual(blank.changes, [{ edits: [{ from: 52, to: 53, insert: '' }], label: 'Remove the blank line', detail: '' }]);
+  assert.equal(blank.dom.byClass('bt-fix-detail').length, 0);
+});
+
+test('the hover card over a number of a rule has a button that makes it a parameter, in one change, with the new line beside it', async () => {
+  const { EditorState } = await import('@codemirror/state');
+  const { analyzeBlock } = await import('../src/diagnostics.ts');
+  const { paramOffer, tooltipFor } = await import('../src/editor.ts');
+  const { El } = await import('./page.ts');
+  const note = ['# Note', '```strategy', 'universe: SPY', '', 'buy when close > sma(200)', 'sell when close < sma(200) or rsi(2) > 70', '```'];
+  const sent: { changes: { from: number; to: number; insert: string }[] }[] = [];
+  const view = {
+    ...placing(El),
+    state: EditorState.create({ doc: note.join('\n') }),
+    dispatch: (t: (typeof sent)[number]) => sent.push(t),
+  } as unknown as EditorView;
+  const lines = note.slice(2, -1);
+  const block = { first: 2, lines, analysis: analyzeBlock(lines), defaults: {} };
+
+  // "# Note", the fence and the universe line and the blank one come first: 7 + 12 + 14 + 1, then "buy when close > sma(".
+  const offer = paramOffer(view, block, 2, 21)!;
+  assert.deepEqual({ from: offer.from, to: offer.to }, { from: 55, to: 58 });
+  assert.equal(offer.change.label, 'Make 200 a parameter (2 places)');
+  assert.equal(offer.change.detail, 'sma_n = 200 in 100..400 step 20');
+  const dom = tooltipFor(view, [], null, () => [], null, offer).create(view).dom as unknown as InstanceType<typeof El>;
+  assert.deepEqual(dom.byClass('bt-fix').map((b) => b.textContent), ['Make 200 a parameter (2 places)']);
+  assert.deepEqual(dom.byClass('bt-fix-detail').map((b) => b.textContent), ['sma_n = 200 in 100..400 step 20']);
+  dom.byClass('bt-fix')[0].dispatch('click');
+  assert.equal(sent.length, 1);
+  const after = EditorState.create({ doc: note.join('\n') }).update({ changes: sent[0].changes }).state.doc.toString();
+  assert.equal(after, ['# Note', '```strategy', 'universe: SPY', '', 'sma_n = 200 in 100..400 step 20', '', 'buy when close > sma(sma_n)', 'sell when close < sma(sma_n) or rsi(2) > 70', '```'].join('\n'));
+
+  // A level is one place; a word is not a number, and a parameter's own line has none to offer.
+  assert.equal(paramOffer(view, block, 3, lines[3].indexOf('70'))!.change.label, 'Make 70 a parameter');
+  assert.equal(paramOffer(view, block, 2, lines[2].indexOf('close')), null);
+  assert.equal(paramOffer(view, block, 0, 0), null);
 });

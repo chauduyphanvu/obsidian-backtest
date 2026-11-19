@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
-import { NOTE_CHANGED, findBlock, replaceBlockInNote, setParamValues, setParamValuesInNote, writeBlockInNote, writeValuesInNote } from '../src/rewrite.ts';
+import { applyFix } from '../src/fixes.ts';
+import { STARTERS } from '../src/gallery.ts';
+import { tokenizeBlock } from '../src/highlight.ts';
+import { NOTE_CHANGED, findBlock, nameProblem, paramFromNumber, renameLinksInNote, replaceBlockInNote, ruleNumbers, setParamValues, setParamValuesInNote, setSettingInNote, writeBlockInNote, writeValuesInNote, type NewParam } from '../src/rewrite.ts';
 
 const block = (...params: string[]) => ['universe: SPY', ...params, 'buy when rsi(2) < fast', 'sell when rsi(2) > fast'].join('\n');
 
@@ -312,4 +315,255 @@ test('writeBlockInNote writes the text, or rejects with the same message as a wr
   const untouched = memoryNote(WRITE_NOTE);
   await assert.rejects(writeBlockInNote(untouched.process, undefined, WRITE_SRC, 'universe: SPY'), (e: unknown) => e instanceof Error && e.message === NOTE_CHANGED);
   assert.equal(untouched.note.runs, 0);
+});
+
+// ---------------------------------------------------------------- a number made a parameter
+
+const TREND = ['name: Trend', 'universe: SPY', 'costs: 5 bps', '', 'buy  when close > sma(200)', 'sell when close < sma(200)'];
+/** The block with the change made, and what the parser reads from it. */
+const made = (lines: string[], p: NewParam) => {
+  const text = applyFix(lines, p.fix).join('\n');
+  return { text, parsed: parseSpec(text) };
+};
+/** The offer for the `nth` place (from 0) where `written` starts on a line. */
+const at = (lines: string[], row: number, written: string, nth = 0) => {
+  let col = -1;
+  for (let k = 0; k <= nth; k++) col = lines[row].indexOf(written, col + 1);
+  return paramFromNumber(lines, row, col);
+};
+
+test('the period of a call becomes a parameter named for its function, in every place the same call is written', () => {
+  const p = at(TREND, 4, '200')!;
+  assert.equal(p.name, 'sma_n');
+  assert.equal(p.declaration, 'sma_n = 200 in 100..400 step 20');
+  assert.equal(p.fix.label, 'Make 200 a parameter (2 places)');
+  assert.equal(p.places, 2);
+  assert.equal(p.context, 'sma(200)');
+  // Between the settings and the rules, with a blank line on each side, as the starter strategies have it.
+  assert.equal(made(TREND, p).text, ['name: Trend', 'universe: SPY', 'costs: 5 bps', '', 'sma_n = 200 in 100..400 step 20', '', 'buy  when close > sma(sma_n)', 'sell when close < sma(sma_n)'].join('\n'));
+  const { spec, errors } = made(TREND, p).parsed;
+  assert.deepEqual(errors, []);
+  assert.deepEqual(spec!.params.map((q) => [q.name, q.value, q.range]), [['sma_n', 200, { lo: 100, hi: 400, step: 20 }]]);
+  // From the other rule, the same change, with that rule's number first.
+  const other = at(TREND, 5, '200')!;
+  assert.equal(made(TREND, other).text, made(TREND, p).text);
+  assert.equal(other.fix.line, 6);
+});
+
+test('an equal number that does something else is left alone: a level is not the period of sma(200)', () => {
+  const lines = ['universe: SPY', 'buy when close > sma(200) and rsi(2) < 200', 'sell when close < sma(200)'];
+  const period = at(lines, 1, '200')!;
+  assert.equal(made(lines, period).text.split('\n').slice(-2).join('\n'), 'buy when close > sma(sma_n) and rsi(2) < 200\nsell when close < sma(sma_n)');
+  const level = at(lines, 1, '200', 1)!;
+  assert.equal(level.name, 'level');
+  assert.equal(level.fix.label, 'Make 200 a parameter');
+  assert.equal(level.context, 'rsi(2) < 200');
+  assert.equal(made(lines, level).text.split('\n').slice(-2).join('\n'), 'buy when close > sma(200) and rsi(2) < level\nsell when close < sma(200)');
+  // Two calls that differ are not the same call.
+  const differ = ['universe: SPY', 'buy when close > sma(200)', 'sell when close < sma(volume, 200)'];
+  assert.equal(at(differ, 1, '200')!.places, 1);
+});
+
+test('a name says what the number does: a window, a lag, a factor, a band width, a period after a series', () => {
+  const lines = [
+    'universe: SPY',
+    'buy when close > sma(50) for 3 bars and close[1] > last entry price * 1.03',
+    '  and bb_upper(20, 2) > close and sma(volume, 30) > volume and close crosses above 50',
+  ];
+  assert.equal(at(lines, 1, '3 bars')!.name, 'n_bars');
+  assert.equal(at(lines, 1, '3 bars')!.context, 'for 3 bars');
+  assert.equal(at(lines, 1, '1]')!.name, 'lag');
+  assert.equal(at(lines, 1, '1]')!.context, 'close[1]');
+  assert.equal(at(lines, 1, '1.03')!.name, 'factor');
+  assert.equal(at(lines, 1, '1.03')!.context, 'last entry price * 1.03');
+  assert.equal(at(lines, 2, '20')!.name, 'bb_upper_n');
+  assert.equal(at(lines, 2, '2)')!.name, 'bb_upper_width');
+  assert.equal(at(lines, 2, '30')!.name, 'sma_n');
+  assert.equal(at(lines, 2, '50')!.name, 'level');
+  assert.equal(at(lines, 2, '50')!.context, 'close crosses above 50');
+});
+
+test('a setting\'s number is named for the setting and keeps its percentage', () => {
+  const lines = ['universe: SPY', 'stop loss: 8%', 'trailing stop: 3 atr(14)', 'entries: 3', 'hold: top 1 by roc(126)', 'buy when roc(126) > 5%', 'add when close > sma(20)'];
+  const stop = at(lines, 1, '8%')!;
+  assert.equal(stop.declaration, 'stop_loss = 8% in 4%..16% step 1%');
+  const { text, parsed } = made(lines, stop);
+  assert.match(text, /^stop loss: stop_loss$/m);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.spec!.stops.SPY.stopLoss, { k: 'pct', v: 0.08 });
+  assert.equal(at(lines, 2, '3')!.name, 'trailing_stop');
+  assert.equal(at(lines, 3, '3')!.name, 'max_entries');
+  assert.equal(at(lines, 4, '1')!.name, 'top_n');
+  // The same call in a setting and in a rule changes in both.
+  const roc = at(lines, 4, '126')!;
+  assert.equal(roc.fix.label, 'Make 126 a parameter (2 places)');
+  assert.deepEqual(made(lines, roc).parsed.errors, []);
+  // A percentage in a rule stays one: 5% is 0.05.
+  const level = at(lines, 5, '5%')!;
+  assert.equal(level.declaration, 'level = 5% in 3%..10% step 1%');
+  assert.equal(made(lines, level).parsed.spec!.params[0].value, 0.05);
+});
+
+test('the new line goes after the last parameter, or above the first rule when no setting is above it', () => {
+  const after = ['universe: SPY', 'fast = 50 in 20..100 step 10', '  # a comment', 'buy when sma(fast) > sma(200)'];
+  assert.equal(made(after, at(after, 3, '200')!).text, ['universe: SPY', 'fast = 50 in 20..100 step 10', 'sma_n = 200 in 100..400 step 20', '  # a comment', 'buy when sma(fast) > sma(sma_n)'].join('\n'));
+  const first = ['buy when close > sma(200)', 'universe: SPY'];
+  assert.equal(made(first, at(first, 0, '200')!).text, ['sma_n = 200 in 100..400 step 20', '', 'buy when close > sma(sma_n)', 'universe: SPY'].join('\n'));
+  const tight = ['universe: SPY', 'buy when close > sma(200)'];
+  assert.equal(made(tight, at(tight, 1, '200')!).text, ['universe: SPY', '', 'sma_n = 200 in 100..400 step 20', '', 'buy when close > sma(sma_n)'].join('\n'));
+});
+
+test('a name the block uses, or one the language keeps, gets a number after it', () => {
+  const lines = ['universe: SPY', 'level = 3', 'level_2 = close > 1', 'buy when rsi(2) < 10 and close > level'];
+  const p = at(lines, 3, '10')!;
+  assert.equal(p.name, 'level_3');
+  assert.deepEqual(made(lines, p).parsed.errors, []);
+});
+
+test('the range keeps to values the block reads, and nothing is offered where a parameter cannot stand', () => {
+  // hma() needs a period of 2 or more, so the range does not reach 1.
+  assert.equal(at(['universe: SPY', 'buy when hma(2) > close'], 1, '2')!.declaration, 'hma_n = 2 in 2..6 step 1');
+  // A weight, a date, a cost, a parameter's own value, and a word.
+  const other = ['universe: SPY 60%, QQQ 40%', 'from: 2010-01-01', 'costs: 5 bps', 'fast = 50 in 20..100', 'buy when sma(fast) > close'];
+  for (const [row, written] of [[0, '60'], [1, '2010'], [2, '5'], [3, '50'], [4, 'sma']] as const) assert.equal(at(other, row, written), null, `${row}: ${written}`);
+});
+
+test('every number a starter strategy offers becomes a parameter the block reads, at its value and at each end of its range', () => {
+  let offered = 0;
+  for (const s of STARTERS) {
+    const lines = s.text.split('\n');
+    tokenizeBlock(lines).forEach((tokens, row) => {
+      for (const t of tokens.filter((x) => x.kind === 'number')) {
+        const p = paramFromNumber(lines, row, t.from);
+        if (!p) continue;
+        offered++;
+        const text = applyFix(lines, p.fix).join('\n');
+        const { spec, errors } = parseSpec(text);
+        assert.deepEqual(errors, [], `${s.title}: ${p.declaration}`);
+        const param = spec!.params.find((q) => q.name === p.name)!;
+        assert.equal(param.value, Number(p.number.replace('%', '')) / (param.percent ? 100 : 1));
+        for (const end of [param.range!.lo, param.range!.hi]) assert.deepEqual(parseSpec(text, { overrides: { [p.name]: end } }).errors, [], `${s.title}: ${p.name} = ${end}`);
+      }
+    });
+  }
+  assert.ok(offered >= 30, `${offered} numbers offered`);
+});
+
+test('the numbers of the rules are listed once for each change, with the code around each', () => {
+  const dips = STARTERS.find((s) => s.title === 'Buy dips in an uptrend')!.text.split('\n');
+  assert.deepEqual(
+    ruleNumbers(dips).map((p) => [p.context, p.fix.label]),
+    [
+      ['rsi(2)', 'Make 2 a parameter (2 places)'],
+      ['rsi(2) < 10', 'Make 10 a parameter'],
+      ['sma(200)', 'Make 200 a parameter'],
+      ['rsi(2) > 70', 'Make 70 a parameter'],
+      ['bars held >= 10', 'Make 10 a parameter'],
+    ],
+  );
+  // The stop loss is a setting, not a rule.
+  assert.ok(!ruleNumbers(dips).some((p) => p.name === 'stop_loss'));
+});
+
+/** The links of the renamed strategy's note: by its name, by its path with or without .md, and by another path that names it. */
+const isTrend = (link: string) => ['Trend', 'Ideas/Trend', 'Ideas/Trend.md'].includes(link);
+
+test('renaming a strategy rewrites the links to it in compare and account blocks, alias, weight and path kept', () => {
+  const note = [
+    '# Mix',
+    '```compare',
+    '[[Trend#Trend]] 60%',
+    '[[Ideas/Trend#trend|Slow one]]',
+    '[[Ideas/Trend.md# Trend ]] 10%',
+    'Ideas/Trend.md#Trend 40%',
+    'Ideas/Trend.md#trend',
+    '[[Trend#Trend following]] 20%',
+    '[[Other#Trend]] 5%',
+    '[[Trend]]',
+    '```',
+    '```account',
+    'cash: 1,000',
+    '[[Trend#Trend]] 100%',
+    '```',
+    'Prose that links [[Trend#Trend]] stays as written.',
+  ].join('\n');
+  const { text, count } = renameLinksInNote(note, isTrend, 'Trend', 'Trend v2', false);
+  assert.equal(count, 6);
+  assert.deepEqual(text.split('\n'), [
+    '# Mix',
+    '```compare',
+    '[[Trend#Trend v2]] 60%',
+    '[[Ideas/Trend#Trend v2|Slow one]]',
+    '[[Ideas/Trend.md# Trend v2 ]] 10%',
+    'Ideas/Trend.md#Trend v2 40%',
+    'Ideas/Trend.md#Trend v2',
+    // A longer name, another note with a strategy of that name, and a link to the note alone are other strategies.
+    '[[Trend#Trend following]] 20%',
+    '[[Other#Trend]] 5%',
+    '[[Trend]]',
+    '```',
+    '```account',
+    'cash: 1,000',
+    '[[Trend#Trend v2]] 100%',
+    '```',
+    'Prose that links [[Trend#Trend]] stays as written.',
+  ]);
+});
+
+test('in a forward test the from line and the text that names the strategy change, and the frozen rules stay', () => {
+  const note = [
+    '---',
+    'backtest_forward: true',
+    '---',
+    '',
+    '# Forward test of Trend',
+    '',
+    'The plugin froze the rules below after the bar of 2026-11-13. They are from [[Ideas/Trend#Trend]].',
+    '',
+    '```forward',
+    'started: 2026-11-13',
+    'from: [[Ideas/Trend#Trend]]',
+    'check: abc',
+    '---',
+    'name: Trend',
+    'universe: SPY',
+    '```',
+  ].join('\r\n');
+  const { text, count } = renameLinksInNote(note, isTrend, 'Trend', 'Trend v2', true);
+  assert.equal(count, 2);
+  const lines = text.split('\r\n');
+  assert.equal(lines[6], 'The plugin froze the rules below after the bar of 2026-11-13. They are from [[Ideas/Trend#Trend v2]].');
+  assert.equal(lines[10], 'from: [[Ideas/Trend#Trend v2]]');
+  assert.equal(lines[13], 'name: Trend');
+  assert.equal(lines[4], '# Forward test of Trend');
+  // Elsewhere only the forward block counts.
+  assert.equal(renameLinksInNote(note, isTrend, 'Trend', 'Trend v2', false).count, 1);
+  // A link to a heading of the note itself names no other note, whatever finds it.
+  assert.equal(renameLinksInNote(`${note}\r\nSee [[#Trend]].`, () => true, 'Trend', 'Trend v2', true).count, 2);
+});
+
+test('a link in a callout keeps its markers, and a note with no link to the strategy comes back as it was', () => {
+  const note = ['> [!note] Mix', '> ```compare', '> [[Trend#Trend]] 50%', '> [[Other#Swing]] 50%', '> ```'].join('\n');
+  assert.equal(renameLinksInNote(note, isTrend, 'Trend', 'Fast', false).text, note.replace('[[Trend#Trend]]', '[[Trend#Fast]]'));
+  const none = renameLinksInNote(note, isTrend, 'Swing', 'Slow', false);
+  assert.deepEqual(none, { text: note, count: 0 });
+});
+
+test('a new name is refused when it is empty, the same, in another block of the note, or breaks a link', () => {
+  assert.equal(nameProblem('  ', 'Trend', []), 'Write a name.');
+  assert.equal(nameProblem('Trend ', 'Trend', []), 'The strategy has this name now. Write a different name.');
+  for (const bad of ['Trend #2', 'A|B', 'A [x]', 'A^B']) assert.equal(nameProblem(bad, 'Trend', []), 'A name cannot contain #, |, [, ] or ^. These characters break the links to the strategy.', bad);
+  assert.equal(nameProblem('A // B', 'Trend', []), 'A name cannot contain // after a space. The plugin reads the text after it as a comment.');
+  assert.equal(nameProblem('swing', 'Trend', ['Swing', null]), 'Another strategy in this note has the name "swing". Write a different name.');
+  assert.equal(nameProblem('Trend v2', 'Trend', ['Swing', null]), null);
+  // Other capitals of the same name, and a first name for a block that had none, are names to write.
+  assert.equal(nameProblem('TREND', 'Trend', ['Swing']), null);
+  assert.equal(nameProblem('Dip', null, ['Swing']), null);
+});
+
+test('the new name is written on the block\'s name line, or added after its settings when it has none', () => {
+  const note = ['# N', '```strategy', 'name: Trend', 'universe: SPY', '', 'buy when close > sma(200)', '```'].join('\n');
+  assert.equal(setSettingInNote(note, 1, 'name: Trend\nuniverse: SPY\n\nbuy when close > sma(200)', 'strategy', 'name', 'Trend v2'), note.replace('name: Trend', 'name: Trend v2'));
+  const unnamed = ['```strategy', 'universe: SPY', 'buy when true', '```'].join('\n');
+  assert.equal(setSettingInNote(unnamed, 0, 'universe: SPY\nbuy when true', 'strategy', 'name', 'Dip'), ['```strategy', 'universe: SPY', 'name: Dip', 'buy when true', '```'].join('\n'));
 });

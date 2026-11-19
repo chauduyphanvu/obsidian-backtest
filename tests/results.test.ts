@@ -162,3 +162,23 @@ test('a result\'s trigger prices are worked out once and kept with it; asked for
   assert.equal(results.triggers(await results.runSource(`${SRC}\nto: 2020-06-01`)), null);
   client.shutdown();
 });
+
+test('a run tells the block its prices as they come in, then the bars; a kept result tells nothing', async () => {
+  const { results, client } = setup();
+  const runs = client.runs();
+  const drawing = results.drawing(SRC, runs);
+  const { spec } = drawing.parse();
+  const key = await results.resultKey(spec!, SRC, drawing.defaults);
+  const heard: string[] = [];
+  const on = {
+    ticker: (done: number, total: number, waiting: { name: string }[]) => heard.push(`${done} of ${total}: ${waiting.map((w) => w.name).join(', ')}`),
+    prices: (bars: number) => heard.push(`${bars} bars`),
+  };
+  await results.runSpec(drawing, spec!, key, false, on);
+  assert.deepEqual(heard, ['0 of 1: a', '1 of 1: ', '300 bars']);
+  heard.length = 0;
+  await results.runSpec(drawing, spec!, key, false, on);
+  assert.deepEqual(heard, []);
+  runs.close();
+  client.shutdown();
+});

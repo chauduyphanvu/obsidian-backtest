@@ -14,6 +14,12 @@
   font-family: inherit;
   line-height: 1.45;
 }
+/* The rename window has the look of the drafting window. */
+.bt-rename-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+}
 .bt-llm-privacy {
   margin: 6px 0 0;
   color: var(--text-muted);

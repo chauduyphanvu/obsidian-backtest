@@ -1,7 +1,7 @@
 import { h } from './dom.ts';
 import { MAX_PERIOD, type Param } from './dsl.ts';
 import { tidy } from './format.ts';
-import { plainNumber } from './rewrite.ts';
+import { around, plainNumber } from './rewrite.ts';
 import type { RunOutput } from './runner.ts';
 
 /** Where a parameter's slider runs, in the units the block is written in: percentage points for a percentage. */
@@ -71,51 +71,6 @@ export function formatParam(p: Pick<Param, 'percent'>, value: number): string {
   return plainNumber(shown(p, value)) + (p.percent ? '%' : '');
 }
 
-/** Most positions a slider offers, so the step stays easy to hit and to walk with the arrow keys. */
-const MAX_POSITIONS = { whole: 120, percent: 100, other: 60 };
-
-function decimals(x: number): number {
-  const text = String(tidy(Math.abs(x)));
-  const dot = text.indexOf('.');
-  return dot < 0 ? 0 : Math.min(6, text.length - dot - 1);
-}
-
-/** 1, 2, 5, 10, 20, 50 and so on, from `from` up. */
-function niceSteps(from: number): number[] {
-  const out: number[] = [];
-  for (let e = Math.floor(Math.log10(from)); e <= 7; e++) {
-    for (const m of [1, 2, 5]) if (m * 10 ** e >= from * (1 - 1e-9)) out.push(tidy(m * 10 ** e));
-  }
-  return out;
-}
-
-/**
- * A range around a value that has none: about half to double, on a step that keeps the grid on the value. A whole number
- * stays whole and at least 1, so it is always a length the parser accepts; a percentage stays above 0 and below 100%.
- */
-function around(v: number, percent: boolean): SliderScale {
-  const whole = !percent && Number.isInteger(v);
-  let lo = 0;
-  let hi = 10;
-  if (v > 0) {
-    lo = v / 2;
-    hi = percent ? Math.max(v, Math.min(2 * v, 99)) : 2 * v;
-    if (whole) {
-      lo = Math.max(1, Math.ceil(lo));
-      hi = Math.min(MAX_PERIOD, Math.max(hi, v + 4));
-    }
-  } else if (v < 0) {
-    lo = 2 * v;
-    hi = v / 2;
-  }
-  const unit = whole ? 1 : Math.min(0.1, 10 ** -decimals(v));
-  const candidates = percent ? [unit, 1, 5, 10, 50].filter((c) => c >= unit * (1 - 1e-9)) : niceSteps(unit);
-  const limit = whole ? MAX_POSITIONS.whole : percent ? MAX_POSITIONS.percent : MAX_POSITIONS.other;
-  const positions = (step: number) => Math.floor((hi - lo) / step + 1e-9) + 1;
-  const step = candidates.find((c) => positions(c) <= limit) ?? candidates[candidates.length - 1];
-  return { lo: tidy(v - Math.floor((v - lo) / step + 1e-9) * step), hi: tidy(v + Math.floor((hi - v) / step + 1e-9) * step), step };
-}
-
 /**
  * The slider for a parameter, built for the value the block declares. With a declared range, that range; the grid starts at
  * the first step that lands on the declared value, because the block's value need not sit on a step and a slider can only
@@ -123,7 +78,8 @@ function around(v: number, percent: boolean): SliderScale {
  */
 export function sliderScale(p: Param): SliderScale {
   const v = shown(p, p.declared);
-  if (!p.range) return around(v, p.percent);
+  // What the parameter stands for in the rules is not known here; a value above the longest period is no period.
+  if (!p.range) return around(v, p.percent, undefined, v <= MAX_PERIOD);
   const { lo, hi, step } = { lo: shown(p, p.range.lo), hi: shown(p, p.range.hi), step: shown(p, p.range.step) };
   return { lo: tidy(v - Math.floor((v - lo) / step + 1e-9) * step), hi, step };
 }

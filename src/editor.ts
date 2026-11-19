@@ -3,14 +3,15 @@ import { Decoration, EditorView, ViewPlugin, hoverTooltip, type DecorationSet, t
 import { EditorSuggest, type App, type Editor, type EditorPosition, type EditorSuggestContext, type EditorSuggestTriggerInfo } from 'obsidian';
 import { closesFence, fenceOf, findBlocks } from './blocks.ts';
 import { complete, hitCompletions, localTickers, tickerPosition, writtenTickers, type Completion } from './complete.ts';
-import { analyzeBlock, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
-import { callAt, helpAt, type Doc } from './docs.ts';
+import { analyzeBlock, fixesForDiagnostic, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
+import { callAt, helpAt, shortOf, type Doc } from './docs.ts';
 import type { Defaults } from './dsl.ts';
 import type { HoverValue } from './debug.ts';
-import { fixChanges, type Fix } from './fixes.ts';
+import { fixChanges, fixWord, type Fix } from './fixes.ts';
 import { pct, price, stamp } from './format.ts';
 import { lineKinds, TICKER_SETTINGS, type TokenKind } from './highlight.ts';
 import { ResultCache } from './result-cache.ts';
+import { paramFromNumber } from './rewrite.ts';
 import { blockSource, blockTickers, isLookupSource, type SymbolLookup, type TickerRef } from './symbols.ts';
 import { plainSource, SOURCE_PREFIX, type DataSource } from './types.ts';
 
@@ -49,6 +50,8 @@ interface Help {
 interface Change {
   edits: { from: number; to: number; insert: string }[];
   label: string;
+  /** What the word the change writes is, from the hover help: "simple average of the last n closes"; empty when the help has nothing. */
+  detail: string;
 }
 
 const PREFIX = { error: 'Problem: ', warning: 'Note: ' };
@@ -218,26 +221,53 @@ class StrategyView {
 }
 
 /** The change a fix makes to the note, from its place in a block. */
-function changeFor(view: EditorView, block: Shown, fix: Fix): Change | null {
+export function changeFor(view: EditorView, block: Shown, fix: Fix): Change | null {
   const { doc } = view.state;
   const edits = fixChanges(fix, (line) => {
     const n = block.first + line;
     return n < 1 || n > doc.lines ? null : doc.line(n).from;
   });
-  return edits && { edits, label: fix.label };
+  const word = fixWord(fix);
+  return edits && { edits, label: fix.label, detail: word === fix.label ? '' : shortOf(word) };
+}
+
+/** A number the hover card offers to make a parameter: where it is in the note, and the change, with the new line as its detail. */
+export interface ParamOffer {
+  from: number;
+  to: number;
+  change: Change;
+}
+
+/** The offer to make the number at column `col` of a block's line `row` (0-based) a parameter; null when that is not such a number. */
+export function paramOffer(view: EditorView, block: Shown, row: number, col: number): ParamOffer | null {
+  const found = paramFromNumber(block.lines, row, col, block.defaults);
+  const change = found && changeFor(view, block, found.fix);
+  if (!found || !change) return null;
+  const start = view.state.doc.line(block.first + row + 1).from;
+  return { from: start + found.fix.from, to: start + found.fix.to, change: { ...change, detail: found.declaration } };
 }
 
 interface Handle {
   /** The fix for the problem at `pos`, or on its line when none covers it. */
   fixAt(view: EditorView, pos: number): Change | null;
+  /** The change that makes the number at `pos`, or just before it, a parameter. */
+  paramAt(view: EditorView, pos: number): Change | null;
 }
 
-/** Lets `applyFixAtCursor` reach the extension installed in a view. */
+/** Lets the commands reach the extension installed in a view. */
 const handles = Facet.define<Handle, Handle | null>({ combine: (all) => all[0] ?? null });
 
 /** Applies the fix for the problem at the cursor, with a normal edit that can be undone. Returns whether there was one. */
 export function applyFixAtCursor(view: EditorView): boolean {
   const change = view.state.facet(handles)?.fixAt(view, view.state.selection.main.head);
+  if (!change) return false;
+  view.dispatch({ changes: change.edits, userEvent: 'input.fix' });
+  return true;
+}
+
+/** Makes the number at the cursor a parameter with a range, with a normal edit that can be undone. Returns whether there was such a number. */
+export function applyParamAtCursor(view: EditorView): boolean {
+  const change = view.state.facet(handles)?.paramAt(view, view.state.selection.main.head);
   if (!change) return false;
   view.dispatch({ changes: change.edits, userEvent: 'input.fix' });
   return true;
@@ -294,50 +324,94 @@ function valuePanel(doc: Document, box: HTMLElement, v: HoverValue): void {
   box.hidden = false;
 }
 
-function tooltipFor(view: EditorView, hits: Problem[], help: Help | null, fixOf: (p: Problem) => Change | null, value?: Promise<HoverValue | null> | null): Tooltip {
-  const from = Math.min(...hits.map((h) => h.from), help?.from ?? Infinity);
-  const to = Math.max(...hits.map((h) => h.to), help?.to ?? -Infinity);
+/** A value as the hover shows it, for laying out the card before the real one comes. */
+const STAND_IN_VALUE: HoverValue = { label: 'x', value: 1, close: 1, values: [1, 2], closes: [1, 2], at: 0, intraday: false };
+
+/**
+ * The height of the hover card `card` in `view`, laid out where it cannot be seen and then taken away. A value panel,
+ * `valueBox`, counts as filled, since the value comes after the card is placed.
+ */
+function cardHeight(view: EditorView, card: HTMLElement, valueBox: HTMLElement | null): number {
+  const doc = view.dom.ownerDocument;
+  // The frame and the class CodeMirror gives a hover card, so the same styles lay it out.
+  const frame = element(doc, 'div', 'cm-tooltip cm-tooltip-hover bt-measure');
+  card.classList.add('cm-tooltip-section');
+  if (valueBox) valuePanel(doc, valueBox, STAND_IN_VALUE);
+  frame.append(card);
+  view.dom.append(frame);
+  const height = frame.getBoundingClientRect().height;
+  frame.remove();
+  if (valueBox) {
+    valueBox.replaceChildren();
+    valueBox.hidden = true;
+  }
+  return height;
+}
+
+/**
+ * The hover card: each problem with a button for each of its fixes, then the help for the word, then the button that makes
+ * the number a parameter, then its value when it comes. It opens above its line when the editor has room for all of it
+ * there, else under the line, so that it does not cover the tab bar and the header above the editor.
+ */
+export function tooltipFor(
+  view: EditorView,
+  hits: Problem[],
+  help: Help | null,
+  fixesOf: (p: Problem) => Change[],
+  value?: Promise<HoverValue | null> | null,
+  param?: ParamOffer | null,
+): Tooltip {
+  const from = Math.min(...hits.map((h) => h.from), help?.from ?? Infinity, param?.from ?? Infinity);
+  const to = Math.max(...hits.map((h) => h.to), help?.to ?? -Infinity, param?.to ?? -Infinity);
+  const doc = view.dom.ownerDocument;
+  const dom = element(doc, 'div', 'bt-diag-tip');
+  // Narrow panes are common, and the tooltip should not be wider than the editor it is in.
+  dom.style.maxWidth = `${Math.max(160, Math.min(420, view.dom.clientWidth - 16))}px`;
+  const fixRow = (change: Change, cls: string): HTMLElement => {
+    const fix = element(doc, 'div', cls);
+    const button = element(doc, 'button', 'bt-fix', change.label);
+    // The editor keeps its focus and cursor; the edit is an ordinary transaction, so undo works.
+    button.addEventListener('mousedown', (e) => e.preventDefault());
+    button.addEventListener('click', () => view.dispatch({ changes: change.edits, userEvent: 'input.fix' }));
+    fix.append(button);
+    if (change.detail) fix.append(element(doc, 'span', 'bt-fix-detail', change.detail));
+    return fix;
+  };
+  for (const h of hits) {
+    const row = element(doc, 'div', `bt-diag-tip-row bt-diag-tip-${h.severity}`);
+    row.append(element(doc, 'span', 'bt-diag-tip-kind', PREFIX[h.severity]), h.message);
+    for (const change of fixesOf(h)) row.append(fixRow(change, 'bt-fix-row'));
+    dom.append(row);
+  }
+  if (help) {
+    const box = element(doc, 'div', 'bt-help');
+    box.append(element(doc, 'div', 'bt-help-sig', help.doc.signature), element(doc, 'div', 'bt-help-text', help.doc.text));
+    if (help.doc.example) box.append(element(doc, 'div', 'bt-help-example', help.doc.example));
+    dom.append(box);
+  }
+  if (param) dom.append(fixRow(param.change, 'bt-fix-row bt-param-offer'));
+  // The value on the block's ticker comes a moment later, from the saved prices, under the help.
+  const valueBox = value ? element(doc, 'div', 'bt-hover-value') : null;
+  if (valueBox) {
+    valueBox.hidden = true;
+    dom.append(valueBox);
+  }
+  const at = view.coordsAtPos(from);
+  const above = at === null || at.top - view.scrollDOM.getBoundingClientRect().top >= cardHeight(view, dom, valueBox);
+  if (value && valueBox) {
+    value.then(
+      (v) => {
+        if (v) valuePanel(doc, valueBox, v);
+        else valueBox.remove();
+      },
+      () => valueBox.remove(),
+    );
+  }
   return {
     pos: from,
     end: to,
-    above: true,
+    above,
     create() {
-      const doc = view.dom.ownerDocument;
-      const dom = element(doc, 'div', 'bt-diag-tip');
-      // Narrow panes are common, and the tooltip should not be wider than the editor it is in.
-      dom.style.maxWidth = `${Math.max(160, Math.min(420, view.dom.clientWidth - 16))}px`;
-      for (const h of hits) {
-        const row = element(doc, 'div', `bt-diag-tip-row bt-diag-tip-${h.severity}`);
-        row.append(element(doc, 'span', 'bt-diag-tip-kind', PREFIX[h.severity]), h.message);
-        const change = fixOf(h);
-        if (change) {
-          const button = element(doc, 'button', 'bt-fix', change.label);
-          // The editor keeps its focus and cursor; the edit is an ordinary transaction, so undo works.
-          button.addEventListener('mousedown', (e) => e.preventDefault());
-          button.addEventListener('click', () => view.dispatch({ changes: change.edits, userEvent: 'input.fix' }));
-          row.append(button);
-        }
-        dom.append(row);
-      }
-      if (help) {
-        const box = element(doc, 'div', 'bt-help');
-        box.append(element(doc, 'div', 'bt-help-sig', help.doc.signature), element(doc, 'div', 'bt-help-text', help.doc.text));
-        if (help.doc.example) box.append(element(doc, 'div', 'bt-help-example', help.doc.example));
-        dom.append(box);
-      }
-      // The value on the block's ticker comes a moment later, from the saved prices, under the help.
-      if (value) {
-        const box = element(doc, 'div', 'bt-hover-value');
-        box.hidden = true;
-        dom.append(box);
-        value.then(
-          (v) => {
-            if (v) valuePanel(doc, box, v);
-            else box.remove();
-          },
-          () => box.remove(),
-        );
-      }
       return {
         dom,
         // CodeMirror keeps a tooltip inside the window; a narrow pane is kept inside as well.
@@ -374,6 +448,8 @@ export function strategyEditor(getDefaults: () => Partial<Defaults>, options: Ed
     const fix = fixForDiagnostic(p.block.lines, p.diagnostic, p.block.defaults, lookup());
     return fix ? changeFor(view, p.block, fix) : null;
   };
+  const fixesOf = (view: EditorView, p: Problem): Change[] =>
+    fixesForDiagnostic(p.block.lines, p.diagnostic, p.block.defaults, lookup()).flatMap((fix) => changeFor(view, p.block, fix) ?? []);
   const byKind = (a: Problem, b: Problem) => (a.severity === b.severity ? a.from - b.from : a.severity === 'error' ? -1 : 1);
 
   const hover = hoverTooltip(
@@ -382,15 +458,16 @@ export function strategyEditor(getDefaults: () => Partial<Defaults>, options: Ed
       if (!sv) return null;
       const hits = sv.hits.filter((h) => pos >= h.from && pos <= h.to && (pos > h.from || side > 0) && (pos < h.to || side < 0)).sort(byKind);
       const help = helpUnder(view, sv, pos, side);
-      if (!hits.length && !help) return null;
-      const changes = new Map(hits.map((h) => [h, fixOf(view, h)] as const));
+      const param = paramUnder(view, sv, pos, side);
+      if (!hits.length && !help && !param) return null;
+      const changes = new Map(hits.map((h) => [h, fixesOf(view, h)] as const));
       // Only a block with no problem has values to show.
       const block = help && !hits.length && options.value ? sv.blockAt(view.state.doc.lineAt(pos).number - 1) : undefined;
       const value =
         block && help && !block.analysis.diagnostics.some((d) => d.severity === 'error')
           ? options.value!(block.lines, callAt(view.state.doc.lineAt(pos).text, help.from - view.state.doc.lineAt(pos).from, help.to - view.state.doc.lineAt(pos).from))
           : null;
-      return tooltipFor(view, hits, help, (p) => changes.get(p) ?? null, value);
+      return tooltipFor(view, hits, help, (p) => changes.get(p) ?? [], value, param);
     },
     { hideOnChange: true },
   );
@@ -408,8 +485,24 @@ export function strategyEditor(getDefaults: () => Partial<Defaults>, options: Ed
       }
       return null;
     },
+    paramAt(view, pos) {
+      const sv = view.plugin(plugin);
+      const line = view.state.doc.lineAt(pos);
+      const block = sv?.blockAt(line.number - 1);
+      if (!block) return null;
+      const row = line.number - 1 - block.first;
+      // The cursor is often just after the number it is on.
+      return (paramOffer(view, block, row, pos - line.from) ?? paramOffer(view, block, row, pos - line.from - 1))?.change ?? null;
+    },
   };
   return [plugin, hover, handles.of(handle)];
+}
+
+/** The offer to make the number the pointer is over a parameter. */
+function paramUnder(view: EditorView, sv: StrategyView, pos: number, side: number): ParamOffer | null {
+  const line = view.state.doc.lineAt(pos);
+  const block = sv.blockAt(line.number - 1);
+  return block ? paramOffer(view, block, line.number - 1 - block.first, pos - line.from - (side > 0 ? 0 : 1)) : null;
 }
 
 /** The help for the character the pointer is over, from the block's tokens. */

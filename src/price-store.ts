@@ -36,6 +36,8 @@ export interface PriceStoreOptions {
   secret?: DataDeps['secret'];
   /** Whether Tiingo stands in for Yahoo (data.ts DataDeps). */
   tiingoFallback?: DataDeps['tiingoFallback'];
+  /** Parses a CSV file's text away from the main thread (data.ts DataDeps); the command line leaves it out. */
+  parseCsv?: DataDeps['parseCsv'];
 }
 
 export class PriceStore {
@@ -86,6 +88,7 @@ export class PriceStore {
       fetchText: this.o.fetchText,
       secret: this.o.secret,
       tiingoFallback: this.o.tiingoFallback,
+      parseCsv: this.o.parseCsv,
       readVaultFile: async (path) => {
         const p = normalizePath(path);
         if (!(await adapter.exists(p))) {

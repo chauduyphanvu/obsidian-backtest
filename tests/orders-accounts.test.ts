@@ -17,7 +17,7 @@ const DATA = new Map([
   ['B', bars([20, 20, 20])],
 ]);
 
-function host(blocks: { note: string; name: string; source: string }[]): AccountScanHost & { ran: string[] } {
+function host(blocks: { note: string; name: string; source: string; line?: number }[]): AccountScanHost & { ran: string[] } {
   const ran: string[] = [];
   return {
     ran,
@@ -110,4 +110,14 @@ test('an account order in the orders window: its badge, and the words after it',
   assert.deepEqual(badge(10, 'close', -10), { action: 'Buy to cover', style: 'cover', text: 'all 10 shares' });
   assert.deepEqual(badge(-80, 'flip', 30), { action: 'Flip', style: 'sell', text: 'sell 30 shares, then sell short 50 shares' });
   assert.deepEqual(badge(80, 'flip', -20), { action: 'Flip', style: 'buy', text: 'buy to cover 20 shares, then buy 60 shares' });
+});
+
+test('each account keeps the line of its block, so the orders window can open the note there', async () => {
+  const accounts = await scanAccounts(
+    host([
+      { note: 'Accounts/Main.md', name: 'Main', source: 'cash: 2,000\n[[Trend]] 50%\n[[Hold]] 50%', line: 6 },
+      { note: 'Accounts/Bad.md', name: 'Bad', source: 'nonsense', line: 2 },
+    ]),
+  );
+  assert.deepEqual(accounts.map((a) => [a.name, a.error === null, a.line]), [['Main', true, 6], ['Bad', false, 2]]);
 });

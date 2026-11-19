@@ -2,6 +2,7 @@
 // functions run in a worker (see worker.ts and worker-client.ts) or, when no worker can start, on the main thread.
 
 import { runBacktest, type Backtest } from './backtest.ts';
+import { parseCsv } from './data.ts';
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { priceMemo } from './price-memo.ts';
@@ -133,7 +134,8 @@ export type ToWorker =
   | { type: 'drop'; id: number }
   | { type: 'job'; id: number; data: number; block: Block; job: Job }
   | { type: 'run'; id: number; data: number; block: Block }
-  | { type: 'triggers'; id: number; data: number; spec: Spec; run: TriggerRun };
+  | { type: 'triggers'; id: number; data: number; spec: Spec; run: TriggerRun }
+  | { type: 'csv'; id: number; text: string };
 
 export interface Progress {
   type: 'progress';
@@ -152,7 +154,8 @@ export type FromWorker =
   | { type: 'done'; id: number; result: Results[Kind] }
   | { type: 'ran'; id: number; result: Ran }
   | { type: 'error'; id: number; message: string }
-  | { type: 'triggered'; id: number; result: TriggerReport };
+  | { type: 'triggered'; id: number; result: TriggerReport }
+  | { type: 'parsed'; id: number; bars: Bars };
 
 /** At most one progress message this often, so a fast job does not flood the main thread. */
 const PROGRESS_MS = 50;
@@ -169,7 +172,7 @@ const failure = (id: number, e: unknown): FromWorker => ({ type: 'error', id, me
  * names the prices it reads. Every job runs to the end in one go: the main thread stops one by ending the worker.
  * Progress goes out at most once every `every` milliseconds. A single run (`run`) is not kept: its result is sent and
  * forgotten, so a slider's many values do not pile up here. The trigger prices of a run (`triggers`) come with the
- * strategy and the run's end, so they too need only the prices.
+ * strategy and the run's end, so they too need only the prices. A CSV file's text (`csv`) is parsed into bars and sent back.
  */
 export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: ToWorker) => Promise<void> {
   const sets = new Map<number, { data: Map<string, Bars>; benches: Map<string, Bench> }>();
@@ -188,6 +191,14 @@ export function serve(post: (m: FromWorker) => void, every = PROGRESS_MS): (m: T
       let reply: FromWorker;
       try {
         reply = { type: 'triggered', id: m.id, result: computeTriggers(m.spec, sets.get(m.data)!.data, m.run) };
+      } catch (e) {
+        reply = failure(m.id, e);
+      }
+      post(reply);
+    } else if (m.type === 'csv') {
+      let reply: FromWorker;
+      try {
+        reply = { type: 'parsed', id: m.id, bars: parseCsv(m.text) };
       } catch (e) {
         reply = failure(m.id, e);
       }

@@ -11,13 +11,30 @@ universe: SPY
 buy when sma(50) crosses over sma(200)
 sell when sma(50) crosses below sma(200)`,
     errors: [
-      { line: 4, message: 'Unknown name "over". Series: open, high, low, close, volume. Functions: sma, ema, rsi, roc, stdev, highest, lowest, atr, macd, macd_signal, bb_upper, bb_lower, stoch_k, stoch_d, adx, plus_di, minus_di, cci, williams_r, mfi, obv, vwap, keltner_upper, keltner_lower, supertrend, supertrend_up, wma, hma, median, zscore, percent_rank, slope, correl, count, bars_since, sum, dema, tema, kama, aroon_up, aroon_down, psar, cmf, linreg, rsquared, efficiency, streak, min, max, abs, sqrt, log, exp, if, column. Dates: month, day, weekday, year, month_start, month_end, quarter, week_start, week_end, quarter_start, quarter_end, year_start, year_end, trading_day, trading_days_left' },
+      { line: 4, message: 'Write "crosses above" or "crosses below", not "crosses over".' },
     ],
     fixed: `name: SPY golden cross
 universe: SPY
 
 buy when sma(50) crosses above sma(200)
 sell when sma(50) crosses below sma(200)`,
+  },
+  {
+    title: 'A crossing written "crosses under"',
+    why: 'A crossing down is written "crosses below", as a crossing up is written "crosses above".',
+    broken: `name: SPY 50-day trend
+universe: SPY
+
+buy when close crosses above sma(50)
+sell when close crosses under sma(50)`,
+    errors: [
+      { line: 5, message: 'Write "crosses above" or "crosses below", not "crosses under".' },
+    ],
+    fixed: `name: SPY 50-day trend
+universe: SPY
+
+buy when close crosses above sma(50)
+sell when close crosses below sma(50)`,
   },
   {
     title: 'An invented function',
@@ -65,9 +82,28 @@ from: 01/31/2015
 buy when close > sma(200)
 sell when close < sma(200)`,
     errors: [
-      { line: 3, message: '"01/31/2015" is not a date. Write it as 2015-01-31' },
+      { line: 3, message: '"01/31/2015" is not a date in the form YYYY-MM-DD. For example, write 2015-01-31.' },
     ],
     fixed: `name: SPY 200-day trend
+universe: SPY
+from: 2015-01-31
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+  },
+  {
+    title: 'A date written with slashes',
+    why: 'Every date is written year-month-day with dashes between the parts, as in 2015-01-31, never with slashes or dots.',
+    broken: `name: SPY 200-day trend since 2015
+universe: SPY
+from: 2015/01/31
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+    errors: [
+      { line: 3, message: 'Write the date with dashes: 2015-01-31.' },
+    ],
+    fixed: `name: SPY 200-day trend since 2015
 universe: SPY
 from: 2015-01-31
 
@@ -159,13 +195,37 @@ buy when close > sma(200)
   and rsi(14) > 50
 sell when close < sma(200)`,
     errors: [
-      { line: 6, message: 'Not a setting or a rule. Rules start with "buy when", "sell when", "short when" or "cover when"' },
+      { line: 6, message: 'A blank line ends the rule on line 4. Remove the blank line.' },
     ],
     fixed: `name: SPY trend with RSI
 universe: SPY
 
 buy when close > sma(200)
   and rsi(14) > 50
+sell when close < sma(200)`,
+  },
+  {
+    title: 'A blank line inside a definition',
+    why: 'A blank line ends a definition as it ends a rule, so a line that continues one must follow it directly.',
+    broken: `name: SPY trend, not overbought
+universe: SPY
+
+calm = close > sma(200)
+
+  and rsi(14) < 70
+
+buy when calm
+sell when close < sma(200)`,
+    errors: [
+      { line: 6, message: 'A blank line ends the definition on line 4. Remove the blank line.' },
+    ],
+    fixed: `name: SPY trend, not overbought
+universe: SPY
+
+calm = close > sma(200)
+  and rsi(14) < 70
+
+buy when calm
 sell when close < sma(200)`,
   },
   {
@@ -221,6 +281,25 @@ sell when close < sma(200)`,
     fixed: `name: SPY trend with a target
 universe: SPY
 take profit: 20%
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+  },
+  {
+    title: 'A stop loss above its maximum',
+    why: 'A stop loss or a trailing stop is a percentage more than 0% and not more than 99%, or a multiple of the average true range.',
+    broken: `name: SPY trend with a stop
+universe: SPY
+stop loss: 150%
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+    errors: [
+      { line: 3, message: 'Stop loss must be more than 0% and not more than 99%.' },
+    ],
+    fixed: `name: SPY trend with a stop
+universe: SPY
+stop loss: 15%
 
 buy when close > sma(200)
 sell when close < sma(200)`,
@@ -317,6 +396,44 @@ sell when close < sma(200)`,
     fixed: `name: SPY trend, trying costs
 universe: SPY
 costs: 5 bps
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+  },
+  {
+    title: 'A parameter value outside its own range',
+    why: 'The value of a parameter with a range is a number from the first end of the range to the second, the ends included.',
+    broken: `name: SPY trend, trying lengths
+universe: SPY
+
+length = 400 in 100..300 step 20
+
+buy when close > sma(length)
+sell when close < sma(length)`,
+    errors: [
+      { line: 4, message: '400 is not in the range 100..300. Change the value or the range.' },
+    ],
+    fixed: `name: SPY trend, trying lengths
+universe: SPY
+
+length = 300 in 100..300 step 20
+
+buy when close > sma(length)
+sell when close < sma(length)`,
+  },
+  {
+    title: 'A CSV path with a space in the universe',
+    why: 'The universe line reads a csv: path only when the names of its file and folders have no spaces.',
+    broken: `name: Gold trend from a file
+universe: csv:My Data/gold prices.csv
+
+buy when close > sma(200)
+sell when close < sma(200)`,
+    errors: [
+      { line: 2, message: 'The path "My Data/gold prices.csv" has a space. The universe line cannot read a path with a space. Change the name of the file or folder to a name with no spaces, for example My_Data/gold_prices.csv.' },
+    ],
+    fixed: `name: Gold trend from a file
+universe: csv:My_Data/gold_prices.csv
 
 buy when close > sma(200)
 sell when close < sma(200)`,

@@ -1,10 +1,11 @@
 // The `backtests` block: one table with every strategy in the vault. Pure; the host finds and runs the strategies.
 
 import { extractBlocks } from './blocks.ts';
+import { priceFailure, type PriceFailure } from './data.ts';
 import type { Diagnostic } from './dsl.ts';
 import type { AssetState } from './engine.ts';
 import { isoDate, minus, pct } from './format.ts';
-import { actionWord, barTime, mapLimit, statusFrom, timingPhrase, TIMINGS, type OrderRow } from './orders.ts';
+import { actionWord, barTime, mapLimit, statusFrom, timingPhrase, TIMINGS, type ListFix, type OrderRow } from './orders.ts';
 import { sparkSeries, type SparkSeries } from './render-chart.ts';
 import type { RunOutput } from './runner.ts';
 import type { TriggerReport } from './trigger.ts';
@@ -69,26 +70,29 @@ export function inFolder(note: string, folder: string | null): boolean {
   return folder === null || note.toLowerCase().startsWith(`${folder.toLowerCase()}/`);
 }
 
-export interface PendingRow {
-  state: 'running';
+/** Where a row's block is: its note, its name, and the 0-based line its block opens on, when the finder knew it. */
+interface Place {
   note: string;
   name: string;
+  line?: number;
 }
 
-export interface FailedRow {
+export interface PendingRow extends Place {
+  state: 'running';
+}
+
+export interface FailedRow extends Place {
   state: 'failed';
-  note: string;
-  name: string;
   reason: string;
   /** The block's text, so a problem in it can be fixed from the table. */
   source?: string;
+  /** Why its prices did not load, when a next step can put it right (data.ts). */
+  failure?: PriceFailure;
 }
 
 /** The latest figures of one strategy, as plain values. */
-export interface DoneRow {
+export interface DoneRow extends Place {
   state: 'done';
-  note: string;
-  name: string;
   /** Return per year, as a fraction. */
   cagr: number;
   benchmark: { label: string; cagr: number };
@@ -174,7 +178,8 @@ export function rowFrom(note: string, name: string, out: RunOutput, now: number)
 }
 
 export function failedRow(note: string, name: string, error: unknown, source?: string): FailedRow {
-  return { state: 'failed', note, name, reason: error instanceof Error ? error.message : String(error), ...(source === undefined ? {} : { source }) };
+  const failure = priceFailure(error);
+  return { state: 'failed', note, name, reason: error instanceof Error ? error.message : String(error), ...(source === undefined ? {} : { source }), ...(failure ? { failure } : {}) };
 }
 
 
@@ -273,15 +278,18 @@ export function sortRows(rows: DashRow[], sort: SortState): DashRow[] {
 
 export interface DashboardHost {
   /** Every strategy block in the vault. Called once when a round starts, with whether it is forced: the place to drop saved results. */
-  find(force: boolean): Promise<{ note: string; name: string; source: string }[]>;
+  find(force: boolean): Promise<(Place & { source: string })[]>;
   /** Runs one strategy, reusing a recent result. `force` fetches its prices again. */
   run(source: string, force: boolean): Promise<RunOutput>;
-  openNote(path: string): void;
+  /** Opens the note at the strategy's block, drawn open. */
+  openBlock(note: string, name: string, line?: number): void;
+  /** Asks for a starter strategy and makes a new note with it. */
+  newNote(): void;
   now(): number;
   /** The trigger prices of a result `run` gave, for the near-order chip; null when there are none. */
   triggers?(out: RunOutput): Promise<TriggerReport | null> | null;
-  /** The fix for a strategy that did not run for a problem in its block, as in today's orders; null when there is none. */
-  fix?(row: FailedRow): { label: string; text: string; write(): Promise<void> } | null;
+  /** What a strategy that did not run offers to put it right, as in today's orders (orders.ts ListFix); null when there is nothing. */
+  fix?(row: FailedRow): ListFix | Promise<ListFix | null> | null;
 }
 
 /** Strategies run side by side, as in today's orders. */
@@ -304,8 +312,9 @@ export async function runRound(host: DashboardHost, config: DashboardConfig, for
   const found = await host.find(force);
   if (!round.current()) return;
   const list = found.filter((f) => inFolder(f.note, config.folder));
+  const at = (f: Place) => (f.line === undefined ? {} : { line: f.line });
   round.onList(
-    list.map((f) => ({ state: 'running', note: f.note, name: f.name })),
+    list.map((f) => ({ state: 'running', note: f.note, name: f.name, ...at(f) })),
     found.length,
   );
   await mapLimit(list, DASHBOARD_CONCURRENCY, async (f, i) => {
@@ -314,9 +323,9 @@ export async function runRound(host: DashboardHost, config: DashboardConfig, for
     let out: RunOutput | undefined;
     try {
       out = await host.run(f.source, force);
-      row = rowFrom(f.note, f.name, out, host.now());
+      row = { ...rowFrom(f.note, f.name, out, host.now()), ...at(f) };
     } catch (e) {
-      row = failedRow(f.note, f.name, e, f.source);
+      row = { ...failedRow(f.note, f.name, e, f.source), ...at(f) };
     }
     if (round.current()) round.onRow(i, row, out);
   });
@@ -343,7 +352,7 @@ export function summaryText(rows: DashRow[], finishedAt: number | null): string 
 
 /** The message in place of the table when there is nothing to list. */
 export function emptyText(config: DashboardConfig, inVault: number): string {
-  if (inVault === 0) return 'The vault has no strategy blocks. Add one with the command "Insert strategy block".';
+  if (inVault === 0) return 'The vault has no strategy blocks.';
   return `The folder "${config.folder}" has no strategy blocks. Make sure that its name is correct, or remove the folder line.`;
 }
 
@@ -351,6 +360,8 @@ export interface FoundStrategy {
   note: string;
   name: string;
   source: string;
+  /** The 0-based line of the note that the block's opening fence is on. */
+  line: number;
 }
 
 /** Sections of a note that cannot hold a fenced block. Anything else, or a kind not listed, might. */
@@ -387,7 +398,7 @@ export async function findStrategies<N extends { path: string; basename: string 
     if (++read % NOTES_PER_PAUSE === 0) await vault.pause();
     const text = await vault.read(note);
     if (!text.includes(lang)) continue;
-    extractBlocks(text, lang).forEach((b, i, all) => found.push({ note: note.path, name: b.name ?? (all.length > 1 ? `${note.basename} ${i + 1}` : note.basename), source: b.source }));
+    extractBlocks(text, lang).forEach((b, i, all) => found.push({ note: note.path, name: b.name ?? (all.length > 1 ? `${note.basename} ${i + 1}` : note.basename), source: b.source, line: b.line }));
   }
   return found;
 }

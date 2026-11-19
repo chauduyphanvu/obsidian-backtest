@@ -4,7 +4,8 @@ import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { isoDate } from '../src/format.ts';
 import type { RunOutput } from '../src/runner.ts';
-import { createWithFreeName, NoteProperties, saveDatedFile, type NewFiles, type PropertiesHost } from '../src/vault-writes.ts';
+import { blockOf, EMPTY, STARTERS } from '../src/gallery.ts';
+import { createStrategyNote, createWithFreeName, NoteProperties, saveDatedFile, type NewFiles, type PropertiesHost } from '../src/vault-writes.ts';
 import { bars } from './helpers.ts';
 
 function run(src: string): RunOutput {
@@ -136,4 +137,19 @@ test('a new file takes the next free name, numbered before its extension', async
   const x = files(['Data/a.csv', 'Data/a-2.csv']);
   assert.equal(await createWithFreeName(x.f, 'Data/a.csv', 'x'), 'Data/a-3.csv');
   assert.equal(await createWithFreeName(x.f, 'Data/b.csv', 'x'), 'Data/b.csv');
+});
+
+test('a new strategy note is named after its block, in the folder for new notes, and never over a note that is there', async () => {
+  const starter = STARTERS[0];
+  const name = starter.text.match(/^name:\s*(.+)$/m)![1];
+  const x = files([`Trading/${name}.md`]);
+  const texts: string[] = [];
+  const f = { ...x.f, create: async (p: string, t: string) => void (texts.push(t), await x.f.create(p, t)) };
+  assert.equal(await createStrategyNote(f, 'Trading', blockOf(starter)), `Trading/${name}-2.md`);
+  assert.deepEqual(texts, [blockOf(starter)]);
+  // The top of the vault, a block with no name, and a name with characters a file name cannot have.
+  assert.equal(await createStrategyNote(x.f, '', blockOf(EMPTY)), 'My strategy.md');
+  assert.equal(await createStrategyNote(x.f, '', '```strategy\nuniverse: SPY\n```\n'), 'Strategy.md');
+  assert.equal(await createStrategyNote(x.f, '', '```strategy\nuniverse: SPY\n```\n'), 'Strategy-2.md');
+  assert.equal(await createStrategyNote(x.f, 'A/B', '```strategy\nname: SPY/TLT: 60#40\nuniverse: SPY\n```\n'), 'A/B/SPY TLT 60 40.md');
 });

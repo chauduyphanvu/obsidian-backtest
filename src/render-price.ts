@@ -2,6 +2,7 @@
 // strategy that shorts its short sales and covers too.
 
 import { h, s } from './dom.ts';
+import { readByKeys, type KeyReading } from './render-chart.ts';
 import type { Trade } from './engine.ts';
 import { price, signedPct, stamp, timeTicks } from './format.ts';
 import {
@@ -57,6 +58,7 @@ interface Drawn {
   shorts: number;
   covers: number;
   dropped: boolean;
+  keys: KeyReading;
 }
 
 type Mark = 'buy' | 'sell' | 'short' | 'cover';
@@ -109,11 +111,14 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
   const chart = h(body, 'div', 'bt-chart bt-price-chart');
   const tip = h(chart, 'div', 'bt-tip bt-price-tip');
   tip.hidden = true;
+  tip.setAttribute('aria-live', 'polite');
   const note = h(body, 'div', 'bt-note bt-price-note', TOO_MANY);
+  let drawn: Drawn | null = null;
+  readByKeys(chart, 'Chart of the price. Use the arrow keys to read the closes.', () => drawn?.keys ?? null);
 
   const redraw = () => {
     if (width <= 0) return;
-    const drawn = drawPrice(chart, tip, width, current, input);
+    drawn = drawPrice(chart, tip, width, current, input);
     const shorts = current.held.filter((w) => w.trade.side === 'short').length;
     heldKey.hidden = current.held.length === shorts;
     shortHeldKey.hidden = shorts === 0;
@@ -215,8 +220,8 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
   s(svg, 'path', { d: points.map((i, k) => `${k ? 'L' : 'M'}${f(x(t[i]))},${f(y(c[i]))}`).join(''), class: 'bt-price-line' });
 
   const count = markerCount(held);
-  const drawn: Drawn = { buys: 0, sells: 0, shorts: 0, covers: 0, dropped: count > 0 && !showMarkers(count, plotW) };
-  if (count > 0 && !drawn.dropped) {
+  const marked = { buys: 0, sells: 0, shorts: 0, covers: 0, dropped: count > 0 && !showMarkers(count, plotW) };
+  if (count > 0 && !marked.dropped) {
     const marks: Record<Mark, string[]> = { buy: [], sell: [], short: [], cover: [] };
     for (const w of held) {
       const short = w.trade.side === 'short';
@@ -224,10 +229,10 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
       for (const p of buyPoints(w)) marks[entry].push(markerPath(POINTS[entry], x(p.t), y(p.price)));
       if (w.sell) marks[exit].push(markerPath(POINTS[exit], x(w.trade.exitT), y(w.trade.exitPrice)));
     }
-    drawn.buys = marks.buy.length;
-    drawn.sells = marks.sell.length;
-    drawn.shorts = marks.short.length;
-    drawn.covers = marks.cover.length;
+    marked.buys = marks.buy.length;
+    marked.sells = marks.sell.length;
+    marked.shorts = marks.short.length;
+    marked.covers = marks.cover.length;
     // A ring in the surface colour under each marker keeps it apart from the line.
     const kinds: Mark[] = ['buy', 'sell', 'short', 'cover'];
     for (const kind of kinds) if (marks[kind].length) s(svg, 'path', { d: marks[kind].join(''), class: `bt-price-ring bt-price-ring-${kind}` });
@@ -238,14 +243,16 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
   const cross = s(svg, 'line', { y1: top, y2: top + plotH, class: 'bt-cross', visibility: 'hidden' });
   const dot = s(svg, 'circle', { r: 4, class: 'bt-dot bt-price-dot', visibility: 'hidden' });
   const hit = s(svg, 'rect', { x: left, y: top, width: Math.max(plotW, 0), height: plotH, fill: 'transparent' });
+  let shown: number | null = null;
   const hide = () => {
+    shown = null;
     tip.hidden = true;
     cross.setAttribute('visibility', 'hidden');
     dot.setAttribute('visibility', 'hidden');
   };
-  const show = (clientX: number) => {
-    const time = from + ((clientX - svg.getBoundingClientRect().left - left) / plotW) * span;
-    const i = nearestIndex(t, time);
+  const nearest = (clientX: number) => nearestIndex(t, from + ((clientX - svg.getBoundingClientRect().left - left) / plotW) * span);
+  const show = (i: number) => {
+    shown = i;
     const px = x(t[i]);
     cross.setAttribute('x1', String(px));
     cross.setAttribute('x2', String(px));
@@ -254,6 +261,8 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     cross.setAttribute('visibility', 'visible');
     dot.setAttribute('visibility', 'visible');
 
+    // Shown before it is filled, so a screen reader reads the change.
+    tip.hidden = false;
     tip.replaceChildren();
     h(tip, 'div', 'bt-tip-date', stamp(t[i], intraday));
     const row = (label: string, value: string) => {
@@ -272,7 +281,6 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
       row(open ? 'Return to date' : 'Return', signedPct(trade.ret));
       if (!open) row('Reason', tradeExit(trade, input.trades));
     }
-    tip.hidden = false;
     // To the right of the crosshair, or to the left when it would run off the chart. Measured from the left edge, where it has the most room.
     tip.style.removeProperty('left');
     tip.classList.add('bt-tip-measure');
@@ -281,8 +289,8 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     tip.style.left = `${px + 12 + w <= width ? px + 12 : Math.max(0, px - 12 - w)}px`;
     tip.style.top = `${top + 4}px`;
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
+  hit.addEventListener('pointermove', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointerdown', (e) => show(nearest((e as PointerEvent).clientX)));
   hit.addEventListener('pointerleave', hide);
-  return drawn;
+  return { ...marked, keys: { t, first: 0, at: () => shown, show, rest: hide } };
 }

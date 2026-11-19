@@ -1,10 +1,13 @@
 import { FUNCTIONS, tickers } from './complete.ts';
-import { CALENDAR, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
+import { CALENDAR, NUM, POSITION, SERIES, SETTINGS, parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
 import { declaredDefinitions, declaredParams, NUMERIC_SETTINGS, RULE_HEADS, settingKey, tokenizeBlock } from './highlight.ts';
 import { shortOf } from './docs.ts';
 import { SOURCE_PREFIX } from './types.ts';
 
-/** One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). */
+/**
+ * One change to a block's text. Columns are in line `line` (1-based, as in a parser Diagnostic). `to` can go past the end of
+ * the line, with one column for each line break, to remove whole lines.
+ */
 export interface FixEdit {
   line: number;
   from: number;
@@ -16,7 +19,7 @@ export interface FixEdit {
 export interface Fix extends FixEdit {
   /** For the button: "Change to sma". */
   label: string;
-  /** For places that can only show text: "Did you mean sma?". */
+  /** For places that can only show text: "Possible correction: sma."; empty when the problem's message already says what the fix does. */
   hint: string;
   /** Further changes that go with this one, so the block stays consistent. Columns are in the block as it is before any change. */
   also?: FixEdit[];
@@ -113,12 +116,12 @@ interface Context {
 const textOf = (lines: string[], line: number, from: number, to: number): string => lines[line - 1]?.slice(from, to) ?? '';
 
 function applied(lines: string[], e: Edit): string[] {
-  const out = [...lines];
-  // From the end of each line backwards, so the columns of the edits still to make stay right.
-  for (const x of [{ line: e.line, from: e.from, to: e.to, insert: e.insert }, ...(e.also ?? [])].sort((a, b) => b.line - a.line || b.from - a.from)) {
-    out[x.line - 1] = out[x.line - 1].slice(0, x.from) + x.insert + out[x.line - 1].slice(x.to);
-  }
-  return out;
+  const start = (line: number) => lines.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0);
+  const places = [{ line: e.line, from: e.from, to: e.to, insert: e.insert }, ...(e.also ?? [])].map((x) => ({ from: start(x.line) + x.from, to: start(x.line) + x.to, insert: x.insert }));
+  let text = lines.join('\n');
+  // From the end backwards, so the places of the edits still to make stay right.
+  for (const x of places.sort((a, b) => b.from - a.from)) text = text.slice(0, x.from) + x.insert + text.slice(x.to);
+  return text.split('\n');
 }
 
 const errorsOf = (lines: string[], defaults: Partial<Defaults>): Diagnostic[] => parseSpec(lines.join('\n'), { defaults }).errors;
@@ -165,16 +168,26 @@ function fix(e: Edit, replaced: string, habit = false): Fix {
   };
 }
 
-/** The nearest candidate whose edit passes `removes`; two equally good ones leave it undecided. */
-function pick(ctx: Context, word: string, candidates: readonly string[], build: (candidate: string) => Edit | null): Fix | null {
+/** The most fixes offered for one problem, when several candidates are equally near. */
+const MAX_FIXES = 3;
+
+/** The nearest candidate whose edit passes `removes`, or the ones that are equally near, the first few of them. */
+function pick(ctx: Context, word: string, candidates: readonly string[], build: (candidate: string) => Edit | null): Fix[] {
   const good = ranked(word, candidates)
     .slice(0, 4)
     .flatMap((c) => {
       const edit = build(c.value);
       return edit && removes(ctx, edit) ? [{ edit, key: c.key }] : [];
     });
-  if (!good.length || (good[1] && compare(good[0].key, good[1].key) === 0)) return null;
-  return fix(good[0].edit, word);
+  return good
+    .filter((g) => compare(g.key, good[0].key) === 0)
+    .slice(0, MAX_FIXES)
+    .map((g) => fix(g.edit, word));
+}
+
+/** A fix whose label and hint are its own, not the word it writes; none when it does not pass `removes`. */
+function offer(ctx: Context, e: Edit, label: string, hint: string): Fix[] {
+  return removes(ctx, e) ? [{ line: e.line, from: e.from, to: e.to, insert: e.insert, label, hint }] : [];
 }
 
 const NAMES = [...SERIES, ...CALENDAR, ...Object.keys(POSITION), 'true', 'false', 'always', 'never'];
@@ -194,21 +207,21 @@ function ruleHead(lineNo: number, line: string): Edit | null {
   return { line: lineNo, from: m[1].length, to: m[1].length + m[2].length + m[3].length + m[4].length, insert: `${first} ${second}` };
 }
 
-function unknownSetting(ctx: Context, name: string): Fix | null {
+function unknownSetting(ctx: Context, name: string): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined || d.to === undefined) return null;
+  if (d.from === undefined || d.to === undefined) return [];
   const typed = textOf(ctx.lines, d.line, d.from, d.to).replace(/\s+/g, ' ');
   const whole = pick(ctx, typed, SETTINGS, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
-  if (whole) return whole;
+  if (whole.length) return whole;
   // `fro TLT:` reads as a setting called "fro TLT".
   const m = typed.match(/^(\S+) (\S+)$/);
-  if (!m || !tickers(ctx.lines, ['universe', 'symbol']).some((t) => t.toLowerCase() === m[2].toLowerCase())) return null;
+  if (!m || !tickers(ctx.lines, ['universe', 'symbol']).some((t) => t.toLowerCase() === m[2].toLowerCase())) return [];
   return pick(ctx, m[1], ['for'], (c) => ({ line: d.line, from: d.from!, to: d.from! + m[1].length, insert: c }));
 }
 
-function unknownName(ctx: Context, word: string): Fix | null {
+function unknownName(ctx: Context, word: string): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined || d.to === undefined || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== word) return null;
+  if (d.from === undefined || d.to === undefined || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== word) return [];
   const call = ctx.lines[d.line - 1].slice(d.to).trimStart().startsWith('(');
   const params = [...declaredParams(ctx.lines), ...declaredDefinitions(ctx.lines)].map((p) => p.name);
   // After "crosses" a direction is as likely as a value.
@@ -217,34 +230,34 @@ function unknownName(ctx: Context, word: string): Fix | null {
   return pick(ctx, word, candidates, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
-function unexpected(ctx: Context, found: string): Fix | null {
+function unexpected(ctx: Context, found: string): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined || d.to === undefined) return null;
+  if (d.from === undefined || d.to === undefined) return [];
   const line = ctx.lines[d.line - 1];
   if ((found === '>' || found === '<') && line[d.from - 1] === '=') {
     const insert = found === '>' ? '>=' : '<=';
-    return fix({ line: d.line, from: d.from - 1, to: d.to, insert }, `=${found}`, true);
+    return [fix({ line: d.line, from: d.from - 1, to: d.to, insert }, `=${found}`, true)];
   }
-  if (!/^[A-Za-z_]+$/.test(found) || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== found) return null;
+  if (!/^[A-Za-z_]+$/.test(found) || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== found) return [];
   if (found === 'is') {
     const next = line.slice(d.to).match(/^(\s+)([A-Za-z]+)/);
     const from = d.to + (next?.[1].length ?? 0);
-    return next ? pick(ctx, next[2], ['above', 'below'], (c) => ({ line: d.line, from, to: from + next[2].length, insert: c })) : null;
+    return next ? pick(ctx, next[2], ['above', 'below'], (c) => ({ line: d.line, from, to: from + next[2].length, insert: c })) : [];
   }
   if (!line.slice(0, d.from).trim()) {
     const head = ruleHead(d.line, line);
-    if (head) return removes(ctx, head) ? fix(head, line.slice(head.from, head.to)) : null;
+    if (head) return removes(ctx, head) ? [fix(head, line.slice(head.from, head.to))] : [];
   }
   return pick(ctx, found, CONNECTIVES, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
 /** `&&`, `||` and a leading `!` as they are written in other languages. */
-function habit(ctx: Context, found: string): Fix | null {
+function habit(ctx: Context, found: string): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined) return null;
+  if (d.from === undefined) return [];
   const line = ctx.lines[d.line - 1];
   const at = d.from;
-  if (line[at] !== found) return null;
+  if (line[at] !== found) return [];
   const spaced = (word: string, run: number): Edit => {
     const before = at > 0 && !/\s/.test(line[at - 1]) ? ' ' : '';
     const after = at + run < line.length && !/\s/.test(line[at + run]) ? ' ' : '';
@@ -257,7 +270,7 @@ function habit(ctx: Context, found: string): Fix | null {
   } else if (found === '!' && /[A-Za-z_(]/.test(line[at + 1] ?? '')) {
     edit = { line: d.line, from: at, to: at + 1, insert: 'not ', shown: 'not' };
   }
-  return edit && removes(ctx, edit) ? fix(edit, line.slice(edit.from, edit.to), true) : null;
+  return edit && removes(ctx, edit) ? [fix(edit, line.slice(edit.from, edit.to), true)] : [];
 }
 
 /** The option list a "must be one of" style message carries, for a value typed in its range. */
@@ -267,73 +280,111 @@ function optionsOf(message: string): string[] | null {
   return /^(Yahoo|Tiingo) data comes as 1d or 1w bars, not "/.test(message) ? ['1d', '1w'] : null;
 }
 
-function settingValue(ctx: Context, options: string[]): Fix | null {
+function settingValue(ctx: Context, options: string[]): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined || d.to === undefined) return null;
+  if (d.from === undefined || d.to === undefined) return [];
   const typed = textOf(ctx.lines, d.line, d.from, d.to).trim().replace(/\s+/g, ' ');
   return pick(ctx, typed, options, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
 /** The ticker on a `for` line the parser says is not in the universe; the problem's range is the name as written. */
-function forTicker(ctx: Context): Fix | null {
+function forTicker(ctx: Context): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined || d.to === undefined) return null;
+  if (d.from === undefined || d.to === undefined) return [];
   return pick(ctx, textOf(ctx.lines, d.line, d.from, d.to), tickers(ctx.lines, ['universe', 'symbol']), (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c }));
 }
 
 /** `entry` or `bars` alone, with the second word missing or misspelt. */
-function onItsOwn(ctx: Context, first: string, second: string): Fix | null {
+function onItsOwn(ctx: Context, first: string, second: string): Fix[] {
   const { d } = ctx;
-  if (d.from === undefined || d.to === undefined || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== first) return null;
+  if (d.from === undefined || d.to === undefined || textOf(ctx.lines, d.line, d.from, d.to).toLowerCase() !== first) return [];
   const next = ctx.lines[d.line - 1].slice(d.to).match(/^(\s+)([A-Za-z_]+)/);
   if (next) {
     return pick(ctx, next[2], [second], (c) => ({ line: d.line, from: d.from!, to: d.to! + next[1].length + next[2].length, insert: `${first} ${c}` }));
   }
   const edit = { line: d.line, from: d.to, to: d.to, insert: ` ${second}`, shown: `${first} ${second}` };
-  return removes(ctx, edit) ? fix(edit, first) : null;
+  return removes(ctx, edit) ? [fix(edit, first)] : [];
 }
 
 /** A line that is neither a setting nor a rule: a rule's start or a setting's name written wrong. */
-function notARule(ctx: Context): Fix | null {
+function notARule(ctx: Context): Fix[] {
   const line = ctx.lines[ctx.d.line - 1];
   const head = ruleHead(ctx.d.line, line);
-  if (head) return removes(ctx, head) ? fix(head, line.slice(head.from, head.to)) : null;
+  if (head) return removes(ctx, head) ? [fix(head, line.slice(head.from, head.to))] : [];
   const m = line.match(/^(\s*)([A-Za-z_][A-Za-z_ ]*?)\s*:/);
-  if (!m) return null;
+  if (!m) return [];
   const typed = m[2].replace(/_/g, ' ').replace(/\s+/g, ' ').toLowerCase();
   const edit = (c: string): Edit => ({ line: ctx.d.line, from: m[1].length, to: m[1].length + m[2].length, insert: c });
-  if (SETTINGS.includes(typed)) return removes(ctx, edit(typed)) ? fix(edit(typed), m[2]) : null;
+  if (SETTINGS.includes(typed)) return removes(ctx, edit(typed)) ? [fix(edit(typed), m[2])] : [];
   return pick(ctx, typed, SETTINGS, edit);
 }
 
 /** A word in a setting's value or a `[n]` that should have been the name of a parameter. */
-function parameterName(ctx: Context): Fix | null {
+function parameterName(ctx: Context): Fix[] {
   const { d } = ctx;
   const line = ctx.lines[d.line - 1];
   const params = declaredParams(ctx.lines).map((p) => p.name);
-  if (!params.length || d.from === undefined || d.to === undefined) return null;
+  if (!params.length || d.from === undefined || d.to === undefined) return [];
   if (/^The number in \[n\] must be a whole number/.test(d.message)) {
     const typed = textOf(ctx.lines, d.line, d.from, d.to);
-    return /^[A-Za-z_]\w*$/.test(typed) ? pick(ctx, typed, params, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : null;
+    return /^[A-Za-z_]\w*$/.test(typed) ? pick(ctx, typed, params, (c) => ({ line: d.line, from: d.from!, to: d.to!, insert: c })) : [];
   }
   const key = settingKey(line);
-  if (!key || !NUMERIC_SETTINGS.includes(key)) return null;
+  if (!key || !NUMERIC_SETTINGS.includes(key)) return [];
   const known = new Set(['atr', 'top', 'by', 'at', 'inverse', 'volatility', 'of', ...FUNCTIONS, ...NAMES, ...params.map((p) => p.toLowerCase())]);
   const colon = line.indexOf(':');
   const value = line.slice(colon + 1).replace(/(^|\s)(#|\/\/).*$/, '');
   const unknown = [...value.matchAll(/[A-Za-z_]\w*/g)].filter((w) => !known.has(w[0].toLowerCase()));
-  if (unknown.length !== 1) return null;
+  if (unknown.length !== 1) return [];
   const from = colon + 1 + unknown[0].index;
   return pick(ctx, unknown[0][0], params, (c) => ({ line: d.line, from, to: from + unknown[0][0].length, insert: c }));
 }
 
+/** `crosses over` or `crosses under`, which the problem covers, as the crossing it most likely means. */
+function crossing(ctx: Context, word: string): Fix[] {
+  const { d } = ctx;
+  if (d.from === undefined || d.to === undefined) return [];
+  const insert = word === 'over' ? 'crosses above' : 'crosses below';
+  return offer(ctx, { line: d.line, from: d.from, to: d.to, insert }, `Change to ${insert}`, `Possible correction: ${insert}.`);
+}
+
+/** A parameter's value outside its own range, which the problem covers: the value moved to the nearer end, or that end moved to the value. */
+function outOfRange(ctx: Context): Fix[] {
+  const { d } = ctx;
+  if (d.from === undefined || d.to === undefined) return [];
+  const line = ctx.lines[d.line - 1];
+  const m = line.slice(d.to).match(new RegExp(String.raw`^(\s+in\s+)(${NUM})(\s*\.\.\s*)(${NUM})`, 'i'));
+  if (!m) return [];
+  const value = line.slice(d.from, d.to);
+  const loFrom = d.to + m[1].length;
+  const above = Number(value.replace('%', '')) > Number(m[4].replace('%', ''));
+  const [end, from] = above ? [m[4], loFrom + m[2].length + m[3].length] : [m[2], loFrom];
+  const range = above ? `${m[2]}..${value}` : `${value}..${m[4]}`;
+  return [
+    ...offer(ctx, { line: d.line, from: d.from, to: d.to, insert: end }, `Change to ${end}`, `Possible correction: ${end}.`),
+    ...offer(ctx, { line: d.line, from, to: from + end.length, insert: value }, `Change the range to ${range}`, `Change the range to ${range}.`),
+  ];
+}
+
+/** The blank lines just above a line that continues a rule or a definition, removed. */
+function blankLines(ctx: Context): Fix[] {
+  const { lines, d } = ctx;
+  let first = d.line;
+  while (first > 1 && !lines[first - 2].trim()) first--;
+  const blank = lines.slice(first - 1, d.line - 1);
+  if (!blank.length) return [];
+  const width = blank.reduce((n, l) => n + l.length + 1, 0);
+  return offer(ctx, { line: first, from: 0, to: width, insert: '' }, blank.length === 1 ? 'Remove the blank line' : 'Remove the blank lines', '');
+}
+
 /**
- * The correction for a problem the parser reported, when it is a likely typo, or null. `lines` are the
- * block's lines and `d` the parser's problem for them; the edit is in the same coordinates (the
- * problem's line is 1-based). It is offered only after applying it to a copy of the block and reading
- * that copy again: the problem at that spot must be gone, with no new one in its place.
+ * The corrections for a problem the parser reported: the one for a likely typo, the equally near ones when two or three are,
+ * or the different ways to put a problem right, such as a value outside its range. `lines` are the block's lines and `d`
+ * the parser's problem for them; each edit is in the same coordinates (the problem's line is 1-based). Each is offered
+ * only after applying it to a copy of the block and reading that copy again: the problem at that spot must be gone, with
+ * no new one in its place. None when there is no correction.
  */
-export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): Fix | null {
+export function fixesFor(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): Fix[] {
   const ctx: Context = { lines, d, defaults, errors: errorsOf(lines, defaults) };
   const m = (re: RegExp) => d.message.match(re);
   let found: RegExpMatchArray | null;
@@ -344,9 +395,21 @@ export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Default
   if (m(/^"for .+?:" names (?:a ticker that is not|.+, which is not) in the universe$/)) return forTicker(ctx);
   if ((found = m(/^"(entry|bars)" is not a complete name\. Write "(?:entry|bars) (price|held)"$/))) return onItsOwn(ctx, found[1], found[2]);
   if (/^Not a setting or a rule/.test(d.message)) return notARule(ctx);
+  if ((found = m(/^Write "crosses above" or "crosses below", not "crosses (over|under)"\.$/))) return crossing(ctx, found[1]);
+  if (m(/^.+ is not in the range .+\.\..+\. Change the value or the range\.$/)) return outOfRange(ctx);
+  if (m(/^A blank line ends the (?:rule|definition) on line \d+\. Remove the blank line\.$/)) return blankLines(ctx);
+  if ((found = m(/^Write the date with dashes: (\d{4}-\d{2}-\d{2})\.$/)) && d.from !== undefined && d.to !== undefined) {
+    return offer(ctx, { line: d.line, from: d.from, to: d.to, insert: found[1] }, `Change to ${found[1]}`, '');
+  }
   const options = optionsOf(d.message);
   if (options) return settingValue(ctx, options);
   return parameterName(ctx);
+}
+
+/** The correction for a problem the parser reported, when there is exactly one (see `fixesFor`), or null. */
+export function fixFor(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): Fix | null {
+  const found = fixesFor(lines, d, defaults);
+  return found.length === 1 ? found[0] : null;
 }
 
 /** A block's lines with a fix made, every edit of it in the block as it was before any of them. */
@@ -369,18 +432,29 @@ export function shortMessage(message: string): { head: string; rest: string } {
   return m ? { head: m[1], rest: m[2] } : { head: message, rest: '' };
 }
 
+const writesWord = (f: Fix): boolean => f.hint.startsWith('Possible correction');
+
 /**
- * The fix for a problem and a sentence that offers it: "Did you mean sma, the simple average of the last n closes?" when the
- * fix writes a function's name, "Did you mean rebalance?" for another word, and the fix's own hint for a habit such as
- * `&&`. Null when there is no fix.
+ * The fixes for a problem and a sentence that offers them, for one fix: "Did you mean sma, the simple average of the last n
+ * closes?" when it writes a function's name, "Did you mean rebalance?" for another word, and the fix's own hint for a habit
+ * such as `&&` (empty when the message says what to do). For equally near words: "Possible corrections: sma, sum.", and for
+ * other ways to put the problem right, nothing more than the message. Null when there is no fix.
  */
-export function suggestion(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): { fix: Fix; text: string } | null {
-  const found = fixFor(lines, d, defaults);
+export function suggestions(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): { fixes: Fix[]; text: string } | null {
+  const fixes = fixesFor(lines, d, defaults);
+  if (fixes.length > 1) return { fixes, text: fixes.every(writesWord) ? `Possible corrections: ${fixes.map(fixWord).join(', ')}.` : '' };
+  const [found] = fixes;
   if (!found) return null;
-  if (!found.hint.startsWith('Possible correction')) return { fix: found, text: found.hint };
+  if (!writesWord(found)) return { fixes, text: found.hint };
   const word = fixWord(found);
   const short = FUNCTIONS.includes(word) ? shortOf(word) : '';
-  return { fix: found, text: short ? `Did you mean ${word}, the ${short}?` : `Did you mean ${word}?` };
+  return { fixes, text: short ? `Did you mean ${word}, the ${short}?` : `Did you mean ${word}?` };
+}
+
+/** The one fix for a problem and the sentence that offers it (see `suggestions`); null when there is none, or more than one. */
+export function suggestion(lines: string[], d: Diagnostic, defaults: Partial<Defaults> = {}): { fix: Fix; text: string } | null {
+  const found = suggestions(lines, d, defaults);
+  return found?.fixes.length === 1 ? { fix: found.fixes[0], text: found.text } : null;
 }
 
 /** Where else a block writes a ticker, as the same ticker: on `for` lines, after `of`, in the universe and so on. */
@@ -399,6 +473,12 @@ function otherPlaces(lines: string[], at: { line: number; from: number }, prefix
   return out;
 }
 
+/** Another way of writing a ticker that its source can know: Yahoo writes a share class after a dash (BRK-B), where others write BRK.B. */
+export function tickerSpellings(ticker: string, source: string): string[] {
+  const m = source === 'yahoo' ? ticker.match(/^([A-Z0-9]+)\.([A-C])$/i) : null;
+  return m ? [`${m[1]}-${m[2]}`.toUpperCase()] : [];
+}
+
 /**
  * Replaces a ticker the source does not know with the nearest of `candidates` (tickers the source does
  * know). `at` is where the ticker is written, with any `binance:` style prefix. The same ticker written
@@ -411,7 +491,7 @@ export function tickerFix(lines: string[], at: { line: number; from: number; to:
   const typed = written.slice(prefix.length);
   const ctx: Context = { lines, d: { line: at.line, message: '', from: at.from, to: at.to }, defaults, errors: errorsOf(lines, defaults), strict: { problems: problemsOf(lines, defaults) } };
   const others = otherPlaces(lines, at, prefix, typed);
-  return pick(ctx, typed, candidates, (c) => ({
+  const found = pick(ctx, typed, candidates, (c) => ({
     line: at.line,
     from: at.from + prefix.length,
     to: at.to,
@@ -419,4 +499,5 @@ export function tickerFix(lines: string[], at: { line: number; from: number; to:
     shown: c,
     also: others.map((o) => ({ ...o, insert: c })),
   }));
+  return found.length === 1 ? found[0] : null;
 }

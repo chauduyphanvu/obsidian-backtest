@@ -126,3 +126,12 @@ export async function createNote(files: NewFiles, folder: string, title: string,
   if (!(await files.exists(folder))) await files.createFolder(folder);
   return createWithFreeName(files, `${folder}/${fileName(title)}.md`, text);
 }
+
+/**
+ * Creates a note whose text is the strategy block, named after its `name:` (else "Strategy"), in `folder` ('' for the top of
+ * the vault), or with "-2", "-3" and on when that name is taken. Returns where it went.
+ */
+export function createStrategyNote(files: Pick<NewFiles, 'exists' | 'create'>, folder: string, block: string): Promise<string> {
+  const title = fileName(extractBlocks(block)[0]?.name ?? '') || 'Strategy';
+  return createWithFreeName(files, `${folder ? `${folder}/` : ''}${title}.md`, block);
+}

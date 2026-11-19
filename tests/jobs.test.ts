@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
+import { parseCsv } from '../src/data.ts';
 import { parseSpec, type Defaults } from '../src/dsl.ts';
 import { explainTrade } from '../src/explain.ts';
 import { benchFor, runBlock, runJob, serve, stoppedResult, withInputs, type Bench, type FromWorker, type Job, type Progress, type Ran, type ToWorker } from '../src/jobs.ts';
@@ -306,6 +307,19 @@ test('a single run that fails in the worker sends the same message the main thre
   const { spec } = parseSpec('universe: A, B\nbuy when close > sma(5)', { defaults: DEFAULTS });
   assert.throws(() => runBacktest(spec!, data), (e: Error) => {
     assert.deepEqual(out, [{ type: 'error', id: 2, message: e.message }]);
+    return true;
+  });
+});
+
+test('a CSV file parsed in the worker gives, as plain data, the bars and columns it gives here, or the same message', async () => {
+  const text = 'date,open,high,low,close,score\n2024-01-03,2,2,2,2,0.5\n2024-01-02,1,1,1,1,0.4\n';
+  const out: FromWorker[] = [];
+  const handle = serve((m) => out.push(structuredClone(m)), 0);
+  await handle({ type: 'csv', id: 1, text });
+  assert.deepStrictEqual(out, [{ type: 'parsed', id: 1, bars: parseCsv(text) }]);
+  await handle({ type: 'csv', id: 2, text: 'date,close\n' });
+  assert.throws(() => parseCsv('date,close\n'), (e: Error) => {
+    assert.deepEqual(out[1], { type: 'error', id: 2, message: e.message });
     return true;
   });
 });

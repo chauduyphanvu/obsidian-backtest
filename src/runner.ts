@@ -1,5 +1,5 @@
 import { runBacktest, type Backtest } from './backtest.ts';
-import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, type DataDeps, type Loaded } from './data.ts';
+import { barsFrom, insideReach, loadBars, loadInsideBars, loadRawBars, PriceError, priceFailure, type DataDeps, type Loaded, type Retry } from './data.ts';
 import { insideKey } from './engine.ts';
 import { isCross, MAX_PERIOD, paramValues, parseSpec, ruleExprs, type Defaults, type Expr, type ParseResult, type Spec } from './dsl.ts';
 import { DAY } from './format.ts';
@@ -161,6 +161,20 @@ export interface PriceInfo {
   stale: boolean;
 }
 
+/**
+ * Prices still on their way: the ticker as the block names it (or, for `magnify`, "the 5m bars of SPY"), where they come
+ * from, the vault path of a CSV file, and Yahoo's next try once a request to it has failed.
+ */
+export interface Waiting {
+  name: string;
+  source: Loaded['source'];
+  id: string;
+  retry: Retry | null;
+}
+
+/** Told as a run's prices come in and as a failed Yahoo request goes out again: how many are in, of how many, and the rest in the block's order. */
+export type OnTicker = (done: number, total: number, waiting: Waiting[]) => void;
+
 /** Loads a spec's prices and runs it. Knows nothing about Obsidian: everything outside comes through `deps`. */
 export class Runner {
   private deps: DataDeps;
@@ -179,12 +193,30 @@ export class Runner {
     return parseSpec(source, { defaults: this.defaults, overrides });
   }
 
-  async loadPrices(spec: Spec, force = false): Promise<{ data: Map<string, Bars>; warnings: string[]; notes: string[]; prices: PriceInfo[] }> {
+  async loadPrices(spec: Spec, force = false, onTicker?: OnTicker): Promise<{ data: Map<string, Bars>; warnings: string[]; notes: string[]; prices: PriceInfo[] }> {
     const refs = new Map<string, AssetRef>();
     const cash = spec.cash.k === 'ticker' ? [spec.cash.ref] : [];
     for (const r of [...spec.universe, ...spec.extras, ...(spec.benchmark ? [spec.benchmark] : []), ...cash]) {
       if (!refs.has(r.name)) refs.set(r.name, r);
     }
+    const insides = spec.magnify ? spec.universe.filter((a) => a.source === 'yahoo' || a.source === 'binance') : [];
+    const waiting = new Map<string, Waiting>();
+    for (const r of refs.values()) waiting.set(r.name, { name: r.name, source: r.source, id: r.id, retry: null });
+    for (const a of insides) waiting.set(insideName(a, spec.magnify!), { name: insideName(a, spec.magnify!), source: a.source, id: a.id, retry: null });
+    const total = waiting.size;
+    const tell = () => onTicker?.(total - waiting.size, total, [...waiting.values()]);
+    /** What a load of `name` reports: its retries while it runs, and its end, failed or not. */
+    const watch = (name: string) => ({
+      onRetry: (retry: Retry) => {
+        waiting.get(name)!.retry = retry;
+        tell();
+      },
+      done: () => {
+        waiting.delete(name);
+        tell();
+      },
+    });
+    tell();
     const lookback = lookbackBars(spec);
     const sinceFor = (step: number) => (spec.from === null ? 0 : spec.from - Math.ceil(lookback * (step >= DAY ? NON_TRADING : 1)) * step);
     const since = sinceFor(Number(spec.interval.slice(0, -1)) * INTERVAL_MS[spec.interval.slice(-1)]);
@@ -203,13 +235,18 @@ export class Runner {
       return Math.min(Number.isFinite(gap) ? sinceFor(gap) : since, counted);
     };
     const load = async (r: AssetRef) => {
+      const told = watch(r.name);
       try {
-        return await loadBars(r, spec.interval, since, this.deps, force, { freshForMs: this.freshForMs });
+        return await loadBars(r, spec.interval, since, this.deps, force, { freshForMs: this.freshForMs, onRetry: told.onRetry });
       } catch (e) {
         if (!(spec.cash.k === 'ticker' && spec.cash.ref.name === r.name)) throw e;
         // Without a cash rate line the ticker comes from the settings, so the block itself never names it.
         const why = (e instanceof Error ? e.message : String(e)).replace(/\.?$/, '.');
-        throw new Error(`${why} The cash rate comes from this ticker. The ticker is in the "cash rate" line of the block. If the block has no such line, it is in the plugin setting "Interest on cash".`);
+        const text = `${why} The cash rate comes from this ticker. The ticker is in the "cash rate" line of the block. If the block has no such line, it is in the plugin setting "Interest on cash".`;
+        const failure = priceFailure(e);
+        throw failure ? new PriceError(text, failure) : new Error(text);
+      } finally {
+        told.done();
       }
     };
     const loaded = await Promise.all([...refs.values()].map(async (r) => ({ name: r.name, rows: r.source === 'csv' || r.source === 'fred', ...(await load(r)) })));
@@ -218,7 +255,7 @@ export class Runner {
     // Saved prices can reach further back than this run asks for; the same block must give the same answer.
     const data = new Map(loaded.map((l) => [l.name, barsFrom(l.bars, l.rows ? rowsSince(l.bars.t) : since)]));
     if (spec.magnify) {
-      for (const inside of await this.loadInside(spec, spec.magnify, force)) {
+      for (const inside of await this.loadInside(spec, spec.magnify, force, insides, watch)) {
         if (inside.warning) warnings.push(inside.warning);
         if (inside.bars) data.set(insideKey(inside.name, spec.magnify), inside.bars);
       }
@@ -227,27 +264,34 @@ export class Runner {
   }
 
   /**
-   * The smaller bars of each Yahoo and Binance ticker in the universe, for `magnify`, from the run's first day (no history
+   * The smaller bars of `refs`, the universe's Yahoo and Binance tickers, for `magnify`, from the run's first day (no history
    * before it is needed, as nothing is held there) or the earliest the source gives them, whichever is later. A ticker
    * whose smaller bars can't be loaded is read as whole bars, with a warning; one whose window does not reach into the
-   * run gets none, which the run's notes say.
+   * run gets none, which the run's notes say. `watch` hears of each load's retries and its end.
    */
-  private loadInside(spec: Spec, interval: string, force: boolean): Promise<{ name: string; bars: Bars | null; warning: string | null }[]> {
+  private loadInside(
+    spec: Spec,
+    interval: string,
+    force: boolean,
+    refs: AssetRef[],
+    watch: (name: string) => { onRetry: (retry: Retry) => void; done: () => void },
+  ): Promise<{ name: string; bars: Bars | null; warning: string | null }[]> {
     const now = this.deps.now();
     return Promise.all(
-      spec.universe
-        .filter((a) => a.source === 'yahoo' || a.source === 'binance')
-        .map(async (a) => {
-          const since = Math.max(spec.from ?? 0, insideReach(a.source, interval, now));
+      refs.map(async (a) => {
+        const told = watch(insideName(a, interval));
+        const since = Math.max(spec.from ?? 0, insideReach(a.source, interval, now));
+        try {
           if (spec.to !== null && spec.to < since) return { name: a.name, bars: emptyBars(), warning: null };
-          try {
-            const l = await loadInsideBars(a, interval, since, this.deps, force, { freshForMs: this.freshForMs });
-            return { name: a.name, bars: barsFrom(l.bars, since), warning: l.warning };
-          } catch (e) {
-            const why = e instanceof Error ? e.message : String(e);
-            return { name: a.name, bars: null, warning: `${why.replace(/\.$/, '')}. The run did not examine the bars of ${a.name} with smaller bars.` };
-          }
-        }),
+          const l = await loadInsideBars(a, interval, since, this.deps, force, { freshForMs: this.freshForMs, onRetry: told.onRetry });
+          return { name: a.name, bars: barsFrom(l.bars, since), warning: l.warning };
+        } catch (e) {
+          const why = e instanceof Error ? e.message : String(e);
+          return { name: a.name, bars: null, warning: `${why.replace(/\.$/, '')}. The run did not examine the bars of ${a.name} with smaller bars.` };
+        } finally {
+          told.done();
+        }
+      }),
     );
   }
 
@@ -306,6 +350,9 @@ export class Runner {
     }
   }
 }
+
+/** How the smaller bars of a ticker are named while they load, as loadInsideBars names them. */
+const insideName = (ref: AssetRef, interval: string): string => `the ${interval} bars of ${ref.name}`;
 
 /** Prices loaded apart from a run (Runner.loadExtras), keyed by ticker name. */
 export interface Extras {

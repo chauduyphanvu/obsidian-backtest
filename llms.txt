@@ -9,7 +9,7 @@ A parser checks every line of a block, and only what it accepts is backtested. W
 - [Writing strategy blocks](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/llms-full.txt): the whole language for a writer, with worked examples and how to check a block
 - [Word list](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/language.json): every function, setting, value and word, with its form, meaning and an example
 - [Worked examples](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/corpus/examples.jsonl): 77 requests in plain English and the blocks that answer them
-- [Mistakes and fixes](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/corpus/mistakes.jsonl): 33 blocks with a mistake, what the parser says and the block put right
+- [Mistakes and fixes](https://raw.githubusercontent.com/chauduyphanvu/obsidian-backtest/main/docs/corpus/mistakes.jsonl): 39 blocks with a mistake, what the parser says and the block put right
 
 ## Tools
 

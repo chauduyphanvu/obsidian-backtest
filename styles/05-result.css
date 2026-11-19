@@ -148,6 +148,13 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+/* Holds its line while empty, so the shapes under it do not move when the count comes. */
+.bt-loading-line {
+  min-height: 1.5em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+}
 .bt-steps {
   display: flex;
   flex-wrap: wrap;
@@ -286,7 +293,8 @@
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--text-muted);
 }
-.bt-chip-watch {
+.bt-chip-watch,
+.bt-chip-old {
   background: var(--bt-warn-bg);
 }
 /* A small warning triangle. */
@@ -445,6 +453,56 @@
   color: var(--text-muted);
   transition: transform var(--bt-t-comp) var(--bt-ease);
 }
+/* Old prices: an amber part joined to the top of the line, whose order then reads as quiet as one that is not near. */
+.bt-root button.bt-status-old {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  padding: 6px 10px 6px 12px;
+  border: none;
+  border-radius: 10px 10px 0 0;
+  background: var(--bt-warn-bg);
+  box-shadow: none;
+  color: var(--bt-warn-ink);
+  font: inherit;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.bt-root button.bt-status-old:hover .bt-status-old-act {
+  text-decoration: underline;
+}
+.bt-root button.bt-status-old:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+.bt-status-box.bt-old > button.bt-status {
+  border-radius: 0 0 10px 10px;
+}
+.bt-root button.bt-status.bt-old.bt-near {
+  background: var(--background-secondary);
+}
+.bt-root button.bt-status.bt-old.bt-near:hover {
+  background: var(--background-modifier-hover);
+}
+.bt-status.bt-old .bt-status-order {
+  color: var(--text-muted);
+  font-weight: inherit;
+}
+.bt-status.bt-old .bt-status-away {
+  background: var(--background-modifier-hover);
+  box-shadow: none;
+  color: var(--text-muted);
+}
+.bt-status.bt-old .bt-breathe::after {
+  display: none;
+}
 .bt-status[aria-expanded='true'] .bt-status-chevron {
   transform: rotate(180deg);
 }
@@ -466,6 +524,17 @@
 }
 .bt-status-note {
   color: var(--text-muted);
+}
+/* The words of the panel, with the button that copies the order line under them. */
+.bt-status-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.bt-status-in > .bt-status-copy {
+  padding-top: 8px;
 }
 .bt-next-chart .bt-svg {
   width: 100%;
@@ -775,6 +844,39 @@
   align-items: center;
   gap: 6px;
   color: var(--text-muted);
+}
+/* A figure's name is a button that opens what it means; it looks like the name, with a dotted line under it on hover. */
+.bt-root button.bt-vs-label {
+  justify-self: start;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.bt-root button.bt-vs-label:hover {
+  background: none;
+  box-shadow: none;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.bt-root button.bt-vs-label:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+.bt-vs-help-text {
+  max-width: 62em;
+  margin: 0;
+  padding: 2px 0 10px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
 }
 /* A row that lights up the chart has a small dot after its name. */
 .bt-vs-linked .bt-vs-label::after {
@@ -1557,6 +1659,11 @@
 }
 .bt-problem-message {
   flex: 1 1 18em;
+}
+.bt-problem-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .bt-root.bt-problem > .bt-source {
   margin: 0;

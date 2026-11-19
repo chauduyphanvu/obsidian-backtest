@@ -32,6 +32,8 @@ export interface DataDeps {
   keyVariable?: (service: KeyedService) => string;
   /** Whether a Yahoo ticker that fails to load may come from Tiingo instead: the setting "When Yahoo fails, use Tiingo". */
   tiingoFallback?: () => boolean;
+  /** Parses a CSV file's text as parseCsv does, somewhere else, such as a background worker; without it the text is parsed here. */
+  parseCsv?: (text: string, path: string) => Promise<Bars>;
 }
 
 export interface Loaded {
@@ -50,11 +52,52 @@ export interface Loaded {
   stale: boolean;
 }
 
-/** A failure that no other host, source or saved copy can fix, such as a ticker that does not exist. */
-class NoPrices extends Error {}
+/**
+ * Why a ticker's prices could not load, when there is a next step that can put it right: a ticker its source does not know
+ * (`ref` as the block names it), a service's API key that is not set or that the service did not accept (`setting` names
+ * where it is chosen), a CSV file that is not in the vault, or no answer from the network and no saved copy.
+ */
+export type PriceFailure =
+  | { kind: 'ticker'; ref: string; source: Source }
+  | { kind: 'key'; service: KeyedService; setting: string; rejected: boolean }
+  | { kind: 'csv'; path: string }
+  | { kind: 'offline' };
 
-/** A service that needs an API key has none set; its message names the setting. */
-class MissingKey extends Error {}
+/** An error that says why prices could not load (PriceFailure). */
+export class PriceError extends Error {
+  readonly failure: PriceFailure;
+
+  constructor(message: string, failure: PriceFailure) {
+    super(message);
+    this.name = 'PriceError';
+    this.failure = failure;
+  }
+}
+
+/** The failure an error carries, read as data, so an error rebuilt from a copy of it carries it too; null for any other error. */
+export function priceFailure(e: unknown): PriceFailure | null {
+  const f = (e as { failure?: { kind?: unknown } } | null)?.failure;
+  return f && ['ticker', 'key', 'csv', 'offline'].includes(f.kind as string) ? (f as PriceFailure) : null;
+}
+
+/** A request that got no answer at all: no network, or a host that cannot be reached. */
+class NoAnswer extends Error {}
+
+/** A GET through deps.fetchText. A rejection that is not an HTTP status (`HTTP 503`, as fetchText words one) got no answer. */
+async function get(deps: DataDeps, url: string, headers?: Record<string, string>): Promise<string> {
+  try {
+    return await deps.fetchText(url, headers);
+  } catch (e) {
+    throw /^HTTP \d{3}\b/.test(message(e)) ? e : new NoAnswer(message(e));
+  }
+}
+
+/** A Yahoo request that failed and goes out again: the try that comes next, of how many, and the wait before it goes; 0 once it has gone. */
+export interface Retry {
+  attempt: number;
+  of: number;
+  wait: number;
+}
 
 interface Cached {
   fetched: number;
@@ -421,8 +464,15 @@ function extraColumns(names: string[]): number[] {
  * accept, before the rows say which of them hold numbers. Empty for any text that is not a header.
  */
 export function csvColumnNames(text: string): string[] {
-  const first = text.replace(/^\uFEFF/, '').split(/\r?\n/).find((l) => l.trim());
-  if (!first) return [];
+  // Line by line to the first with text: splitting a file of a million rows takes the main thread tens of milliseconds.
+  const body = text.startsWith('\uFEFF') ? text.slice(1) : text;
+  let first = '';
+  for (let at = 0; at < body.length && !first.trim(); ) {
+    const end = body.indexOf('\n', at);
+    first = body.slice(at, end < 0 ? body.length : end).replace(/\r$/, '');
+    at = end < 0 ? body.length : end + 1;
+  }
+  if (!first.trim()) return [];
   const names = splitLine(first, detectSeparator(first));
   const out: string[] = [];
   for (const i of extraColumns(names)) {
@@ -528,7 +578,7 @@ export function parseCsv(text: string): Bars {
 /** The pieces parseCsv reads a file with, for code that has to agree with it exactly. */
 export { SLASHED as CSV_SLASHED_DATE, detectSeparator as detectCsvSeparator, parseTime as parseCsvTime, slashedDatesAreDayFirst, splitLine as splitCsvLine };
 
-async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw = false): Promise<Bars> {
+async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw = false, tell?: (retry: Retry) => void): Promise<Bars> {
   const now = Math.floor(deps.now() / 1000);
   // Intraday bars come for a recent window only, asked for whole (see insideReach).
   const days = YAHOO_INSIDE_DAYS[interval];
@@ -539,10 +589,15 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw =
       : `?period1=0&period2=${now}&interval=${interval === '1w' ? '1wk' : '1d'}&events=div%2Csplit&includeAdjustedClose=true`);
   let failure: unknown;
   for (let attempt = 0; attempt < YAHOO_HOSTS.length; attempt++) {
-    if (attempt > 0) await deps.sleep?.(YAHOO_WAITS[attempt - 1]);
+    if (attempt > 0) {
+      const next = { attempt: attempt + 1, of: YAHOO_HOSTS.length };
+      tell?.({ ...next, wait: YAHOO_WAITS[attempt - 1] });
+      await deps.sleep?.(YAHOO_WAITS[attempt - 1]);
+      tell?.({ ...next, wait: 0 });
+    }
     let text: string;
     try {
-      text = await deps.fetchText(`https://${YAHOO_HOSTS[attempt]}.finance.yahoo.com${path}`);
+      text = await get(deps, `https://${YAHOO_HOSTS[attempt]}.finance.yahoo.com${path}`);
     } catch (e) {
       failure = e;
       continue;
@@ -556,7 +611,7 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw =
       if (days) return parseYahooInside(text, deps.now(), intervalMs(interval));
       return raw ? parseYahooRaw(text, deps.now()) : parseYahoo(text, deps.now(), interval === '1w');
     } catch (e) {
-      if (/"code"\s*:\s*"Not Found"/.test(text)) throw new NoPrices(`Yahoo has no prices for ${ref.name}. Make sure that the ticker is correct.`);
+      if (/"code"\s*:\s*"Not Found"/.test(text)) throw unknown(ref, `Yahoo has no prices for ${ref.name}. Make sure that the ticker is correct.`);
       throw e;
     }
   }
@@ -570,12 +625,12 @@ async function fetchBinance(ref: AssetRef, interval: string, since: number, have
     if (pages === 300) throw new Error('there is too much history for this interval. Move the "from" date forward');
     // data-api.binance.vision serves public market data where api.binance.com is region-blocked.
     const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(ref.id)}&interval=${interval}&startTime=${start}&limit=1000`;
-    const text = await deps.fetchText(url);
+    const text = await get(deps, url);
     let page: Bars;
     try {
       page = parseBinance(text, deps.now());
     } catch (e) {
-      if (/"code"\s*:\s*-1121\b/.test(text)) throw new NoPrices(`Binance has no market with the name ${ref.name}. Make sure that the symbol is correct, for example BTCUSDT.`);
+      if (/"code"\s*:\s*-1121\b/.test(text)) throw unknown(ref, `Binance has no market with the name ${ref.name}. Make sure that the symbol is correct, for example BTCUSDT.`);
       throw e;
     }
     for (let i = 0; i < page.t.length; i++) push(bars, page.t[i], page.o[i], page.h[i], page.l[i], page.c[i], page.v[i]);
@@ -587,12 +642,19 @@ async function fetchBinance(ref: AssetRef, interval: string, since: number, have
 /** A message with the query taken off every web address in it, so no key a request carried in its URL is shown. */
 export const withoutQueries = (text: string): string => text.replace(/\b(https?:\/\/[^\s?#"'<>]*)\?[^\s"'<>]*/gi, '$1');
 
-/** The API key a request to `service` needs, or a MissingKey error that names the setting to choose it with. */
+/** A ticker its source does not know: no other host, source or saved copy can fix it. */
+const unknown = (ref: AssetRef, text: string): PriceError => new PriceError(text, { kind: 'ticker', ref: ref.name, source: ref.source });
+
+/** A service's key not set, or not accepted (`rejected`). */
+const keyProblem = (service: KeyedService, deps: DataDeps, text: string, rejected: boolean): PriceError =>
+  new PriceError(text, { kind: 'key', service, setting: deps.keyVariable ? deps.keyVariable(service) : KEY_SETTING[service], rejected });
+
+/** The API key a request to `service` needs, or an error that names the setting to choose it with. */
 function keyFor(service: KeyedService, ref: AssetRef, deps: DataDeps): string {
   const key = deps.secret?.(service)?.trim();
   if (!key) {
     const where = deps.keyVariable ? `Set ${deps.keyVariable(service)} in the environment.` : `Select the secret with the key in the plugin setting "${KEY_SETTING[service]}".`;
-    throw new MissingKey(`The plugin must have a ${SERVICE[service]} API key to load ${ref.name}. ${where}`);
+    throw keyProblem(service, deps, `The plugin must have a ${SERVICE[service]} API key to load ${ref.name}. ${where}`, false);
   }
   return key;
 }
@@ -606,8 +668,10 @@ async function keyed<T>(key: string, request: () => Promise<T>): Promise<T> {
   try {
     return await request();
   } catch (e) {
-    if (e instanceof NoPrices) throw e;
-    throw new Error(withoutQueries(message(e).split(key).join('…')));
+    // These messages are the plugin's own, with no key in them.
+    if (e instanceof PriceError) throw e;
+    const clean = withoutQueries(message(e).split(key).join('…'));
+    throw e instanceof NoAnswer ? new NoAnswer(clean) : new Error(clean);
   }
 }
 
@@ -626,15 +690,15 @@ async function fetchTiingo(ref: AssetRef, interval: string, deps: DataDeps, raw 
   const key = keyFor('tiingo', ref, deps);
   return keyed(key, async () => {
     const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ref.id)}/prices?startDate=${TIINGO_START}&resampleFreq=daily`;
-    const text = await deps.fetchText(url, { Authorization: `Token ${key}` });
+    const text = await get(deps, url, { Authorization: `Token ${key}` });
     if (!/^\s*[[{]/.test(text)) throw new Error('Tiingo did not send price data');
     try {
       return raw ? parseTiingoRaw(text, deps.now()) : parseTiingo(text, deps.now(), interval === '1w');
     } catch (e) {
       const detail = said(text, 'detail');
       if (detail === undefined) throw e;
-      if (/not\s*found/i.test(detail)) throw new NoPrices(`Tiingo has no prices for ${ref.name}. Make sure that the ticker is correct.`);
-      if (/token|api key|auth/i.test(detail)) throw new Error(`Tiingo did not accept the API key. Make sure that ${keyPlace('tiingo', deps)} is correct`);
+      if (/not\s*found/i.test(detail)) throw unknown(ref, `Tiingo has no prices for ${ref.name}. Make sure that the ticker is correct.`);
+      if (/token|api key|auth/i.test(detail)) throw keyProblem('tiingo', deps, `Tiingo did not accept the API key. Make sure that ${keyPlace('tiingo', deps)} is correct`, true);
       throw new Error(`Tiingo sent this message: ${detail}`);
     }
   });
@@ -653,14 +717,15 @@ async function fetchFred(ref: AssetRef, deps: DataDeps): Promise<FredSeries> {
   const key = keyFor('fred', ref, deps);
   return keyed(key, async () => {
     const ask = async (path: string, query: string): Promise<Record<string, unknown>> => {
-      const text = await deps.fetchText(
+      const text = await get(
+        deps,
         `https://api.stlouisfed.org/fred/series/${path}?series_id=${encodeURIComponent(ref.id)}&api_key=${encodeURIComponent(key)}&file_type=json${query}`,
       );
       if (!text.trimStart().startsWith('{')) throw new Error('FRED did not send series data');
       const error = said(text, 'error_message');
       if (error !== undefined) {
-        if (/does not exist/i.test(error)) throw new NoPrices(`FRED has no series with the name ${ref.name}. Make sure that the series ID is correct, for example T10Y2Y.`);
-        if (/api_key/i.test(error)) throw new Error(`FRED did not accept the API key. Make sure that ${keyPlace('fred', deps)} is correct`);
+        if (/does not exist/i.test(error)) throw unknown(ref, `FRED has no series with the name ${ref.name}. Make sure that the series ID is correct, for example T10Y2Y.`);
+        if (/api_key/i.test(error)) throw keyProblem('fred', deps, `FRED did not accept the API key. Make sure that ${keyPlace('fred', deps)} is correct`, true);
         throw new Error(`FRED sent this message: ${error.replace(/\s+/g, ' ')}`);
       }
       return JSON.parse(text) as Record<string, unknown>;
@@ -705,10 +770,10 @@ function loaded(source: Source, bars: Bars, fetched: number, warning: string | n
   return { bars: own, warning, note, source, through: own.t[own.t.length - 1], fetched, stale };
 }
 
-async function fetchBars(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps, raw = false): Promise<{ bars: Bars; note: string | null }> {
+async function fetchBars(ref: AssetRef, interval: string, since: number, cached: Cached | null, deps: DataDeps, raw = false, tell?: (retry: Retry) => void): Promise<{ bars: Bars; note: string | null }> {
   switch (ref.source) {
     case 'yahoo':
-      return { bars: await fetchYahoo(ref, interval, deps, raw), note: null };
+      return { bars: await fetchYahoo(ref, interval, deps, raw, tell), note: null };
     case 'binance':
       return { bars: await fetchBinance(ref, interval, since, cached?.bars ?? null, deps), note: null };
     case 'tiingo':
@@ -728,6 +793,8 @@ interface RefreshOptions {
   fallback?: boolean;
   /** Prices as they traded, unadjusted (parseYahooRaw, parseTiingoRaw), for Yahoo and Tiingo. */
   raw?: boolean;
+  /** Told when a Yahoo request failed and goes out again. */
+  tell?: (retry: Retry) => void;
 }
 
 /**
@@ -738,14 +805,14 @@ interface RefreshOptions {
 async function refresh(ref: AssetRef, interval: string, since: number, deps: DataDeps, key: string, cached: Cached | null, o: RefreshOptions = {}): Promise<Loaded> {
   const keepFrom = o.keepFrom ?? -Infinity;
   try {
-    const got = await fetchBars(ref, interval, since, cached, deps, o.raw);
+    const got = await fetchBars(ref, interval, since, cached, deps, o.raw, o.tell);
     const bars = keepFrom > -Infinity ? barsFrom(got.bars, keepFrom) : got.bars;
     if (bars.t.length === 0) throw new Error('the source sent no bars');
     const fetched = deps.now();
     await deps.cacheWrite(key, JSON.stringify({ fetched, since: Math.max(cached?.since ?? since, keepFrom), bars, ...(got.note ? { note: got.note } : {}) } satisfies Cached));
     return loaded(ref.source, bars, fetched, null, false, got.note);
   } catch (e) {
-    if (e instanceof NoPrices) throw e;
+    if (priceFailure(e)?.kind === 'ticker') throw e;
     const why = message(e);
     let tiingo = '';
     if (o.fallback !== false && !(cached && deps.now() - cached.fetched < YAHOO_SAVED_FIRST) && tiingoStandsIn(ref, interval, deps)) {
@@ -761,13 +828,21 @@ async function refresh(ref: AssetRef, interval: string, since: number, deps: Dat
     if (cached) {
       return loaded(ref.source, cached.bars, cached.fetched, `Cannot download new prices for ${ref.name} (${why}). The plugin uses the prices saved on ${isoDate(cached.fetched)}.`, true, cached.note ?? null);
     }
-    if (e instanceof MissingKey) throw new Error(e.message);
-    throw new Error(`Cannot load ${ref.name} from ${ref.source}: ${why}${tiingo ? `. The plugin also cannot use Tiingo: ${tiingo}` : ''}`);
+    const failure: PriceFailure | null = e instanceof PriceError ? e.failure : e instanceof NoAnswer ? { kind: 'offline' } : null;
+    // A key that is not set says only that.
+    const text = failure?.kind === 'key' && !failure.rejected ? why : `Cannot load ${ref.name} from ${ref.source}: ${why}${tiingo ? `. The plugin also cannot use Tiingo: ${tiingo}` : ''}`;
+    throw failure ? new PriceError(text, failure) : new Error(text);
   }
 }
 
 
-const running = new WeakMap<DataDeps, Map<string, Promise<Loaded>>>();
+/** A download on its way, with whoever is to be told of its retries. */
+interface Download {
+  loaded: Promise<Loaded>;
+  told: Set<(retry: Retry) => void>;
+}
+
+const running = new WeakMap<DataDeps, Map<string, Download>>();
 
 /**
  * Bars for one asset, from the cache while it is fresh (6 hours unless `opts.freshForMs` says otherwise).
@@ -780,17 +855,18 @@ export async function loadBars(
   since: number,
   deps: DataDeps,
   force = false,
-  opts?: { freshForMs?: number; keepFrom?: number; key?: string; fallback?: boolean; raw?: boolean },
+  opts?: { freshForMs?: number; keepFrom?: number; key?: string; fallback?: boolean; raw?: boolean; onRetry?: (retry: Retry) => void },
 ): Promise<Loaded> {
   if (ref.source === 'csv') {
     const text = await deps.readVaultFile(ref.id);
-    if (text === null) throw new Error(`There is no file at ${ref.id}`);
+    if (text === null) throw new PriceError(`There is no file at ${ref.id}`, { kind: 'csv', path: ref.id });
     let bars: Bars;
     try {
-      bars = parseCsv(text);
+      bars = deps.parseCsv ? await deps.parseCsv(text, ref.id) : parseCsv(text);
     } catch (e) {
       // A block can read several files, so the message says which one.
-      throw e instanceof Error ? new Error(e.message.replace(/^The CSV\b/, `The CSV file ${ref.id}`)) : e;
+      if (!(e instanceof Error) || !/^The CSV\b/.test(e.message)) throw e;
+      throw new Error(e.message.replace(/^The CSV\b/, `The CSV file ${ref.id}`));
     }
     return loaded('csv', bars, deps.now());
   }
@@ -815,12 +891,16 @@ export async function loadBars(
   let download = byKey.get(slot);
   if (!download) {
     const map = byKey;
-    download = refresh(ref, interval, since, deps, key, cached, { keepFrom: opts?.keepFrom, freshForMs: opts?.freshForMs, force, fallback: opts?.fallback, raw: opts?.raw }).finally(() =>
+    const told = new Set<(retry: Retry) => void>();
+    const tell = (retry: Retry) => told.forEach((listen) => listen(retry));
+    const pending = refresh(ref, interval, since, deps, key, cached, { keepFrom: opts?.keepFrom, freshForMs: opts?.freshForMs, force, fallback: opts?.fallback, raw: opts?.raw, tell }).finally(() =>
       map.delete(slot),
     );
+    download = { loaded: pending, told };
     byKey.set(slot, download);
   }
-  return download;
+  if (opts?.onRetry) download.told.add(opts.onRetry);
+  return download.loaded;
 }
 
 /**
@@ -870,7 +950,7 @@ export function insideReach(source: AssetRef['source'], interval: string, now: n
  * file. A file of Binance's smaller bars saved under the shared name before they had their own is left to blocks of that
  * interval, as any saved file is.
  */
-export function loadInsideBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number }): Promise<Loaded> {
+export function loadInsideBars(ref: AssetRef, interval: string, since: number, deps: DataDeps, force = false, opts?: { freshForMs?: number; onRetry?: (retry: Retry) => void }): Promise<Loaded> {
   const binance = ref.source === 'binance';
   const keepFrom = binance ? insideReach('binance', interval, deps.now()) : undefined;
   const key = binance ? `${cacheKey(ref, interval)}-inside` : undefined;

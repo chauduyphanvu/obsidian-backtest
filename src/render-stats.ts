@@ -3,6 +3,7 @@
 
 import { h, onWidth, s } from './dom.ts';
 import { MONTHS, pct, plural, signedPct } from './format.ts';
+import { readByKeys, type KeyReading } from './render-chart.ts';
 import { periodReturns, type PeriodReturn } from './stats.ts';
 import { tabInfo } from './tabs.ts';
 import { benchProse, LEVEL, periodName, yearsAhead } from './verdict.ts';
@@ -50,6 +51,7 @@ export function renderYears(parent: HTMLElement, input: PeriodInput): () => void
       h(body, 'p', 'bt-tab-lead', ahead.onlyFalling && ahead.ahead.length < ahead.years ? `${all} In each year that the strategy did better, ${bench} decreased.` : all);
     }
     const read = h(body, 'div', 'bt-tab-read');
+    read.setAttribute('aria-live', 'polite');
     const idle = `Each bar shows the strategy return minus the ${bench} return for one calendar year. Move the pointer to a year to compare.`;
     read.textContent = idle;
     const key = h(body, 'div', 'bt-chart-legend');
@@ -59,15 +61,17 @@ export function renderYears(parent: HTMLElement, input: PeriodInput): () => void
       h(k, 'span', undefined, text);
     }
     const chart = h(body, 'div', 'bt-chart');
+    let keys: KeyReading | null = null;
+    readByKeys(chart, 'Chart of the years. Use the arrow keys to read each year.', () => keys);
     if (mine.some((p) => p.partial)) h(body, 'div', 'bt-note', 'A light bar shows a year that the data does not fully cover.');
-    return onWidth(chart, (width) => drawGaps(chart, read, idle, width, mine, theirs, bench));
+    return onWidth(chart, (width) => (keys = drawGaps(chart, read, idle, width, mine, theirs, bench)));
   });
 }
 
 /** Columns closer than this have every second, fifth or tenth year named. */
 const LABEL_GAP = 34;
 
-function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: number, mine: PeriodReturn[], theirs: Map<string, PeriodReturn>, bench: string): void {
+function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: number, mine: PeriodReturn[], theirs: Map<string, PeriodReturn>, bench: string): KeyReading {
   chart.querySelector('svg')?.remove();
   const n = mine.length;
   const gaps = mine.map((p) => {
@@ -111,8 +115,10 @@ function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: nu
   });
 
   const hit = s(svg, 'rect', { x: left, y: 0, width: plotW, height, fill: 'transparent' });
-  const show = (clientX: number) => {
-    const i = Math.min(n - 1, Math.max(0, Math.floor((clientX - svg.getBoundingClientRect().left - left) / groupW)));
+  let shown: number | null = null;
+  const nearest = (clientX: number) => Math.min(n - 1, Math.max(0, Math.floor((clientX - svg.getBoundingClientRect().left - left) / groupW)));
+  const show = (i: number) => {
+    shown = i;
     hl.setAttribute('x', String(left + i * groupW));
     hl.setAttribute('visibility', 'visible');
     const p = mine[i];
@@ -121,12 +127,15 @@ function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: nu
     const apart = !Number.isFinite(g) ? `no ${bench} return` : Math.abs(g) <= LEVEL ? 'the same' : `${pts(g)} ${g > 0 ? 'better' : 'worse'}`;
     read.textContent = `${p.key}${p.partial ? ', part of the year' : ''} · strategy ${signedPct(p.ret)}, ${bench} ${b ? signedPct(b.ret) : '–'} · ${apart}`;
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerleave', () => {
+  const rest = () => {
+    shown = null;
     hl.setAttribute('visibility', 'hidden');
     read.textContent = idle;
-  });
+  };
+  hit.addEventListener('pointermove', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointerdown', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointerleave', rest);
+  return { t: mine.map((p) => p.t), first: 0, at: () => shown, show, rest };
 }
 
 /** Weakest and strongest tint, as a percentage of the gain or loss colour. */

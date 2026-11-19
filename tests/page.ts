@@ -65,12 +65,22 @@ export class El {
   }
   // As on the page, null clears the text.
   set textContent(text: string | null) {
+    this.dropChildren();
     this.children = text === null ? [] : [text];
+  }
+  /** Taken out of the element it was in. An element made on its own counts as on the page. */
+  private detached = false;
+  get isConnected(): boolean {
+    return !this.detached && (this.parent === null || this.parent.isConnected);
+  }
+  private dropChildren(): void {
+    for (const c of this.children) if (typeof c !== 'string') c.detached = true;
   }
   // As on the page, a node put somewhere leaves the place it was in.
   appendChild(child: El): El {
     child.remove();
     child.parent = this;
+    child.detached = false;
     this.children.push(child);
     return child;
   }
@@ -79,6 +89,7 @@ export class El {
       if (typeof n !== 'string') {
         n.remove();
         n.parent = this;
+        n.detached = false;
       }
       this.children.push(n);
     }
@@ -86,23 +97,35 @@ export class El {
   prepend(node: El): void {
     node.remove();
     node.parent = this;
+    node.detached = false;
     this.children.unshift(node);
   }
   replaceChildren(...nodes: (El | string)[]): void {
+    this.dropChildren();
     this.children = [];
     this.append(...nodes);
   }
   remove(): void {
-    if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
+    if (this.parent) {
+      this.parent.children = this.parent.children.filter((c) => c !== this);
+      this.detached = true;
+    }
     this.parent = null;
   }
   after(node: El): void {
     const list = this.parent!.children;
     list.splice(list.indexOf(this) + 1, 0, node);
     node.parent = this.parent;
+    node.detached = false;
   }
   get parentElement(): El | null {
     return this.parent;
+  }
+  get childNodes(): (El | string)[] {
+    return this.children;
+  }
+  get firstElementChild(): El | null {
+    return this.children.find((c): c is El => typeof c !== 'string') ?? null;
   }
   get previousElementSibling(): El | null {
     const els = (this.parent?.children ?? []).filter((c): c is El => typeof c !== 'string');
@@ -152,7 +175,12 @@ export class El {
 
 // Each test file runs in a process of its own, so the page stays a stand-in for the whole run of the file that imports this.
 (globalThis as { document?: unknown }).document = { activeElement: null, createElement: (tag: string) => new El(tag), createElementNS: (_ns: string, tag: string) => new El(tag) };
-(globalThis as { window?: unknown }).window = { requestAnimationFrame: (f: (t: number) => void) => (f(0), 0), cancelAnimationFrame: () => {} };
+(globalThis as { window?: unknown }).window = {
+  requestAnimationFrame: (f: (t: number) => void) => (f(0), 0),
+  cancelAnimationFrame: () => {},
+  setTimeout: (f: () => void, ms: number) => setTimeout(f, ms),
+  clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
+};
 (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
   private seen: (entries: { contentRect: { width: number } }[]) => void;
   constructor(seen: (entries: { contentRect: { width: number } }[]) => void) {

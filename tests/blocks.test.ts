@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { extractBlocks } from '../src/blocks.ts';
+import { blockAt, extractBlocks, hasStrategyBlock, targetBlock } from '../src/blocks.ts';
 
 test('finds strategy blocks with their names and lines, and skips other languages', () => {
   const note = ['# Note', '```strategy', 'name: First one', 'universe: SPY', '```', 'text', '```js', 'name: no', '```', '~~~~strategy', 'universe: QQQ', '~~~~', '```strategy', 'unterminated'].join('\n');
@@ -96,4 +96,63 @@ test('a long run of spaces or fence characters is read in linear time', () => {
     best = Math.min(best, performance.now() - t0);
   }
   assert.ok(best < 2000, `${best.toFixed(0)} ms`);
+});
+
+test('a list or a link finds its block by its line while that is still it, else by its name', () => {
+  const note = ['# Two', ...strategy('name: Trend', 'universe: SPY'), '', ...strategy('universe: QQQ'), '', ...strategy('name: Swing', 'universe: TLT')].join('\n');
+  const at = (name: string | null, line: number | null) => {
+    const found = targetBlock(note, name, line);
+    return found && [found.block.name, found.block.line, found.index];
+  };
+  assert.deepEqual(at('Trend', 1), ['Trend', 1, 0]);
+  // A block with no name goes by its note's name in a list: its line finds it.
+  assert.deepEqual(at('Two 2', 6), [null, 6, 1]);
+  // The note changed since the list was made: the name finds the block, in any capitals.
+  assert.deepEqual(at('swing', 1), ['Swing', 10, 2]);
+  assert.deepEqual(at('Swing', null), ['Swing', 10, 2]);
+  assert.deepEqual(at('Swing', 40), ['Swing', 10, 2]);
+  assert.equal(at('Gone', 1), null);
+  assert.equal(at('Two 2', 7), null);
+  assert.equal(at(null, null), null);
+  // Other kinds of block, such as an account, by their language.
+  const account = targetBlock(`${note}\n\n\`\`\`account\nname: Main\ncash: 1000\n\`\`\``, 'Main', 15, 'account');
+  assert.deepEqual(account && [account.block.line, account.index], [15, 0]);
+});
+
+test('the cursor finds the strategy block it is in, from its opening fence to its closing fence, and its place in the note', () => {
+  const note = ['# Two', ...strategy('name: Trend', 'universe: SPY'), '', '```js', 'x', '```', ...strategy('universe: QQQ'), 'after'].join('\n');
+  const at = (line: number) => {
+    const found = blockAt(note, line);
+    return found && [found.block.name, found.block.line, found.index];
+  };
+  assert.equal(at(0), null);
+  assert.deepEqual([1, 2, 3, 4].map(at), Array(4).fill(['Trend', 1, 0]));
+  assert.equal(at(5), null);
+  // A block of another language is not a strategy.
+  assert.equal(at(7), null);
+  assert.deepEqual([9, 10, 11].map(at), Array(3).fill([null, 9, 1]));
+  assert.equal(at(12), null);
+  // The same block, text and place, as the list of the note's blocks gives it.
+  assert.deepEqual(blockAt(note, 2), { block: extractBlocks(note)[0], index: 0 });
+});
+
+test('the cursor finds a block in a callout, one with no closing fence yet, and an empty one', () => {
+  const callout = ['> [!note]', '> ```strategy', '> name: Inside', '> universe: SPY', '> ```', 'after'].join('\n');
+  assert.deepEqual(blockAt(callout, 3)?.block, { name: 'Inside', source: 'name: Inside\nuniverse: SPY', line: 1 });
+  assert.equal(blockAt(callout, 5), null);
+  // A quote that ends without a closing fence ends the block with it.
+  const quote = ['> ```strategy', '> universe: SPY', 'after'].join('\n');
+  assert.equal(blockAt(quote, 1)?.index, 0);
+  assert.equal(blockAt(quote, 2), null);
+  const open = ['text', '```strategy', 'universe: SPY', '', 'buy when'].join('\n');
+  assert.equal(blockAt(open, 4)?.block.line, 1);
+  const empty = ['```strategy', '```', 'after'].join('\n');
+  assert.equal(blockAt(empty, 1)?.index, 0);
+  assert.equal(blockAt(empty, 2), null);
+});
+
+test('a note has a strategy block only when a strategy fence opens one', () => {
+  assert.equal(hasStrategyBlock(['# Note', ...strategy('universe: SPY')].join('\n')), true);
+  assert.equal(hasStrategyBlock('A note about a strategy, with no block.'), false);
+  assert.equal(hasStrategyBlock(['````md', '```strategy', 'universe: SPY', '```', '````'].join('\n')), false);
 });

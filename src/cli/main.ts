@@ -1,12 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { extractBlocks } from '../blocks.ts';
 import { ALL_DOCS, docFor, type Doc } from '../docs.ts';
 import { parseSpec, type Diagnostic } from '../dsl.ts';
+import { applyFix, suggestions, type Fix } from '../fixes.ts';
 import { languageJson, llmsFull, wordList } from '../llm-files.ts';
 import type { DataDeps } from '../data.ts';
+import { replaceBlockInNote } from '../rewrite.ts';
 import { Runner, type RunOutput } from '../runner.ts';
 import { DEFAULT_SETTINGS, defaultsFrom } from '../settings-core.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
@@ -34,17 +36,21 @@ export async function readText(stream: AsyncIterable<Buffer | string>): Promise<
 const HELP = `backtest-blocks: examine and backtest the strategy blocks of Backtest Blocks without Obsidian.
 
 Usage:
-  backtest-blocks check <file|->...      examine all strategy blocks in notes, or one block without a fence (exit code 1 for errors)
+  backtest-blocks check <file|->... [--fix]
+                                          examine all strategy blocks in notes, or one block without a fence (exit code 1 for errors),
+                                          with the correction under each problem that has one
   backtest-blocks run <file|-> [--block <name|n>] [--vault <dir>] [--cache <dir>] [--refresh]
                                           backtest one block on live prices and print the result
-  backtest-blocks explain <word>          show the help text for a function, setting, value or word
+  backtest-blocks explain <word>          show the help text for a function, setting, value, word or phrase (for 3 bars)
   backtest-blocks words                   list all words of the language
   backtest-blocks guide                   print the instructions to write blocks (llms-full.txt)
   backtest-blocks mcp                     start an MCP server on stdio with the check, run and explain tools
   backtest-blocks --version | --help
 
 Options:
-  --json     print JSON, not text (check, run, words)
+  --json     print JSON, not text (check, run, words); with check, each problem has its corrections in "fixes"
+  --fix      write into the note each correction that is the only one for its problem, examine the note again,
+             and print what changed and the problems that remain (check)
   --block    the block of the note to run: its name, or its number (the first block is 1)
   --vault    the vault folder, for the CSV files that a block reads (default: the folder above the note that contains .obsidian)
   --cache    the folder for saved prices (default: $XDG_CACHE_HOME/backtest-blocks or ~/.cache/backtest-blocks)
@@ -77,6 +83,21 @@ export function blocksIn(text: string, note = false): FoundBlock[] {
   return note || /^\s*(`{3,}|~{3,})/m.test(text) ? [] : [{ name: null, source: text.replace(/\n+$/, ''), start: 0 }];
 }
 
+/**
+ * A correction of a problem, placed in the note: the line as a problem counts it, and the text from column `from` up to
+ * column `to` (counted as a problem's column, from 1) replaced by `insert`. A correction that reaches into the lines after
+ * its first, such as one that removes blank lines, ends on `endLine`, and `to` is a column of that line. In a callout or
+ * quote, the columns of each line count that line's own markers.
+ */
+export interface ProblemFix {
+  label: string;
+  line: number;
+  from: number;
+  endLine?: number;
+  to: number;
+  insert: string;
+}
+
 export interface Problem {
   file: string;
   block: string | null;
@@ -84,21 +105,54 @@ export interface Problem {
   column: number | null;
   severity: 'error' | 'warning';
   message: string;
+  /** What to write instead, as the editor offers it: "Did you mean sma, the simple average of the last n closes?". */
+  suggestion?: string;
+  /** Each correction that removes the problem; none, one, or two or three equally good ones. */
+  fixes: ProblemFix[];
 }
 
-function problemsOf(file: string, text: string, b: FoundBlock): Problem[] {
+/** A block's problems, each with its corrections both in the block's own lines (to make them) and placed in the note. */
+function diagnose(file: string, text: string, b: FoundBlock): { problem: Problem; fixes: Fix[] }[] {
   const fileLines = text.split(/\r?\n/);
   const blockLines = b.source.split('\n');
   const { errors, warnings } = parseSpec(b.source);
-  const place = (d: Diagnostic, severity: Problem['severity']): Problem => {
-    const fileLine = fileLines[b.start + d.line - 1] ?? '';
-    const own = blockLines[d.line - 1] ?? '';
-    // A block in a callout or quote has its markers before the text the parser read.
-    const shift = fileLine.endsWith(own) ? fileLine.length - own.length : 0;
-    return { file, block: b.name, line: b.start + d.line, column: d.from === undefined ? null : shift + d.from + 1, severity, message: d.message };
+  // A block in a callout or quote has its markers before the text the parser read.
+  const shift = (line: number): number => {
+    const fileLine = fileLines[b.start + line - 1] ?? '';
+    const own = blockLines[line - 1] ?? '';
+    return fileLine.endsWith(own) ? fileLine.length - own.length : 0;
   };
-  return [...errors.map((d) => place(d, 'error')), ...warnings.map((d) => place(d, 'warning'))].sort((x, y) => x.line - y.line);
+  // A fix's `to` past the end of its line reaches into the lines after it, one column for each line break.
+  const placeFix = (f: Fix): ProblemFix => {
+    let end = f.line;
+    let to = f.to;
+    while (end < blockLines.length && to > blockLines[end - 1].length) {
+      to -= blockLines[end - 1].length + 1;
+      end++;
+    }
+    const at = { label: f.label, line: b.start + f.line, from: shift(f.line) + f.from + 1 };
+    const rest = { to: shift(end) + to + 1, insert: f.insert };
+    return end === f.line ? { ...at, ...rest } : { ...at, endLine: b.start + end, ...rest };
+  };
+  const place = (d: Diagnostic, severity: Problem['severity']) => {
+    const offered = suggestions(blockLines, d);
+    const fixes = offered?.fixes ?? [];
+    const problem: Problem = {
+      file,
+      block: b.name,
+      line: b.start + d.line,
+      column: d.from === undefined ? null : shift(d.line) + d.from + 1,
+      severity,
+      message: d.message,
+      ...(offered?.text ? { suggestion: offered.text } : {}),
+      fixes: fixes.map(placeFix),
+    };
+    return { problem, fixes };
+  };
+  return [...errors.map((d) => place(d, 'error')), ...warnings.map((d) => place(d, 'warning'))].sort((x, y) => x.problem.line - y.problem.line);
 }
+
+const problemsOf = (file: string, text: string, b: FoundBlock): Problem[] => diagnose(file, text, b).map((x) => x.problem);
 
 /** Every problem in the strategy blocks of a note, or of a bare block, with lines counted in the note. */
 export function checkSource(text: string, file: string): { blocks: number; problems: Problem[] } {
@@ -106,8 +160,50 @@ export function checkSource(text: string, file: string): { blocks: number; probl
   return { blocks: found.length, problems: found.flatMap((b) => problemsOf(file, text, b)) };
 }
 
-/** A problem as one line: "note.md:12:5: error: message". */
-export const problemLine = (p: Problem): string => `${p.file}:${p.line}${p.column === null ? '' : `:${p.column}`}: ${p.severity}: ${p.message}`;
+/** A correction that was made: where its problem was when it was made, the problem, and what the correction did. */
+export interface Fixed {
+  file: string;
+  block: string | null;
+  line: number;
+  column: number | null;
+  message: string;
+  label: string;
+}
+
+/** Rounds of corrections at most: each can show a problem that the one before it hid. */
+const FIX_ROUNDS = 20;
+
+/**
+ * The text with each correction made that is the only one for its problem; a problem with two or more equally good
+ * corrections is left as it is. After each round the blocks are checked again, until nothing more can be corrected.
+ */
+export function correctSource(text: string, file: string): { text: string; fixed: Fixed[] } {
+  const fixed: Fixed[] = [];
+  for (let round = 0; round < FIX_ROUNDS; round++) {
+    let changed = false;
+    // From the last block up, so a change leaves the lines of the blocks above it where they are.
+    for (const b of blocksIn(text, isNote(file)).reverse()) {
+      const one = diagnose(file, text, b).find((x) => x.fixes.length === 1);
+      if (!one) continue;
+      const source = applyFix(b.source.split('\n'), one.fixes[0]).join('\n');
+      // A bare block is the whole text, but for the blank lines after it.
+      const next = b.start === 0 ? source + text.slice(b.source.length) : replaceBlockInNote(text, b.start - 1, b.source, source);
+      if (next === null) continue;
+      const { file: f, block, line, column, message } = one.problem;
+      fixed.push({ file: f, block, line, column, message, label: one.fixes[0].label });
+      text = next;
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  return { text, fixed: fixed.sort((a, b) => a.line - b.line || (a.column ?? 0) - (b.column ?? 0)) };
+}
+
+/** A problem as one line: "note.md:12:5: error: message", with the suggestion under it when there is one. */
+export const problemLine = (p: Problem): string => `${p.file}:${p.line}${p.column === null ? '' : `:${p.column}`}: ${p.severity}: ${p.message}${p.suggestion ? `\n  ${p.suggestion}` : ''}`;
+
+/** A correction that was made, as one line: "note.md:12:18: fixed: Change to sma". */
+export const fixedLine = (f: Fixed): string => `${f.file}:${f.line}${f.column === null ? '' : `:${f.column}`}: fixed: ${f.label}`;
 
 async function readInput(path: string, io: Io): Promise<string> {
   return path === '-' ? io.stdin() : readFile(resolve(io.cwd, path), 'utf8');
@@ -115,15 +211,21 @@ async function readInput(path: string, io: Io): Promise<string> {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-async function check(files: string[], json: boolean, io: Io): Promise<number> {
+async function check(files: string[], o: { json: boolean; fix: boolean }, io: Io): Promise<number> {
   if (files.length === 0) {
     io.err('check: give a note, or - to read a block from standard input');
     return 2;
   }
+  if (o.fix && files.includes('-')) {
+    io.err('check --fix writes the corrections into the note file. Thus it cannot read a block from standard input. Give a note.');
+    return 2;
+  }
   const problems: Problem[] = [];
+  const fixed: Fixed[] = [];
   let blocks = 0;
   let empty = 0;
   let unread = 0;
+  let unwritten = 0;
   for (const file of files) {
     let text: string;
     try {
@@ -133,6 +235,18 @@ async function check(files: string[], json: boolean, io: Io): Promise<number> {
       io.err(`check: cannot read ${file}: ${e instanceof Error ? e.message : e}`);
       unread++;
       continue;
+    }
+    const corrected = o.fix ? correctSource(text, file) : null;
+    if (corrected?.fixed.length) {
+      try {
+        await writeFile(resolve(io.cwd, file), corrected.text, 'utf8');
+        fixed.push(...corrected.fixed);
+        text = corrected.text;
+      } catch (e) {
+        // The note is as it was, and its problems are those of its text.
+        io.err(`check: cannot write ${file}: ${e instanceof Error ? e.message : e}`);
+        unwritten++;
+      }
     }
     const found = checkSource(text, file);
     // A note with no block to check is a mistake too: the fence may be misspelt.
@@ -144,17 +258,22 @@ async function check(files: string[], json: boolean, io: Io): Promise<number> {
     problems.push(...found.problems);
   }
   const errors = problems.filter((p) => p.severity === 'error').length;
-  if (json) io.out(JSON.stringify({ blocks, errors, warnings: problems.length - errors, notesWithoutBlock: empty, notesUnread: unread, problems }, null, 2));
-  else {
+  if (o.json) {
+    const corrections = o.fix ? { fixed, notesNotWritten: unwritten } : {};
+    io.out(JSON.stringify({ blocks, errors, warnings: problems.length - errors, notesWithoutBlock: empty, notesUnread: unread, ...corrections, problems }, null, 2));
+  } else {
+    for (const f of fixed) io.out(fixedLine(f));
     for (const p of problems) io.out(problemLine(p));
     const said = [
       ...(problems.length ? [`${plural(errors, 'error', 'errors')}, ${plural(problems.length - errors, 'warning', 'warnings')}`] : []),
       ...(empty ? [`${plural(empty, 'note', 'notes')} with no strategy block`] : []),
       ...(unread ? [`${plural(unread, 'note', 'notes')} not read`] : []),
+      ...(unwritten ? [`${plural(unwritten, 'note', 'notes')} not written`] : []),
     ];
-    io.err(`${plural(blocks, 'block', 'blocks')} examined: ${said.join('; ') || 'no problems'}`);
+    const written = o.fix ? `${plural(fixed.length, 'correction', 'corrections')} written; ` : '';
+    io.err(`${plural(blocks, 'block', 'blocks')} examined: ${written}${said.join('; ') || 'no problems'}`);
   }
-  return unread > 0 ? 2 : errors > 0 || empty > 0 ? 1 : 0;
+  return unread > 0 || unwritten > 0 ? 2 : errors > 0 || empty > 0 ? 1 : 0;
 }
 
 /** The folder above `from` that holds .obsidian, which makes it a vault; null when there is none. */
@@ -236,10 +355,23 @@ export function findDoc(word: string): Doc | undefined {
   return byId(w) ?? (call ? byId(call[1]) : undefined) ?? (setting ? (byId(`${setting[1]}=${setting[2]}`) ?? byId(setting[1])) : undefined);
 }
 
+/**
+ * The word a phrase is about: a window with its number (`for 3 bars`, `within 5 bars`), and the names other tools give a
+ * cross, with a note that the language calls it `crosses`. Null for any other text.
+ */
+function phrase(word: string): { id: string; note?: string } | null {
+  const w = word.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (/^for \S+ bars?$/.test(w)) return { id: 'for … bars' };
+  if (/^within \S+ bars?$/.test(w)) return { id: 'within' };
+  if (/^(crossover|cross over|crosses over)$/.test(w)) return { id: 'crosses', note: `"${word.trim()}" is not a word of the language. The language uses crosses, crosses above and crosses below. This is the help for crosses.` };
+  return null;
+}
+
 /** A word's form, meaning and example as text, or what to say when it is not a word of the language. */
 export function explainText(word: string): { text: string } | { error: string } {
-  const d = findDoc(word);
-  if (d) return { text: [d.signature, '', d.text, ...(d.example ? ['', 'Example:', d.example] : [])].join('\n') };
+  const said = phrase(word);
+  const d = said ? docFor(said.id) : findDoc(word);
+  if (d) return { text: [...(said?.note ? [said.note, ''] : []), d.signature, '', d.text, ...(d.example ? ['', 'Example:', d.example] : [])].join('\n') };
   const near = ALL_DOCS.filter((x) => x.id.toLowerCase().includes(word.trim().toLowerCase())).map((x) => x.id);
   return { error: `"${word}" is not a word of the language.${near.length ? ` Words that contain "${word.trim()}": ${near.slice(0, 8).join(', ')}.` : ' To see all words, use list_words or backtest-blocks words.'}` };
 }
@@ -278,6 +410,7 @@ export async function cli(args: string[], io: Io): Promise<number> {
       allowPositionals: true,
       options: {
         json: { type: 'boolean', default: false },
+        fix: { type: 'boolean', default: false },
         block: { type: 'string' },
         vault: { type: 'string' },
         cache: { type: 'string' },
@@ -301,7 +434,7 @@ export async function cli(args: string[], io: Io): Promise<number> {
   }
   switch (command) {
     case 'check':
-      return check(rest, o.json, io);
+      return check(rest, { json: o.json, fix: o.fix }, io);
     case 'run':
       return run(rest[0], { block: o.block, vault: o.vault, cache: o.cache, refresh: o.refresh, json: o.json }, io);
     case 'explain':

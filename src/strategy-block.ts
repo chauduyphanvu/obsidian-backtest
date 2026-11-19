@@ -2,10 +2,13 @@
 // what a drawing leaves behind (its runs, its sections, its place among the blocks on screen) until the block is drawn
 // again or goes away. The plugin says where each block is and hands in the settings, the results and the vault writes.
 
+import { priceFailure } from './data.ts';
+import { runStep, type RunStep } from './diagnostics.ts';
 import type { Defaults } from './dsl.ts';
 import { easeHeight } from './dom.ts';
-import { equityCsv, snapshotMarkdown, tradesCsv } from './export.ts';
+import { equityCsv, resultMarkdown, snapshotMarkdown, tradesCsv } from './export.ts';
 import { isIntraday } from './format.ts';
+import { applyFix } from './fixes.ts';
 import { forwardLink, type ForwardStart } from './forward.ts';
 import { trialOf, versionFigures, type Ledgers } from './ledger.ts';
 import { LimitError } from './limits.ts';
@@ -17,12 +20,13 @@ import { renderPriceCharts } from './render-price.ts';
 import { renderRegimes } from './render-regimes.ts';
 import { renderSweep } from './render-sweep.ts';
 import { renderVersions } from './render-versions.ts';
-import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderResult, type DrawnResult, type Loading, type Section, type ViewState } from './render.ts';
+import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderRenamed, renderResult, type DrawnResult, type Loading, type NextAction, type Section, type ViewState } from './render.ts';
 import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
 import type { Results } from './results.ts';
 import { setParamValues } from './rewrite.ts';
 import type { RunOutput } from './runner.ts';
 import { defaultsFrom, type Settings } from './settings-core.ts';
+import type { SymbolLookup } from './symbols.ts';
 import { blockRuns } from './worker-client.ts';
 
 /** Blocks whose open or folded state is remembered for the session. */
@@ -61,6 +65,14 @@ export interface BlocksHost {
   settings(): Settings;
   /** Writes text to a dated file in the results folder and says where it went. */
   saveFile(title: string, ext: string, text: string): Promise<void>;
+  /** Puts text on the clipboard and says so; `what` names it in that message ("the result"). */
+  copy(text: string, what: string): void;
+  /** Opens the plugin's tab of the settings, for a run that failed for an API key. */
+  openSettings(): void;
+  /** Opens the CSV helper ("Use a CSV file in a strategy"), for a run that failed for a CSV file that is not there. */
+  openCsv(): void;
+  /** The ticker lookup while the setting "Find tickers while you type" is on; null means nothing is requested. */
+  lookup(): SymbolLookup | null;
   /** Writes the properties of the note at `notePath` a moment after the last of its blocks has rendered. */
   scheduleProperties(notePath: string): void;
   /** Each block's record of tries and versions, by its `blockKey`. */
@@ -71,7 +83,37 @@ export interface BlocksHost {
   saveProperties(notePath: string): Promise<void>;
   /** Opens a menu of `items` under the element `at`. */
   showMenu(at: HTMLElement, items: MenuItems): void;
+  /**
+   * For a block drawn in its note with the key `key`, the name `name` and the text `text`: the old name its record of tries
+   * and its links still use after a rename by hand, and the move that takes them to `name`; null when there is no clear
+   * sign of one.
+   */
+  renamedFrom?(notePath: string, key: string, name: string, text: string): Promise<{ name: string; move(): Promise<void> } | null>;
 }
+
+/** The block's text with the values of the run on screen written into it, as a kept note and a forward test carry it. */
+const shownText = (source: string, shown: RunOutput): string => setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
+
+/** What "Keep this result as a note" saves for the run `shown` of the block `source`: the file's title and its text. */
+export function keptNote(source: string, shown: RunOutput, now: number): { title: string; text: string } {
+  const name = shown.spec.name ?? 'Backtest';
+  return { title: `${name} result`, text: snapshotMarkdown({ name, source: shownText(source, shown), backtest: shown.backtest, now }) };
+}
+
+/** What "Start a forward test" starts from for the run `shown` of the block `source` in the note at `notePath`. */
+export function forwardStart(source: string, shown: RunOutput, defaults: Defaults, notePath: string): ForwardStart {
+  return {
+    source: shownText(source, shown),
+    defaults,
+    started: shown.backtest.run.t[shown.backtest.run.t.length - 1],
+    intraday: isIntraday(shown.backtest.run.t),
+    link: forwardLink(notePath, shown.spec.name),
+    name: shown.spec.name ?? 'Backtest',
+  };
+}
+
+/** A block's text as a note holds it, whatever its line endings and blank lines at its end. */
+const plainText = (text: string): string => text.replace(/\r/g, '').trimEnd();
 
 /** The strategy blocks on screen. A block is known by the object its drawings are tied to (Obsidian's render child). */
 export class StrategyBlocks {
@@ -90,8 +132,12 @@ export class StrategyBlocks {
   /** What the last sweep of each block's text found, by result key, for its slider tracks; and who is listening. */
   private sweeps = new ResultCache<TrackPaint>(KEPT_BLOCK_STATES, Infinity);
   private sweepListeners = new Map<string, Set<(paint: TrackPaint) => void>>();
-  /** The strategy blocks on screen with the defaults each was drawn with, so each can say when the settings have since changed. */
-  private onScreen = new Map<object, { source: string; drawn: Defaults; say: (changed: boolean) => void }>();
+  /**
+   * The strategy blocks on screen with the defaults each was drawn with, so each can say when the settings have since
+   * changed, and with its note, so each can read the age of its prices again when the note is shown again, and the
+   * commands for the whole note can reach it. `refresh` runs it again with new prices, as its refresh button does.
+   */
+  private onScreen = new Map<object, { source: string; drawn: Defaults; say: (changed: boolean) => void; note: string; panel: boolean; card: DrawnResult; refresh: () => Promise<void> }>();
   /** Tells each block on screen whether the settings have changed what it means, once settings stop changing for a moment. */
   readonly checkDefaults = debounce(() => {
     const now = defaultsFrom(this.host.settings());
@@ -114,6 +160,85 @@ export class StrategyBlocks {
     return () => {
       set.delete(listen);
       if (set.size === 0) this.sweepListeners.delete(key);
+    };
+  }
+
+  /** The results on screen of the note at `notePath` read the age of their prices again at `now`; nothing runs again. */
+  checkAges(notePath: string, now: number): void {
+    for (const block of this.onScreen.values()) if (block.note === notePath) block.card.checkAge(now);
+  }
+
+  /**
+   * Runs the blocks of the note at `notePath` with the texts `sources` again with new prices. A block on screen, in the note
+   * or in the preview panel, refreshes as its refresh button does. One that is not drawn (Live Preview draws only the blocks
+   * near the screen) runs here, so it shows the new result when it draws. Resolves with how many of them ran, and why the
+   * first that did not run here failed; one on screen says why itself.
+   */
+  async refreshNote(notePath: string, sources: readonly string[]): Promise<{ ran: number; problem: string | null }> {
+    let problem: string | null = null;
+    const refresh = (source: string): Promise<boolean> => {
+      const drawn = [...this.onScreen].filter(([, b]) => b.note === notePath && plainText(b.source) === plainText(source));
+      if (drawn.length === 0) {
+        return this.host.results.runSource(source, { force: true }).then(
+          () => true,
+          (e: unknown) => {
+            problem ??= e instanceof Error ? e.message : String(e);
+            return false;
+          },
+        );
+      }
+      // A refresh that did not run leaves the result it had on screen.
+      return Promise.all(drawn.map(([child, b]) => b.refresh().then(() => this.cards.get(child) !== b.card))).then((ran) => ran.some(Boolean));
+    };
+    // Two blocks with the same text are one run.
+    const runs = new Map<string, Promise<boolean>>();
+    const ran = await Promise.all(
+      sources.map((source) => {
+        const key = plainText(source);
+        let run = runs.get(key);
+        if (!run) runs.set(key, (run = refresh(source)));
+        return run;
+      }),
+    );
+    return { ran: ran.filter(Boolean).length, problem };
+  }
+
+  /**
+   * Opens (or with `open` false, folds) every result of the note at `notePath` on screen, and the blocks with the keys
+   * `keys` (render.ts blockStateKey) are drawn that way from now on. The preview panel keeps its own view.
+   */
+  setOpenInNote(notePath: string, keys: readonly string[], open: boolean): void {
+    for (const key of keys) this.blockState.set(key, open);
+    for (const block of this.onScreen.values()) if (block.note === notePath && !block.panel) block.card.setOpen(open);
+  }
+
+  /** What is remembered of the block with the key `from` (open or folded, its view, its height) is now that of `to`: the block was renamed. */
+  moveState(from: string, to: string): void {
+    if (from === to) return;
+    for (const kept of [this.blockState, this.views, this.heights] as ResultCache<unknown>[]) {
+      const value = kept.get(from);
+      if (value === undefined) continue;
+      kept.set(to, value);
+      kept.delete(from);
+    }
+  }
+
+  /** What the failure card offers for `step`: a correction is written through `restore`, so none is offered without it. */
+  private nextAction(step: RunStep, lines: string[], restore: StrategyOptions['restore']): NextAction | null {
+    const { action } = step;
+    if (!action) return step.text ? { text: step.text, button: null } : null;
+    if (action.kind !== 'change') return { text: step.text, button: { label: action.label, run: () => (action.kind === 'settings' ? this.host.openSettings() : this.host.openCsv()) } };
+    if (!restore) return { text: step.text, button: null };
+    const fixed = applyFix(lines, action.fix).join('\n');
+    return {
+      text: step.text,
+      button: {
+        label: action.label,
+        run: () =>
+          restore(fixed).catch((e: unknown) => {
+            throw new Error(`Cannot change the block. ${e instanceof Error ? e.message : String(e)}`);
+          }),
+      },
     };
   }
 
@@ -143,12 +268,24 @@ export class StrategyBlocks {
     const drawing = this.host.results.drawing(source, runs, { anyway: opts.anyway });
     const force = opts.force ?? false;
     // In the panel a failed first run is for the panel to show, but a retry has nobody above it: it draws its own failure.
-    const redraw = (more: Pick<StrategyOptions, 'force' | 'anyway' | 'inPlace'>): void => {
+    const redraw = (more: Pick<StrategyOptions, 'force' | 'anyway' | 'inPlace'>): Promise<void> =>
       // A block run without the size limits is drawn again without them, whether it was asked for now or by the result it came from.
       this.renderStrategy(source, el, child, { ...opts, anyway: drawing.anyway, inPlace: false, ...more }).catch(showFailure);
+    // A failure that a next step can put right draws that step as soon as it is known; a ticker search can take a moment.
+    const showFailure = (e: unknown): void => {
+      const message = e instanceof Error ? e.message : String(e);
+      const again = () => void redraw({ force: false });
+      renderFailure(el, message, source, again);
+      const failure = priceFailure(e);
+      if (!failure) return;
+      const card = el.firstElementChild;
+      const lines = source.split('\n');
+      void runStep(lines, failure, drawing.defaults, this.host.lookup()).then((step) => {
+        const next = this.nextAction(step, lines, opts.restore);
+        if (next && el.firstElementChild === card) renderFailure(el, message, source, again, next);
+      });
     };
-    const showFailure = (e: unknown): void => renderFailure(el, e instanceof Error ? e.message : String(e), source, () => redraw({ force: false }));
-    const retry = (refetch: boolean) => () => redraw({ force: refetch, inPlace: true });
+    const retry = (refetch: boolean) => () => void redraw({ force: refetch, inPlace: true });
     try {
       const { spec, errors, warnings } = drawing.parse();
       if (!spec) {
@@ -172,7 +309,10 @@ export class StrategyBlocks {
           folded,
         });
       }
-      const out = await this.host.results.runSpec(drawing, spec, key, force, (bars) => loading?.prices(bars));
+      const out = await this.host.results.runSpec(drawing, spec, key, force, {
+        prices: (bars) => loading?.prices(bars),
+        ticker: (done, total, waiting) => loading?.tickers(done, total, waiting),
+      });
       // Stopped, or a kept result came back after the block was drawn again or went away.
       if (!out || this.disposers.get(child) !== stop) return;
       // A result that was run without the size limits is shown with its sliders without them too.
@@ -191,6 +331,7 @@ export class StrategyBlocks {
           parse: drawing.parse,
           defaults: drawing.defaults,
           apply: opts.apply,
+          rewrite: opts.restore,
           ledger,
           onResult: (paint: TrackPaint) => {
             this.sweeps.set(key, paint);
@@ -233,28 +374,27 @@ export class StrategyBlocks {
           : {
               label: 'Start a forward test',
               icon: 'arrow-right',
-              run: () =>
-                this.host.startForward({
-                  source: setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value]))),
-                  defaults: drawing.defaults,
-                  started: shown.backtest.run.t[shown.backtest.run.t.length - 1],
-                  intraday: isIntraday(shown.backtest.run.t),
-                  link: forwardLink(opts.notePath, shown.spec.name),
-                  name: shown.spec.name ?? 'Backtest',
-                }),
+              run: () => this.host.startForward(forwardStart(source, shown, drawing.defaults, opts.notePath)),
             };
       // The menu of the run on screen: the saves, then the forward test and the note's properties.
       const menu = (at: HTMLElement, shown: RunOutput): void => {
         const bt = shown.backtest;
         const intraday = isIntraday(bt.run.t);
         const name = shown.spec.name ?? 'Backtest';
-        // A kept note carries the values that made its result.
-        const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
         const next = forward(shown);
         const items: MenuItems = [
           { label: 'Save trades as CSV', icon: 'table', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
           { label: 'Save value history as CSV', icon: 'activity', run: () => this.host.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
-          { label: 'Keep this result as a note', icon: 'bookmark', run: () => this.host.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
+          {
+            label: 'Keep this result as a note',
+            icon: 'bookmark',
+            run: () => {
+              const kept = keptNote(source, shown, Date.now());
+              return this.host.saveFile(kept.title, 'md', kept.text);
+            },
+          },
+          // A copy carries the values that made its result.
+          { label: 'Copy as Markdown', icon: 'copy', run: () => this.host.copy(resultMarkdown({ source: shownText(source, shown), backtest: bt }), 'the result') },
           ...(next || (!opts.panel && opts.notePath) ? [null] : []),
           ...(next ? [next] : []),
           ...(!opts.panel && opts.notePath ? [{ label: "Save this note's results to its properties", icon: 'save', run: () => this.host.saveProperties(opts.notePath) }] : []),
@@ -298,6 +438,7 @@ export class StrategyBlocks {
           figuresNote: ledger ? (note, now) => renderTriesNote(note, ledger, now.backtest) : undefined,
           triggers: (shown) => this.host.results.triggers(shown, runs),
           menu,
+          copy: (text, what) => this.host.copy(text, what),
           nextStep: forward,
           initial,
           arrive,
@@ -322,7 +463,22 @@ export class StrategyBlocks {
         easeHeight(el, () => el.replaceChildren(...Array.from(stage.childNodes)));
       } else drawn = draw(el);
       this.cards.set(child, drawn);
-      this.onScreen.set(child, { source, drawn: drawing.defaults, say: renderDefaultsChanged(el, () => redraw({ force: false, inPlace: true })) });
+      this.onScreen.set(child, {
+        source,
+        drawn: drawing.defaults,
+        say: renderDefaultsChanged(el, () => void redraw({ force: false, inPlace: true })),
+        note: opts.notePath,
+        panel: opts.panel ?? false,
+        card: drawn,
+        refresh: () => redraw({ force: true, inPlace: true }),
+      });
+      // A rename by hand is offered on the block in its note, which is where its record and links belong.
+      const name = out.spec.name;
+      if (ledger && name && opts.blockKey && !opts.panel) {
+        void this.host.renamedFrom?.(opts.notePath, opts.blockKey, name, source).then((found) => {
+          if (found && this.cards.get(child) === drawn) renderRenamed(el, found.name, found.move);
+        });
+      }
       this.disposers.set(child, () => {
         if (stateKey !== undefined) this.views.set(stateKey, drawn.view());
         drawn.dispose();
@@ -349,6 +505,11 @@ export class StrategyBlocks {
       else if (opts.panel) throw e;
       else showFailure(e);
     }
+  }
+
+  /** The block with this key (render.ts blockStateKey) draws open the next time it is drawn. */
+  drawOpen(stateKey: string): void {
+    this.blockState.set(stateKey, true);
   }
 }
 

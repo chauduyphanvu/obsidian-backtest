@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { blockName } from '../src/blocks.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, viewText, waitFor, type Shown } from '../src/live-core.ts';
+import { EMPTY_TEXT, Latest, PAUSE_DOWNLOAD, PAUSE_READY, PAUSE_SWITCH, ReadyMemo, blockLabel, changeKind, chooseBlock, drawHeld, loadNeeds, locateBlock, viewText, waitFor, type Shown } from '../src/live-core.ts';
 
 const BODY_A = ['name: Trend', 'universe: SPY', 'buy when close > sma(200)'];
 const BODY_B = ['universe: QQQ', 'buy when rsi(2) < 10'];
@@ -361,4 +361,9 @@ test('the panel reads a note in reading mode from its file\'s text, which its ed
   assert.equal(viewText(view('preview')), 'costs: 7 bps');
   // While typing, the editor is ahead of the file.
   assert.equal(viewText(view('source')), 'costs: 5 bps');
+});
+
+test('the empty panel names no command: a note with no block offers the button for a new strategy note', () => {
+  for (const text of Object.values(EMPTY_TEXT)) assert.doesNotMatch(text, /command/i);
+  assert.equal(EMPTY_TEXT['no-block'], 'This note has no strategy block. Type a block in the note. The result shows here while you type.');
 });

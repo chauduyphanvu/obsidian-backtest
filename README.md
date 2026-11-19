@@ -197,20 +197,30 @@ Run **Show today's orders**, or click its ribbon icon. The plugin runs all the s
 - the orders for each account;
 - the blocks that cannot run, with a button that corrects many problems.
 
-The status bar shows the number of orders. The plugin does not place orders. You place the trades yourself.
+The status bar shows the number of orders. To keep the list open while you trade, click **Keep in the sidebar**. The plugin does not place orders. You place the trades yourself.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | Insert strategy block | Adds one of ten starter strategies. |
+| New strategy note | Makes a new note with one of the starter strategies. Works with no note open. |
 | Use a CSV file in a strategy | Changes a CSV file into a ticker, a column or a small strategy. |
 | Write a strategy from a description | A language model writes a strategy from plain English. First, select a provider in the settings. |
 | Open strategy preview | Shows the result of the block that you edit, in the sidebar. |
 | Correct the problem at the cursor | Applies the suggested correction. |
+| Make the number at the cursor a parameter | Changes a number such as the 200 in `sma(200)` into a parameter with a range. |
 | Insert strategy dashboard | Adds a `backtests` block. |
 | Show today's orders | Opens the orders window. |
+| Show today's orders in the sidebar | Keeps the list of orders open in the sidebar. |
 | Save this note's results to its properties | Writes the figures of each strategy to `bt_` properties. |
+| Refresh all strategies in this note | Gets new prices for every strategy in the note. |
+| Fold all results in this note | Folds every result of the note to one line. |
+| Open all results in this note | Opens every result of the note. |
+| Refresh the strategy at the cursor | Gets new prices for the strategy that you edit. |
+| Keep the strategy at the cursor as a note | Saves its result as a note. |
+| Start a forward test for the strategy at the cursor | Starts a forward test of the strategy that you edit. |
+| Rename the strategy at the cursor | Gives the strategy a new name. Its count of tries and the links to it stay correct. |
 | Delete saved prices | Deletes the saved prices. |
 
 ## With an AI assistant
@@ -225,6 +235,7 @@ The status bar shows the number of orders. The plugin does not place orders. You
 
 ```
 node backtest-blocks.mjs check note.md           # show each problem with its line; exit code 1 if there are errors
+node backtest-blocks.mjs check --fix note.md     # write each correction that is the only one into the note
 node backtest-blocks.mjs run note.md --block 2   # backtest one block on live prices (--json for data)
 node backtest-blocks.mjs explain "stop loss"     # what a word means
 node backtest-blocks.mjs mcp                     # the same, as MCP tools

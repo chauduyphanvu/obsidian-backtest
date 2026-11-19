@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseSpec, type Diagnostic } from '../src/dsl.ts';
-import { closest, editDistance, fixChanges, fixEdits, fixFor, tickerFix, type Fix } from '../src/fixes.ts';
+import { applyFix, closest, editDistance, fixChanges, fixEdits, fixesFor, fixFor, suggestion, suggestions, tickerFix, type Fix } from '../src/fixes.ts';
 
 const errorsOf = (lines: string[]) => parseSpec(lines.join('\n')).errors;
 
@@ -353,4 +353,105 @@ test('a parameter written for the number of entries, misspelt, is offered the pa
   const found = firstFix(lines)!;
   assert.equal(found.fix.hint, 'Possible correction: steps.');
   assert.equal(apply(lines, found.fix)[2], 'entries: steps');
+});
+
+/** Each fix of the first problem: its button, its hint and the line it changes as the block reads after it. */
+function offered(lines: string[]): { label: string; hint: string; after: string[] }[] {
+  return fixesFor(lines, errorsOf(lines)[0]).map((f) => ({ label: f.label, hint: f.hint, after: applyFix(lines, f) }));
+}
+
+test('equally near words are each offered, at most three, and fixFor offers none of them', () => {
+  const sam = [HEAD, 'buy when close > sam(200)'];
+  assert.deepEqual(
+    offered(sam).map((f) => [f.label, f.hint, f.after[1]]),
+    [
+      ['Change to sma', 'Possible correction: sma.', 'buy when close > sma(200)'],
+      ['Change to sum', 'Possible correction: sum.', 'buy when close > sum(200)'],
+    ],
+  );
+  for (const f of offered(sam)) assert.deepEqual(errorsOf(f.after), []);
+  assert.equal(fixFor(sam, errorsOf(sam)[0]), null);
+  assert.equal(suggestion(sam, errorsOf(sam)[0]), null);
+  assert.deepEqual(suggestions(sam, errorsOf(sam)[0])?.text, 'Possible corrections: sma, sum.');
+  // sma, ema, wma and hma are all one letter from xma: the first three are offered.
+  assert.deepEqual(offered([HEAD, 'buy when close > xma(200)']).map((f) => f.label), ['Change to sma', 'Change to ema', 'Change to wma']);
+  // A word that is nearer than the others is still the only one.
+  assert.deepEqual(offered([HEAD, 'buy when close > smaa(200)']).map((f) => f.label), ['Change to sma']);
+  // Each one is still checked: sma() and sum() both need a period, so neither is offered.
+  assert.deepEqual(offered([HEAD, 'buy when close > sam()']), []);
+});
+
+test('"crosses over" and "crosses under" are offered the crossing they most likely mean', () => {
+  const lines = [HEAD, 'buy when close crosses over sma(50)', 'sell when close crosses  under sma(50)'];
+  const [over, under] = errorsOf(lines);
+  const up = fixFor(lines, over)!;
+  assert.deepEqual([up.label, applyFix(lines, up)[1]], ['Change to crosses above', 'buy when close crosses above sma(50)']);
+  const down = fixFor(lines, under)!;
+  assert.deepEqual([down.label, applyFix(lines, down)[2]], ['Change to crosses below', 'sell when close crosses below sma(50)']);
+  assert.equal(suggestion(lines, over)?.text, 'Did you mean crosses above?');
+});
+
+test('a parameter outside its range is offered the nearer end, and a range that takes the value in', () => {
+  const lines = [HEAD, 'n = 400 in 100..300 step 20', 'buy when close > sma(n)'];
+  assert.deepEqual(
+    offered(lines).map((f) => [f.label, f.after[1]]),
+    [
+      ['Change to 300', 'n = 300 in 100..300 step 20'],
+      ['Change the range to 100..400', 'n = 400 in 100..400 step 20'],
+    ],
+  );
+  for (const f of offered(lines)) assert.deepEqual(errorsOf(f.after), []);
+  assert.equal(fixFor(lines, errorsOf(lines)[0]), null, 'two ways to put it right');
+  assert.equal(suggestions(lines, errorsOf(lines)[0])?.text, '', 'the message says it, and the buttons show the two');
+  // Under the range, and with percentages written with a space.
+  assert.deepEqual(
+    offered([HEAD, 'stop = 2 % in 5 %..20 %', 'stop loss: stop', RULE]).map((f) => [f.label, f.after[1]]),
+    [
+      ['Change to 5 %', 'stop = 5 % in 5 %..20 %'],
+      ['Change the range to 2 %..20 %', 'stop = 2 % in 2 %..20 %'],
+    ],
+  );
+  // A range that would hold too many values is not offered, so the one fix left is the fix.
+  const wide = [HEAD, 'n = 400 in 100..299 step 1', 'buy when close > sma(n)'];
+  assert.deepEqual(offered(wide).map((f) => f.label), ['Change to 299']);
+  assert.equal(fixFor(wide, errorsOf(wide)[0])?.label, 'Change to 299');
+});
+
+test('a blank line inside a rule is removed, with the line breaks it takes', () => {
+  const lines = [HEAD, RULE, '', '  and rsi(14) < 30', 'sell when close < sma(200)'];
+  const d = errorsOf(lines)[0];
+  const f = fixFor(lines, d)!;
+  assert.deepEqual([f.label, f.hint], ['Remove the blank line', '']);
+  assert.deepEqual(applyFix(lines, f), [HEAD, RULE, '  and rsi(14) < 30', 'sell when close < sma(200)']);
+  assert.equal(suggestion(lines, d)?.text, '', 'the message already says what to do');
+  // Two blank lines, one with spaces, and Windows line ends.
+  const crlf = [HEAD, RULE, '   \r', '\r', 'or rsi(14) < 30', 'sell when close < sma(200)'];
+  const g = fixFor(crlf, errorsOf(crlf)[0])!;
+  assert.equal(g.label, 'Remove the blank lines');
+  assert.deepEqual(applyFix(crlf, g), [HEAD, RULE, 'or rsi(14) < 30', 'sell when close < sma(200)']);
+  // In a note, the edit reaches from the first blank line to the start of the line that continues the rule.
+  const note = ['# Note', '```strategy', ...lines, '```'];
+  const at = (line: number) => note.slice(0, line + 1).reduce((n, l) => n + l.length + 1, 0);
+  const changes = fixChanges(f, at)!;
+  const text = note.join('\n');
+  const edited = changes.reduceRight((t, c) => t.slice(0, c.from) + c.insert + t.slice(c.to), text);
+  assert.equal(edited, ['# Note', '```strategy', ...applyFix(lines, f), '```'].join('\n'));
+  // A definition is continued the same way.
+  const def = [HEAD, 'up = close > sma(50)', '', '  and rsi(14) < 30', 'buy when up'];
+  assert.deepEqual(applyFix(def, fixFor(def, errorsOf(def)[0])!), [HEAD, 'up = close > sma(50)', '  and rsi(14) < 30', 'buy when up']);
+});
+
+test('a date with slashes or dots, year first, is written with dashes; one in another order gets no fix', () => {
+  const lines = [HEAD, 'from: 2015/01/01  # start', RULE];
+  const d = errorsOf(lines)[0];
+  const f = fixFor(lines, d)!;
+  assert.deepEqual([f.label, applyFix(lines, f)[1]], ['Change to 2015-01-01', 'from: 2015-01-01  # start']);
+  assert.equal(suggestion(lines, d)?.text, '');
+  assert.equal(firstFix([HEAD, 'test from: 2019.6.3', RULE])!.fix.insert, '2019-06-03');
+  assert.equal(firstFix([HEAD, 'from: 01/02/2015', RULE]), null);
+});
+
+test('a CSV path with a space and a percentage outside its range get a message and no fix', () => {
+  assert.equal(firstFix(['universe: csv:My Data/spy.csv', RULE]), null);
+  assert.equal(firstFix([HEAD, 'stop loss: 150%', RULE]), null);
 });

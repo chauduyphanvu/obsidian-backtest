@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { emptyLedger, Ledgers, trialHash, trialOf, versionFigures, versionHash, type Ledger, type LedgerStore } from '../src/ledger.ts';
+import { emptyLedger, handRenamed, Ledgers, mergeLedgers, recordName, trialHash, trialOf, versionFigures, versionHash, type Ledger, type LedgerStore } from '../src/ledger.ts';
 import { walkForward } from '../src/luck.ts';
 import { pbo, stepBlocks, stepsPerYear } from '../src/overfit.ts';
 import { blockKeyPrefix, blockStateKey } from '../src/render.ts';
@@ -84,7 +84,7 @@ test('a run shown counts as a try only when it traded, and a version keeps its f
   assert.equal(trialOf(idle, runBacktest(idle, data)), null);
 });
 
-/** A store in memory that counts its writes, with JsonStore's renamePrefix. */
+/** A store in memory that counts its writes, with JsonStore's moves and list of keys. */
 function memory(): LedgerStore & { records: Map<string, Ledger>; writes: number } {
   const records = new Map<string, Ledger>();
   const store = {
@@ -97,6 +97,13 @@ function memory(): LedgerStore & { records: Map<string, Ledger>; writes: number 
       records.set(key, next);
       return next;
     },
+    rename: async (from: string, to: string) => {
+      const moving = records.get(from);
+      if (!moving) return;
+      records.delete(from);
+      const there = records.get(to);
+      records.set(to, there ? mergeLedgers(there, moving) : moving);
+    },
     renamePrefix: async (from: string, to: string) => {
       for (const [k, v] of [...records]) {
         if (!k.startsWith(from)) continue;
@@ -104,6 +111,7 @@ function memory(): LedgerStore & { records: Map<string, Ledger>; writes: number 
         records.set(to + k.slice(from.length), v);
       }
     },
+    listKeys: async (prefix: string) => [...records.keys()].filter((k) => k.startsWith(prefix)),
   };
   return store;
 }
@@ -188,6 +196,94 @@ test('a new note at a renamed note\'s old path starts its own record, and a bloc
   await old.add([run('trend3')]);
   assert.deepEqual(Object.keys(store.records.get(blockStateKey('Dip.md', null, 0))!.trials), ['dip1', 'dip2']);
   assert.deepEqual(Object.keys(store.records.get(blockStateKey('Trend.md', null, 0))!.trials), ['trend1', 'trend2', 'trend3']);
+});
+
+test('a block given a new name takes its record along, and a block whose name only starts the same keeps its own', async () => {
+  const store = memory();
+  const ledgers = new Ledgers(store, () => 1);
+  const trend = ledgers.forBlock(blockStateKey('Notes/a.md', 'Trend', 0));
+  const longer = ledgers.forBlock(blockStateKey('Notes/a.md', 'Trend following', 1));
+  await trend.add([run('a1'), run('a2')], { text: 'name: Trend', defaults: {}, figures });
+  await longer.add([run('l1')]);
+  await ledgers.move(blockStateKey('Notes/a.md', 'Trend', 0), blockStateKey('Notes/a.md', 'Trend v2', 0));
+  assert.deepEqual([...store.records.keys()].sort(), [blockStateKey('Notes/a.md', 'Trend following', 1), blockStateKey('Notes/a.md', 'Trend v2', 0)]);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Notes/a.md', 'Trend v2', 0))!.trials), ['a1', 'a2']);
+  // A drawing made before the move writes to the new name; the longer name still writes to its own.
+  await trend.add([run('a3')]);
+  await longer.add([run('l2')]);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Notes/a.md', 'Trend v2', 0))!.trials), ['a1', 'a2', 'a3']);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Notes/a.md', 'Trend following', 1))!.trials), ['l1', 'l2']);
+  // A block given the old name afterwards is another block, and a move onto a name that has a record joins the two.
+  await ledgers.forBlock(blockStateKey('Notes/a.md', 'Trend', 0)).add([run('n1')]);
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Notes/a.md', 'Trend', 0))!.trials), ['n1']);
+  await ledgers.move(blockStateKey('Notes/a.md', 'Trend', 0), blockStateKey('Notes/a.md', 'Trend v2', 0));
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Notes/a.md', 'Trend v2', 0))!.trials).sort(), ['a1', 'a2', 'a3', 'n1']);
+  // A drawing under the new name hears of the tries the move brought along.
+  const heard: number[] = [];
+  ledgers.forBlock(blockStateKey('Notes/a.md', 'Dip', 2)).watch((l) => heard.push(Object.keys(l.trials).length));
+  // A block that had no name moves the same way.
+  await ledgers.forBlock(blockStateKey('Notes/a.md', null, 2)).add([run('u1')]);
+  await ledgers.move(blockStateKey('Notes/a.md', null, 2), blockStateKey('Notes/a.md', 'Dip', 2));
+  assert.deepEqual(Object.keys(store.records.get(blockStateKey('Notes/a.md', 'Dip', 2))!.trials), ['u1']);
+  assert.deepEqual(heard, [1]);
+});
+
+const ledgerOf = (at: number, text = 'name: Trend\nuniverse: SPY'): Ledger => ({ trials: { t1: [1, 252, at] }, versions: [{ hash: 'v1', text, defaults: 'd', at, figures: { cagr: 0, maxDrawdown: 0, sharpe: 0, trades: 1 } }], resetAt: 0 });
+
+test('a block renamed by hand finds its old record only when exactly one name of its note has a record but no block', () => {
+  const key = 'N.md\u0000name:trend v2';
+  const old = 'N.md\u0000name:trend';
+  const other = 'N.md\u0000name:swing';
+  const blocks = [key, other];
+  const since = 1000;
+  const text = 'name: Trend v2\nuniverse: SPY';
+  assert.equal(handRenamed(key, null, [[old, ledgerOf(5)], [other, ledgerOf(5)]], blocks, since, text), old);
+  // Tries under the new name made in this session, as by the drawing that asks, do not hide it.
+  assert.equal(handRenamed(key, ledgerOf(1500), [[old, ledgerOf(5)]], blocks, since, text), old);
+  // A record under the new name from before the session: the block has had that name for a while.
+  assert.equal(handRenamed(key, ledgerOf(500), [[old, ledgerOf(5)]], blocks, since, text), null);
+  // Two names left behind with the block's text: which one it was is not clear.
+  assert.equal(handRenamed(key, null, [[old, ledgerOf(5)], ['N.md\u0000name:gone', ledgerOf(5)]], blocks, since, text), null);
+  // No name left behind, or one whose record is empty.
+  assert.equal(handRenamed(key, null, [[other, ledgerOf(5)]], blocks, since, text), null);
+  assert.equal(handRenamed(key, null, [[old, emptyLedger()], [other, ledgerOf(5)]], blocks, since, text), null);
+  assert.equal(handRenamed(key, null, [[old, null]], blocks, since, text), null);
+});
+
+test('a record left by a block that was deleted is no old name of a new block with other text', () => {
+  const key = 'N.md\u0000name:meanrev';
+  const momentum = 'N.md\u0000name:momentum';
+  const since = 1000;
+  const deleted = ledgerOf(5, 'name: Momentum\nuniverse: SPY\nbuy when close > sma(200)');
+  assert.equal(handRenamed(key, null, [[momentum, deleted]], [key], since, 'name: MeanRev\nuniverse: SPY\nbuy when rsi(2) < 10'), null);
+  // The same text but for its name line is a rename, whatever the line endings, the blank lines at the end and the comment.
+  assert.equal(handRenamed(key, null, [[momentum, deleted]], [key], since, 'name: MeanRev # was Momentum\r\nuniverse: SPY\r\nbuy when close > sma(200)\r\n\n'), momentum);
+  // A record with tries but no version has no text to compare.
+  assert.equal(handRenamed(key, null, [[momentum, { ...emptyLedger(), trials: { t1: [1, 252, 5] } }]], [key], since, 'name: MeanRev'), null);
+  // Of two names left behind, the one with the block's text is the old name.
+  const trend = 'N.md\u0000name:trend';
+  assert.equal(handRenamed(key, null, [[momentum, deleted], [trend, ledgerOf(5, 'name: Trend\nuniverse: QQQ')]], [key], since, 'name: MeanRev\nuniverse: QQQ'), trend);
+});
+
+test('the old name comes from the latest version of its record, as written', async () => {
+  assert.equal(recordName(ledgerOf(5, 'universe: SPY\nname: Trend Following # old'), 'trend following'), 'Trend Following');
+  assert.equal(recordName({ ...emptyLedger(), trials: { t1: [1, 252, 5] } }, 'trend following'), 'trend following');
+  const store = memory();
+  const ledgers = new Ledgers(store, () => 2000);
+  store.records.set('N.md\u0000name:trend', ledgerOf(5));
+  store.records.set('N.md\u0000name:swing', ledgerOf(5, 'name: Swing'));
+  store.records.set('N.md\u0000block:0', ledgerOf(5, 'universe: QQQ'));
+  store.records.set('M.md\u0000name:other', ledgerOf(5, 'name: Other'));
+  const blocks = async () => ['N.md\u0000name:trend v2', 'N.md\u0000name:swing', 'N.md\u0000block:2'];
+  const text = 'name: Trend v2\nuniverse: SPY';
+  // Only names count: a block keyed by its place moves when blocks move, which is no rename.
+  assert.deepEqual(await ledgers.renamedFrom('N.md\u0000name:trend v2', 'N.md\u0000name:', blocks, 1000, text), { key: 'N.md\u0000name:trend', name: 'Trend' });
+  await ledgers.forBlock('N.md\u0000name:trend v2').add([run('x1')]);
+  assert.deepEqual(await ledgers.renamedFrom('N.md\u0000name:trend v2', 'N.md\u0000name:', blocks, 1000, text), { key: 'N.md\u0000name:trend', name: 'Trend' });
+  // A block whose text changed besides its name gives no sign of a rename.
+  assert.equal(await ledgers.renamedFrom('N.md\u0000name:trend v2', 'N.md\u0000name:', blocks, 1000, 'name: Trend v2\nuniverse: QQQ'), null);
+  await ledgers.move('N.md\u0000name:trend', 'N.md\u0000name:trend v2');
+  assert.equal(await ledgers.renamedFrom('N.md\u0000name:trend v2', 'N.md\u0000name:', blocks, 1000, text), null);
 });
 
 test('the key of a block starts with its note\'s prefix and its folders\', and no other note\'s', () => {

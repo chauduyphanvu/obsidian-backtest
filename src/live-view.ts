@@ -3,7 +3,7 @@ import { EditorView } from '@codemirror/view';
 import { ItemView, MarkdownView, type App, type WorkspaceLeaf } from 'obsidian';
 import { h } from './dom.ts';
 import type { Defaults, Diagnostic } from './dsl.ts';
-import { Latest, blockLabel, changeKind, chooseBlock, locateBlock, viewText, waitFor, type Choice, type Shown } from './live-core.ts';
+import { EMPTY_TEXT, Latest, blockLabel, changeKind, chooseBlock, locateBlock, viewText, waitFor, type Choice, type Shown } from './live-core.ts';
 import { blockStateKey, problemLines } from './render.ts';
 import { debounce } from './result-cache.ts';
 import { findBlock, writeValuesInNote } from './rewrite.ts';
@@ -26,6 +26,8 @@ export interface LiveHost {
   defaults(): Partial<Defaults>;
   /** The block's text with these parameter values written in. */
   rewrite(source: string, values: Record<string, number>): string;
+  /** Asks for a starter strategy and makes a new note with it. */
+  newNote(): void;
 }
 
 /** After the last edit or cursor move, how long to wait before reading the note. Reading is cheap; this keeps it to once per burst. */
@@ -70,11 +72,6 @@ interface Drawn {
   note: string;
   index: number;
 }
-
-const EMPTY_TEXT = {
-  'no-note': 'Open a note to see the result of its strategy block here. The result updates as you type.',
-  'no-block': 'This note has no strategy block. Type a block, or use the command "Insert strategy block". The result shows here while you type.',
-};
 
 export class LiveView extends ItemView {
   private host: LiveHost;
@@ -339,6 +336,7 @@ export class LiveView extends ItemView {
     this.top.replaceChildren();
     this.status.textContent = '';
     h(this.top, 'div', 'bt-note bt-live-empty', EMPTY_TEXT[kind]);
+    if (kind === 'no-block') h(this.top, 'button', 'bt-button', 'New strategy note').addEventListener('click', () => this.host.newNote());
   }
 
   private setHeading(reading: BlockReading): void {

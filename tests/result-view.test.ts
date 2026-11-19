@@ -4,11 +4,13 @@ import { El, WIDTH } from './page.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
-import { timeTicks } from '../src/format.ts';
+import { isoDate, timeTicks } from '../src/format.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { awayText, nextOrder, watchText } from '../src/render-now.ts';
+import { awayText, nextOrder, orderLine, watchText } from '../src/render-now.ts';
+import { renderPriceCharts } from '../src/render-price.ts';
 import { renderRegimes } from '../src/render-regimes.ts';
-import { renderResult, type ResultView } from '../src/render.ts';
+import { oldPrices, renderRenamed, renderResult, type ResultView } from '../src/render.ts';
+import { versusView } from '../src/render-versus.ts';
 import type { AssetRef } from '../src/types.ts';
 import type { RunOutput } from '../src/runner.ts';
 import { condition, priceAlone, type Trigger, type TriggerReport } from '../src/trigger.ts';
@@ -150,6 +152,85 @@ test('the chart reads out the last bar, then the bar under the pointer, with the
   assert.equal(root.byClass('bt-chart-note')[0].textContent, 'Shading: the gap between the two lines, and the large market drawdowns');
 });
 
+/** A key pressed on `el`; says whether the chart took it, which stops it there. */
+function press(el: El, key: string, shiftKey = false): boolean {
+  let took = false;
+  el.dispatch('keydown', { key, shiftKey, preventDefault() {}, stopPropagation: () => (took = true) });
+  return took;
+}
+
+test('the chart reads with the arrow keys while it has the focus, and Escape gives the read-out back to the last bar', () => {
+  const out = run(TREND);
+  const root = draw(out);
+  const read = (cls: string) => root.byClass(cls)[0].textContent;
+  const iso = (time: number) => new Date(time).toISOString().slice(0, 10);
+  const t = out.backtest.run.t;
+  const chart = root.byClass('bt-chart')[0];
+  assert.equal(chart.tabIndex, 0);
+  assert.equal(chart.attrs['aria-label'], 'Chart of the value. Use the arrow keys to read the values.');
+  assert.equal(root.byClass('bt-read')[0].attrs['aria-live'], 'polite');
+  const cross = () => chart.all().find((e) => e.attrs.class === 'bt-cross')!;
+  assert.ok(press(chart, 'ArrowLeft'));
+  assert.equal(read('bt-read-date'), iso(t.at(-1)!));
+  assert.equal(cross().attrs.visibility, 'visible');
+  assert.ok(press(chart, 'ArrowLeft'));
+  assert.equal(read('bt-read-date'), iso(t.at(-2)!));
+  // Shift goes back a month by date, on a run of three years.
+  assert.ok(press(chart, 'ArrowLeft', true));
+  assert.equal(read('bt-read-date'), iso(t.at(-2)! - 31 * DAY));
+  assert.ok(press(chart, 'Home'));
+  assert.equal(read('bt-read-date'), iso(t[0]));
+  // The pointer and the keys move one read-out: the keys go on from the bar the pointer read.
+  const hit = chart.all().find((e) => e.tag === 'rect' && e.attrs.fill === 'transparent')!;
+  hit.dispatch('pointermove', { clientX: Number(hit.attrs.x) + ((Date.UTC(2020, 2, 1) - t[0]) / (t.at(-1)! - t[0])) * Number(hit.attrs.width) });
+  assert.equal(read('bt-read-date'), '2020-03-01');
+  assert.ok(press(chart, 'ArrowRight'));
+  assert.equal(read('bt-read-date'), '2020-03-02');
+  assert.equal(read('bt-read-fall'), 'Covid crash');
+  assert.ok(press(chart, 'Escape'));
+  assert.equal(read('bt-read-date'), `${iso(t.at(-1)!)} · last bar`);
+  assert.equal(cross().attrs.visibility, 'hidden');
+  // Keys it does not use, and Escape with nothing to give back, go on to Obsidian.
+  assert.ok(!press(chart, 'Escape'));
+  assert.ok(!press(chart, 'Enter'));
+  assert.ok(!press(chart, 'ArrowUp'));
+});
+
+test('the Years chart and the price chart read with the arrow keys too', () => {
+  const out = run(TREND);
+  const root = draw(out);
+  const years = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details')[1];
+  years.dispatch('toggle');
+  const chart = years.byClass('bt-chart')[0];
+  const read = years.byClass('bt-tab-read')[0];
+  assert.equal(chart.attrs['aria-label'], 'Chart of the years. Use the arrow keys to read each year.');
+  assert.equal(read.attrs['aria-live'], 'polite');
+  assert.ok(press(chart, 'ArrowRight'));
+  assert.match(read.textContent, /^2019 · strategy /);
+  assert.ok(press(chart, 'ArrowRight', true));
+  assert.match(read.textContent, /^2020 · strategy /);
+  assert.ok(press(chart, 'End'));
+  assert.match(read.textContent, /^2022, part of the year · /);
+  assert.ok(press(chart, 'Escape'));
+  assert.match(read.textContent, /^Each bar shows the strategy return/);
+
+  const box = new El('div');
+  const bt = out.backtest;
+  renderPriceCharts(box as unknown as HTMLElement, { data: out.data, tickers: ['A'], trades: bt.run.trades, from: bt.run.t[0], to: bt.run.t.at(-1)!, intraday: false });
+  box.byClass('bt-details')[0].dispatch('toggle');
+  const prices = box.byClass('bt-price-chart')[0];
+  const tip = box.byClass('bt-price-tip')[0];
+  assert.equal(prices.attrs['aria-label'], 'Chart of the price. Use the arrow keys to read the closes.');
+  assert.equal(tip.attrs['aria-live'], 'polite');
+  assert.ok(press(prices, 'ArrowLeft'));
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.byClass('bt-tip-date')[0].textContent, new Date(bt.run.t.at(-1)!).toISOString().slice(0, 10));
+  assert.ok(press(prices, 'Home'));
+  assert.equal(tip.byClass('bt-tip-date')[0].textContent, new Date(out.data.get('A')!.t[0]).toISOString().slice(0, 10));
+  assert.ok(press(prices, 'Escape'));
+  assert.equal(tip.hidden, true);
+});
+
 test('a run of three years can show its last year alone; the span stays when another run is drawn', () => {
   const root = draw(run(TREND));
   const buttons = () => root.byClass('bt-range-button');
@@ -237,6 +318,35 @@ test('the status line names the nearest order with its price alone, and how far 
   assert.equal(nextOrder({ ...report({ ...SPY, blocked: 'ranking' }), decision: 0 }, one, null).text, 'The ranking selects again at the next close');
   assert.equal(nextOrder(report({ ...SPY, blocked: 'warmup', warmup: null }), one, null).text, 'No order is possible at the next close');
   assert.equal(nextOrder(report({ ...SPY, fires: [] }), one, null).text, 'No order is near the last close');
+});
+
+test('the order line to copy names the ticker, how far the close is and the date of the prices', () => {
+  const one = run(TREND);
+  const several = { ...one, backtest: { ...one.backtest, run: { ...one.backtest.run, states: [one.backtest.run.states[0], { ...one.backtest.run.states[0], name: 'B' }] } } };
+  assert.equal(orderLine(nextOrder(report(SPY), one, null), false, '2026-11-18'), 'SPY: sells if it closes below 730.03 (0.33% away). Prices to 2026-11-18.');
+  assert.equal(orderLine(nextOrder(report(SPY), several, null), true, '2026-11-18'), 'SPY: sells if it closes below 730.03 (0.33% away). Prices to 2026-11-18.');
+  assert.equal(orderLine(nextOrder(report({ ...SPY, ticker: 'QQQ' }), one, null), false, '2026-11-18'), 'QQQ: sells if SPY closes below 730.03 (0.33% away). Prices to 2026-11-18.');
+  assert.equal(orderLine(nextOrder(report(SPY), one, 'sells A at the next open'), false, '2026-11-18'), 'Sells A at the next open. Prices to 2026-11-18.');
+});
+
+test('the panel of the status line copies the order line; with nothing to watch it has no Copy button', async () => {
+  const out = run(TREND);
+  const near: Trigger = { ticker: 'A', side: 'sell', driver: 'A', last: 100, range: { lo: 95, hi: 105 }, fires: [{ lo: null, hi: 99.7 }], ownLast: 100, exact: true, assumptions: [] };
+  const copied: [string, string][] = [];
+  const copy = (text: string, what: string) => void copied.push([text, what]);
+  const root = draw(out, { copy, triggers: () => Promise.resolve(report(near)) });
+  await settle();
+  root.byClass('bt-status')[0].dispatch('click');
+  const button = root.byClass('bt-status-copy')[0].children[0] as El;
+  assert.equal(button.textContent, 'Copy');
+  button.dispatch('click');
+  const last = new Date(out.backtest.run.t.at(-1)!).toISOString().slice(0, 10);
+  assert.deepEqual(copied, [[`A: sells if it closes below ${condition(near, 'it', priceAlone)!.replace(/^if it closes below /, '')} (0.30% away). Prices to ${last}.`, 'the order']]);
+  const quiet = draw(out, { copy, triggers: () => Promise.resolve(report({ ...near, fires: [] })) });
+  await settle();
+  quiet.byClass('bt-status')[0].dispatch('click');
+  assert.equal(quiet.byClass('bt-status-say')[0].textContent, 'No order is near the last close.');
+  assert.equal(quiet.byClass('bt-status-copy').length, 0);
 });
 
 test('a distance has two decimals below 1%, so a near order never reads as 0.0%', () => {
@@ -330,10 +440,113 @@ test('“All figures” keeps the keyboard on it when it opens and closes the re
   assert.equal(page.activeElement, button());
 });
 
+test('a figure’s name opens what it means under its row, and a second press closes it; the row still lights the chart', () => {
+  const lit: (string | null)[] = [];
+  const root = draw(run(TREND));
+  const name = () => root.byClass('bt-vs-label').find((e) => e.textContent === 'Sharpe ratio')!;
+  const help = () => root.all().find((e) => e.id === name().attrs['aria-controls'])!;
+  assert.equal(name().tag, 'button');
+  assert.equal(name().attrs['aria-expanded'], 'false');
+  assert.equal(help().hidden, true);
+  name().dispatch('click');
+  assert.equal(name().attrs['aria-expanded'], 'true');
+  assert.equal(help().hidden, false);
+  assert.match(help().textContent, /^For each bar, the plugin subtracts the interest that cash earned at the cash rate from the return\./);
+  // It sits right under its row.
+  const row = name().parent!;
+  assert.equal(row.parent!.children[row.parent!.children.indexOf(row) + 1], help());
+  // The rows are drawn again when "All figures" opens; the meaning stays open, and the new rows have theirs.
+  root.byClass('bt-vs-toggle')[0].dispatch('click');
+  assert.equal(name().attrs['aria-expanded'], 'true');
+  assert.equal(help().hidden, false);
+  assert.ok(root.byClass('bt-vs-label').some((e) => e.textContent === 'Longest time below a previous high' && e.tag === 'button'));
+  name().dispatch('click');
+  assert.equal(name().attrs['aria-expanded'], 'false');
+  assert.equal(help().hidden, true);
+  // The row of the worst drawdown still lights its part of the chart.
+  const figs = new El('div');
+  const view = versusView(figs as unknown as HTMLElement, { link: (part) => lit.push(part) });
+  view.show(run(TREND).backtest);
+  const dd = figs.byClass('bt-vs-label').find((e) => e.textContent === 'Worst drawdown')!.parent!;
+  dd.dispatch('pointerenter');
+  dd.dispatch('pointerleave');
+  assert.deepEqual(lit, ['dd', null]);
+});
+
 test('a run with a `to` date says what it held at its end, not what the next close would do', async () => {
   const root = draw(run(TREND.replace('costs: 5 bps', 'costs: 5 bps\nto: 2021-06-30')));
   await settle();
   assert.equal(root.byClass('bt-status-order')[0].textContent, 'The run ends on 2021-06-30');
+  // Its prices end where the run does on purpose, so they are not called old.
+  assert.equal(root.byClass('bt-status-old')[0].hidden, true);
+  assert.equal(root.byClass('bt-chip-old')[0].hidden, true);
+});
+
+test('with old prices the status line says in amber where they end, its order quieter, and a click there loads new ones', async () => {
+  let refreshed = 0;
+  const near: Trigger = { ticker: 'A', side: 'sell', driver: 'A', last: 100, range: { lo: 95, hi: 105 }, fires: [{ lo: null, hi: 99.7 }], ownLast: 100, exact: true, assumptions: [] };
+  const out = run(TREND);
+  const root = draw(out, { onRefresh: () => refreshed++, triggers: () => Promise.resolve({ next: 0, intraday: false, closeFill: false, decision: null, triggers: [near] }) });
+  await settle();
+  const end = isoDate(out.backtest.run.t[out.backtest.run.t.length - 1]);
+  const old = root.byClass('bt-status-old')[0];
+  assert.equal(old.hidden, false);
+  assert.equal(old.tag, 'button');
+  assert.equal(old.textContent, `Prices end on ${end}. They can be old.Click to load new prices.`);
+  // The order words stay, in a quieter style than an order that is near.
+  const line = root.byClass('bt-status')[0];
+  assert.equal(root.byClass('bt-status-order')[0].textContent, `Sells ${condition(near, 'it', priceAlone)}`);
+  assert.ok(line.classes().includes('bt-old') && line.classes().includes('bt-near'));
+  // A click on the amber part is the refresh of the card, and does not open the panel of the line.
+  old.dispatch('click');
+  assert.equal(refreshed, 1);
+  assert.equal(line.attrs['aria-expanded'], 'false');
+  // Folded, the line has a short marker that says the same.
+  const mark = root.byClass('bt-chip-old')[0];
+  assert.equal(mark.hidden, false);
+  assert.equal(mark.textContent, 'Old prices');
+  assert.equal(mark.title, `Prices end on ${end}. They can be old.`);
+});
+
+test('old prices of bars shorter than a day say the time they end, also from a file of minute bars with no interval line', () => {
+  const start = Date.UTC(2026, 10, 13, 10, 0);
+  const { spec } = parseSpec('universe: csv:Data/a.csv\nbuy when close > 11');
+  assert.equal(spec!.interval, '1d');
+  const data = new Map([['a', bars([10, 10, 12], { start, step: 60_000 })]]);
+  const out: RunOutput = { spec: spec!, backtest: runBacktest(spec!, data), data, warnings: [], prices: [] };
+  assert.equal(oldPrices(out, start + 30 * DAY), 'Prices end at 2026-11-13 10:02 UTC');
+});
+
+test('a result left open reads the age of its prices again when asked, and changes only that part', async () => {
+  // Daily bars that end yesterday are not old today, whatever the time zone.
+  const now = new Date();
+  const closes = CLOSES.slice(0, 400);
+  const start = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - closes.length * DAY;
+  const { spec } = parseSpec(TREND);
+  const data = new Map([['A', bars(closes, { start })]]);
+  const out: RunOutput = { spec: spec!, backtest: runBacktest(spec!, data), data, warnings: [], prices: [] };
+  const root = new El('div');
+  const drawn = renderResult(root as unknown as HTMLElement, { source: '', out, notes: [], onRefresh: () => {} });
+  await settle();
+  const old = root.byClass('bt-status-old')[0];
+  const mark = root.byClass('bt-chip-old')[0];
+  const order = root.byClass('bt-status-order')[0];
+  assert.deepEqual([old.hidden, mark.hidden], [true, true]);
+  assert.ok(!root.byClass('bt-status')[0].classes().includes('bt-old'));
+  // Ten days later the same drawing says they are old; nothing else is drawn again.
+  drawn.checkAge(Date.now() + 10 * DAY);
+  assert.deepEqual([old.hidden, mark.hidden], [false, false]);
+  assert.match(old.textContent, /^Prices end on \d{4}-\d\d-\d\d\. They can be old\./);
+  assert.ok(root.byClass('bt-status')[0].classes().includes('bt-old'));
+  assert.equal(root.byClass('bt-status-order')[0], order);
+  drawn.checkAge(Date.now());
+  assert.deepEqual([old.hidden, mark.hidden], [true, true]);
+  // Folded and never opened, only the marker is there to change.
+  const folded = new El('div');
+  const card = renderResult(folded as unknown as HTMLElement, { source: '', out, notes: [], onRefresh: () => {}, compact: true });
+  card.checkAge(Date.now() + 10 * DAY);
+  assert.equal(folded.byClass('bt-chip-old')[0].hidden, false);
+  assert.equal(folded.byClass('bt-status-old').length, 0);
 });
 
 test('five years in a narrow chart still name more than one year, and a wide chart is as before', () => {
@@ -419,4 +632,65 @@ test('the tools sit under the tabs as "Test the idea", tests first, each with an
   tools[0].dispatch('click');
   assert.equal(trades.attrs['aria-selected'], 'false');
   assert.equal(tools[0].attrs['aria-selected'], 'true');
+});
+
+test('a command opens or folds a result on screen as a click on its title does, and the block remembers it', () => {
+  const told: boolean[] = [];
+  let open: boolean | undefined;
+  const root = new El('div');
+  const drawn = renderResult(root as unknown as HTMLElement, {
+    source: TREND,
+    out: run(TREND),
+    notes: [],
+    onRefresh: () => {},
+    compact: true,
+    remember: { get: () => open, set: (now) => void told.push((open = now)) },
+  });
+  const card = root.byClass('bt-result')[0];
+  const fold = root.byClass('bt-fold')[0];
+  assert.ok(card.classes().includes('bt-folded'));
+  drawn.setOpen(true);
+  assert.ok(!card.classes().includes('bt-folded'));
+  assert.equal(fold.attrs['aria-expanded'], 'true');
+  assert.equal(root.byClass('bt-body')[0].hidden, false);
+  // Already open: nothing changes, and nothing more is remembered.
+  drawn.setOpen(true);
+  drawn.setOpen(false);
+  assert.ok(card.classes().includes('bt-folded'));
+  assert.equal(fold.attrs['aria-expanded'], 'false');
+  drawn.setOpen(false);
+  assert.deepEqual(told, [true, false]);
+  // The title still opens it after a command folded it.
+  fold.dispatch('click');
+  assert.deepEqual(told, [true, false, true]);
+  assert.ok(!card.classes().includes('bt-folded'));
+});
+
+test('a result renamed by hand says which name its record still uses, and its button moves them', async () => {
+  const root = draw(run(TREND));
+  let moves = 0;
+  let fail = true;
+  const move = async () => {
+    moves++;
+    if (fail) throw new Error('The disk is full.');
+  };
+  renderRenamed(root as unknown as HTMLElement, 'Trend', move);
+  renderRenamed(root as unknown as HTMLElement, 'Trend', move);
+  assert.equal(root.byClass('bt-renamed').length, 1, 'one line, however often it is asked for');
+  const line = root.byClass('bt-renamed')[0];
+  assert.equal(root.byClass('bt-result')[0].children[0], line);
+  assert.equal(line.byClass('bt-defaults-changed-text')[0].textContent, 'This block has a new name. Its record of tries and its links still use the old name "Trend".');
+  const button = line.byClass('bt-button')[0];
+  assert.equal(button.textContent, 'Move them to the new name');
+  button.dispatch('click');
+  assert.equal(button.disabled, true);
+  await settle();
+  // A move that failed gives the button back.
+  assert.equal(button.disabled, false);
+  assert.equal(root.byClass('bt-renamed').length, 1);
+  fail = false;
+  button.dispatch('click');
+  await settle();
+  assert.equal(moves, 2);
+  assert.equal(root.byClass('bt-renamed').length, 0);
 });

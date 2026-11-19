@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { closesFence, fenceOf, findBlocks } from '../src/blocks.ts';
 import { parseSpec } from '../src/dsl.ts';
 import { blockTickers } from '../src/symbols.ts';
-import { analyzeBlock, blockDiagnostics, fixForDiagnostic, placeDiagnostic, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
+import { analyzeBlock, blockDiagnostics, fixForDiagnostic, placeDiagnostic, runStep, unknownTickers, type BlockDiagnostic } from '../src/diagnostics.ts';
+import { applyFix } from '../src/fixes.ts';
 
 /** Where a diagnostic points: line, columns, severity and the text under it. */
 const at = (lines: string[], d: BlockDiagnostic) => [d.line, d.from, d.to, d.severity, lines[d.line].slice(d.from, d.to)];
@@ -394,4 +395,57 @@ test('fixForDiagnostic: a ticker named on a `for` line changes with the one in t
   const clash = ['universe: SPYY, QQQ', 'buy when close of csv:Data/spy.csv > 1'];
   const [again] = unknownTickers(blockTickers(clash), lookup);
   assert.equal(fixForDiagnostic(clash, again, {}, lookup), null);
+});
+
+test('runStep: a ticker its source does not know changes to a near one of the block or its usual spelling, without a request', async () => {
+  const asked: string[] = [];
+  const lookup = { search: async (q: string) => (asked.push(q), []) };
+  // A typo of another ticker in the block, written in each place the block names it.
+  const typo = ['universe: SPYY, TLT', 'benchmark: SPY', 'buy when close > sma(200)', 'for SPYY:', '  stop loss: 5%'];
+  const step = await runStep(typo, { kind: 'ticker', ref: 'SPYY', source: 'yahoo' }, {}, lookup);
+  assert.equal(step.text, 'Did you mean SPY?');
+  assert.ok(step.action?.kind === 'change');
+  assert.equal(step.action.label, 'Change to SPY (2 places)');
+  assert.deepEqual(applyFix(typo, step.action.fix), ['universe: SPY, TLT', 'benchmark: SPY', 'buy when close > sma(200)', 'for SPY:', '  stop loss: 5%']);
+  // Yahoo writes a share class after a dash.
+  const brk = ['universe: BRK.B', 'buy when close > sma(200)'];
+  const share = await runStep(brk, { kind: 'ticker', ref: 'BRK.B', source: 'yahoo' }, {}, null);
+  assert.deepEqual([share.text, share.action?.label], ['Did you mean BRK-B?', 'Change to BRK-B']);
+  assert.deepEqual(asked, []);
+});
+
+test('runStep: the ticker lookup is asked only while it is on, and with no confident correction the step says where to look', async () => {
+  const lines = ['universe: QQQM, IWMM', 'buy when close > sma(200)'];
+  const ticker = { kind: 'ticker' as const, ref: 'IWMM', source: 'yahoo' as const };
+  const asked: string[] = [];
+  const found = { search: async (q: string) => (asked.push(q), [{ ticker: 'IWM', name: 'iShares Russell 2000', detail: 'NYSEArca · ETF', source: 'yahoo' as const }]) };
+  const step = await runStep(lines, ticker, {}, found);
+  assert.deepEqual(asked, ['IWMM']);
+  assert.deepEqual([step.text, step.action?.label], ['Did you mean IWM?', 'Change to IWM']);
+  const nothing = await runStep(lines, ticker, {}, { search: async () => [] });
+  assert.deepEqual(nothing, { text: 'To find the ticker, search for the name on finance.yahoo.com.', action: null });
+  // With the lookup off nothing is sent, and the step says the setting can find tickers.
+  const off = await runStep(lines, ticker, {}, null);
+  assert.deepEqual(off, { text: 'To find the ticker, search for the name on finance.yahoo.com. Or turn on the setting "Find tickers while you type". Then the editor shows tickers while you write them.', action: null });
+  const binance = await runStep(['universe: binance:BTCUSD', 'buy when true'], { kind: 'ticker', ref: 'BTCUSD', source: 'binance' }, {}, { search: async () => [] });
+  assert.equal(binance.text, 'To find the symbol, search for the coin on binance.com. A symbol has the two currencies together, for example BTCUSDT.');
+  // A FRED series is never looked up; a ticker the block does not name, as a cash rate from the settings, is not changed.
+  const fred = await runStep(['universe: SPY', 'buy when close of fred:T10Y2YY > 0'], { kind: 'ticker', ref: 'T10Y2YY', source: 'fred' }, {}, found);
+  assert.deepEqual(fred, { text: 'To find the series ID, search for the series on fred.stlouisfed.org.', action: null });
+  assert.deepEqual(asked, ['IWMM']);
+  const cash = await runStep(['universe: SPY', 'buy when true'], { kind: 'ticker', ref: 'BILLL', source: 'yahoo' }, {}, null);
+  assert.equal(cash.action, null);
+});
+
+test('runStep: a key opens the settings, a missing CSV file the CSV helper, and no network says that prices load once', async () => {
+  const lines = ['universe: tiingo:SPY', 'buy when true'];
+  assert.deepEqual(await runStep(lines, { kind: 'key', service: 'tiingo', setting: 'Tiingo API key', rejected: false }, {}, null), { text: '', action: { kind: 'settings', label: 'Open settings' } });
+  assert.deepEqual(await runStep(lines, { kind: 'csv', path: 'Data/gold.csv' }, {}, null), {
+    text: 'The CSV helper lists the CSV files of the vault and shows how the plugin reads each one.',
+    action: { kind: 'csv', label: 'Use a CSV file' },
+  });
+  assert.deepEqual(await runStep(lines, { kind: 'offline' }, {}, null), {
+    text: 'The plugin must have a connection to the internet to load the prices of a ticker the first time. After that, it can use the saved prices.',
+    action: null,
+  });
 });

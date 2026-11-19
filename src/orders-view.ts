@@ -1,8 +1,8 @@
-import { Modal, Notice, setIcon, type App } from 'obsidian';
+import { ItemView, Modal, Notice, setIcon, type App, type WorkspaceLeaf } from 'obsidian';
 import { h, motionOK, reveal, revealBox, s } from './dom.ts';
 import { shortMessage } from './fixes.ts';
 import { awayText } from './render-now.ts';
-import { price, shareCount, signedPct } from './format.ts';
+import { fullStop, price, shareCount, signedPct } from './format.ts';
 import {
   ACCOUNTS_HEADING,
   ACCOUNTS_NOTE,
@@ -13,6 +13,7 @@ import {
   basisOf,
   CLOSE_FILL_NOTE,
   LAST_CLOSE_NOTE,
+  lastCheckText,
   notOurNoteMessage,
   orderSize,
   ordersMarkdown,
@@ -29,68 +30,176 @@ import {
   watchClose,
   watchList,
   type AccountStatus,
+  type ListFix,
   type SaveOutcome,
   type StrategyStatus,
   type TodoRow,
 } from './orders.ts';
+import type { Scan } from './orders-badge.ts';
 
 export interface OrdersHost {
-  /** Runs every strategy in the vault; calls onProgress as each finishes. `force` refetches every price once. */
-  scan(force: boolean, onProgress: (done: number, total: number) => void): Promise<StrategyStatus[]>;
+  /**
+   * Runs every strategy in the vault, or joins the scan that runs already (SharedScan); calls onProgress as each finishes.
+   * `force` refetches every price once.
+   */
+  scan(force: boolean, onProgress: (done: number, total: number) => void): Promise<Scan>;
+  /** The last scan, when it finished a few minutes ago or less; null when none did. */
+  recent(): Scan | null;
   /** Every account block's orders, from the runs the scan kept (scanAccounts); called after each scan. */
   accounts(): Promise<AccountStatus[]>;
-  /** Opens a note. */
-  openNote(path: string): void;
+  /** Opens the note at a block the list names, a strategy drawn open; at the top of the note when the note no longer has the block. */
+  openBlock(note: string, name: string, line: number | undefined, lang: 'strategy' | 'account'): void;
   /** Writes the Markdown to the configured note, unless that note exists and this plugin did not make it. */
   save(markdown: string): Promise<SaveOutcome>;
   now(): number;
   /**
-   * The fix for a strategy that did not run because its block has a problem, with the defaults of the settings: the
-   * button's words, the sentence that offers it, and what writes it into the note (rejects with a message fit to show).
-   * Null when there is none.
+   * What a strategy that did not run offers to put it right (orders.ts ListFix), with the defaults of the settings: for a
+   * problem in its block, the button's words, the sentence that offers it, and what writes it into the note (rejects with
+   * a message fit to show); for prices that did not load, the step its own card offers. Null when there is nothing.
    */
-  fix?(status: StrategyStatus): { label: string; text: string; write(): Promise<void> } | null;
+  fix?(status: StrategyStatus): ListFix | Promise<ListFix | null> | null;
+  /** Asks for a starter strategy and makes a new note with it. */
+  newNote(): void;
+  /** Opens the list in a pane of the right sidebar. */
+  openPane(): void;
 }
 
 export class OrdersModal extends Modal {
-  private host: OrdersHost;
-  /** Counts scans, so the answer to an older one, or one for a closed window, is dropped. */
-  private scans = 0;
+  private panel: OrdersPanel;
 
   constructor(app: App, host: OrdersHost) {
     super(app);
-    this.host = host;
+    this.panel = new OrdersPanel(this.contentEl, host, () => this.close());
   }
 
   onOpen(): void {
     this.modalEl.classList.add('bt-orders-modal');
     this.titleEl.textContent = "Today's orders";
-    void this.load(false);
+    this.panel.start();
   }
 
   onClose(): void {
+    this.panel.stop();
+  }
+}
+
+export const VIEW_TYPE_ORDERS = 'backtest-orders';
+
+/** Today's orders in a pane that stays open: it shows each scan the status bar or the orders window makes. */
+export class OrdersView extends ItemView {
+  private host: OrdersHost;
+  private panel: OrdersPanel | null = null;
+
+  constructor(leaf: WorkspaceLeaf, host: OrdersHost) {
+    super(leaf);
+    this.host = host;
+    this.navigation = false;
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE_ORDERS;
+  }
+
+  getDisplayText(): string {
+    return "Today's orders";
+  }
+
+  getIcon(): string {
+    return 'list-checks';
+  }
+
+  async onOpen(): Promise<void> {
+    this.contentEl.classList.add('bt-orders-pane');
+    this.panel = new OrdersPanel(this.contentEl, this.host, null);
+    this.panel.start();
+  }
+
+  async onClose(): Promise<void> {
+    this.panel?.stop();
+    this.panel = null;
+  }
+
+  /** A scan that finished elsewhere. */
+  offer(scan: Scan): void {
+    void this.panel?.offer(scan);
+  }
+}
+
+/** Opens the pane in the right sidebar, or shows it if it is open already. */
+export async function openOrdersPane(app: App): Promise<void> {
+  const { workspace } = app;
+  let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(VIEW_TYPE_ORDERS)[0] ?? null;
+  if (!leaf) {
+    leaf = workspace.getRightLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({ type: VIEW_TYPE_ORDERS, active: true });
+  }
+  await workspace.revealLeaf(leaf);
+}
+
+/** The list of today's orders, drawn into the orders window or the pane. */
+export class OrdersPanel {
+  private el: HTMLElement;
+  private host: OrdersHost;
+  /** Closes the window the list is in; null in the pane, which stays open. */
+  private close: (() => void) | null;
+  /** Counts scans, so the answer to an older one, or one for a closed list, is dropped. */
+  private scans = 0;
+  /** The scan on show, so the same scan offered again is not drawn again. */
+  private shown: Scan | null = null;
+
+  constructor(el: HTMLElement, host: OrdersHost, close: (() => void) | null) {
+    this.el = el;
+    this.host = host;
+    this.close = close;
+  }
+
+  /** Shows the orders: in the pane, those of a recent scan when there is one; else those of a new scan. */
+  start(): void {
+    const recent = this.close === null ? this.host.recent() : null;
+    if (recent) void this.offer(recent);
+    else void this.load(false);
+  }
+
+  stop(): void {
     this.scans++;
-    this.contentEl.replaceChildren();
+    this.shown = null;
+    this.el.replaceChildren();
+  }
+
+  /** Shows a scan that finished, with the accounts worked out from its runs, unless it is on show already. */
+  async offer(scan: Scan): Promise<void> {
+    if (scan === this.shown) return;
+    this.shown = scan;
+    const mine = ++this.scans;
+    try {
+      const accounts = await this.host.accounts();
+      if (mine === this.scans) this.show(scan, sortAccounts(accounts));
+    } catch (e) {
+      if (mine === this.scans) this.failed(e instanceof Error ? e.message : String(e));
+    }
   }
 
   private async load(force: boolean): Promise<void> {
     const mine = ++this.scans;
     const current = () => mine === this.scans;
+    this.shown = null;
     this.progress(0, 0);
+    let scan: Scan;
     try {
-      const list = await this.host.scan(force, (done, total) => {
+      scan = await this.host.scan(force, (done, total) => {
         if (current()) this.progress(done, total);
       });
-      const accounts = await this.host.accounts();
-      if (current()) this.show(sortStatuses(list), sortAccounts(accounts));
     } catch (e) {
       if (current()) this.failed(e instanceof Error ? e.message : String(e));
+      return;
     }
+    if (current()) await this.offer(scan);
   }
 
   private fresh(): HTMLElement {
-    this.contentEl.replaceChildren();
-    return h(this.contentEl, 'div', 'bt-orders');
+    this.el.replaceChildren();
+    return h(this.el, 'div', 'bt-orders');
   }
 
   private progress(done: number, total: number): void {
@@ -104,14 +213,21 @@ export class OrdersModal extends Modal {
     h(root, 'button', 'bt-orders-button', 'Run again').addEventListener('click', () => void this.load(false));
   }
 
-  private show(list: StrategyStatus[], accounts: AccountStatus[]): void {
+  private show(scan: Scan, accounts: AccountStatus[]): void {
+    const list = sortStatuses(scan.statuses);
+    // A pane drawn again keeps its place.
+    const top = this.el.scrollTop;
     const root = this.fresh();
     if (list.length === 0) {
-      h(root, 'p', 'bt-orders-empty', 'The vault has no strategy blocks. Add one with the command "Insert strategy block".');
+      h(root, 'p', 'bt-orders-empty', 'The vault has no strategy blocks.');
+      h(root, 'button', 'bt-orders-button', 'New strategy note').addEventListener('click', () => {
+        this.close?.();
+        this.host.newNote();
+      });
       return;
     }
     const todo = todoRows(list);
-    this.header(root, list, accounts);
+    this.header(root, list, accounts, scan.at);
     this.todo(root, todo);
     this.accounts(root, accounts);
     const watching = this.watch(root, list);
@@ -133,13 +249,15 @@ export class OrdersModal extends Modal {
         reveal(box, open);
       });
     }
+    this.el.scrollTop = top;
   }
 
-  private header(root: HTMLElement, list: StrategyStatus[], accounts: AccountStatus[]): void {
+  private header(root: HTMLElement, list: StrategyStatus[], accounts: AccountStatus[], checked: number): void {
     const basis = basisOf(list);
     const head = h(root, 'div', 'bt-orders-head');
     const asof = h(head, 'div', 'bt-orders-asof', basis === null ? 'The plugin loaded no prices' : basis.text);
     if (basis?.note) h(asof, 'div', 'bt-orders-muted', basis.note);
+    if (this.close === null) h(asof, 'div', 'bt-orders-muted', lastCheckText(checked, this.host.now()));
     const actions = h(head, 'div', 'bt-orders-actions');
     const button = (icon: string, label: string, quiet: boolean) => {
       const b = h(actions, 'button', quiet ? 'bt-orders-button bt-orders-quiet' : 'bt-orders-button');
@@ -149,6 +267,13 @@ export class OrdersModal extends Modal {
     };
     const save = button('file-text', 'Save as note', true);
     save.addEventListener('click', () => void this.save(save, list, accounts));
+    const close = this.close;
+    if (close) {
+      button('panel-right', 'Keep in the sidebar', true).addEventListener('click', () => {
+        this.host.openPane();
+        close();
+      });
+    }
     button('refresh-cw', 'Refresh prices', false).addEventListener('click', () => void this.load(true));
   }
 
@@ -180,13 +305,13 @@ export class OrdersModal extends Modal {
     return section;
   }
 
-  /** The strategy's name, as a link that opens its note. */
-  private link(parent: HTMLElement, s: Pick<StrategyStatus, 'note' | 'strategy'>): void {
+  /** The strategy's name, as a link that opens its note at the block. */
+  private link(parent: HTMLElement, s: Pick<StrategyStatus, 'note' | 'strategy' | 'line'>, lang: 'strategy' | 'account' = 'strategy'): void {
     const link = h(parent, 'button', 'bt-orders-link', s.strategy);
     link.title = `Open ${s.note}`;
     link.addEventListener('click', () => {
-      this.host.openNote(s.note);
-      this.close();
+      this.host.openBlock(s.note, s.strategy, s.line, lang);
+      this.close?.();
     });
   }
 
@@ -230,7 +355,7 @@ export class OrdersModal extends Modal {
     h(section, 'p', 'bt-orders-muted', ACCOUNTS_NOTE);
     for (const a of accounts) {
       const box = h(section, 'div', 'bt-orders-hold');
-      this.link(box, { note: a.note, strategy: a.name });
+      this.link(box, { note: a.note, strategy: a.name, line: a.line }, 'account');
       if (a.error !== null) {
         h(box, 'div', 'bt-orders-muted', `Cannot calculate the orders. ${a.error}`);
         continue;
@@ -353,26 +478,38 @@ export class OrdersModal extends Modal {
       const what = h(item, 'div', 'bt-orders-what');
       const who = h(what, 'div', 'bt-orders-who');
       this.link(who, s);
-      const fix = s.error !== null && first ? (this.host.fix?.(s) ?? null) : null;
       const said = s.error !== null ? shortMessage(s.error).head : text;
-      h(what, 'div', 'bt-orders-muted', fix ? `${said} ${fix.text}` : said);
-      if (!fix) continue;
-      const px = h(item, 'div', 'bt-orders-px');
-      const button = h(px, 'button', 'bt-orders-button', fix.label);
-      button.type = 'button';
-      button.addEventListener('click', () => {
-        button.disabled = true;
-        fix.write().then(
-          () => {
-            button.textContent = 'Changed';
-            void this.load(false);
-          },
-          (e: unknown) => {
-            button.disabled = false;
-            new Notice(`Cannot change the block. ${e instanceof Error ? e.message : String(e)}`);
-          },
-        );
-      });
+      const words = h(what, 'div', 'bt-orders-muted', said);
+      // A run whose prices did not load can wait for a ticker search before its fix is known.
+      const show = (fix: ListFix | null) => {
+        if (!fix) return;
+        if (fix.text) words.textContent = `${fullStop(said)} ${fix.text}`;
+        const { label, write, open } = fix;
+        if (!label || !(write || open)) return;
+        const px = h(item, 'div', 'bt-orders-px');
+        const button = h(px, 'button', 'bt-orders-button', label);
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          if (!write) {
+            open?.();
+            return;
+          }
+          button.disabled = true;
+          write().then(
+            () => {
+              button.textContent = 'Changed';
+              void this.load(false);
+            },
+            (e: unknown) => {
+              button.disabled = false;
+              new Notice(`Cannot change the block. ${e instanceof Error ? e.message : String(e)}`);
+            },
+          );
+        });
+      };
+      const asked = s.error !== null && first ? (this.host.fix?.(s) ?? null) : null;
+      if (asked instanceof Promise) void asked.then(show, () => {});
+      else show(asked);
     }
   }
 }

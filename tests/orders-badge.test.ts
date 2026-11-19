@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { failedStatus, sortStatuses, todoRows, type OrderRow, type StrategyStatus, type WatchRow } from '../src/orders.ts';
-import { badgeView, ordersText, OrdersBadge, START_DELAY_MS, type BadgeElement, type BadgeHost } from '../src/orders-badge.ts';
+import { badgeView, ordersText, OrdersBadge, SharedScan, START_DELAY_MS, type BadgeElement, type BadgeHost } from '../src/orders-badge.ts';
 import { DAY, T0 } from './helpers.ts';
 
 // An HTMLElement is what the plugin passes in.
@@ -642,4 +642,95 @@ test('with no status bar, show changes nothing and sends no notice', () => {
   badge.show([status('A', [['buy', 'X']])]);
   assert.deepEqual(log.notices, []);
   badge.stop();
+});
+
+// ---- one scan at a time, shared by the status bar, the orders window and the pane
+
+/** A scan that finishes when told to, and what each one was asked for and reported. */
+function scans() {
+  const started: boolean[] = [];
+  const ends: { progress(done: number, total: number): void; finish(list: StrategyStatus[]): void; fail(e: Error): void }[] = [];
+  const scan = (force: boolean, onProgress: (done: number, total: number) => void) =>
+    new Promise<StrategyStatus[]>((resolve, reject) => {
+      started.push(force);
+      ends.push({ progress: onProgress, finish: resolve, fail: reject });
+    });
+  return { started, ends, scan };
+}
+
+test('a scan asked for while one runs joins it, with the progress so far and after', async () => {
+  const s = scans();
+  let now = 1000;
+  const shared = new SharedScan(s.scan, () => now);
+  const seen: string[] = [];
+  const first = shared.run(false, (d, t) => void seen.push(`first ${d}/${t}`));
+  s.ends[0].progress(1, 4);
+  const second = shared.run(false, (d, t) => void seen.push(`second ${d}/${t}`));
+  s.ends[0].progress(2, 4);
+  now = 2000;
+  const list = [status('Trend')];
+  s.ends[0].finish(list);
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual(s.started, [false]);
+  assert.equal(a, b);
+  assert.deepEqual(a, { statuses: list, at: 2000 });
+  assert.deepEqual(seen, ['first 1/4', 'second 1/4', 'first 2/4', 'second 2/4']);
+  // Once it has ended, the next one is a new scan.
+  void shared.run(false);
+  assert.deepEqual(s.started, [false, false]);
+});
+
+test('the last scan is offered for a few minutes after it ended, and a failed one is not', async () => {
+  const s = scans();
+  let now = 0;
+  const shared = new SharedScan(s.scan, () => now);
+  assert.equal(shared.recent(60_000), null);
+  const done = shared.run(false);
+  s.ends[0].finish([status('Trend')]);
+  const scan = await done;
+  now = 59_999;
+  assert.equal(shared.recent(60_000), scan);
+  now = 60_000;
+  assert.equal(shared.recent(60_000), null);
+  assert.equal(shared.recent(120_000), scan);
+  const failing = shared.run(false);
+  s.ends[1].fail(new Error('offline'));
+  await assert.rejects(failing, /offline/);
+  assert.equal(shared.recent(120_000), scan);
+});
+
+test('a forced scan waits for the one that runs, then runs once for everyone who asked', async () => {
+  const s = scans();
+  const shared = new SharedScan(s.scan, () => 0);
+  const quiet = shared.run(false);
+  const forced = shared.run(true);
+  const again = shared.run(true);
+  await flush();
+  assert.deepEqual(s.started, [false]);
+  s.ends[0].finish([status('Old')]);
+  assert.deepEqual((await quiet).statuses.map((x) => x.strategy), ['Old']);
+  await flush();
+  assert.deepEqual(s.started, [false, true]);
+  // A scan that is not forced joins the forced one.
+  const plain = shared.run(false);
+  s.ends[1].finish([status('New')]);
+  const [f, g, p] = await Promise.all([forced, again, plain]);
+  assert.ok(f === g && g === p);
+  assert.deepEqual(f.statuses.map((x) => x.strategy), ['New']);
+  assert.deepEqual(s.started, [false, true]);
+});
+
+test('a scan that fails fails for everyone who joined it, and a forced one waiting still runs', async () => {
+  const s = scans();
+  const shared = new SharedScan(s.scan, () => 0);
+  const a = shared.run(false);
+  const b = shared.run(false);
+  const forced = shared.run(true);
+  s.ends[0].fail(new Error('Vault is closed'));
+  await assert.rejects(a, /Vault is closed/);
+  await assert.rejects(b, /Vault is closed/);
+  await flush();
+  assert.deepEqual(s.started, [false, true]);
+  s.ends[1].finish([]);
+  assert.deepEqual((await forced).statuses, []);
 });

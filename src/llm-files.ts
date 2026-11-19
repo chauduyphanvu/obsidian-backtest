@@ -81,8 +81,8 @@ ${CORPUS.filter((e) => e.prompt).map(example).join('\n\n')}
 
 ## Check your work
 
-- Command line: download ${CLI_DOWNLOAD} and run \`node backtest-blocks.mjs check note.md\`. It checks every strategy block in the note, prints each problem with its line and column, and exits with 1 when there is an error. \`node backtest-blocks.mjs run note.md\` backtests a block on live prices.
-- MCP: \`node backtest-blocks.mjs mcp\` serves the tools check_strategy, run_backtest, explain_word and list_words, and this guide as a resource.
+- Command line: download ${CLI_DOWNLOAD} and run \`node backtest-blocks.mjs check note.md\`. It checks every strategy block in the note, prints each problem with its line and column and, under it, the correction when the plugin has one ("Did you mean sma?"), and exits with 1 when there is an error. \`--json\` gives each problem's corrections as edits, and \`check --fix note.md\` writes into the note each correction that is the only one for its problem, then checks it again. \`node backtest-blocks.mjs run note.md\` backtests a block on live prices.
+- MCP: \`node backtest-blocks.mjs mcp\` serves the tools check_strategy, run_backtest, explain_word and list_words, and this guide as a resource. check_strategy gives each problem its corrections, and corrected_source: the block with each correction made that is the only one for its problem. Use it, then decide the choices that are left.
 - Word list: ${RAW}/docs/language.json has every function, setting, value and word with its form, meaning and example.
 - Grammar: ${RAW}/docs/grammar/strategy.lark and ${RAW}/docs/grammar/strategy.gbnf, for generating under a grammar. They take more than the parser does (any name, operators in any order), so check what they produce.
 `;

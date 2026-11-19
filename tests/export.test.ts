@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { runBacktest, type Backtest, type Segment, type Stats, type TradeStats } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
 import type { AssetState, Trade } from '../src/engine.ts';
-import { equityCsv, planProperties, propertyIds, resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
+import { equityCsv, planProperties, propertyIds, resultMarkdown, resultProperties, snapshotMarkdown, tradesCsv } from '../src/export.ts';
 import { bars, DAY, T0 } from './helpers.ts';
 import { money } from '../src/format.ts';
 
@@ -232,6 +232,15 @@ test('snapshot: front matter, a text fence, figures, positions and trades, newes
   const md = snapshotMarkdown({ name: 'Trend following', source: '\nuniverse: SPY, TLT\nbuy when close > sma(200)\n', backtest: bt, now: NOW });
   assert.equal(md, SNAPSHOT);
   assert.ok(!md.includes('```strategy'));
+});
+
+test('copy as Markdown: the snapshot without its front matter, title and date, starting at the dates of the run', () => {
+  const bt = result({ states: [state('SPY', true), state('TLT', false, { pending: 'buy' })] });
+  const md = resultMarkdown({ source: '\nuniverse: SPY, TLT\nbuy when close > sma(200)\n', backtest: bt });
+  const body = SNAPSHOT.slice(SNAPSHOT.indexOf('The run is from'));
+  assert.equal(md, body);
+  assert.ok(md.startsWith('The run is from 2020-01-01 to 2020-01-03.'));
+  assert.ok(!md.includes('tags: [backtest/snapshot]') && !md.includes('# Trend following') && !md.includes('Snapshot made on'));
 });
 
 test('snapshot: a strategy with a commission says what it paid, and one built in entries says so in its positions and trades', () => {

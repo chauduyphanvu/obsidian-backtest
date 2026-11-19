@@ -62,7 +62,7 @@ test('check_strategy says a good block has no problems and lists a bad one\'s wi
   assert.equal(textOf(good), 'The block has no problems.');
   assert.deepEqual(good.structuredContent, { blocks: 1, errors: 0, warnings: 0, problems: [] });
   const bad = await client.callTool({ name: 'check_strategy', arguments: { source: '```strategy\nuniverse: SPY\nfrom: 01/31/2015\nbuy when true\n```' } });
-  assert.equal(textOf(bad), 'strategy:3:7: error: "01/31/2015" is not a date. Write it as 2015-01-31');
+  assert.equal(textOf(bad), 'strategy:3:7: error: "01/31/2015" is not a date in the form YYYY-MM-DD. For example, write 2015-01-31.');
   assert.equal((bad.structuredContent as { errors: number }).errors, 1);
 });
 
@@ -120,6 +120,46 @@ test('run_backtest names a problem at its line in the note, as check_strategy do
   assert.equal(ran.isError, true);
   const line = checked.match(/^strategy:\d+:\d+: error: .*$/m)![0];
   assert.ok(textOf(ran).includes(line), `${textOf(ran)}\n--- should hold ---\n${line}`);
+});
+
+test('check_strategy gives each problem its corrections, and the source with each correction that is the only one made', async () => {
+  const source = 'universe: SPY\nrebalance: montly\nbuy when close > smaa(200)\nsell when close < sam(200)';
+  const r = await client.callTool({ name: 'check_strategy', arguments: { source } });
+  const s = r.structuredContent as { errors: number; problems: { line: number; suggestion?: string; fixes: unknown[] }[]; corrected_source?: string };
+  assert.equal(s.errors, 3);
+  assert.deepEqual(s.problems.map((p) => [p.line, p.suggestion, p.fixes.length]), [
+    [2, 'Did you mean monthly?', 1],
+    [3, 'Did you mean sma, the simple average of the last n closes?', 1],
+    [4, 'Possible corrections: sma, sum.', 2],
+  ]);
+  assert.deepEqual(s.problems[0].fixes, [{ label: 'Change to monthly', line: 2, from: 12, to: 18, insert: 'monthly' }]);
+  // A choice between two is left for the model to make.
+  assert.equal(s.corrected_source, 'universe: SPY\nrebalance: monthly\nbuy when close > sma(200)\nsell when close < sam(200)');
+  const t = textOf(r);
+  assert.match(t, /^strategy:2:12: error: rebalance must be one of: .+\n {2}Did you mean monthly\?\n/);
+  assert.ok(t.endsWith(`The source with each correction that is the only one for its problem:\n${s.corrected_source}`));
+  // In a note, the note comes back with the corrections made in its blocks.
+  const note = '# Note\n\n```strategy\nuniverse: SPY\nbuy when close > smaa(200)\n```\n';
+  const inNote = await client.callTool({ name: 'check_strategy', arguments: { source: note } });
+  assert.equal((inNote.structuredContent as { corrected_source?: string }).corrected_source, note.replace('smaa', 'sma'));
+  // Nothing to correct: no corrected source.
+  const tie = await client.callTool({ name: 'check_strategy', arguments: { source: 'universe: SPY\nbuy when close > sam(200)' } });
+  assert.ok(!('corrected_source' in (tie.structuredContent as object)));
+});
+
+test('explain_word takes a window with its number, and maps crossover to crosses with a note', async () => {
+  assert.match(textOf(await client.callTool({ name: 'explain_word', arguments: { word: 'for 3 bars' } })), /^condition for n bars\n/);
+  assert.match(textOf(await client.callTool({ name: 'explain_word', arguments: { word: 'crossover' } })), /^"crossover" is not a word of the language\. .+\n\na crosses b\n/);
+});
+
+test('run_backtest names the vault_path argument when it cannot find a CSV file', async () => {
+  const source = 'universe: csv:Data/missing.csv\nbuy when close > sma(30)\nsell when close < sma(30)';
+  const given = await client.callTool({ name: 'run_backtest', arguments: { source, vault_path: vault } });
+  assert.equal(given.isError, true);
+  assert.match(textOf(given), /There is no file at Data\/missing\.csv/);
+  assert.ok(textOf(given).endsWith(`The server reads CSV files from the vault_path folder, ${vault}. Make sure that it is the vault folder, and that the path of the file starts from it.`));
+  const none = await client.callTool({ name: 'run_backtest', arguments: { source } });
+  assert.match(textOf(none), /because the vault_path argument is not given\. Give the vault folder in vault_path/);
 });
 
 test('check_strategy on a block in a plain fence says how to fence it', async () => {

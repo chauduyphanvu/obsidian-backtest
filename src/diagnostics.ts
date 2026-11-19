@@ -1,7 +1,9 @@
+import type { PriceFailure } from './data.ts';
 import { parseSpec, type Defaults, type Diagnostic } from './dsl.ts';
-import { fixFor, tickerFix, type Fix } from './fixes.ts';
+import { fixesFor, tickerFix, tickerSpellings, type Fix } from './fixes.ts';
 import { lineKind, tokenizeBlock, type Token } from './highlight.ts';
-import { blockTickers, unknownTickerMessage, type SymbolLookup, type TickerRef } from './symbols.ts';
+import { blockTickers, isLookupSource, unknownTickerMessage, type SymbolLookup, type TickerRef } from './symbols.ts';
+import type { Source } from './types.ts';
 
 export interface BlockDiagnostic {
   /** 0-based line within the block. */
@@ -70,18 +72,74 @@ export function unknownTickers(refs: TickerRef[], lookup: KnownTickers): BlockDi
 }
 
 /**
- * The one-click correction for a problem in a block, or null. A parser error is corrected as `fixFor`
- * does; an unknown ticker by the nearest ticker of the same source that the lookup knows to exist,
- * the block's own tickers first and then what searching for it found.
+ * The one-click corrections for a problem in a block, none when it has none. A parser error is corrected as `fixesFor`
+ * does; an unknown ticker by the nearest ticker of the same source that the lookup knows to exist, the block's own tickers
+ * first and then what searching for it found.
  */
-export function fixForDiagnostic(lines: string[], d: BlockDiagnostic, defaults: Partial<Defaults>, lookup: KnownTickers | null): Fix | null {
-  if (d.origin && d.severity === 'error') return fixFor(lines, d.origin, defaults);
-  if (!d.ticker || !lookup) return null;
+export function fixesForDiagnostic(lines: string[], d: BlockDiagnostic, defaults: Partial<Defaults>, lookup: KnownTickers | null): Fix[] {
+  if (d.origin && d.severity === 'error') return fixesFor(lines, d.origin, defaults);
+  if (!d.ticker || !lookup) return [];
   const t = d.ticker;
   const at = { line: d.line + 1, from: d.from, to: d.to };
   const own = blockTickers(lines, defaults)
     .filter((r) => r.source === t.source && r.ticker !== t.ticker && lookup.peek(r.ticker, r.source) === 'known')
     .map((r) => r.ticker);
   const found = (lookup.peekSearch(t.ticker, t.source) ?? []).filter((h) => h.source === t.source).map((h) => h.ticker);
-  return tickerFix(lines, at, own, defaults) ?? tickerFix(lines, at, found, defaults);
+  const fix = tickerFix(lines, at, own, defaults) ?? tickerFix(lines, at, found, defaults);
+  return fix ? [fix] : [];
+}
+
+/** The correction for a problem in a block when there is exactly one (see `fixesForDiagnostic`), or null. */
+export function fixForDiagnostic(lines: string[], d: BlockDiagnostic, defaults: Partial<Defaults>, lookup: KnownTickers | null): Fix | null {
+  const found = fixesForDiagnostic(lines, d, defaults, lookup);
+  return found.length === 1 ? found[0] : null;
+}
+
+/** What a run that failed on its prices offers to put it right (data.ts PriceFailure). */
+export interface RunStep {
+  /** A sentence after the run's own message; empty when that message says what to do. */
+  text: string;
+  /** The button: a correction written into the block, the plugin's settings, or the CSV helper; null for a sentence alone. */
+  action: { kind: 'change'; label: string; fix: Fix } | { kind: 'settings' | 'csv'; label: string } | null;
+}
+
+/** Where to find the right name of a ticker that a source does not know. */
+const LOOK_UP: Partial<Record<Source, string>> = {
+  yahoo: 'To find the ticker, search for the name on finance.yahoo.com.',
+  binance: 'To find the symbol, search for the coin on binance.com. A symbol has the two currencies together, for example BTCUSDT.',
+  tiingo: 'To find the ticker, search for the name on tiingo.com.',
+  fred: 'To find the series ID, search for the series on fred.stlouisfed.org.',
+};
+
+/**
+ * The step a run that failed for `failure` offers. A ticker its source does not know changes to the nearest of the
+ * block's other tickers and its usual spellings (tickerSpellings), else of what the ticker lookup finds for it. `lookup`
+ * is there only while the setting "Find tickers while you type" is on, as a search is a request. With no correction that
+ * stands out, the sentence says where to look the ticker up. A key opens the settings, a missing CSV file the CSV helper.
+ */
+export async function runStep(lines: string[], failure: PriceFailure, defaults: Partial<Defaults>, lookup: Pick<SymbolLookup, 'search'> | null): Promise<RunStep> {
+  switch (failure.kind) {
+    case 'key':
+      return { text: '', action: { kind: 'settings', label: 'Open settings' } };
+    case 'csv':
+      return { text: 'The CSV helper lists the CSV files of the vault and shows how the plugin reads each one.', action: { kind: 'csv', label: 'Use a CSV file' } };
+    case 'offline':
+      return { text: 'The plugin must have a connection to the internet to load the prices of a ticker the first time. After that, it can use the saved prices.', action: null };
+  }
+  const { source } = failure;
+  const ticker = failure.ref.toUpperCase();
+  const written = blockTickers(lines, defaults).filter((r) => r.source === source);
+  const at = written.find((r) => r.ticker === ticker);
+  if (at && isLookupSource(source)) {
+    const where = { line: at.line + 1, from: at.from, to: at.to };
+    const own = written.filter((r) => r.ticker !== ticker).map((r) => r.ticker);
+    let fix = tickerFix(lines, where, [...own, ...tickerSpellings(ticker, source)], defaults);
+    if (!fix && lookup) {
+      const found = (await lookup.search(ticker, source)).filter((hit) => hit.source === source).map((hit) => hit.ticker);
+      fix = tickerFix(lines, where, found, defaults);
+    }
+    if (fix) return { text: `Did you mean ${fix.insert}?`, action: { kind: 'change', label: fix.label, fix } };
+  }
+  const setting = !lookup && isLookupSource(source) ? ' Or turn on the setting "Find tickers while you type". Then the editor shows tickers while you write them.' : '';
+  return { text: `${LOOK_UP[source] ?? ''}${setting}`, action: null };
 }

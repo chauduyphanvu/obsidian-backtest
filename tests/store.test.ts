@@ -207,6 +207,14 @@ test('a file\'s key is read once: later renames by a prefix read only files not 
   assert.deepEqual(JSON.parse(s.map.get(path('H.md\u0000name:z'))!).value, [3]);
 });
 
+test('the keys with a prefix are those of the files and of the records not yet written, each once', async () => {
+  const s = setup({ [path('N.md\u0000name:a')]: file('N.md\u0000name:a', [1]), [path('M.md\u0000name:b')]: file('M.md\u0000name:b', [2]), 'plugin/ledger/broken.json': 'not json' });
+  await s.store.update('N.md\u0000name:c', () => [3]);
+  await s.store.update('N.md\u0000name:a', (v) => [...(v ?? []), 4]);
+  assert.deepEqual((await s.store.listKeys('N.md\u0000name:')).sort(), ['N.md\u0000name:a', 'N.md\u0000name:c']);
+  assert.deepEqual(await s.store.listKeys('O.md\u0000'), []);
+});
+
 test('a change whose write failed is still a change: the next flush writes it', async () => {
   const s = setup();
   const write = s.io.write;

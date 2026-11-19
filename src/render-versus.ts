@@ -2,9 +2,9 @@
 // benchmark's on a line of its own, as two dots on one scale, with how far apart they are.
 
 import type { Backtest } from './backtest.ts';
-import { h, s } from './dom.ts';
+import { h, reveal, revealBox, s } from './dom.ts';
 import { pct, signedPct } from './format.ts';
-import { figures, moreFigures, verdict, type Figure, type Judge } from './verdict.ts';
+import { FIGURE_HELP, figures, moreFigures, verdict, type Figure, type Judge } from './verdict.ts';
 
 /** The opening sentence, drawn again for each run shown. */
 export function verdictView(parent: HTMLElement): { show(bt: Backtest, opts?: { arrive?: boolean }): void; wait(): void } {
@@ -90,14 +90,34 @@ function moved(f: Figure, was: Figure | undefined): { text: string; better: bool
   return { text, better: f.direction ? d * f.direction > 0 : null };
 }
 
-function row(parent: HTMLElement, f: Figure, arrive: boolean, was?: Figure): HTMLElement {
+/** For ids that are unique across every result on the page. */
+let helps = 0;
+
+/**
+ * A figure's row. Its name is a button that opens what the figure means under the row, and closes it again; `opened`
+ * holds the names whose meaning is open, so a row drawn again for another run keeps it.
+ */
+function row(parent: HTMLElement, f: Figure, arrive: boolean, opened: Set<string>, was?: Figure): HTMLElement {
   const r = h(parent, 'div', 'bt-vs-row');
   const link = LINKS[f.label];
   if (link) {
     r.classList.add('bt-vs-linked');
     r.setAttribute('data-bt-hl', link);
   }
-  h(r, 'span', 'bt-vs-label', f.label);
+  const name = h(r, 'button', 'bt-vs-label', f.label);
+  name.type = 'button';
+  const { box, inner } = revealBox(parent, 'bt-vs-help', opened.has(f.label));
+  box.id = `bt-vs-help-${++helps}`;
+  h(inner, 'p', 'bt-vs-help-text', FIGURE_HELP[f.label]);
+  name.setAttribute('aria-controls', box.id);
+  name.setAttribute('aria-expanded', String(opened.has(f.label)));
+  name.addEventListener('click', () => {
+    const open = !opened.has(f.label);
+    if (open) opened.add(f.label);
+    else opened.delete(f.label);
+    name.setAttribute('aria-expanded', String(open));
+    reveal(box, open);
+  });
   value(r, 'bt-vs-s', f.sText, f.sNote);
   const track = dumbbell(r, f.s, f.b);
   track.classList.add('bt-vs-track');
@@ -138,6 +158,7 @@ export function versusView(
   let more = o.more ?? false;
   let shown: Backtest | null = null;
   let from: Backtest | null = null;
+  const opened = new Set<string>();
   const draw = (arrive: boolean) => {
     const bt = shown!;
     box.replaceChildren();
@@ -165,14 +186,14 @@ export function versusView(
       tally.append(said.join(' \u00b7 '));
     }
     for (const f of list) {
-      const r = row(box, f, arrive, before.find((x) => x.label === f.label));
+      const r = row(box, f, arrive, opened, before.find((x) => x.label === f.label));
       const part = r.getAttribute('data-bt-hl');
       if (part && o.link) {
         r.addEventListener('pointerenter', () => o.link!(part));
         r.addEventListener('pointerleave', () => o.link!(null));
       }
     }
-    if (more) for (const f of moreFigures(bt)) row(box, f, false);
+    if (more) for (const f of moreFigures(bt)) row(box, f, false, opened);
     const foot = h(box, 'div', 'bt-vs-foot');
     h(foot, 'span', 'bt-vs-trades', tradesLine(bt));
     const toggle = h(foot, 'button', 'bt-chip-button bt-vs-toggle', more ? 'Fewer figures' : `All figures \u00b7 ${MORE_FIGURES} more`);

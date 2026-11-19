@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { actionWord, barLabel, basisOf, CLOSE_FILL_NOTE, failedStatus, LAST_CLOSE_NOTE, mapLimit, notOurNoteMessage, orderSize, ordersMarkdown, ordersSavePlan, positionOrder, problemsOf, scanOrders, sortStatuses, statusFrom, todoGroups, todoRows, WATCH_NOTE, watchClose, watchList, watchRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
+import { PriceError } from '../src/data.ts';
+import { actionWord, barLabel, basisOf, CLOSE_FILL_NOTE, failedStatus, LAST_CLOSE_NOTE, lastCheckText, mapLimit, notOurNoteMessage, orderSize, ordersMarkdown, ordersSavePlan, positionOrder, pricesEnd, pricesOld, problemsOf, scanOrders, sortStatuses, statusFrom, todoGroups, todoRows, WATCH_NOTE, watchClose, watchList, watchRows, type OrderRow, type StrategyStatus } from '../src/orders.ts';
 import { computeTriggers, triggerRun, type Trigger, type TriggerReport } from '../src/trigger.ts';
 import type { AssetState } from '../src/engine.ts';
 import type { RunOutput } from '../src/runner.ts';
@@ -446,6 +447,38 @@ test('intraday prices are stale when the last bar is more than 3 bars old, whate
   assert.equal(statusFrom('n.md', 'S', fiveMinutes, last5 + 15 * 60_000 + 1).stale, true);
 });
 
+test('pricesOld is the rule of the orders, so a result and the orders never disagree about old prices', () => {
+  const daily = run('universe: A\nbuy when close > 11', { A: bars([10, 10, 12]) });
+  const weekly = run('universe: A\ninterval: 1w\nbuy when close > 11', { A: bars([10, 10, 12], { start: Date.UTC(2019, 11, 23), step: 7 * DAY }) });
+  const intraday = hourly(5);
+  const cases: [RunOutput, number[]][] = [
+    [daily, [local(2020, 1, 4), local(2020, 1, 7, 23, 59), local(2020, 1, 8, 0, 0), local(2020, 2, 1)]],
+    [weekly, [Date.UTC(2020, 0, 6) + 14 * DAY, Date.UTC(2020, 0, 6) + 14 * DAY + 1]],
+    [intraday, [LAST_BAR + 3 * HOUR, LAST_BAR + 3 * HOUR + 1, LAST_BAR + 4 * DAY]],
+  ];
+  for (const [out, times] of cases) {
+    for (const now of times) {
+      const status = statusFrom('n.md', 'S', out, now);
+      assert.deepEqual(pricesOld(out, now), { old: status.stale, asOf: status.asOf });
+    }
+  }
+  assert.deepEqual(pricesOld(daily, local(2020, 1, 8, 0, 0)), { old: true, asOf: Date.UTC(2020, 0, 3) });
+  // Over a weekend and a holiday daily prices are not old yet: four calendar days.
+  assert.equal(pricesOld(daily, local(2020, 1, 7, 12)).old, false);
+  assert.equal(pricesEnd({ asOf: Date.UTC(2020, 0, 3) }), 'Prices end on 2020-01-03');
+  assert.equal(pricesEnd({ asOf: LAST_BAR, intraday: true }), 'Prices end at 2026-11-13 14:00 UTC');
+});
+
+test('prices of bars shorter than a day end at a time, also from a file of minute bars with no interval line', () => {
+  const minutes = run('universe: csv:Data/a.csv\ncapital: 1000\nbuy when close > 11', { a: bars([10, 10, 12], { start: HOURLY_START, step: 60_000 }) });
+  assert.equal(minutes.spec.interval, '1d');
+  const s = statusFrom('n.md', 'S', minutes, HOURLY_START + 30 * DAY);
+  assert.equal(s.intraday, true);
+  assert.deepEqual(problemsOf(s), ['Prices end at 2026-11-13 10:02 UTC. Thus this result is possibly out of date.']);
+  assert.equal(statusFrom('n.md', 'S', hourly(5), LAST_BAR).intraday, true);
+  assert.equal(statusFrom('n.md', 'S', run('universe: A\nbuy when true', { A: bars([10, 10, 12]) }), NOW).intraday, undefined);
+});
+
 test('a daily strategy keeps the calendar-day rule', () => {
   const out = run('universe: A\nbuy when close > 11', { A: bars([10, 10, 12]) });
   assert.equal(statusFrom('n.md', 'S', out, local(2020, 1, 7, 23, 59)).stale, false);
@@ -465,7 +498,7 @@ test('the bar an order rests on is named with its date, and its time of day when
 });
 
 test('an intraday strategy\'s stale warning names the time', () => {
-  const s = status('a.md', 'A', [], { interval: '1h', asOf: Date.UTC(2026, 10, 13, 14), stale: true });
+  const s = status('a.md', 'A', [], { interval: '1h', intraday: true, asOf: Date.UTC(2026, 10, 13, 14), stale: true });
   assert.deepEqual(problemsOf(s), ['Prices end at 2026-11-13 14:00 UTC. Thus this result is possibly out of date.']);
   assert.deepEqual(problemsOf(status('a.md', 'A', [], { stale: true, asOf: Date.UTC(2026, 10, 13) })), ['Prices end on 2026-11-13. Thus this result is possibly out of date.']);
 });
@@ -682,6 +715,51 @@ test('a scan gives each strategy the trigger prices of its result, and lists it 
   assert.deepEqual(asked, ['good', 'good']);
   assert.equal(list[0].watch!.length, 1);
   assert.deepEqual([list[1].error, 'watch' in list[1]], [null, false]);
+});
+
+test('a scan keeps the line of each block, for a strategy that ran and for one that did not', async () => {
+  const good = run('universe: A\ncapital: 1000\nbuy when true', { A: bars([10, 11, 12]) });
+  const list = await scanOrders(
+    {
+      clear: () => {},
+      find: async () => [
+        { note: 'a.md', name: 'A', source: 'good', line: 3 },
+        { note: 'a.md', name: 'B', source: 'bad', line: 9 },
+        { note: 'b.md', name: 'C', source: 'good' },
+      ],
+      run: async (source) => (source === 'good' ? good : Promise.reject(new Error('Line 1: no'))),
+    },
+    false,
+    () => {},
+  );
+  assert.deepEqual(list.map((s) => [s.strategy, s.error === null, s.line]), [['A', true, 3], ['B', false, 9], ['C', true, undefined]]);
+});
+
+test('a scan keeps why the prices of a strategy did not load, so the list can offer the next step', async () => {
+  const list = await scanOrders(
+    {
+      clear: () => {},
+      find: async () => [
+        { note: 'a.md', name: 'A', source: 'universe: BRK.B' },
+        { note: 'b.md', name: 'B', source: 'bad' },
+      ],
+      run: async (source) =>
+        Promise.reject(source === 'bad' ? new Error('Line 1: no') : new PriceError('Yahoo has no prices for BRK.B. Make sure that the ticker is correct.', { kind: 'ticker', ref: 'BRK.B', source: 'yahoo' })),
+    },
+    false,
+    () => {},
+  );
+  assert.deepEqual(list[0].failure, { kind: 'ticker', ref: 'BRK.B', source: 'yahoo' });
+  assert.equal(list[0].error, 'Yahoo has no prices for BRK.B. Make sure that the ticker is correct.');
+  assert.equal(list[0].source, 'universe: BRK.B');
+  assert.ok(!('failure' in list[1]));
+  assert.deepEqual(failedStatus('c.md', 'C', 'There is no file at x.csv', 'src', { kind: 'csv', path: 'x.csv' }).failure, { kind: 'csv', path: 'x.csv' });
+});
+
+test('the pane says when it last checked, in local time, with the date when that was not today', () => {
+  assert.equal(lastCheckText(local(2026, 11, 19, 14, 5), local(2026, 11, 19, 18, 0)), 'Last check: 14:05');
+  assert.equal(lastCheckText(local(2026, 11, 19, 9, 0), local(2026, 11, 19, 9, 0)), 'Last check: 09:00');
+  assert.equal(lastCheckText(local(2026, 11, 18, 23, 59), local(2026, 11, 19, 0, 10)), 'Last check: 2026-11-18 23:59');
 });
 
 test('the Markdown lists the closes to watch after the orders, nearest first', () => {
