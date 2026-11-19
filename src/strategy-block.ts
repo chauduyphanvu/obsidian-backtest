@@ -9,7 +9,7 @@ import { isIntraday } from './format.ts';
 import { forwardLink, type ForwardStart } from './forward.ts';
 import { trialOf, versionFigures, type Ledgers } from './ledger.ts';
 import { LimitError } from './limits.ts';
-import { renderActions } from './render-actions.ts';
+import type { Action, MenuItems } from './render-actions.ts';
 import { renderDebug } from './render-debug.ts';
 import { renderLuck, renderTriesNote } from './render-luck.ts';
 import { renderPriceCharts } from './render-price.ts';
@@ -66,6 +66,10 @@ export interface BlocksHost {
   ledgers?: Ledgers;
   /** Writes a forward test note for the strategy and opens it, or says why it could not. */
   startForward(input: ForwardStart): Promise<void>;
+  /** Writes the results of the note at `notePath` to its properties now. */
+  saveProperties(notePath: string): Promise<void>;
+  /** Opens a menu of `items` under the element `at`. */
+  showMenu(at: HTMLElement, items: MenuItems): void;
 }
 
 /** The strategy blocks on screen. A block is known by the object its drawings are tied to (Obsidian's render child). */
@@ -192,30 +196,42 @@ export class StrategyBlocks {
           (root) => renderLuck(root, tryValues),
           // Versions: after the luck checks.
           ...(ledger ? [(root: HTMLElement) => renderVersions(root, { ledger, source, defaults: drawing.defaults, restore: opts.restore })] : []),
-          (root) =>
-            renderActions(root, [
-              { label: 'Save trades as CSV', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
-              { label: 'Save value history as CSV', run: () => this.host.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
-              { label: 'Keep this result as a note', run: () => this.host.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
-              // Only a block in a note: the test links back to it, and the preview panel is not the strategy's home.
-              ...(opts.panel || !opts.notePath
-                ? []
-                : [
-                    {
-                      label: 'Start a forward test',
-                      run: () =>
-                        this.host.startForward({
-                          source: shownSource,
-                          defaults: drawing.defaults,
-                          started: bt.run.t[bt.run.t.length - 1],
-                          intraday,
-                          link: forwardLink(opts.notePath, shown.spec.name),
-                          name,
-                        }),
-                    },
-                  ]),
-            ]),
         ];
+      };
+      // A forward test starts only from a block in a note: the test links back to it, and the preview panel is not its home.
+      const forward = (shown: RunOutput): Action | null =>
+        opts.panel || !opts.notePath
+          ? null
+          : {
+              label: 'Start a forward test',
+              icon: 'arrow-right',
+              run: () =>
+                this.host.startForward({
+                  source: setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value]))),
+                  defaults: drawing.defaults,
+                  started: shown.backtest.run.t[shown.backtest.run.t.length - 1],
+                  intraday: isIntraday(shown.backtest.run.t),
+                  link: forwardLink(opts.notePath, shown.spec.name),
+                  name: shown.spec.name ?? 'Backtest',
+                }),
+            };
+      // The menu of the run on screen: the saves, then the forward test and the note's properties.
+      const menu = (at: HTMLElement, shown: RunOutput): void => {
+        const bt = shown.backtest;
+        const intraday = isIntraday(bt.run.t);
+        const name = shown.spec.name ?? 'Backtest';
+        // A kept note carries the values that made its result.
+        const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
+        const next = forward(shown);
+        const items: MenuItems = [
+          { label: 'Save trades as CSV', icon: 'table', run: () => this.host.saveFile(`${name} trades`, 'csv', tradesCsv(bt.run.trades, intraday)) },
+          { label: 'Save value history as CSV', icon: 'activity', run: () => this.host.saveFile(`${name} value`, 'csv', equityCsv(bt.run.t, bt.run.equity, bt.benchmark.equity, bt.benchmark.label, intraday)) },
+          { label: 'Keep this result as a note', icon: 'bookmark', run: () => this.host.saveFile(`${name} result`, 'md', snapshotMarkdown({ name, source: shownSource, backtest: bt, now: Date.now() })) },
+          ...(next || (!opts.panel && opts.notePath) ? [null] : []),
+          ...(next ? [next] : []),
+          ...(!opts.panel && opts.notePath ? [{ label: "Save this note's results to its properties", icon: 'save', run: () => this.host.saveProperties(opts.notePath) }] : []),
+        ];
+        this.host.showMenu(at, items);
       };
       const asDrawn = drawing.sliders(out);
       // Every result a slider shows is a try.
@@ -253,6 +269,8 @@ export class StrategyBlocks {
           params: spec.params.length > 0 ? { ...sliders, apply } : undefined,
           figuresNote: ledger ? (note, now) => renderTriesNote(note, ledger, now.backtest) : undefined,
           triggers: (shown) => this.host.results.triggers(shown, runs),
+          menu,
+          nextStep: forward,
           initial,
           arrive,
           onHeight: stateKey === undefined ? undefined : (height, folded) => this.heights.set(stateKey, { height, folded }),

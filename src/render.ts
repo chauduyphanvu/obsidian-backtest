@@ -8,16 +8,17 @@ import { DAY, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from '.
 import { commentStart, declaredParams, settingKey } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, timingPhrase } from './orders.ts';
+import { renderNextStep, type Action } from './render-actions.ts';
 import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderValueChart, sparkline } from './render-chart.ts';
-import { renderNow, watchText } from './render-now.ts';
+import { statusView, watchText, type Holding } from './render-now.ts';
 import { renderMonths, renderYears } from './render-stats.ts';
 import { renderTrades } from './render-trades.ts';
 import { verdictView, versusView } from './render-versus.ts';
 import { sectionsIn, tabify, tabName } from './tabs.ts';
 import type { RunOutput } from './runner.ts';
 import type { Source } from './types.ts';
-import type { TriggerReport } from './trigger.ts';
+import { watchable, type TriggerReport } from './trigger.ts';
 
 /** The strategy as written: the block replaces its own text, so the result has to show it. */
 function source(el: HTMLElement, text: string): void {
@@ -158,6 +159,11 @@ function stopParams(source: string): Set<string> {
  * when the line spells that stop out; `source` is the block's text, which says which parameters those are.
  */
 export function summary(spec: Spec, source = ''): string {
+  return summaryParts(spec, source).join(', ');
+}
+
+/** The parts of the summary, the tickers first. */
+function summaryParts(spec: Spec, source: string): string[] {
   const names = spec.universe.map((a) => a.name);
   const parts = [
     spec.rank
@@ -184,7 +190,15 @@ export function summary(spec: Spec, source = ''): string {
   const asStops = spelt ? stopParams(source) : new Set<string>();
   const listed = spec.params.filter((p) => !asStops.has(p.name.toLowerCase()));
   if (listed.length) parts.push(listed.map((p) => `${p.name} ${formatParam(p, p.value)}`).join(', '));
-  return parts.join(', ');
+  return parts;
+}
+
+/** The line under a result's title: the tickers, the dates of the run, and the rest of the summary. */
+export function metaLine(out: RunOutput, source: string): string {
+  const [tickers, ...rest] = summaryParts(out.spec, source);
+  const t = out.backtest.run.t;
+  const intraday = isIntraday(t);
+  return [tickers, t.length ? `${stamp(t[0], intraday)} to ${stamp(t[t.length - 1], intraday)}` : '', rest.join(', ')].filter(Boolean).join(' \u00b7 ');
 }
 
 /** A commission as the summary names it: "commission 1 an order", "commission 0.005 a share, minimum 1, maximum 1% of the order". */
@@ -222,6 +236,10 @@ export interface ResultView {
   initial?: ViewState;
   /** A new result, not one drawn again: its lines draw in once. */
   arrive?: boolean;
+  /** The step the card closes with for the run on screen, such as starting a forward test; null for none. */
+  nextStep?: (out: RunOutput) => Action | null;
+  /** Opens the menu of what can be done with the run on screen (saves, a forward test) under `at`, the ⋯ button. */
+  menu?: (at: HTMLElement, out: RunOutput) => void;
   /** Told the card's height once it has settled, so the block can wait in that height next time it loads. */
   onHeight?: (height: number, folded: boolean) => void;
 }
@@ -331,6 +349,27 @@ export function compactFacts(out: RunOutput): CompactFacts {
   };
 }
 
+/**
+ * What the left of the status line says: "Long SPY" with "since 2026-04-09 · +8.6%" for one ticker held, "Holds 2 of 3"
+ * for several, "In cash".
+ */
+export function holdingFacts(out: RunOutput): Holding {
+  const { run } = out.backtest;
+  const intraday = isIntraday(run.t);
+  const held = run.states.filter((st) => st.side !== null);
+  if (held.length === 0) return { held: null, text: 'In cash', more: null };
+  if (held.length > 1) return { held: 'several', text: compactFacts(out).holding, more: null };
+  const one = held[0];
+  const steps = out.spec.entries ?? 1;
+  const open = run.trades.find((t) => t.asset === one.name && t.reason === 'open');
+  const more = [one.since != null ? `since ${stamp(one.since, intraday)}` : '', open ? signedPct(open.ret) : ''].filter(Boolean).join(' \u00b7 ');
+  return {
+    held: one.side === 'short' ? 'short' : 'long',
+    text: `${one.side === 'short' ? 'Short' : 'Long'} ${one.name}${steps > 1 ? `, ${one.entries} of ${steps} entries` : ''}`,
+    more: more || null,
+  };
+}
+
 /** Everything worth a reader's attention that is not an error: price warnings, the run's own notes, the parser's warnings. */
 function notesOf(view: ResultView, out: RunOutput): string[] {
   const { spec, warnings, backtest: bt } = out;
@@ -393,13 +432,12 @@ function finePrint(root: HTMLElement, out: RunOutput): void {
  * The parts of a result that are heavy to draw or rarely needed: what it holds and what the next close could do, the
  * sections as tabs, and the fine print. Returns what to run when they are drawn again or go away.
  */
-function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], triggers: Promise<TriggerReport | null> | null): (() => void)[] {
+function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], next: Action | null): (() => void)[] {
   const { backtest: bt } = out;
   const { run } = bt;
   const intraday = isIntraday(run.t);
   const stops: (() => void)[] = [];
   segments(root, bt);
-  renderNow(root, { bt, intraday, holding: compactFacts(out).holding, triggers });
   const host = h(root, 'div', 'bt-sections');
   stops.push(renderTrades(host, bt, intraday));
   const periods = { t: run.t, strategy: run.equity, benchmark: bt.benchmark.equity, benchmarkLabel: bt.benchmark.label };
@@ -409,6 +447,7 @@ function fillRest(root: HTMLElement, out: RunOutput, sections: Section[], trigge
     if (stop) stops.push(stop);
   }
   tabify(host);
+  if (next) renderNextStep(root, { title: 'Run it forward', text: 'Copy these rules to a new note, and count only prices after today.', action: next });
   finePrint(root, out);
   return stops;
 }
@@ -425,38 +464,49 @@ function refreshIcon(parent: HTMLElement): void {
   s(svg, 'path', { d: 'M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
 }
 
+function moreIcon(parent: HTMLElement): void {
+  const svg = s(parent, 'svg', { width: 16, height: 16, viewBox: '0 0 16 16', 'aria-hidden': 'true' });
+  for (const cx of [3.5, 8, 12.5]) s(svg, 'circle', { cx, cy: 8, r: 1.3, fill: 'currentColor' });
+}
+
 /**
- * The block's text, its settings folded away behind a button: the line under the title says them in words. Settings
- * after a `for` line are the ticker's own and stay in view.
+ * The block's text in a tinted well: the rules stay in view, and the settings fold away behind a chip ("4 settings") at the
+ * well's right, since the line under the title says them in words. Settings after a `for` line are the ticker's own and
+ * stay in view, and so does a setting the parser has a note about (`flagged`, 1-based lines of the block).
  */
-function sourcePanel(parent: HTMLElement, text: string): void {
+function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = new Set()): HTMLElement | null {
   const src = text.trim();
-  if (!src) return;
+  if (!src) return null;
+  // Lines the trim took off the top, so the parser's line numbers still point at the right lines.
+  const skipped = text.slice(0, text.length - text.trimStart().length).split('\n').length - 1;
   const box = h(parent, 'div', 'bt-src');
   const pre = h(box, 'pre', 'bt-source');
   const lines = colourLines(pre, src);
   let inFor = false;
   let afterSetting = false;
-  const fold = src.split('\n').map((line) => {
+  const fold = src.split('\n').map((line, i) => {
     if (/^\s*for\s+.+:\s*(#.*|\/\/.*)?$/i.test(line)) inFor = true;
-    const setting = !inFor && settingKey(line) !== null;
+    const setting = !inFor && settingKey(line) !== null && !flagged.has(i + 1 + skipped);
     const gap = !line.trim() && afterSetting;
     if (line.trim()) afterSetting = setting;
-    return setting || gap;
+    return { setting, gap };
   });
+  const folded = fold.filter((f) => f.setting || f.gap).length;
   // Nothing to fold, or nothing that would stay in view, such as a ranking written as settings alone: show it all.
-  const folded = fold.filter(Boolean).length;
-  if (folded === 0 || folded === lines.length) return;
-  fold.forEach((f, i) => f && lines[i].classList.add('bt-src-setting'));
-  const toggle = h(box, 'button', 'bt-link-button bt-src-toggle', 'Show all of the block');
+  if (folded === 0 || folded === lines.length) return box;
+  fold.forEach((f, i) => (f.setting || f.gap) && lines[i].classList.add('bt-src-setting'));
+  const count = fold.filter((f) => f.setting).length;
+  const closed = count === 1 ? '1 setting' : `${count} settings`;
+  const toggle = h(box, 'button', 'bt-chip-button bt-src-toggle', closed);
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', 'false');
   toggle.addEventListener('click', () => {
     const all = !box.classList.contains('bt-src-all');
     box.classList.toggle('bt-src-all', all);
-    toggle.textContent = all ? 'Hide the settings' : 'Show all of the block';
+    toggle.textContent = all ? 'Hide the settings' : closed;
     toggle.setAttribute('aria-expanded', String(all));
   });
+  return box;
 }
 
 /**
@@ -479,18 +529,24 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   const text = h(fold, 'span', 'bt-fold-text');
   const titleRow = h(text, 'span', 'bt-title-row');
   h(titleRow, 'span', 'bt-title', first.spec.name ?? 'Backtest');
-  const held = h(titleRow, 'span', 'bt-chip bt-chip-held');
-  h(held, 'span', 'bt-chip-dot');
-  const heldText = h(held, 'span');
-  const order = h(titleRow, 'span', 'bt-chip bt-fold-order');
-  const watch = h(titleRow, 'span', 'bt-chip bt-chip-watch');
-  watch.hidden = true;
+  const meta = h(text, 'span', 'bt-meta');
   const line = h(text, 'span', 'bt-fold-facts');
-  const refresh = h(head, 'button', 'bt-icon-button bt-refresh');
+  const tools = h(head, 'div', 'bt-head-tools');
+  const refresh = h(tools, 'button', 'bt-icon-button bt-refresh');
   refresh.type = 'button';
   refresh.setAttribute('aria-label', 'Refresh prices');
   refreshIcon(refresh);
   refresh.addEventListener('click', view.onRefresh);
+  // The run on screen: the saves in the menu save it, whether it is the block as written or a slider's.
+  let onScreen = first;
+  if (view.menu) {
+    const more = h(tools, 'button', 'bt-icon-button bt-more');
+    more.type = 'button';
+    more.setAttribute('aria-label', 'More actions');
+    more.setAttribute('aria-haspopup', 'menu');
+    moreIcon(more);
+    more.addEventListener('click', () => view.menu!(more, onScreen));
+  }
   const body = h(root, 'div', 'bt-body');
 
   // The top line follows the run on screen: what it holds, what is due, and how near the next order is once that is known.
@@ -498,17 +554,20 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   const showHead = (out: RunOutput): Promise<TriggerReport | null> | null => {
     const bt = out.backtest;
     onHead = bt;
+    onScreen = out;
     const facts = compactFacts(out);
-    heldText.textContent = facts.holding;
-    held.classList.toggle('bt-chip-cash', !bt.run.states.some((st) => st.side !== null));
-    order.textContent = facts.order ?? '';
-    order.hidden = !facts.order;
+    meta.textContent = metaLine(out, view.source);
     line.replaceChildren();
     sparkline(line, bt);
     for (const fact of [...(facts.tickers ? [facts.tickers] : []), ...facts.figures]) h(line, 'span', 'bt-fold-fact', fact);
+    const held = h(line, 'span', `bt-fold-held${bt.run.states.some((st) => st.side !== null) ? '' : ' bt-chip-cash'}`);
+    h(held, 'span', 'bt-chip-dot');
+    held.append(facts.holding);
+    if (facts.order) h(line, 'span', 'bt-chip bt-fold-order', facts.order);
+    const watch = h(line, 'span', 'bt-chip bt-chip-watch');
+    watch.hidden = true;
     const noteCount = notesOf(view, out).length;
     if (noteCount > 0) h(line, 'span', 'bt-fold-mark', noteCount === 1 ? '1 note' : `${noteCount} notes`);
-    watch.hidden = true;
     const asked = view.triggers?.(out) ?? null;
     asked?.then(
       (report) => {
@@ -526,8 +585,17 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   const firstTriggers = showHead(first);
 
   const build = () => {
-    const sub = h(body, 'div', 'bt-sub', summary(first.spec, view.source));
-    sourcePanel(body, view.source);
+    const status = statusView(body);
+    const showStatus = (out: RunOutput, triggers: Promise<TriggerReport | null> | null) =>
+      status.show({
+        out,
+        holding: holdingFacts(out),
+        due: compactFacts(out).order,
+        triggers,
+        intraday: isIntraday(out.backtest.run.t),
+        ended: watchable(out.spec) ? null : stamp(out.backtest.run.t[out.backtest.run.t.length - 1], isIntraday(out.backtest.run.t)),
+      });
+    sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)));
 
     // The bar is made once, before the result it drives, and is never redrawn.
     let show = (_out: RunOutput, _settled: boolean): void => {};
@@ -545,7 +613,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     current = () => ({ tab: tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null), span: chart.span(), more: figs.more() });
 
     const paint = (out: RunOutput) => {
-      sub.textContent = summary(out.spec, view.source);
+      meta.textContent = metaLine(out, view.source);
       said.show(out.backtest);
       figs.show(out.backtest);
       chart.show(out.backtest);
@@ -561,6 +629,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       notes.replaceChildren();
       for (const text of notesOf(view, out)) h(notes, 'div', 'bt-warning', text);
       paint(out);
+      showStatus(out, triggers);
       stopRest();
       figuresNote.replaceChildren();
       const watching = view.figuresNote?.(figuresNote, out);
@@ -568,7 +637,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       const open = tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null);
       rest.replaceChildren();
       rest.classList.remove('bt-stale');
-      stops = [...fillRest(rest, out, view.sections?.(out) ?? [], triggers), ...(watching ? [watching] : [])];
+      stops = [...fillRest(rest, out, view.sections?.(out) ?? [], view.nextStep?.(out) ?? null), ...(watching ? [watching] : [])];
       const again = sectionsIn(rest.querySelector('.bt-sections')).find((d) => tabName(d) === open);
       if (again) again.open = true;
     };
@@ -593,7 +662,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     root.classList.toggle('bt-folded', !open);
     fold.setAttribute('aria-expanded', String(open));
     fold.title = open ? 'Show this result as one line' : 'Open this result';
-    body.hidden = refresh.hidden = !open;
+    body.hidden = !open;
     if (open && !built) {
       built = true;
       build();

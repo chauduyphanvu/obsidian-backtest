@@ -686,9 +686,9 @@ const VERB: Record<Exclude<TriggerSide, 'rearm' | 'rearmShort'>, string> = { buy
  * next to the band that gives no order, so a close at it gives none and the next one in gives the order. A series of
  * values is not shown in steps, so it shows the edges as found.
  */
-function where(b: Band, last: number, values?: true): string {
-  const lo = b.lo === null ? null : priced(values ? b.lo : below(b.lo), last, values);
-  const hi = b.hi === null ? null : priced(values ? b.hi : above(b.hi), last, values);
+function where(b: Band, last: number, values?: true, write: PriceWriter = priced): string {
+  const lo = b.lo === null ? null : write(values ? b.lo : below(b.lo), last, values);
+  const hi = b.hi === null ? null : write(values ? b.hi : above(b.hi), last, values);
   if (lo !== null && hi !== null) return `between ${lo} and ${hi}`;
   return lo !== null ? `above ${lo}` : `below ${hi}`;
 }
@@ -699,17 +699,23 @@ function where(b: Band, last: number, values?: true): string {
  * `who` closes: "it" for the ticker itself, or the driver's name. For a series of values it is the driver's next value
  * that is above or below: "if T10Y2Y's next value is above 0.10 (+0.04)".
  */
-export function condition(t: Pick<Trigger, 'fires' | 'last' | 'values'>, who: string): string | null {
+export function condition(t: Pick<Trigger, 'fires' | 'last' | 'values'>, who: string, write: PriceWriter = priced): string | null {
   if (t.fires.length === 0) return null;
   const closes = t.values ? `${who}'s next value is` : `${who} closes`;
-  if (t.fires.length > 1) return `if ${closes} ${t.fires.map((b) => where(b, t.last, t.values)).join(' or ')}`;
+  if (t.fires.length > 1) return `if ${closes} ${t.fires.map((b) => where(b, t.last, t.values, write)).join(' or ')}`;
   const [b] = t.fires;
   if (b.lo === null && b.hi === null) return t.values ? `at all next values of ${who}` : 'at all prices of the next close';
   // Here the price shown is the last in the band, which still gives the order.
-  if (b.hi === null && b.lo! <= t.last) return `unless ${closes} below ${priced(t.values ? b.lo! : atOrAbove(b.lo!), t.last, t.values)}`;
-  if (b.lo === null && b.hi! >= t.last) return `unless ${closes} above ${priced(t.values ? b.hi! : atOrBelow(b.hi!), t.last, t.values)}`;
-  return `if ${closes} ${where(b, t.last, t.values)}`;
+  if (b.hi === null && b.lo! <= t.last) return `unless ${closes} below ${write(t.values ? b.lo! : atOrAbove(b.lo!), t.last, t.values)}`;
+  if (b.lo === null && b.hi! >= t.last) return `unless ${closes} above ${write(t.values ? b.hi! : atOrBelow(b.hi!), t.last, t.values)}`;
+  return `if ${closes} ${where(b, t.last, t.values, write)}`;
 }
+
+/** How a price is written in a condition: with its distance from the last close (the default), or alone. */
+type PriceWriter = (x: number, from: number, values?: true) => string;
+
+/** A price alone, as the status line of a result writes it beside the distance it shows on its own. */
+export const priceAlone: PriceWriter = (x, _from, values) => shownPrice(x, values);
 
 /**
  * Each edge of the bands where the rule fires, with the price the sentence names for it (condition), so a drawing of the
@@ -791,7 +797,7 @@ function warmupText(ts: Trigger[]): string[] {
 const listed = (xs: string[]) => (xs.length === 1 ? xs[0] : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 /** When a ranking decides next, after "next" or "again": "at the next close", "at the close of 2026-11-30". */
-function decisionPhrase(report: TriggerReport): string | null {
+export function decisionPhrase(report: TriggerReport): string | null {
   if (report.decision === null) return null;
   return report.decision === report.next ? 'at the next close' : `at the close of ${stamp(report.decision, report.intraday)}`;
 }

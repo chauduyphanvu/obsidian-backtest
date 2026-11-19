@@ -1,5 +1,5 @@
 import type { EditorView } from '@codemirror/view';
-import { MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
+import { MarkdownRenderChild, MarkdownView, Menu, Notice, Platform, Plugin, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { runAccount } from './account.ts';
 import { compareCurves, parseCompare, type CompareHost } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
@@ -98,6 +98,19 @@ export default class BacktestBlocks extends Plugin {
       if (file instanceof TFile) this.properties.scheduleProperties(file);
     },
     startForward: (input) => this.startForward(input),
+    saveProperties: async (notePath) => {
+      const file = this.app.vault.getAbstractFileByPath(notePath);
+      if (file instanceof TFile) await this.properties.saveProperties(file, true);
+    },
+    showMenu: (at, items) => {
+      const menu = new Menu();
+      for (const item of items) {
+        if (!item) menu.addSeparator();
+        else menu.addItem((m) => m.setTitle(item.label).setIcon(item.icon).onClick(() => void item.run()));
+      }
+      const box = at.getBoundingClientRect();
+      menu.showAtPosition({ x: box.right, y: box.bottom + 4, left: true }, at.ownerDocument);
+    },
   });
   /** The scan of the vault for today's orders, with each result's trigger prices worked out before its runs close. */
   private orders: ScanHost = {

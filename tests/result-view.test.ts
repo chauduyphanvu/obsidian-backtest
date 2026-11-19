@@ -6,12 +6,12 @@ import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { timeTicks } from '../src/format.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { ruler, watchText } from '../src/render-now.ts';
+import { awayText, nextOrder, watchText } from '../src/render-now.ts';
 import { renderRegimes } from '../src/render-regimes.ts';
 import { renderResult, type ResultView } from '../src/render.ts';
 import type { AssetRef } from '../src/types.ts';
 import type { RunOutput } from '../src/runner.ts';
-import { tickerText, type Trigger, type TriggerReport } from '../src/trigger.ts';
+import { condition, priceAlone, type Trigger, type TriggerReport } from '../src/trigger.ts';
 import { bars, DAY } from './helpers.ts';
 
 const START = Date.UTC(2019, 0, 1);
@@ -38,7 +38,7 @@ function draw(out: RunOutput, more: Partial<ResultView> = {}): El {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const texts = (els: El[]) => els.map((e) => e.textContent);
 
-test('the block’s settings are folded away behind a button, its rules and a ticker’s own settings stay in view', () => {
+test('the block’s settings fold away behind a chip that counts them, its rules and a ticker’s own settings stay in view', () => {
   const source = 'name: Trend\nuniverse: A\ncosts: 5 bps\n\nn = 20 in 10..40\nbuy when close > sma(n)\nsell when close < sma(n)\n\nfor A:\n  stop loss: 5%';
   const root = draw(run(TREND), { source });
   const lines = root.byClass('bt-src-line');
@@ -47,10 +47,15 @@ test('the block’s settings are folded away behind a button, its rules and a ti
   assert.ok(lines.some((l) => l.textContent === '  stop loss: 5%' && !l.classes().includes('bt-src-setting')));
   const box = root.byClass('bt-src')[0];
   const toggle = root.byClass('bt-src-toggle')[0];
-  assert.equal(toggle.textContent, 'Show all of the block');
+  assert.equal(toggle.textContent, '3 settings');
   toggle.dispatch('click');
   assert.ok(box.classes().includes('bt-src-all'));
   assert.equal(toggle.attrs['aria-expanded'], 'true');
+  assert.equal(toggle.textContent, 'Hide the settings');
+  // A setting the parser has a note about stays in view.
+  const noted = draw(run(TREND), { source, notes: [{ line: 3, message: 'A note' }] });
+  assert.deepEqual(noted.byClass('bt-src-line').filter((l) => l.classes().includes('bt-src-setting')).map((l) => l.textContent), ['name: Trend', 'universe: A']);
+  assert.equal(noted.byClass('bt-src-toggle')[0].textContent, '2 settings');
   // A block of rules alone has nothing to fold, and a block of settings alone, such as a ranking, shows them all.
   assert.equal(draw(run(TREND), { source: 'buy when close > sma(20)' }).byClass('bt-src-toggle').length, 0);
   const settingsOnly = draw(run(TREND), { source: 'universe: A, B, C\nhold: top 1 by roc(20)\nrebalance: monthly' });
@@ -94,7 +99,7 @@ test('the tab open when a slider is let go stays open on the new run', async () 
   slider.valueAsNumber = 30;
   slider.dispatch('change');
   await settle();
-  assert.match(root.byClass('bt-sub')[0].textContent, /n 30/);
+  assert.match(root.byClass('bt-meta')[0].textContent, /n 30/);
   const open = root.byClass('bt-sections')[0].children.filter((c): c is El => typeof c !== 'string' && c.tag === 'details' && c.open);
   assert.deepEqual(open.map((d) => d.attrs['data-bt-tab']), ['Years']);
   // The page tells a section it was opened a moment later; the tab follows.
@@ -176,17 +181,27 @@ test('folded, the line has the growth, the figures and what is held; the chip sa
   const facts = root.byClass('bt-fold-facts')[0];
   assert.equal(facts.byClass('bt-spark').length, 1);
   assert.deepEqual(texts(facts.byClass('bt-fold-fact')).map((f) => f.replace(/[−+\d.]+%/g, 'X')), ['X a year', 'worst drawdown X']);
-  assert.match(root.byClass('bt-chip-held')[0].textContent, /^(Long A since \d{4}-\d\d-\d\d|In cash)$/);
+  assert.match(root.byClass('bt-fold-held')[0].textContent, /^(Long A since \d{4}-\d\d-\d\d|In cash)$/);
   const chip = root.byClass('bt-chip-watch')[0];
   assert.equal(chip.hidden, true);
   await settle();
   assert.equal(chip.hidden, false);
   assert.equal(chip.textContent, '0.30% from a sell');
-  // Opened, the next close is said in the trigger's own words, with its scale.
+  // Opened, the status line says the position, the order and how far the close is from it, in amber as it is near.
   root.byClass('bt-fold')[0].dispatch('click');
   await settle();
-  assert.equal(root.byClass('bt-now-say')[0].textContent, tickerText(report, 'A').text);
-  assert.equal(root.byClass('bt-ruler').length, 1);
+  const status = root.byClass('bt-status')[0];
+  assert.match(root.byClass('bt-status-held')[0].textContent, /^(Long A|In cash)$/);
+  assert.equal(root.byClass('bt-status-order')[0].textContent, `Sells ${condition(near, 'it', priceAlone)}`);
+  assert.equal(root.byClass('bt-status-away')[0].textContent, '0.30% away');
+  assert.ok(status.classes().includes('bt-near'));
+  // The ring breathes only within 0.5%.
+  assert.ok(root.byClass('bt-status-dot')[0].classes().includes('bt-breathe'));
+  // It opens on the last closes against the price, and the rule in words.
+  status.dispatch('click');
+  assert.equal(status.attrs['aria-expanded'], 'true');
+  assert.equal(root.byClass('bt-next-chart').length, 1);
+  assert.match(root.byClass('bt-status-say')[0].textContent, /^The last close was 100\.00\. The value of sma\(20\) is now [\d.]+\. Sells if it closes below 99\.\d\d, at the open after that close\.$/);
 });
 
 const SPY: Trigger = { ticker: 'SPY', side: 'sell', driver: 'SPY', last: 732.44, range: { lo: 700, hi: 765 }, fires: [{ lo: null, hi: 730.0221579985773 }], ownLast: 732.44, exact: true, assumptions: [] };
@@ -201,29 +216,34 @@ test('the chip names the nearest order within 2% of the last close, or one given
   assert.equal(watchText(report({ ...SPY, fires: [{ lo: null, hi: 650 }] }), 1), null);
 });
 
-test('the scale of the next close: the closes that sell shaded, the edge named as the sentence names it, the last close', () => {
-  const box = new El('div');
-  ruler(box as unknown as HTMLElement, SPY);
-  const zone = box.byClass('bt-ruler-zone')[0];
-  assert.equal(zone.style.left, '0.00%');
-  assert.equal(zone.style.width, `${(((730.0221579985773 - 700) / 65) * 100).toFixed(2)}%`);
-  const price = box.byClass('bt-ruler-price')[0];
-  assert.equal(price.textContent, '730.03');
-  assert.ok(price.classes().includes('bt-ruler-after'));
-  assert.ok(tickerText(report(SPY), 'SPY').text.includes('below 730.03'));
-  assert.equal(box.byClass('bt-ruler-zone-label')[0].textContent, 'sells here');
-  assert.equal(box.byClass('bt-ruler-last')[0].textContent, 'last close 732.44');
-  assert.equal(box.byClass('bt-ruler-dot')[0].style.left, `${(((732.44 - 700) / 65) * 100).toFixed(2)}%`);
-  // A flip's two orders at the same closes share one scale.
-  const flip = new El('div');
-  ruler(flip as unknown as HTMLElement, SPY, [{ ...SPY, side: 'short' }]);
-  assert.equal(flip.byClass('bt-ruler-zone-label')[0].textContent, 'sells and shorts here');
-  // A rule that gives no order anywhere in the closes searched, or waits on an order, gets no scale.
-  const none = new El('div');
-  ruler(none as unknown as HTMLElement, { ...SPY, fires: [] });
-  ruler(none as unknown as HTMLElement, { ...SPY, blocked: 'pending' });
-  assert.equal(none.children.length, 0);
-  assert.equal(WIDTH, 600);
+test('the status line names the nearest order with its price alone, and how far the close is from it', () => {
+  const one = run(TREND);
+  const several = { ...one, backtest: { ...one.backtest, run: { ...one.backtest.run, states: [one.backtest.run.states[0], { ...one.backtest.run.states[0], name: 'B' }] } } };
+  const order = nextOrder(report(SPY), one, null);
+  assert.equal(order.text, 'Sells if it closes below 730.03');
+  assert.equal(order.away, '0.33% away');
+  assert.ok(order.near && order.close && !order.due);
+  // Far away, it still says the order, in a calm colour.
+  const far = nextOrder(report({ ...SPY, fires: [{ lo: null, hi: 650 }] }), one, null);
+  assert.equal(far.away, '11% away');
+  assert.ok(!far.near && !far.close);
+  // With several tickers it names the ticker; another ticker's close names that ticker.
+  assert.equal(nextOrder(report(SPY), several, null).text, 'SPY: sells if it closes below 730.03');
+  assert.equal(nextOrder(report({ ...SPY, ticker: 'QQQ' }), one, null).text, 'Sells if SPY closes below 730.03');
+  // An order already waiting comes first; a ranking and a rule still warming up say why there is nothing to watch.
+  assert.deepEqual([nextOrder(report(SPY), one, 'sells A at the next open').text, nextOrder(report(SPY), one, 'sells A at the next open').due], ['Sells A at the next open', true]);
+  assert.equal(nextOrder({ ...report({ ...SPY, blocked: 'ranking' }), decision: 0 }, one, null).text, 'The ranking selects again at the next close');
+  assert.equal(nextOrder(report({ ...SPY, blocked: 'warmup', warmup: null }), one, null).text, 'No order is possible at the next close');
+  assert.equal(nextOrder(report({ ...SPY, fires: [] }), one, null).text, 'No order is near the last close');
+});
+
+test('a distance has two decimals below 1%, so a near order never reads as 0.0%', () => {
+  assert.equal(awayText(0.0000958), '0.01% away');
+  assert.equal(awayText(-0.0033), '0.33% away');
+  assert.equal(awayText(0.012), '1.2% away');
+  assert.equal(awayText(0.14), '14% away');
+  assert.equal(awayText(0.04, true), '0.04 away');
+  assert.equal(awayText(NaN), null);
 });
 
 test('a run of 200,000 bars folds to its line, and its 50,000 trades draw on the Trades tab', () => {
@@ -307,10 +327,10 @@ test('“More figures” keeps the keyboard on it when it opens and closes the r
   assert.equal(page.activeElement, button());
 });
 
-test('a run with a `to` date says what it held at its end, not what the next close would do', () => {
+test('a run with a `to` date says what it held at its end, not what the next close would do', async () => {
   const root = draw(run(TREND.replace('costs: 5 bps', 'costs: 5 bps\nto: 2021-06-30')));
-  assert.equal(root.byClass('bt-now-title')[0].textContent, 'At the end of the run');
-  assert.equal(draw(run(TREND)).byClass('bt-now-title')[0].textContent, 'At the next close');
+  await settle();
+  assert.equal(root.byClass('bt-status-order')[0].textContent, 'The run ends on 2021-06-30');
 });
 
 test('five years in a narrow chart still name more than one year, and a wide chart is as before', () => {

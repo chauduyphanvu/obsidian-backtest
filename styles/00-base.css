@@ -217,7 +217,7 @@ body {
 /* Their aria-labels are for screen readers. Obsidian would show each as a tooltip over the content, and over an svg its
    tooltip code throws; this variable is what it checks first. */
 .bt-svg,
-.bt-ruler,
+.bt-status,
 .bt-tabs-main,
 .bt-tabs-more,
 .bt-range,

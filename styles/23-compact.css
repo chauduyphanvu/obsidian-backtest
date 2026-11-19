@@ -89,6 +89,12 @@
 .bt-fold-order {
   color: var(--text-normal);
 }
+.bt-fold-held {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
 .bt-fold-mark {
   padding: 0 7px;
   border: 1px solid var(--bt-warning);
