@@ -67,18 +67,24 @@ export class El {
   set textContent(text: string | null) {
     this.children = text === null ? [] : [text];
   }
+  // As on the page, a node put somewhere leaves the place it was in.
   appendChild(child: El): El {
+    child.remove();
     child.parent = this;
     this.children.push(child);
     return child;
   }
   append(...nodes: (El | string)[]): void {
     for (const n of nodes) {
-      if (typeof n !== 'string') n.parent = this;
+      if (typeof n !== 'string') {
+        n.remove();
+        n.parent = this;
+      }
       this.children.push(n);
     }
   }
   prepend(node: El): void {
+    node.remove();
     node.parent = this;
     this.children.unshift(node);
   }

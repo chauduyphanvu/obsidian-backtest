@@ -2,10 +2,9 @@
    benchmark's, the value chart, the next close, the sections as tabs, and the fine print. Colours come from the theme;
    the strategy is blue and its benchmark orange in every part of it. */
 
-.bt-root.bt-result {
-  container: bt-result / inline-size;
-  padding: 16px 20px 18px;
-  border-radius: 12px;
+/* The result's colours, shared with the dashboard, whose sparklines shade the same gaps. */
+.bt-root.bt-result,
+.bt-root.bt-dash {
   --bt-loss: #e34948;
   --bt-ahead: color-mix(in srgb, var(--bt-strategy) 14%, transparent);
   --bt-behind: color-mix(in srgb, var(--bt-benchmark) 13%, transparent);
@@ -14,7 +13,13 @@
   --bt-warn-bg: color-mix(in srgb, var(--bt-warning) 20%, transparent);
   --bt-join: color-mix(in srgb, var(--text-normal) 22%, transparent);
 }
-.theme-dark .bt-root.bt-result {
+.bt-root.bt-result {
+  container: bt-result / inline-size;
+  padding: 16px 20px 18px;
+  border-radius: 12px;
+}
+.theme-dark .bt-root.bt-result,
+.theme-dark .bt-root.bt-dash {
   --bt-loss: #e66767;
   --bt-ahead: color-mix(in srgb, var(--bt-strategy) 22%, transparent);
   --bt-behind: color-mix(in srgb, var(--bt-benchmark) 20%, transparent);

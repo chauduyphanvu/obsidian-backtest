@@ -1,43 +1,50 @@
-/* The `backtests` block: every strategy in one table. */
+/* The `backtests` block: every strategy in one table of six columns that fit a note. The line above the table says how
+   many, the last bar of their prices and when the figures were worked out. */
 
+.bt-dash-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.bt-dash-head .bt-title {
+  margin-right: auto;
+}
+.bt-dash-summary {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
 .bt-dash-wide {
-  container-type: inline-size;
+  container: bt-dash / inline-size;
   margin-top: 8px;
 }
 .bt-root table.bt-dash-table {
-  --bt-dash-first: 11em;
+  width: 100%;
   margin: 0;
-}
-@container (max-width: 480px) {
-  .bt-root table.bt-dash-table {
-    --bt-dash-first: 9em;
-  }
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
 }
 .bt-root .bt-dash-table th,
 .bt-root .bt-dash-table td {
-  padding: 4px 6px;
-  vertical-align: top;
-}
-.bt-root .bt-dash-table th {
-  vertical-align: bottom;
-}
-/* Words are never broken inside a cell; Obsidian's own table rules outrank a bare class, so the cells are named in full. */
-.bt-root .bt-dash-table th,
-.bt-root .bt-dash-table td {
+  padding: 7px 6px;
+  border: none;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: transparent;
+  vertical-align: middle;
   overflow-wrap: normal;
   word-break: normal;
 }
-
-/* The strategy's name stays in view while the rest of a wide table scrolls under it. */
-.bt-root .bt-dash-table .bt-dash-first {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  box-sizing: border-box;
-  width: var(--bt-dash-first);
-  min-width: var(--bt-dash-first);
-  max-width: var(--bt-dash-first);
-  background: var(--background-primary);
+.bt-root .bt-dash-table th {
+  padding-bottom: 6px;
+  vertical-align: bottom;
+  font-weight: var(--font-normal);
+}
+.bt-root .bt-dash-table tbody tr {
+  transition: background var(--bt-t-micro) var(--bt-ease);
+}
+.bt-root .bt-dash-table tbody tr:hover {
+  background: var(--background-modifier-hover);
 }
 
 .bt-dash .bt-dash-sort,
@@ -52,16 +59,20 @@
   cursor: pointer;
 }
 .bt-dash .bt-dash-sort {
+  padding: 3px 4px;
+  border-radius: 5px;
   color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }
 .bt-dash .bt-dash-sort:hover {
-  background: none;
+  background: var(--background-modifier-hover);
   box-shadow: none;
+  color: var(--text-normal);
 }
-.bt-dash .bt-dash-sort:hover,
 .bt-dash th[aria-sort='ascending'] .bt-dash-sort,
 .bt-dash th[aria-sort='descending'] .bt-dash-sort {
   color: var(--text-normal);
+  font-weight: var(--font-semibold);
 }
 .bt-dash th[aria-sort='ascending'] .bt-dash-sort::after {
   content: ' \2191';
@@ -72,7 +83,6 @@
 
 .bt-dash .bt-dash-link {
   display: block;
-  width: 100%;
   color: var(--text-normal);
 }
 .bt-dash .bt-dash-link:hover {
@@ -85,68 +95,170 @@
 }
 .bt-dash-name {
   display: block;
+  font-weight: var(--font-semibold);
   overflow-wrap: anywhere;
-  color: var(--text-accent);
 }
 .bt-dash-link:hover .bt-dash-name {
   color: var(--text-accent-hover);
   text-decoration: underline;
 }
-.bt-dash-notename,
 .bt-dash-sub {
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-}
-.bt-dash-notename {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: var(--font-normal);
   white-space: nowrap;
 }
-.bt-dash-sub {
-  max-width: 10em;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.bt-dash-stale {
+  color: var(--bt-warn-ink);
+}
+.bt-root .bt-dash-table .bt-dash-first {
+  min-width: 9em;
+  text-align: left;
+}
+.bt-root .bt-dash-table .bt-num {
+  text-align: right;
   white-space: nowrap;
 }
-.bt-root .bt-dash-table td.bt-num,
-.bt-root .bt-dash-table td.bt-dash-now,
-.bt-root .bt-dash-table td.bt-dash-next,
-.bt-root .bt-dash-table td.bt-dash-through {
-  white-space: nowrap;
+.bt-dash-value {
+  font-weight: var(--font-semibold);
 }
 .bt-root .bt-dash-table td.bt-num .bt-dash-sub {
+  max-width: 11em;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bt-root .bt-dash-table .bt-dash-spark {
+  width: 68px;
+}
+.bt-dash-spark .bt-spark {
+  display: block;
+}
+.bt-root .bt-dash-table .bt-dash-state {
+  text-align: left;
+  font-size: var(--font-ui-smaller);
+}
+.bt-dash-state .bt-fold-held {
+  display: flex;
+}
+/* The orders due, or the near-order chip, on a line of its own whose height is kept while the chip is on its way. */
+.bt-dash-next {
+  display: flex;
+  flex-direction: column;
+  min-height: 1.4em;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+.bt-root .bt-dash-table .bt-dash-state {
+  min-width: 9em;
+}
+.bt-dash-next.bt-dash-near {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 1px 8px 1px 6px;
+  border-radius: 10px;
+  background: var(--bt-warn-bg, color-mix(in srgb, var(--bt-warn-dot) 18%, transparent));
+  color: var(--bt-warn-ink);
+  font-weight: var(--font-semibold);
+  line-height: 1.3;
+  animation: bt-fade-in var(--bt-t-comp) var(--bt-ease) both;
+}
+.bt-dash-order {
+  color: var(--text-normal);
+  white-space: nowrap;
 }
 .bt-dash-none {
   color: var(--text-muted);
 }
 
-/* A strategy that is still running or could not run takes the rest of its row; the text stays in view beside the name. */
-.bt-dash-msgtext {
-  position: sticky;
-  left: var(--bt-dash-first);
-  box-sizing: border-box;
-  width: max-content;
-  max-width: calc(100cqw - var(--bt-dash-first) - 20px);
-  white-space: normal;
-  /* A path or a ticker with no space in it still wraps inside the visible width. */
-  overflow-wrap: anywhere;
+/* A row still running keeps its place with a shimmer where its figures will be. */
+.bt-dash-sk {
+  display: inline-block;
+  width: 4em;
+  height: 10px;
+  vertical-align: middle;
 }
-.bt-dash-running .bt-dash-msgtext {
-  color: var(--text-muted);
+.bt-dash-spark .bt-dash-sk {
+  width: 68px;
+  height: 22px;
 }
-.bt-dash-failed .bt-dash-msgtext {
-  padding-left: 8px;
-  border-left: 3px solid var(--bt-critical);
+.bt-dash-running .bt-dash-sub {
+  color: var(--text-faint);
 }
 
-.bt-dash-foot {
+/* A strategy that could not run: the tag, the message cut short, and its fix. The cell gives no width to the table, so
+   a long message wraps inside the columns it spans instead of widening the table. */
+.bt-root .bt-dash-table td.bt-dash-msg {
+  max-width: 0;
+}
+.bt-dash-msgtext {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  margin-top: 10px;
+  gap: 6px 10px;
+  white-space: normal;
   color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+.bt-dash-msgtext .bt-button {
+  font-size: var(--font-ui-smaller);
+}
+
+/* In a narrow pane each row is a small grid: the name with the return and the drawdown beside it, and what it holds and
+   what is near under them, as on a folded result. The sparkline and the Sharpe ratio go; under 420 px the drawdown too. */
+@container bt-dash (max-width: 560px) {
+  .bt-root table.bt-dash-table,
+  .bt-root .bt-dash-table thead,
+  .bt-root .bt-dash-table tbody {
+    display: block;
+  }
+  .bt-root .bt-dash-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 8.5em 6em;
+    align-items: center;
+    column-gap: 10px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+  }
+  .bt-root .bt-dash-table th,
+  .bt-root .bt-dash-table td {
+    border-bottom: none;
+  }
+  .bt-root .bt-dash-table .bt-dash-spark,
+  .bt-root .bt-dash-table .bt-dash-sharpe,
+  .bt-root .bt-dash-table th.bt-dash-state {
+    display: none;
+  }
+  .bt-root .bt-dash-table td.bt-dash-state,
+  .bt-root .bt-dash-table td.bt-dash-msg {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+  .bt-root .bt-dash-table td.bt-dash-state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 12px;
+    min-width: 0;
+    padding-top: 0;
+  }
+  .bt-dash-state .bt-dash-next {
+    margin-top: 0;
+  }
+  .bt-root .bt-dash-table .bt-dash-first {
+    min-width: 0;
+  }
+}
+@container bt-dash (max-width: 420px) {
+  .bt-root .bt-dash-table tr {
+    grid-template-columns: minmax(0, 1fr) 8.5em;
+  }
+  .bt-root .bt-dash-table th:nth-child(4),
+  .bt-root .bt-dash-table td:nth-child(4):not(.bt-dash-msg) {
+    display: none;
+  }
 }

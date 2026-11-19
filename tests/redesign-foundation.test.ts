@@ -165,3 +165,57 @@ test('a fix from a list finds its block by its text, and refuses a note with two
   assert.equal(fixBlockInNote(twice, block, fixed), null);
   assert.equal(fixBlockInNote('no blocks', block, fixed), null);
 });
+
+test('the dashboard has six columns, a shimmer for a running row, the near chip filled late, and a fix for a block with a problem', async () => {
+  const { renderDashboard } = await import('../src/render-dashboard.ts');
+  const { El } = await import('./page.ts');
+  const closes = Array.from({ length: 300 }, (_, i) => 100 + i * 0.1 + 3 * Math.sin(i / 7));
+  const good = 'name: Good\nuniverse: A\nbuy when close > sma(20)\nsell when close < sma(20)';
+  const typo = 'name: Typo\nuniverse: A\nbuy when close > smaa(20)';
+  const out = (src: string) => {
+    const { spec } = parseSpec(src);
+    const data = new Map([['A', bars(closes)]]);
+    return { spec: spec!, backtest: runBacktest(spec!, data), data, warnings: [], prices: [] };
+  };
+  let release: (v: ReturnType<typeof out>) => void = () => {};
+  const late = new Promise<ReturnType<typeof out>>((r) => (release = r));
+  let answer: (r: null) => void = () => {};
+  const fixed: string[] = [];
+  const host = {
+    find: async () => [
+      { note: 'a.md', name: 'Good', source: good },
+      { note: 'b.md', name: 'Typo', source: typo },
+      { note: 'c.md', name: 'Slow', source: good },
+    ],
+    run: (source: string) => (source === typo ? Promise.reject(new Error(parseSpec(typo).errors[0].message)) : source === good && fixed.length === 0 && host.calls++ === 1 ? late : Promise.resolve(out(source))),
+    calls: 0,
+    openNote: () => {},
+    now: () => Date.UTC(2026, 10, 18, 22, 41),
+    triggers: () => new Promise<null>((r) => (answer = r)),
+    fix: () => ({ label: 'Change to sma', text: 'Did you mean sma?', write: async () => void fixed.push('done') }),
+  };
+  const root = new El('div');
+  renderDashboard(root as unknown as HTMLElement, '', host);
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(root.all().filter((e) => e.tag === 'th').map((e) => e.textContent), ['Strategy', '', 'Return per year', 'Worst drawdown', 'Sharpe', 'Now and next']);
+  const names = () => root.byClass('bt-dash-name').map((e) => e.textContent);
+  // The one that ran comes first, the problem next, the one still running last with a shimmer in its cells.
+  assert.deepEqual(names(), ['Good', 'Typo', 'Slow']);
+  const rows = root.all().filter((e) => e.tag === 'tr').slice(1);
+  assert.ok(rows[2].classes().includes('bt-dash-running') && rows[2].byClass('bt-dash-sk').length === 5);
+  assert.equal(rows[0].byClass('bt-spark').length, 1);
+  // Old prices are said under the name.
+  assert.match(rows[0].byClass('bt-dash-sub')[0].textContent, /^\d+ trades? · prices end \d{4}-\d\d-\d\d$/);
+  // The near chip's line is there and empty until the trigger prices come; with none, it says so.
+  assert.equal(rows[0].byClass('bt-dash-next')[0].textContent, '');
+  answer(null);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(root.all().filter((e) => e.tag === 'tr')[1].byClass('bt-dash-next')[0].textContent, 'No order near');
+  // The problem row: the message cut short, the sentence and the button.
+  assert.equal(rows[1].byClass('bt-dash-reason')[0].textContent, 'Unknown name "smaa". Did you mean sma?');
+  const button = rows[1].all().find((e) => e.tag === 'button' && e.textContent === 'Change to sma')!;
+  button.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(fixed, ['done']);
+  release(out(good));
+});

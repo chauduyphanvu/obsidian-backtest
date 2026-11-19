@@ -330,6 +330,8 @@ export default class BacktestBlocks extends Plugin {
       run: (source, force) => this.results.runSource(source, { background: true, ...(force ? { freshForMs: Date.now() - started } : {}) }),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       now: () => Date.now(),
+      triggers: (out) => this.results.triggers(out, undefined, true),
+      fix: (row) => this.blockFix(row.note, row.source),
     };
   }
 
@@ -465,17 +467,7 @@ export default class BacktestBlocks extends Plugin {
       accounts: () => scanAccounts(this.accountScan),
       now: () => Date.now(),
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
-      fix: (status) => {
-        const source = status.source;
-        if (source === undefined) return null;
-        const defaults = defaultsFrom(this.settings);
-        const lines = source.split('\n');
-        for (const e of this.results.runner().parse(source).errors) {
-          const offered = suggestion(lines, e, defaults);
-          if (offered) return { label: offered.fix.label, text: offered.text, write: () => this.fixInNote(status.note, source, applyFix(lines, offered.fix).join('\n')) };
-        }
-        return null;
-      },
+      fix: (status) => this.blockFix(status.note, status.source),
       save: async (markdown) => {
         if (!this.settings.ordersNote.trim()) return { kind: 'none' };
         const path = normalizePath(this.settings.ordersNote.trim().replace(/(\.md)?$/i, '.md'));
@@ -487,6 +479,21 @@ export default class BacktestBlocks extends Plugin {
         return { kind: 'saved', path };
       },
     }).open();
+  }
+
+  /**
+   * The fix for the first problem of a block that has one, for a list of every block (today's orders, the dashboard): the
+   * button's words, the sentence that offers it, and what writes it into the note. Null when there is none.
+   */
+  private blockFix(note: string, source: string | undefined): { label: string; text: string; write(): Promise<void> } | null {
+    if (source === undefined) return null;
+    const defaults = defaultsFrom(this.settings);
+    const lines = source.split('\n');
+    for (const e of this.results.runner().parse(source).errors) {
+      const offered = suggestion(lines, e, defaults);
+      if (offered) return { label: offered.fix.label, text: offered.text, write: () => this.fixInNote(note, source, applyFix(lines, offered.fix).join('\n')) };
+    }
+    return null;
   }
 
   /** Writes a fixed block into its note, found by its text, for a list that does not know where the block is. */

@@ -5,7 +5,9 @@ import type { Diagnostic } from './dsl.ts';
 import type { AssetState } from './engine.ts';
 import { isoDate, minus, pct } from './format.ts';
 import { actionWord, barTime, mapLimit, statusFrom, timingPhrase, TIMINGS, type OrderRow } from './orders.ts';
+import { sparkSeries, type SparkSeries } from './render-chart.ts';
 import type { RunOutput } from './runner.ts';
+import type { TriggerReport } from './trigger.ts';
 
 export const SORTS = ['return', 'drawdown', 'sharpe', 'name'] as const;
 export type DashboardSort = (typeof SORTS)[number];
@@ -78,6 +80,8 @@ export interface FailedRow {
   note: string;
   name: string;
   reason: string;
+  /** The block's text, so a problem in it can be fixed from the table. */
+  source?: string;
 }
 
 /** The latest figures of one strategy, as plain values. */
@@ -104,6 +108,10 @@ export interface DoneRow {
   asOf: number;
   /** The prices are probably out of date. */
   stale: boolean;
+  /** The value of the strategy and of its benchmark, cut down to a sparkline's points. */
+  spark: SparkSeries;
+  /** How many tickers it trades, for the near-order chip. */
+  tickers: number;
 }
 
 export type DashRow = PendingRow | FailedRow | DoneRow;
@@ -160,14 +168,15 @@ export function rowFrom(note: string, name: string, out: RunOutput, now: number)
     through: barTime(status, status.asOf),
     asOf: status.asOf,
     stale: status.stale,
+    spark: sparkSeries(bt),
+    tickers: bt.run.states.length,
   };
 }
 
-export function failedRow(note: string, name: string, error: unknown): FailedRow {
-  return { state: 'failed', note, name, reason: error instanceof Error ? error.message : String(error) };
+export function failedRow(note: string, name: string, error: unknown, source?: string): FailedRow {
+  return { state: 'failed', note, name, reason: error instanceof Error ? error.message : String(error), ...(source === undefined ? {} : { source }) };
 }
 
-export const failureText = (row: FailedRow): string => `The strategy did not run. ${row.reason}`;
 
 /** Two decimals, with no "-0.00" for a value too small to show. */
 const ratio = (x: number) => (Number.isFinite(x) ? minus((Math.round(x * 100) / 100 || 0).toFixed(2)) : '–');
@@ -180,7 +189,8 @@ export function figures(row: DoneRow): { cagr: string; benchmark: string; maxDra
 export type SortKey = 'name' | 'return' | 'benchmark' | 'drawdown' | 'sharpe' | 'trades' | 'now' | 'next' | 'through';
 
 export interface Column {
-  key: SortKey;
+  /** The sort it gives, or null for a column that has none (the sparkline). */
+  key: SortKey | null;
   label: string;
   /** Right-aligned figures. */
   num: boolean;
@@ -188,16 +198,22 @@ export interface Column {
   hint?: string;
 }
 
+/**
+ * Six columns that fit a note: the trades go under the name, the benchmark's return under the strategy's, and the date of
+ * the prices into the line above the table.
+ */
 export const COLUMNS: Column[] = [
   { key: 'name', label: 'Strategy', num: false },
-  { key: 'return', label: 'Return per year', num: true },
-  { key: 'benchmark', label: 'Benchmark per year', num: true, hint: "The benchmark's return per year. Its name is below each figure." },
+  { key: null, label: '', num: false },
+  { key: 'return', label: 'Return per year', num: true, hint: "The strategy's return per year, with the benchmark's under it" },
   { key: 'drawdown', label: 'Worst drawdown', num: true },
-  { key: 'sharpe', label: 'Sharpe ratio', num: true },
-  { key: 'trades', label: 'Trades', num: true },
-  { key: 'now', label: 'Now', num: false, hint: 'What the strategy holds after the last bar' },
-  { key: 'next', label: 'Next', num: false, hint: 'Orders for the next open, if a line does not give a different time. A strategy with fill: close made the Bought and Sold orders at the last close' },
-  { key: 'through', label: 'Prices through', num: false, hint: 'The last bar that the figures use' },
+  { key: 'sharpe', label: 'Sharpe', num: true, hint: 'Sharpe ratio' },
+  {
+    key: 'next',
+    label: 'Now and next',
+    num: false,
+    hint: 'What the strategy holds after the last bar, and its orders for the next open, if a line does not give a different time. A strategy with fill: close made the Bought and Sold orders at the last close',
+  },
 ];
 
 export interface SortState {
@@ -262,6 +278,10 @@ export interface DashboardHost {
   run(source: string, force: boolean): Promise<RunOutput>;
   openNote(path: string): void;
   now(): number;
+  /** The trigger prices of a result `run` gave, for the near-order chip; null when there are none. */
+  triggers?(out: RunOutput): Promise<TriggerReport | null> | null;
+  /** The fix for a strategy that did not run for a problem in its block, as in today's orders; null when there is none. */
+  fix?(row: FailedRow): { label: string; text: string; write(): Promise<void> } | null;
 }
 
 /** Strategies run side by side, as in today's orders. */
@@ -270,8 +290,8 @@ export const DASHBOARD_CONCURRENCY = 3;
 export interface Round {
   /** Gives the strategies found, all still running, and how many the vault holds before `folder` takes any out. */
   onList(rows: DashRow[], inVault: number): void;
-  /** One strategy finished, by its place in the list. */
-  onRow(index: number, row: DoneRow | FailedRow): void;
+  /** One strategy finished, by its place in the list, with its run when it ran. */
+  onRow(index: number, row: DoneRow | FailedRow, out?: RunOutput): void;
   /** False once nothing should be drawn or started any more. */
   current(): boolean;
 }
@@ -291,12 +311,14 @@ export async function runRound(host: DashboardHost, config: DashboardConfig, for
   await mapLimit(list, DASHBOARD_CONCURRENCY, async (f, i) => {
     if (!round.current()) return;
     let row: DoneRow | FailedRow;
+    let out: RunOutput | undefined;
     try {
-      row = rowFrom(f.note, f.name, await host.run(f.source, force), host.now());
+      out = await host.run(f.source, force);
+      row = rowFrom(f.note, f.name, out, host.now());
     } catch (e) {
-      row = failedRow(f.note, f.name, e);
+      row = failedRow(f.note, f.name, e, f.source);
     }
-    if (round.current()) round.onRow(i, row);
+    if (round.current()) round.onRow(i, row, out);
   });
 }
 
@@ -308,10 +330,15 @@ function clock(t: number): string {
   return `${isoDate(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
-/** The line under the table: how many strategies, then how far the run has got or when the figures were worked out. */
+/**
+ * The line above the table: how far the run has got, or how many strategies, the last bar of their prices and when the
+ * figures were worked out: "5 strategies · prices through 2026-11-18 · calculated at 2026-11-18 22:41".
+ */
 export function summaryText(rows: DashRow[], finishedAt: number | null): string {
   if (finishedAt === null) return `The plugin runs ${rows.filter((r) => r.state !== 'running').length} of ${rows.length}…`;
-  return `${plural(rows.length)}. The plugin calculated these figures on ${clock(finishedAt)}.`;
+  const done = rows.filter((r): r is DoneRow => r.state === 'done');
+  const latest = done.length ? done.reduce((a, r) => (r.asOf > a.asOf ? r : a)) : null;
+  return [plural(rows.length), ...(latest ? [`prices through ${latest.through}`] : []), `calculated at ${clock(finishedAt)}`].join(' \u00b7 ');
 }
 
 /** The message in place of the table when there is nothing to list. */

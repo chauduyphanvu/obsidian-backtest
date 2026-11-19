@@ -8,7 +8,6 @@ import {
   DASHBOARD_TEMPLATE,
   emptyText,
   failedRow,
-  failureText,
   figures,
   findStrategies,
   inFolder,
@@ -225,7 +224,7 @@ test('a failure keeps its reason, whether it was an Error or text', () => {
     reason: 'Yahoo has no prices for XYZ. Check the ticker.',
   });
   assert.equal(failedRow('n.md', 'S', 'boom').reason, 'boom');
-  assert.equal(failureText(failedRow('n.md', 'S', new Error('Line 3: Unknown name'))), "The strategy did not run. Line 3: Unknown name");
+  assert.equal(failedRow('n.md', 'S', new Error('Line 3: Unknown name')).reason, 'Line 3: Unknown name');
 });
 
 // ---- sorting
@@ -247,6 +246,8 @@ function done(name: string, cagr: number, more: Partial<DoneRow> = {}): DoneRow 
     through: '2020-01-03',
     asOf: T0,
     stale: false,
+    spark: { strategy: [1, 1.1], benchmark: [1, 1.05], label: 'SPY buy & hold' },
+    tickers: 1,
     ...more,
   };
 }
@@ -285,7 +286,9 @@ test('every column can be sorted', () => {
   assert.deepEqual(order('now'), ['B', 'C', 'A']);
   assert.deepEqual(order('next'), ['B', 'C', 'A']);
   assert.deepEqual(order('through'), ['C', 'B', 'A']);
-  assert.deepEqual(COLUMNS.map((c) => c.key).sort(), ['benchmark', 'drawdown', 'name', 'next', 'now', 'return', 'sharpe', 'through', 'trades']);
+  // Six columns on the table; the sparkline has no sort, and the others' sorts still work from code.
+  assert.deepEqual(COLUMNS.map((c) => c.label), ['Strategy', '', 'Return per year', 'Worst drawdown', 'Sharpe', 'Now and next']);
+  assert.deepEqual(COLUMNS.map((c) => c.key), ['name', null, 'return', 'drawdown', 'sharpe', 'next']);
 });
 
 test('failed and unfinished rows stay at the bottom, whichever way the table is sorted', () => {
@@ -466,12 +469,12 @@ test('when the strategies cannot be listed the round rejects with the reason', a
   await assert.rejects(runRound(host, { folder: null, sort: 'name' }, false, recorder().round), /Vault is closed/);
 });
 
-// ---- the line under the table
+// ---- the line above the table
 
-test('the line under the table counts the strategies and says when the figures were worked out', () => {
-  const rows = [done('A', 0.1), failed('B')];
-  assert.equal(summaryText(rows, local(2026, 11, 17, 14, 5)), '2 strategies. The plugin calculated these figures on 2026-11-17 14:05.');
-  assert.equal(summaryText([done('A', 0.1)], local(2026, 1, 2, 9, 30)), '1 strategy. The plugin calculated these figures on 2026-01-02 09:30.');
+test('the line above the table counts the strategies, gives the last bar of their prices and when the figures were worked out', () => {
+  const rows = [done('A', 0.1), done('C', 0.2, { through: '2020-01-05', asOf: T0 + 2 * DAY }), failed('B')];
+  assert.equal(summaryText(rows, local(2026, 11, 17, 14, 5)), '3 strategies · prices through 2020-01-05 · calculated at 2026-11-17 14:05');
+  assert.equal(summaryText([failed('B')], local(2026, 1, 2, 9, 30)), '1 strategy · calculated at 2026-01-02 09:30');
 });
 
 test('while it runs the line says how far it has got', () => {
