@@ -273,11 +273,56 @@ export function handRenamed(key: string, own: Ledger | null, others: readonly [s
   if (!newSince(own, since)) return null;
   const now = new Set(blockKeys);
   const unnamed = withoutName(normalText(text));
-  const left = others.filter(([k, ledger]) => {
-    const latest = ledger?.versions[ledger.versions.length - 1];
-    return k !== key && !now.has(k) && latest !== undefined && withoutName(normalText(latest.text)) === unnamed;
-  });
+  const left = others.filter(([k, ledger]) => k !== key && !now.has(k) && latestUnnamed(ledger) === unnamed);
   return left.length === 1 ? left[0][0] : null;
+}
+
+/** The text of a record's latest version without its `name:` line, as blocks are matched whatever their names; null when it has none. */
+function latestUnnamed(ledger: Ledger | null): string | null {
+  const latest = ledger?.versions[ledger.versions.length - 1];
+  return latest === undefined ? null : withoutName(normalText(latest.text));
+}
+
+/** Whether some version of a record has `text`, but for the `name:` line: the record is that block's, not another's. */
+export function holdsText(ledger: Ledger | null, text: string): boolean {
+  const unnamed = withoutName(normalText(text));
+  return ledger !== null && ledger.versions.some((v) => withoutName(normalText(v.text)) === unnamed);
+}
+
+/**
+ * The key of the record a block with no name kept by its place `key` (render.ts blockStateKey), for the block's `text`:
+ * `key` when its own record holds the text (holdsText), else the one record of `others`, the note's other places, that
+ * does, as when a block was put above it since. Null when none does, or more than one.
+ */
+export function placeRecord(key: string, own: Ledger | null, others: readonly [string, Ledger | null][], text: string): string | null {
+  if (holdsText(own, text)) return key;
+  const found = others.filter(([k, ledger]) => k !== key && holdsText(ledger, text));
+  return found.length === 1 ? found[0][0] : null;
+}
+
+/** The tries of `from` that `to` does not count: not in it, and first seen at or after its last reset, since a write drops older ones. */
+export function triesToAdd(to: Ledger | null, from: Ledger): [string, Trial][] {
+  const resetAt = to?.resetAt ?? 0;
+  return Object.entries(from.trials).filter(([id, t]) => !(to !== null && Object.hasOwn(to.trials, id)) && t[2] >= resetAt);
+}
+
+/** `to` with the tries of `from` it does not count (triesToAdd), each with its figures and first sight; the same object when there are none. */
+export function addTries(to: Ledger, from: Ledger): Ledger {
+  const more = triesToAdd(to, from);
+  return more.length === 0 ? to : { ...to, trials: { ...to.trials, ...Object.fromEntries(more) } };
+}
+
+/**
+ * The key of the record a named block left in another note when it was moved or copied from there, for the block with key
+ * `key`, record `own` and text `text`: only when its own record began at `since` or later, and exactly one of `others` (the
+ * records of blocks with its name in other notes) has a latest version with `text` but for the `name:` line, and tries that
+ * `own` does not count. A record whose tries are all counted already, as after a copy was added, is no candidate. Null otherwise.
+ */
+export function carriedFrom(key: string, own: Ledger | null, others: readonly [string, Ledger | null][], since: number, text: string): string | null {
+  if (!newSince(own, since)) return null;
+  const unnamed = withoutName(normalText(text));
+  const found = others.filter(([k, ledger]) => k !== key && ledger !== null && latestUnnamed(ledger) === unnamed && triesToAdd(own, ledger).length > 0);
+  return found.length === 1 ? found[0][0] : null;
 }
 
 /** The name a record was kept under, as its latest version writes it; `fallback` when no version has one. */
@@ -342,6 +387,43 @@ export class Ledgers {
     const found = handRenamed(key, own, others, await blockKeys(), since, text);
     if (found === null) return null;
     return { key: found, name: recordName(others.find(([k]) => k === found)![1], found.slice(prefix.length)) };
+  }
+
+  /** The record a block with no name at `key` and with `text` kept by its place (placeRecord); `prefix` starts the keys of its note's places. */
+  async placeRecord(key: string, prefix: string, text: string): Promise<string | null> {
+    const others: [string, Ledger | null][] = [];
+    for (const k of await this.store.listKeys(prefix)) if (k !== key) others.push([k, await this.store.get(k)]);
+    return placeRecord(key, await this.store.get(key), others, text);
+  }
+
+  /**
+   * The record a named block moved or copied from another note left there (carriedFrom), for the block with key `key` and
+   * text `text`. `suffix` ends the key of every block with the block's name, and `stillThere` tells whether a key is still
+   * that of a block in its note, which makes the block a copy and not a move. `tries` is how many tries the block would gain.
+   */
+  async carriedFrom(key: string, suffix: string, stillThere: (key: string) => Promise<boolean>, since: number, text: string): Promise<{ key: string; moved: boolean; tries: number } | null> {
+    // Most blocks have kept a record for longer, and need no look at the other records.
+    if (!newSince(await this.store.get(key), since)) return null;
+    const others: [string, Ledger | null][] = [];
+    for (const k of await this.store.listKeys('')) if (k !== key && k.endsWith(suffix)) others.push([k, await this.store.get(k)]);
+    if (others.length === 0) return null;
+    // Read again: the block's own first try may have been written while the other records were read.
+    const own = await this.store.get(key);
+    const found = carriedFrom(key, own, others, since, text);
+    if (found === null) return null;
+    const old = others.find(([k]) => k === found)![1]!;
+    return { key: found, moved: !(await stillThere(found)), tries: triesToAdd(own, old).length };
+  }
+
+  /** Adds to the record under `to` the tries of the record under `from` that it does not count (addTries). `from` keeps its record. Returns how many were added. */
+  async copyTrials(from: string, to: string): Promise<number> {
+    const source = await this.store.get(from);
+    if (source === null) return 0;
+    const added = triesToAdd(await this.store.get(to), source).length;
+    if (added === 0) return 0;
+    const next = await this.store.update(to, (l) => addTries(l ?? emptyLedger(), source));
+    for (const w of this.listeners) if (this.current(w.key, w.since) === to) w.fn(next);
+    return added;
   }
 
   forBlock(key: string): BlockLedger {

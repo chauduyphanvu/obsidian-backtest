@@ -33,12 +33,13 @@ const offline = async (url: string): Promise<string> => {
 const store = (v: ReturnType<typeof vault>) => new PriceStore({ files: v.io, cacheDir: 'plugin/cache', normalize, fetchText: offline });
 const saved = (fetched: number) => JSON.stringify({ fetched, since: 0, bars: bars(Array.from({ length: 400 }, (_, i) => 100 + i)) });
 
-test('a saved price file is read from the vault once and then from memory', async () => {
+test('a saved price file is read from the vault each time, and a missing one is null', async () => {
   const v = vault({ 'plugin/cache/yahoo-SPY-1d.json': 'saved' });
   const deps = store(v).deps();
   assert.equal(await deps.cacheRead('yahoo-SPY-1d'), 'saved');
-  assert.equal(await deps.cacheRead('yahoo-SPY-1d'), 'saved');
-  assert.deepEqual(v.reads, ['plugin/cache/yahoo-SPY-1d.json']);
+  v.map.set('plugin/cache/yahoo-SPY-1d.json', 'changed by a sync');
+  assert.equal(await deps.cacheRead('yahoo-SPY-1d'), 'changed by a sync');
+  assert.deepEqual(v.reads, ['plugin/cache/yahoo-SPY-1d.json', 'plugin/cache/yahoo-SPY-1d.json']);
   assert.equal(await deps.cacheRead('yahoo-QQQ-1d'), null);
 });
 
@@ -47,7 +48,7 @@ test('one set of data calls serves the whole life of the store', () => {
   assert.equal(s.deps(), s.deps());
 });
 
-test('writing a price file makes the folder, keeps the text in memory and ends every answer about readiness', async () => {
+test('writing a price file makes the folder and ends every answer about readiness', async () => {
   const v = vault();
   const s = store(v);
   s.ready.set('needs', true, Infinity);
@@ -57,7 +58,6 @@ test('writing a price file makes the folder, keeps the text in memory and ends e
   assert.equal(v.map.get('plugin/cache/yahoo-SPY-1d.json'), 'new');
   assert.equal(s.ready.get('needs'), undefined);
   assert.equal(await deps.cacheRead('yahoo-SPY-1d'), 'new');
-  assert.deepEqual(v.reads, []);
 });
 
 test('reading a CSV file keeps its column names, which a missing file, a delete or a rename forgets', async () => {
@@ -77,17 +77,13 @@ test('reading a CSV file keeps its column names, which a missing file, a delete 
   assert.equal(s.columns('Data/other.csv'), undefined);
 });
 
-test('forgetting drops the files in memory, and removing takes the folder away only when it is there', async () => {
+test('forgetting drops every answer about readiness, and removing takes the folder away only when it is there', async () => {
   const v = vault({ 'plugin/cache/yahoo-SPY-1d.json': 'saved' });
   v.dirs.add('plugin/cache');
   const s = store(v);
-  const deps = s.deps();
-  await deps.cacheRead('yahoo-SPY-1d');
   s.ready.set('needs', true, Infinity);
   s.forget();
   assert.equal(s.ready.get('needs'), undefined);
-  await deps.cacheRead('yahoo-SPY-1d');
-  assert.equal(v.reads.length, 2);
   await s.removeSaved();
   assert.ok(!v.dirs.has('plugin/cache'));
   assert.equal(v.map.size, 0);

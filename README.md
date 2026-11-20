@@ -251,7 +251,7 @@ In Claude Desktop or Codex, add an MCP server with the command `node` and the ar
 
 The server has four tools: `check_strategy`, `run_backtest`, `explain_word` and `list_words`. It also gives the guide, the word list, the examples and the grammars as resources, and a `write_strategy` prompt.
 
-Prices are saved in `~/.cache/backtest-blocks`. Tiingo and FRED read their API keys from `TIINGO_API_KEY` and `FRED_API_KEY`.
+`run` uses the plugin settings of the vault that holds the note, so it gives the same result as Obsidian. Prices are saved in `~/.cache/backtest-blocks`. Tiingo and FRED read their API keys from `TIINGO_API_KEY` and `FRED_API_KEY`.
 
 ## Settings
 

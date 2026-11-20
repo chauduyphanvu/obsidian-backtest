@@ -211,6 +211,31 @@ test('run backtests the block named, on a CSV file in the vault above the note',
   assert.deepEqual(Object.keys(j.now[0]), ['ticker', 'holds']);
 });
 
+test('run uses the plugin settings that the vault keeps, and says so, and stops when it cannot read them', async () => {
+  const kept = join(dir, 'kept');
+  mkdirSync(join(kept, '.obsidian/plugins/backtest-blocks'), { recursive: true });
+  mkdirSync(join(kept, 'Data'), { recursive: true });
+  writeFileSync(join(kept, 'Data/walk.csv'), prices());
+  writeFileSync(join(kept, 'Two.md'), NOTE);
+  const settings = join(kept, '.obsidian/plugins/backtest-blocks/data.json');
+  writeFileSync(settings, JSON.stringify({ costs: '50 bps', capital: 20000 }));
+  const plain = JSON.parse((await call(['run', 'Two.md', '--block', 'Walk trend', '--json'])).out);
+  const r = await call(['run', 'Two.md', '--block', 'Walk trend', '--json'], '', { cwd: kept });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.err, `run: uses the plugin settings in ${settings}`);
+  const j = JSON.parse(r.out);
+  assert.ok(j.trades.count > 0);
+  assert.ok(j.strategy.totalReturn < plain.strategy.totalReturn, 'the costs of the vault make each trade cost more');
+  // --vault points at the vault whose settings and files a run uses.
+  const pointed = await call(['run', join(kept, 'Two.md'), '--block', 'Walk trend', '--json', '--vault', vault]);
+  assert.equal(pointed.err, '');
+  assert.equal(JSON.parse(pointed.out).strategy.totalReturn, plain.strategy.totalReturn);
+  writeFileSync(settings, '{ not json');
+  const broken = await call(['run', 'Two.md', '--block', 'Walk trend'], '', { cwd: kept });
+  assert.equal(broken.code, 2);
+  assert.match(broken.err, /^run: cannot read the plugin settings in .*data\.json: /);
+});
+
 test('run asks which block when a note has several, and does not run a block with errors', async () => {
   const several = await call(['run', 'Two.md']);
   assert.equal(several.code, 2);

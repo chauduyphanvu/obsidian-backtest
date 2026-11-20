@@ -6,7 +6,8 @@ import { MISTAKES } from '../corpus/mistakes.ts';
 import type { DataDeps } from '../data.ts';
 import { generatedFiles, wordList } from '../llm-files.ts';
 import { SYSTEM_PROMPT, userMessage } from '../llm.ts';
-import { checkSource, correctSource, explainText, noBlock, problemLine, runNote, version, WORD_KINDS, wordNames, type Io } from './main.ts';
+import type { Settings } from '../settings-core.ts';
+import { checkSource, correctSource, explainText, noBlock, problemLine, runNote, settingsIn, version, WORD_KINDS, wordNames, type Io } from './main.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
@@ -18,8 +19,11 @@ const csvFolder = (vault: string | undefined): string =>
     ? 'The server reads CSV files from the folder where it started, because the vault_path argument is not given. Give the vault folder in vault_path, and write the path of the file from that folder.'
     : `The server reads CSV files from the vault_path folder, ${vault}. Make sure that it is the vault folder, and that the path of the file starts from it.`;
 
-/** The tools, resources and prompt; `depsFor` gives what a run reads from outside, with CSV files under `vault`. */
-export function createServer(depsFor: (vault: string | undefined) => DataDeps): McpServer {
+/**
+ * The tools, resources and prompt; `depsFor` gives what a run reads from outside, with CSV files under `vault`, and
+ * `settingsFor` the plugin settings a run in `vault` uses.
+ */
+export function createServer(depsFor: (vault: string | undefined) => DataDeps, settingsFor: (vault: string | undefined) => Promise<Settings>): McpServer {
   const server = new McpServer({ name: 'backtest-blocks', version: version() });
 
   const fix = z.object({
@@ -78,17 +82,23 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps): 
     {
       title: 'Backtest a strategy block',
       description:
-        'Backtests a strategy block on live prices (Yahoo Finance, Binance, Tiingo, FRED, or CSV files in vault_path). Returns the verdict, and the return per year, total return, worst drawdown and Sharpe ratio, compared with buy and hold. Also returns the trades and the positions after the last bar. The prices are saved between runs.',
+        'Backtests a strategy block on live prices (Yahoo Finance, Binance, Tiingo, FRED, or CSV files in vault_path). Returns the verdict, and the return per year, total return, worst drawdown and Sharpe ratio, compared with buy and hold. Also returns the trades and the positions after the last bar. The prices are saved between runs. It uses the plugin settings that the vault in vault_path keeps, or the default settings when there are none.',
       inputSchema: {
         source: z.string().describe('A strategy block, or a note that contains ```strategy blocks'),
         block: z.string().optional().describe('The block of a note to run: its name, or its number (the first block is 1). Necessary when the note has more than one block'),
-        vault_path: z.string().optional().describe('The Obsidian vault folder, for the CSV files that the block reads'),
+        vault_path: z.string().optional().describe('The Obsidian vault folder, for the CSV files that the block reads and the plugin settings'),
         refresh: z.boolean().optional().describe('Download the prices again, and do not use the saved prices'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ source, block, vault_path, refresh }) => {
-      const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, 'the block argument');
+      let settings: Settings;
+      try {
+        settings = await settingsFor(vault_path);
+      } catch (e) {
+        return { content: [text(`Cannot read the plugin settings of the vault: ${e instanceof Error ? e.message : e}`)], isError: true };
+      }
+      const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, settings, 'the block argument');
       if ('code' in result) return { content: [text(/There is no file at /.test(result.message) ? `${result.message}\n${csvFolder(vault_path)}` : result.message)], isError: true };
       return { content: [text(runText(result.out))], structuredContent: runSummary(result.out) };
     },
@@ -149,7 +159,10 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps): 
 
 /** Serves the tools over standard input and output until the client closes them. */
 export async function serve(io: Io): Promise<void> {
-  const server = createServer((vault) => nodeDeps({ vault: vault ?? io.cwd, cacheDir: defaultCacheDir(io.env), env: io.env, fetch: io.fetch }));
+  const server = createServer(
+    (vault) => nodeDeps({ vault: vault ?? io.cwd, cacheDir: defaultCacheDir(io.env), env: io.env, fetch: io.fetch }),
+    (vault) => settingsIn(vault ?? io.cwd),
+  );
   const transport = new StdioServerTransport();
   const closed = new Promise<void>((resolve) => (transport.onclose = resolve));
   await server.connect(transport);

@@ -16,10 +16,11 @@ import { LIMITS, LimitError, anywayLabel, sizeRefusal } from '../src/limits.ts';
 import { notOurNoteMessage, ORDERS_MARKER } from '../src/orders.ts';
 import { MAX_VERSIONS } from '../src/ledger.ts';
 import { PBO_MIN_STEPS_PER_GROUP, PBO_MIN_VARIANTS, STRETCHES } from '../src/overfit.ts';
-import { RESET, upperBound, valuesUsed } from '../src/render-luck.ts';
+import { ADD_NAME, RESET, UNNAMED, upperBound, valuesUsed } from '../src/render-luck.ts';
 import { RESTORE } from '../src/render-versions.ts';
 import { WAITING, WRITTEN } from '../src/render-sweep.ts';
 import { NOTE_CHANGED } from '../src/rewrite.ts';
+import { oldRecordWords, type OldRecord } from '../src/render.ts';
 import { bars } from './helpers.ts';
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -314,6 +315,7 @@ test('the reference words the tries, the overfitting check and the versions as t
     [luck, 'How many tries'],
     [luck, 'Start again'],
     [luck, 'Keep the count'],
+    [luck, 'Give the strategy a name'],
     [sweep, 'Overfitting check'],
     [versions, 'Versions'],
     [versions, 'Show the changes'],
@@ -321,7 +323,19 @@ test('the reference words the tries, the overfitting check and the versions as t
   ] as const) {
     assert.ok(file.includes(`'${text}'`) && readme.includes(`"${text}"`), text);
   }
-  for (const text of [RESET, RESTORE]) assert.ok(readme.includes(`"${text}"`), text);
+  for (const text of [RESET, RESTORE, UNNAMED, ADD_NAME]) assert.ok(readme.includes(`"${text}"`), text);
+  // The lines of a record left elsewhere, with the example the reference uses.
+  const take = async () => {};
+  const found: OldRecord[] = [
+    { kind: 'renamed', name: 'Trend', take },
+    { kind: 'moved', note: 'Scratch.md', take },
+    { kind: 'copied', note: 'Scratch.md', name: 'Trend', tries: 120, take },
+  ];
+  for (const f of found) {
+    const { text, button } = oldRecordWords(f);
+    assert.ok(readme.includes(`"${text}"`) && readme.includes(`"${button}"`), text);
+  }
+  assert.ok(readme.includes('"Add it to the count"'));
   const bound = 'is the maximum number of different tries. Variants that are near each other give almost the same results. Thus the number of different tries is smaller';
   assert.ok(upperBound(7).startsWith(`7 ${bound}`) && readme.includes(`N ${bound}`));
   assert.ok(readme.includes(`summed over ${STRETCHES} equal stretches`));

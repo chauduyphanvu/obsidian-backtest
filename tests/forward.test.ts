@@ -29,8 +29,8 @@ import { DAY } from './helpers.ts';
 const utc = (y: number, m: number, d: number, hh = 0, mm = 0) => Date.UTC(y, m - 1, d, hh, mm);
 
 const DEFAULTS: Defaults = { capital: 10_000, costBps: 0, slippageBps: 0, cashRate: '0%', dataSource: 'yahoo' };
-/** Everything different from the defaults above, so a setting left to the defaults shows. */
-const OTHER: Defaults = { capital: 1, costBps: 99, slippageBps: 98, cashRate: '9%', dataSource: 'binance', commission: { k: 'order', fee: 9 } };
+/** Everything different from the defaults above, so a setting left to the defaults shows. Required, so a new default must be added here too. */
+const OTHER: Required<Defaults> = { capital: 1, costBps: 99, slippageBps: 98, cashRate: '9%', dataSource: 'binance', commission: { k: 'order', fee: 9 }, borrowFee: 0.04, marginRate: 0.11 };
 
 const STRATEGY = ['name: Trend following', 'universe: SPY', 'buy when close > sma(200)', 'sell when close < sma(200)'].join('\n');
 const LINK = '[[Trend following#Trend following]]';

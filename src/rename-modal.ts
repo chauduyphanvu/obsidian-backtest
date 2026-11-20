@@ -26,7 +26,12 @@ export class RenameModal extends Modal {
     input.type = 'text';
     input.value = this.host.current ?? '';
     input.setAttribute('aria-label', 'New name of the strategy');
-    const hint = h(root, 'p', 'bt-llm-hint', 'The record of tries and the links to the strategy change to the new name.');
+    const hint = h(
+      root,
+      'p',
+      'bt-llm-hint',
+      this.host.current === null ? 'The plugin then counts the tries of the strategy and keeps its versions under this name.' : 'The record of tries and the links to the strategy change to the new name.',
+    );
     hint.setAttribute('role', 'status');
     const submit = () => {
       const problem = this.host.problem(input.value);

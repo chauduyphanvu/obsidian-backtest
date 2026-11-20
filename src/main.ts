@@ -12,8 +12,8 @@ import { hoverValue, type HoverValue } from './debug.ts';
 import { parseSpec, type Spec } from './dsl.ts';
 import type { Bars } from './types.ts';
 import { applyFix, suggestion } from './fixes.ts';
-import { HOUR, isoDate } from './format.ts';
-import { isForwardNote, makeForward, writeLog, type ForwardStart } from './forward.ts';
+import { HOUR, isoDate, plural } from './format.ts';
+import { forwardLink, isForwardNote, makeForward, writeLog, type ForwardStart } from './forward.ts';
 import { GalleryModal } from './gallery-modal.ts';
 import { Ledgers, mergeLedgers, parseLedger, type Ledger } from './ledger.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
@@ -28,11 +28,11 @@ import { renderAccount, type AccountHost } from './render-account.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
 import { renderForward, type ForwardHost } from './render-forward.ts';
-import { blockKeyPrefix, blockNameKeyPrefix, blockStateKey } from './render.ts';
+import { blockKeyPrefix, blockNameKeyPrefix, blockNameKeySuffix, blockStateKey, keyNote, type OldRecord } from './render.ts';
 import { RenameModal } from './rename-modal.ts';
 import { Results } from './results.ts';
 import type { RunOutput } from './runner.ts';
-import { findBlock, fixBlockInNote, nameProblem, renameLinksInNote, setParamValues, setSettingInNote, setWeightsInNote, writeBlockInNote, writeInNote, writeValuesInNote } from './rewrite.ts';
+import { NOTE_CHANGED, findBlock, fixBlockInNote, nameProblem, renameLinksInNote, setParamValues, setSettingInNote, setWeightsInNote, writeBlockInNote, writeInNote, writeValuesInNote } from './rewrite.ts';
 import { JsonStore } from './store.ts';
 import { StrategyBlocks, forwardStart, keptNote, type StrategyOptions } from './strategy-block.ts';
 import { SymbolLookup } from './symbols.ts';
@@ -50,13 +50,19 @@ function place(editor: Editor, text: string): void {
 const idle = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 
 /** The strategy block the cursor is in, in the note being edited. */
-interface AtCursor {
+/** A strategy block of a note. */
+interface Place {
   file: TFile;
   /** The note's text as the editor holds it. */
   text: string;
   block: Block;
   /** Its place among the note's strategy blocks. */
   index: number;
+  /** The editor the note is open in, when it is. */
+  view?: MarkdownView | MarkdownFileInfo;
+}
+
+interface AtCursor extends Place {
   view: MarkdownView | MarkdownFileInfo;
 }
 
@@ -151,7 +157,7 @@ export default class BacktestBlocks extends Plugin {
       const box = at.getBoundingClientRect();
       menu.showAtPosition({ x: box.right, y: box.bottom + 4, left: true }, at.ownerDocument);
     },
-    renamedFrom: (notePath, key, name, text) => this.renamedFrom(notePath, key, name, text),
+    oldRecord: (notePath, key, name, text) => this.oldRecord(notePath, key, name, text),
   });
   /** When the plugin loaded: a block's record that began since then was made in this session. */
   private loadedAt = Date.now();
@@ -384,7 +390,7 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** What a strategy block can do because of where it sits in its note: write values back into it, and have its open or folded state remembered. */
-  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'restore' | 'stateKey' | 'blockKey'> {
+  private placeInNote(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): Pick<StrategyOptions, 'apply' | 'restore' | 'rename' | 'stateKey' | 'blockKey'> {
     const info = ctx.getSectionInfo(el);
     const found = info ? findBlock(info.text, info.lineStart, source) : null;
     if (!found) return {};
@@ -394,7 +400,8 @@ export default class BacktestBlocks extends Plugin {
     // The block's line is asked for again now: the note may have moved it since it was drawn.
     const apply = (values: Record<string, number>): Promise<void> => writeValuesInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, values);
     const restore = (text: string): Promise<void> => writeBlockInNote((edit) => this.app.vault.process(file, edit), ctx.getSectionInfo(el)?.lineStart, source, text);
-    return { stateKey, blockKey: stateKey, apply, restore };
+    const rename = (): void => void this.renameBlock(file, ctx.getSectionInfo(el)?.lineStart, source);
+    return { stateKey, blockKey: stateKey, apply, restore, rename };
   }
 
   private liveHost(): LiveHost {
@@ -538,7 +545,7 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** Asks for a new name for the block at the cursor, then gives it that name (renameStrategy). */
-  private renameAtCursor(at: AtCursor): void {
+  private renameAtCursor(at: Place): void {
     const others = extractBlocks(at.text).filter((_, i) => i !== at.index).map((b) => b.name);
     new RenameModal(this.app, {
       current: at.block.name,
@@ -548,7 +555,7 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** Writes the block's new name on its `name:` line, then moves its record, its remembered state and the links to it (moveStrategy). */
-  private async renameStrategy(at: AtCursor, name: string): Promise<void> {
+  private async renameStrategy(at: Place, name: string): Promise<void> {
     const { file, block, index } = at;
     try {
       // The note on disk is the one written: the editor's text, saved first, is what the block was found in.
@@ -560,7 +567,10 @@ export default class BacktestBlocks extends Plugin {
     }
     const named = block.name === null ? `The plugin gave the strategy the name "${name}".` : `The plugin renamed ${strategyLabel(block)} to "${name}".`;
     try {
-      const { links, notes } = await this.moveStrategy(file, { key: blockStateKey(file.path, block.name, index), name: block.name }, { key: blockStateKey(file.path, name, index), name });
+      const from = blockStateKey(file.path, block.name, index);
+      // A block with no name was kept by its place, which another block may have held, or which it may have left: the record that comes along is the one with its text.
+      const record = block.name !== null ? from : await this.ledgers.placeRecord(from, `${blockKeyPrefix(file.path, false)}block:`, block.source);
+      const { links, notes } = await this.moveStrategy(file, { key: from, name: block.name }, { key: blockStateKey(file.path, name, index), name }, record);
       new Notice(block.name === null ? named : `${named} It changed ${links > 0 ? linksIn(links, notes) : 'no links'}.`);
     } catch (e) {
       new Notice(`${named} It cannot move the record of tries or the links. ${e instanceof Error ? e.message : String(e)}`);
@@ -573,8 +583,8 @@ export default class BacktestBlocks extends Plugin {
    * blocks and forward test notes (rewrite.ts renameLinksInNote), one write for each note. Resolves with how many links
    * changed in how many notes.
    */
-  private async moveStrategy(file: TFile, from: { key: string; name: string | null }, to: { key: string; name: string }): Promise<{ links: number; notes: number }> {
-    await this.ledgers.move(from.key, to.key);
+  private async moveStrategy(file: TFile, from: { key: string; name: string | null }, to: { key: string; name: string }, record: string | null = from.key): Promise<{ links: number; notes: number }> {
+    if (record !== null) await this.ledgers.move(record, to.key);
     this.blocks.moveState(from.key, to.key);
     const old = from.name;
     if (old === null) return { links: 0, notes: 0 };
@@ -606,29 +616,91 @@ export default class BacktestBlocks extends Plugin {
     return { links, notes };
   }
 
+  /** The editor the note `file` is open in, if any: its text is ahead of the file while typing. */
+  private openView(file: TFile): MarkdownView | undefined {
+    return this.app.workspace.getLeavesOfType('markdown').map((leaf) => leaf.view).find((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
+  }
+
+  /** The keys of the strategy blocks of the note at `path` now (render.ts blockStateKey), read from its editor when it is open; null when there is no such note. */
+  private async blockKeysOf(path: string): Promise<string[] | null> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return null;
+    const open = this.openView(file);
+    const note = open ? viewText(open) : await this.app.vault.cachedRead(file);
+    return extractBlocks(note).map((b, i) => blockStateKey(path, b.name, i));
+  }
+
+  /** Asks for a name for the block with the text `source` that opens on `line` of the note `file`, then gives it that name, as its result's button does. */
+  private async renameBlock(file: TFile, line: number | undefined, source: string): Promise<void> {
+    const view = this.openView(file);
+    const text = view ? viewText(view) : await this.app.vault.cachedRead(file);
+    const found = line === undefined ? null : findBlock(text, line, source);
+    if (!found) {
+      new Notice(NOTE_CHANGED);
+      return;
+    }
+    this.renameAtCursor({ file, text, view, ...found });
+  }
+
   /**
-   * For StrategyBlocks: the old name of a block of the note at `notePath` with the text `text`, renamed by hand, from its
-   * record of tries (Ledgers renamedFrom), and the move to its name now, `name`. The note's text is the editor's when it is
-   * open, since the editor is ahead of the file while typing.
+   * For StrategyBlocks: the record of tries that the block with the key `key`, the name `name` and the text `text` in the
+   * note at `notePath` left elsewhere, with what brings it here: under its old name after a rename by hand (Ledgers
+   * renamedFrom), or else in another note that it was moved or copied from (Ledgers carriedFrom).
    */
-  private async renamedFrom(notePath: string, key: string, name: string, text: string): Promise<{ name: string; move(): Promise<void> } | null> {
+  private async oldRecord(notePath: string, key: string, name: string, text: string): Promise<OldRecord | null> {
     const file = this.app.vault.getAbstractFileByPath(notePath);
     if (!(file instanceof TFile)) return null;
-    const keys = async () => {
-      const open = this.app.workspace.getLeavesOfType('markdown').map((leaf) => leaf.view).find((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
-      const note = open ? viewText(open) : await this.app.vault.cachedRead(file);
-      return extractBlocks(note).map((b, i) => blockStateKey(notePath, b.name, i));
-    };
-    const old = await this.ledgers.renamedFrom(key, blockNameKeyPrefix(notePath), keys, this.loadedAt, text);
-    if (!old) return null;
+    const old = await this.ledgers.renamedFrom(key, blockNameKeyPrefix(notePath), async () => (await this.blockKeysOf(notePath)) ?? [], this.loadedAt, text);
+    if (old) {
+      return {
+        kind: 'renamed',
+        name: old.name,
+        take: async () => {
+          try {
+            const { links, notes } = await this.moveStrategy(file, old, { key, name });
+            new Notice(`The plugin moved the record of "${old.name}" to "${name}". It changed ${links > 0 ? linksIn(links, notes) : 'no links'}.`);
+          } catch (e) {
+            new Notice(`Cannot move the record of "${old.name}". ${e instanceof Error ? e.message : String(e)}`);
+            throw e;
+          }
+        },
+      };
+    }
+    // A block cut from a note that is open is gone from its editor at once, though the file may still hold it.
+    const stillThere = async (k: string) => (await this.blockKeysOf(keyNote(k)))?.includes(k) ?? false;
+    const carried = await this.ledgers.carriedFrom(key, blockNameKeySuffix(name), stillThere, this.loadedAt, text);
+    if (!carried) return null;
+    const from = keyNote(carried.key);
+    if (carried.moved) {
+      return {
+        kind: 'moved',
+        note: from,
+        take: async () => {
+          try {
+            await this.ledgers.move(carried.key, key);
+            new Notice(`The plugin moved the record of "${name}" from ${from} to ${notePath}. Links such as ${forwardLink(from, name)} do not change.`);
+          } catch (e) {
+            new Notice(`Cannot move the record of "${name}" from ${from}. ${e instanceof Error ? e.message : String(e)}`);
+            throw e;
+          }
+        },
+      };
+    }
     return {
-      name: old.name,
-      move: async () => {
+      kind: 'copied',
+      note: from,
+      name,
+      tries: carried.tries,
+      take: async () => {
         try {
-          const { links, notes } = await this.moveStrategy(file, old, { key, name });
-          new Notice(`The plugin moved the record of "${old.name}" to "${name}". It changed ${links > 0 ? linksIn(links, notes) : 'no links'}.`);
+          const added = await this.ledgers.copyTrials(carried.key, key);
+          new Notice(
+            added > 0
+              ? `The plugin added ${plural(added, 'try', 'tries')} of "${name}" in ${from} to the count of "${name}" in ${notePath}.`
+              : `The plugin did not add tries of "${name}" in ${from}. The count of "${name}" in ${notePath} includes them, or it started again after them.`,
+          );
         } catch (e) {
-          new Notice(`Cannot move the record of "${old.name}". ${e instanceof Error ? e.message : String(e)}`);
+          new Notice(`Cannot add the tries of "${name}" in ${from}. ${e instanceof Error ? e.message : String(e)}`);
           throw e;
         }
       },

@@ -1,19 +1,11 @@
-// Saved prices: the files in the plugin's cache folder, the ones kept in memory, the column names of the CSV files read,
-// and whether a block's prices are all saved and fresh. The plugin hands in the vault's file calls and the network.
+// Saved prices: the files in the plugin's cache folder, the column names of the CSV files read, and whether a block's
+// prices are all saved and fresh. The plugin hands in the vault's file calls and the network.
 
 import { csvColumnNames, type DataDeps } from './data.ts';
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
-import { WeighedCache } from './limits.ts';
 import { ReadyMemo, loadNeeds } from './live-core.ts';
 import { Runner } from './runner.ts';
 import type { Bars } from './types.ts';
-
-/**
- * Saved price files kept in memory, by their total length in characters, which is about a byte each. A Binance ticker's
- * smaller bars come to several megabytes each, so the files are not counted alone. The least recently used go first.
- */
-const KEPT_PRICE_TEXT = 60_000_000;
-const KEPT_PRICE_FILES = 200;
 
 /** The vault's file calls the store uses, with paths as the vault writes them. */
 export interface PriceFiles {
@@ -43,7 +35,6 @@ export interface PriceStoreOptions {
 export class PriceStore {
   /** Whether each kind of block's prices are all saved and fresh, which the preview panel asks at every pause in typing. */
   readonly ready = new ReadyMemo();
-  private memory = new WeighedCache<string>({ maxEntries: KEPT_PRICE_FILES, maxAgeMs: Infinity, weigh: (text) => text.length, maxWeight: KEPT_PRICE_TEXT });
   private dataDeps: DataDeps | null = null;
   /** Column names of the CSV files read so far, for completion after `column(`. A file that is deleted or renamed is forgotten. */
   private csvColumns = new Map<string, string[]>();
@@ -63,9 +54,8 @@ export class PriceStore {
     for (const known of this.csvColumns.keys()) if (known === path || known.startsWith(`${path}/`)) this.csvColumns.delete(known);
   }
 
-  /** Drops the files kept in memory and every answer about readiness; the saved files stay (see removeSaved). */
+  /** Drops every answer about readiness; the saved files stay (see removeSaved). */
   forget(): void {
-    this.memory.clear();
     this.ready.changed();
   }
 
@@ -99,16 +89,9 @@ export class PriceStore {
         if (p.toLowerCase().endsWith('.csv')) this.csvColumns.set(p, csvColumnNames(text));
         return text;
       },
-      cacheRead: async (key) => {
-        const hit = this.memory.get(key);
-        if (hit !== undefined) return hit;
-        if (!(await adapter.exists(file(key)))) return null;
-        const text = await adapter.read(file(key));
-        this.memory.set(key, text);
-        return text;
-      },
+      // Each load parses the file's text again, so keeping the text in memory would save only the read.
+      cacheRead: async (key) => ((await adapter.exists(file(key))) ? adapter.read(file(key)) : null),
       cacheWrite: async (key, text) => {
-        this.memory.set(key, text);
         this.ready.changed();
         if (!(await adapter.exists(this.o.cacheDir))) await adapter.mkdir(this.o.cacheDir);
         await adapter.write(file(key), text);

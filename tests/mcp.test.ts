@@ -1,12 +1,13 @@
 // The MCP server as a client sees it: its tools, resources and prompt, through the SDK's own client.
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { settingsIn } from '../src/cli/main.ts';
 import { createServer } from '../src/cli/mcp.ts';
 import { nodeDeps } from '../src/cli/node-deps.ts';
 import { SYSTEM_PROMPT } from '../src/llm.ts';
@@ -33,7 +34,7 @@ before(async () => {
   const server = createServer((v) => {
     vaults.push(v);
     return nodeDeps({ vault: v ?? vault, cacheDir: join(dir, 'cache'), env: {}, fetch: () => Promise.reject(new Error('no network in tests')) });
-  });
+  }, (v) => settingsIn(v ?? vault));
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), client.connect(b)]);
 });
@@ -80,6 +81,25 @@ test('run_backtest runs a block on a CSV file in the vault given, and refuses on
   const bad = await client.callTool({ name: 'run_backtest', arguments: { source: 'universe: SPY\nbuy when close > sma(' } });
   assert.equal(bad.isError, true);
   assert.match(textOf(bad), /^The block has errors. It did not run:\nstrategy:2/);
+});
+
+test('run_backtest uses the plugin settings that the vault in vault_path keeps', async () => {
+  const kept = join(dir, 'kept');
+  mkdirSync(join(kept, '.obsidian/plugins/backtest-blocks'), { recursive: true });
+  mkdirSync(join(kept, 'Data'), { recursive: true });
+  copyFileSync(join(vault, 'Data/walk.csv'), join(kept, 'Data/walk.csv'));
+  writeFileSync(join(kept, '.obsidian/plugins/backtest-blocks/data.json'), JSON.stringify({ costs: '50 bps' }));
+  const source = 'name: Walk\nuniverse: csv:Data/walk.csv\nbuy when close > sma(30)\nsell when close < sma(30)';
+  const total = async (vault_path: string) => {
+    const r = await client.callTool({ name: 'run_backtest', arguments: { source, vault_path } });
+    assert.ok(!r.isError, textOf(r));
+    return (r.structuredContent as { strategy: { totalReturn: number } }).strategy.totalReturn;
+  };
+  assert.ok((await total(kept)) < (await total(vault)));
+  writeFileSync(join(kept, '.obsidian/plugins/backtest-blocks/data.json'), '{ not json');
+  const broken = await client.callTool({ name: 'run_backtest', arguments: { source, vault_path: kept } });
+  assert.equal(broken.isError, true);
+  assert.match(textOf(broken), /^Cannot read the plugin settings of the vault: /);
 });
 
 test('run_backtest says plainly when the prices can not be had', async () => {

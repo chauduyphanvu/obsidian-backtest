@@ -43,8 +43,10 @@ export interface SweepInput {
    * resolves once written; a rejection means nothing was written, and its message says why in words fit to show.
    */
   apply?: Apply;
-  /** The block's record of tries, which the variants run here count in; absent for a block that can't be told apart. */
+  /** The block's record of tries, which the variants run here count in; absent for a block with no name, or one that can't be told apart. */
   ledger?: BlockLedger;
+  /** Set for a block with no name, which keeps no count: `rename` opens the window that gives it one, and is absent where the block can't be edited. */
+  unnamed?: { rename?: () => void };
   /** Told each sweep that finished or was stopped, with what it ran, for the slider tracks of the block's result. */
   onResult?: (paint: TrackPaint) => void;
   /**

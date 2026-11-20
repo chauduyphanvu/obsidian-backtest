@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runBacktest } from '../src/backtest.ts';
 import { parseSpec } from '../src/dsl.ts';
-import { emptyLedger, handRenamed, Ledgers, mergeLedgers, recordName, trialHash, trialOf, versionFigures, versionHash, type Ledger, type LedgerStore } from '../src/ledger.ts';
+import { addTries, carriedFrom, emptyLedger, handRenamed, holdsText, Ledgers, mergeLedgers, placeRecord, recordName, trialHash, trialOf, triesToAdd, versionFigures, versionHash, type Ledger, type LedgerStore } from '../src/ledger.ts';
 import { walkForward } from '../src/luck.ts';
 import { pbo, stepBlocks, stepsPerYear } from '../src/overfit.ts';
-import { blockKeyPrefix, blockStateKey } from '../src/render.ts';
+import { blockKeyPrefix, blockNameKeySuffix, blockStateKey, keyNote } from '../src/render.ts';
 import { runSweep, sweepPbo, sweepTrials, type SweepResult } from '../src/sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY } from './helpers.ts';
@@ -284,6 +284,115 @@ test('the old name comes from the latest version of its record, as written', asy
   assert.equal(await ledgers.renamedFrom('N.md\u0000name:trend v2', 'N.md\u0000name:', blocks, 1000, 'name: Trend v2\nuniverse: QQQ'), null);
   await ledgers.move('N.md\u0000name:trend', 'N.md\u0000name:trend v2');
   assert.equal(await ledgers.renamedFrom('N.md\u0000name:trend v2', 'N.md\u0000name:', blocks, 1000, text), null);
+});
+
+/** A record with two tries, as a sweep leaves it, first seen at `at`. */
+const tuned = (at: number, text = 'name: Trend\nuniverse: SPY'): Ledger => ({ ...ledgerOf(at, text), trials: { t1: [1, 252, at], t2: [0.5, 252, at] } });
+
+test('a block moved or copied from another note finds the record it left there only when exactly one has its text and tries it does not count', () => {
+  const key = 'Live.md\u0000name:trend';
+  const scratch = 'Scratch.md\u0000name:trend';
+  const since = 1000;
+  const text = 'name: Trend\nuniverse: SPY';
+  assert.equal(carriedFrom(key, null, [[scratch, tuned(5)]], since, text), scratch);
+  // Its own tries from this session, such as the run it shows, do not hide it.
+  assert.equal(carriedFrom(key, ledgerOf(1500), [[scratch, tuned(5)]], since, text), scratch);
+  // A record of its own from before the session: the block has been here for a while.
+  assert.equal(carriedFrom(key, ledgerOf(500), [[scratch, tuned(5)]], since, text), null);
+  // Two records with its text: which one it came from is not clear.
+  assert.equal(carriedFrom(key, null, [[scratch, tuned(5)], ['Old.md\u0000name:trend', tuned(5)]], since, text), null);
+  // Other text, no version to compare, or no record.
+  assert.equal(carriedFrom(key, null, [[scratch, tuned(5, 'name: Trend\nuniverse: QQQ')]], since, text), null);
+  assert.equal(carriedFrom(key, null, [[scratch, { ...emptyLedger(), trials: { t1: [1, 252, 5] } }]], since, text), null);
+  assert.equal(carriedFrom(key, null, [[scratch, null]], since, text), null);
+  // The comment and the capitals of the name line do not matter.
+  assert.equal(carriedFrom(key, null, [[scratch, tuned(5, 'name: trend # tuned\r\nuniverse: SPY\n')]], since, text), scratch);
+  // Every try counted already, as after they were added in the same session: no line.
+  const today = tuned(1200);
+  const added = addTries({ ...emptyLedger(), trials: { x1: [1, 252, 1500] } }, today);
+  assert.equal(carriedFrom(key, added, [[scratch, today]], since, text), null);
+  // Of two records with its text, the one whose tries are all counted is no candidate.
+  const other: Ledger = { ...ledgerOf(1300), trials: { t9: [2, 252, 1300] } };
+  assert.equal(carriedFrom(key, added, [[scratch, today], ['Old.md\u0000name:trend', other]], since, text), 'Old.md\u0000name:trend');
+  // Tries from before the block's last reset are not offered, since a write drops them.
+  assert.equal(carriedFrom(key, { ...emptyLedger(), resetAt: 1600 }, [[scratch, today]], since, text), null);
+});
+
+test('the tries a copy adds are those its count lacks, with their figures and first sight, and none from before its reset', () => {
+  const from: Ledger = { trials: { a: [1, 252, 5], b: [0.4, 52, 7], c: [2, 252, 9] }, versions: [], resetAt: 0 };
+  const to: Ledger = { trials: { a: [1.5, 252, 20] }, versions: [], resetAt: 8 };
+  assert.deepEqual(triesToAdd(to, from), [['c', [2, 252, 9]]]);
+  assert.deepEqual(addTries(to, from).trials, { a: [1.5, 252, 20], c: [2, 252, 9] });
+  assert.deepEqual(addTries(to, from).versions, [], 'versions are not added');
+  assert.deepEqual(triesToAdd(null, from).map(([id]) => id), ['a', 'b', 'c']);
+  const full = addTries(emptyLedger(), from);
+  assert.equal(addTries(full, from), full, 'nothing to add gives the same record');
+});
+
+test('a block copied from another note adds the first block\'s tries, which keeps its record, and a block moved takes the whole record', async () => {
+  const text = 'name: Trend\nuniverse: SPY';
+  const scratch = blockStateKey('Scratch.md', 'Trend', 0);
+  const live = blockStateKey('Live.md', 'Trend', 0);
+  const suffix = blockNameKeySuffix('Trend');
+  assert.equal(keyNote(live), 'Live.md');
+
+  const store = memory();
+  const ledgers = new Ledgers(store, () => 1500);
+  store.records.set(scratch, { ...ledgerOf(5, text), trials: { t1: [1, 252, 5], t2: [0.5, 252, 6] } });
+  // Records of another name, or kept by a block's place, are never candidates, whatever their text.
+  store.records.set(blockStateKey('Scratch.md', 'Trend v2', 1), tuned(5, text));
+  store.records.set(blockStateKey('Scratch.md', null, 2), tuned(5, text));
+  const copy = ledgers.forBlock(live);
+  const heard: number[] = [];
+  copy.watch((l) => heard.push(Object.keys(l.trials).length));
+  // The copy draws first and counts the run it shows, which the first block counted too.
+  await copy.add([run('t1')], { text, defaults: {}, figures });
+  assert.deepEqual(await ledgers.carriedFrom(live, suffix, async () => true, 1000, text), { key: scratch, moved: false, tries: 1 });
+  assert.equal(await ledgers.copyTrials(scratch, live), 1);
+  assert.deepEqual(store.records.get(live)!.trials, { t1: [1, 252, 1500], t2: [0.5, 252, 6] });
+  assert.equal(Object.keys(store.records.get(scratch)!.trials).length, 2, 'the first block keeps its record');
+  assert.deepEqual(heard, [1, 2]);
+  assert.equal(await ledgers.carriedFrom(live, suffix, async () => true, 1000, text), null);
+  assert.equal(await ledgers.copyTrials(scratch, live), 0);
+
+  const cut = memory();
+  const moving = new Ledgers(cut, () => 1500);
+  cut.records.set(scratch, tuned(5, text));
+  assert.deepEqual(await moving.carriedFrom(live, suffix, async (k) => k !== scratch, 1000, text), { key: scratch, moved: true, tries: 2 });
+  await moving.move(scratch, live);
+  assert.deepEqual([...cut.records.keys()], [live]);
+  assert.equal(await moving.carriedFrom(live, suffix, async () => false, 1000, text), null);
+});
+
+test('a record holds a block\'s text when one of its versions has it, but for the name line', () => {
+  const two: Ledger = { ...ledgerOf(5, 'universe: SPY'), versions: [...ledgerOf(5, 'universe: SPY').versions, { ...ledgerOf(9, 'universe: QQQ').versions[0], hash: 'v2' }] };
+  assert.ok(holdsText(two, 'name: Trend\nuniverse: SPY\r\n'));
+  assert.ok(holdsText(two, 'universe: QQQ'));
+  assert.ok(!holdsText(two, 'universe: IWM'));
+  assert.ok(!holdsText(emptyLedger(), 'universe: SPY'));
+  assert.ok(!holdsText(null, 'universe: SPY'));
+});
+
+test('a block with no name finds the record it kept by its place, also after a block was put above it', async () => {
+  const at = (i: number) => blockStateKey('Old.md', null, i);
+  const dip = 'universe: SPY\nbuy when close > sma(15)';
+  const slow = 'universe: SPY\nbuy when close > sma(40)';
+  const fresh = 'universe: SPY\nbuy when close > sma(25)';
+  const kept = (text: string) => ledgerOf(5, text);
+  // Slow was the second block; a new block now sits between it and Dip.
+  assert.equal(placeRecord(at(2), null, [[at(0), kept(dip)], [at(1), kept(slow)]], slow), at(1));
+  assert.equal(placeRecord(at(1), kept(slow), [[at(0), kept(dip)]], fresh), null);
+  assert.equal(placeRecord(at(0), kept(dip), [[at(1), kept(slow)]], 'name: Dip\n' + dip), at(0));
+  assert.equal(placeRecord(at(2), null, [[at(0), kept(slow)], [at(1), kept(slow)]], slow), null);
+
+  const store = memory();
+  store.records.set(at(0), kept(dip));
+  store.records.set(at(1), kept(slow));
+  store.records.set(blockStateKey('Old.md', 'Other', 0), kept(slow));
+  store.records.set(blockStateKey('Older.md', null, 0), kept(slow));
+  const ledgers = new Ledgers(store, () => 1000);
+  assert.equal(await ledgers.placeRecord(at(2), `${blockKeyPrefix('Old.md', false)}block:`, slow), at(1));
+  assert.equal(await ledgers.placeRecord(at(1), `${blockKeyPrefix('Old.md', false)}block:`, fresh), null);
 });
 
 test('the key of a block starts with its note\'s prefix and its folders\', and no other note\'s', () => {

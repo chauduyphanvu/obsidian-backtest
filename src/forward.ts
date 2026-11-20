@@ -3,7 +3,7 @@
 
 import { maxDrawdown } from './backtest.ts';
 import { closesFence, extractBlocks, fenceOf, type Block } from './blocks.ts';
-import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic } from './dsl.ts';
+import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic, type Spec } from './dsl.ts';
 import { barAt, firstAtOrAfter, isFlip, type RunResult } from './engine.ts';
 import { isoDate, localDate, median, plural, price, stamp, tidy } from './format.ts';
 import { hash } from './result-cache.ts';
@@ -109,24 +109,33 @@ export interface ForwardStart {
 }
 
 /**
+ * Each default setting as a forward test writes it down, in the order of its lines: the setting's name and its value, or
+ * null when the block does not use it. Every key of Defaults must be here, so the type check fails until a new default is
+ * pinned, and a running test can't move when that setting changes.
+ */
+const PINS: { [K in keyof Defaults]-?: [setting: string, value: (d: Defaults, spec: Spec | null) => string | null] } = {
+  capital: ['capital', (d) => plain(d.capital)],
+  costBps: ['costs', (d) => `${plain(d.costBps)} bps`],
+  slippageBps: ['slippage', (d) => `${plain(d.slippageBps)} bps`],
+  commission: ['commission', (d) => commissionText(d.commission)],
+  cashRate: ['cash rate', (d) => d.cashRate.trim()],
+  dataSource: ['data', (d) => d.dataSource],
+  borrowFee: ['borrow fee', (_, spec) => (spec?.margin && Object.values(spec.rules).some((r) => r.short) ? yearly(spec.margin.borrowFee) : null)],
+  marginRate: ['margin rate', (_, spec) => (spec?.margin ? yearly(spec.margin.rate) : null)],
+};
+
+/**
  * The strategy's text with the plugin defaults it leaves open written down as settings, so a later change to the
  * settings can't move a running test; for a block that can borrow, its borrow fee and margin rate too. A setting the
  * block already writes is left as it is, since a second one is an error. The lines go at the end, because a parameter's
  * line number is part of the spec and must not move.
  */
 export function pinDefaults(source: string, defaults: Defaults): string {
-  const pins: [string, string][] = [
-    ['capital', plain(defaults.capital)],
-    ['costs', `${plain(defaults.costBps)} bps`],
-    ['slippage', `${plain(defaults.slippageBps)} bps`],
-    ['commission', commissionText(defaults.commission)],
-    ['cash rate', defaults.cashRate.trim()],
-    ['data', defaults.dataSource],
-  ];
   const spec = parseSpec(source, { defaults }).spec;
-  if (spec?.margin) {
-    if (Object.values(spec.rules).some((r) => r.short)) pins.push(['borrow fee', yearly(spec.margin.borrowFee)]);
-    pins.push(['margin rate', yearly(spec.margin.rate)]);
+  const pins: [string, string][] = [];
+  for (const [setting, value] of Object.values(PINS)) {
+    const v = value(defaults, spec);
+    if (v !== null) pins.push([setting, v]);
   }
   const { given, scoped } = scan(source, pins.map(([key]) => key));
   const open = pins.filter(([key]) => !given.has(key));

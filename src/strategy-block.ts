@@ -20,7 +20,7 @@ import { renderPriceCharts } from './render-price.ts';
 import { renderRegimes } from './render-regimes.ts';
 import { renderSweep } from './render-sweep.ts';
 import { renderVersions } from './render-versions.ts';
-import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderRenamed, renderResult, type DrawnResult, type Loading, type NextAction, type Section, type ViewState } from './render.ts';
+import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderOldRecord, renderResult, type DrawnResult, type Loading, type NextAction, type OldRecord, type Section, type ViewState } from './render.ts';
 import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
 import type { Results } from './results.ts';
 import { setParamValues } from './rewrite.ts';
@@ -45,6 +45,8 @@ export interface StrategyOptions {
   apply?: (values: Record<string, number>) => Promise<void>;
   /** Writes a whole text in place of the block's, for restoring a version. Absent where the block can't be edited. */
   restore?: (text: string) => Promise<void>;
+  /** Opens the window that gives the block a name or a new name. Absent where the block can't be edited. */
+  rename?: () => void;
   /** Keys the block's remembered open or folded state; without one it is not remembered. */
   stateKey?: string;
   /** Which block of which note this is (render.ts blockStateKey), the same in the note and in the preview panel; absent when that can't be told. */
@@ -75,7 +77,7 @@ export interface BlocksHost {
   lookup(): SymbolLookup | null;
   /** Writes the properties of the note at `notePath` a moment after the last of its blocks has rendered. */
   scheduleProperties(notePath: string): void;
-  /** Each block's record of tries and versions, by its `blockKey`. */
+  /** The record of tries and versions of each block with a name, by its `blockKey`. */
   ledgers?: Ledgers;
   /** Writes a forward test note for the strategy and opens it, or says why it could not. */
   startForward(input: ForwardStart): Promise<void>;
@@ -84,11 +86,11 @@ export interface BlocksHost {
   /** Opens a menu of `items` under the element `at`. */
   showMenu(at: HTMLElement, items: MenuItems): void;
   /**
-   * For a block drawn in its note with the key `key`, the name `name` and the text `text`: the old name its record of tries
-   * and its links still use after a rename by hand, and the move that takes them to `name`; null when there is no clear
-   * sign of one.
+   * For a block drawn in its note with the key `key`, the name `name` and the text `text`: the record of tries it left
+   * elsewhere, under its old name after a rename by hand or in another note it was moved or copied from, and what brings
+   * it here; null when there is no clear sign of one.
    */
-  renamedFrom?(notePath: string, key: string, name: string, text: string): Promise<{ name: string; move(): Promise<void> } | null>;
+  oldRecord?(notePath: string, key: string, name: string, text: string): Promise<OldRecord | null>;
 }
 
 /** The block's text with the values of the run on screen written into it, as a kept note and a forward test carry it. */
@@ -317,8 +319,10 @@ export class StrategyBlocks {
       if (!out || this.disposers.get(child) !== stop) return;
       // A result that was run without the size limits is shown with its sliders without them too.
       drawing.follow(out);
-      // What the block has been through; a block with no key of its own records nothing.
-      const ledger = opts.blockKey ? this.host.ledgers?.forBlock(opts.blockKey) : undefined;
+      // What the block has been through; a block with no key of its own records nothing, and neither does a block with no
+      // name, whose key is its place in the note and passes to another block when blocks move.
+      const named = out.spec.name !== null;
+      const ledger = named && opts.blockKey ? this.host.ledgers?.forBlock(opts.blockKey) : undefined;
       void ledger?.add([trialOf(out.spec, out.backtest)], { text: source, defaults: drawing.defaults, figures: versionFigures(out.backtest) });
       const sections = (shown: RunOutput): Section[] => {
         const bt = shown.backtest;
@@ -333,6 +337,7 @@ export class StrategyBlocks {
           apply: opts.apply,
           rewrite: opts.restore,
           ledger,
+          ...(named ? {} : { unnamed: { rename: opts.rename } }),
           onResult: (paint: TrackPaint) => {
             this.sweeps.set(key, paint);
             for (const listen of this.sweepListeners.get(key) ?? []) listen(paint);
@@ -472,11 +477,11 @@ export class StrategyBlocks {
         card: drawn,
         refresh: () => redraw({ force: true, inPlace: true }),
       });
-      // A rename by hand is offered on the block in its note, which is where its record and links belong.
+      // A record left elsewhere is offered on the block in its note, which is where its record and links belong.
       const name = out.spec.name;
       if (ledger && name && opts.blockKey && !opts.panel) {
-        void this.host.renamedFrom?.(opts.notePath, opts.blockKey, name, source).then((found) => {
-          if (found && this.cards.get(child) === drawn) renderRenamed(el, found.name, found.move);
+        void this.host.oldRecord?.(opts.notePath, opts.blockKey, name, source).then((found) => {
+          if (found && this.cards.get(child) === drawn) renderOldRecord(el, found);
         });
       }
       this.disposers.set(child, () => {

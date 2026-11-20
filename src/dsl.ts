@@ -1461,7 +1461,8 @@ const BUILTIN_DEFAULTS: Defaults = { capital: 10_000, costBps: 0, slippageBps: 0
 
 export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult {
   const given = opts.defaults ?? {};
-  const defaults: Defaults = {
+  // Every key of Defaults, so a new default can't be dropped here without the type check saying so.
+  const defaults = {
     capital: given.capital ?? BUILTIN_DEFAULTS.capital,
     costBps: given.costBps ?? BUILTIN_DEFAULTS.costBps,
     slippageBps: given.slippageBps ?? BUILTIN_DEFAULTS.slippageBps,
@@ -1470,7 +1471,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     commission: given.commission,
     borrowFee: given.borrowFee,
     marginRate: given.marginRate,
-  };
+  } satisfies Record<keyof Defaults, unknown> as Defaults;
   const errors: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
   const settings = new Map<string, SettingLine>();

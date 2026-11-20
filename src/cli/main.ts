@@ -10,7 +10,8 @@ import { languageJson, llmsFull, wordList } from '../llm-files.ts';
 import type { DataDeps } from '../data.ts';
 import { replaceBlockInNote } from '../rewrite.ts';
 import { Runner, type RunOutput } from '../runner.ts';
-import { DEFAULT_SETTINGS, defaultsFrom } from '../settings-core.ts';
+import { HOUR } from '../format.ts';
+import { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, type Settings } from '../settings-core.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
@@ -52,9 +53,12 @@ Options:
   --fix      write into the note each correction that is the only one for its problem, examine the note again,
              and print what changed and the problems that remain (check)
   --block    the block of the note to run: its name, or its number (the first block is 1)
-  --vault    the vault folder, for the CSV files that a block reads (default: the folder above the note that contains .obsidian)
+  --vault    the vault folder, for the CSV files that a block reads and the plugin settings (default: the folder above the note that contains .obsidian)
   --cache    the folder for saved prices (default: $XDG_CACHE_HOME/backtest-blocks or ~/.cache/backtest-blocks)
   --refresh  download the prices again, and do not use the saved prices
+
+run uses the plugin settings that the vault keeps in .obsidian/plugins/backtest-blocks/data.json, so it gives the result that
+Obsidian gives. A vault without that file uses the default settings.
 
 The keys for Tiingo and FRED are in TIINGO_API_KEY and FRED_API_KEY.`;
 
@@ -284,6 +288,24 @@ function vaultAbove(from: string): string | null {
   }
 }
 
+/** Where a vault keeps the plugin's settings. */
+const SETTINGS_FILE = join('.obsidian', 'plugins', 'backtest-blocks', 'data.json');
+
+/**
+ * The plugin's settings as the vault at `vault` keeps them, read as the plugin reads them, so a run gives the result that
+ * Obsidian gives; null when the vault has no settings file. Rejects when the file is there but can't be read.
+ */
+export async function vaultSettings(vault: string): Promise<{ settings: Settings; path: string } | null> {
+  const path = join(vault, SETTINGS_FILE);
+  if (!existsSync(path)) return null;
+  return { settings: normalizeSettings(JSON.parse(await readFile(path, 'utf8'))), path };
+}
+
+/** The settings a run in the vault at `vault` uses: the vault's own, else the default settings. */
+export async function settingsIn(vault: string): Promise<Settings> {
+  return (await vaultSettings(vault))?.settings ?? DEFAULT_SETTINGS;
+}
+
 /** The block of a note to run: the one named or numbered, or the only one; else what to say. */
 export function pickBlock(text: string, file: string, block: string | undefined, how = '--block'): { block: FoundBlock } | { error: string } {
   const found = blocksIn(text, isNote(file));
@@ -301,13 +323,13 @@ export function pickBlock(text: string, file: string, block: string | undefined,
 /** Why a block was not run: which block to run is unclear (2), or it has errors, each at its line in the note (1). */
 export type NotRun = { code: 1 | 2; message: string };
 
-/** Runs one block of a note, or a bare block, with the plugin's default settings. Shared by `run` and the MCP tool. */
-export async function runNote(text: string, file: string, block: string | undefined, deps: DataDeps, refresh: boolean, how = '--block'): Promise<{ out: RunOutput } | NotRun> {
+/** Runs one block of a note, or a bare block, with the plugin settings `settings`. Shared by `run` and the MCP tool. */
+export async function runNote(text: string, file: string, block: string | undefined, deps: DataDeps, refresh: boolean, settings: Settings, how = '--block'): Promise<{ out: RunOutput } | NotRun> {
   const picked = pickBlock(text, file, block, how);
   if ('error' in picked) return { code: 2, message: picked.error };
   const errors = problemsOf(file, text, picked.block).filter((p) => p.severity === 'error');
   if (errors.length > 0) return { code: 1, message: `The block has errors. It did not run:\n${errors.map(problemLine).join('\n')}` };
-  const runner = new Runner(deps, defaultsFrom(DEFAULT_SETTINGS));
+  const runner = new Runner(deps, defaultsFrom(settings), { freshForMs: settings.cacheHours * HOUR });
   try {
     return { out: await runner.run(runner.parse(picked.block.source).spec!, refresh) };
   } catch (e) {
@@ -328,13 +350,22 @@ async function run(file: string | undefined, o: { block?: string; vault?: string
     return 2;
   }
   const noteDir = file === '-' ? io.cwd : dirname(resolve(io.cwd, file));
+  const vault = o.vault ? resolve(io.cwd, o.vault) : (vaultAbove(noteDir) ?? noteDir);
+  let saved: Awaited<ReturnType<typeof vaultSettings>>;
+  try {
+    saved = await vaultSettings(vault);
+  } catch (e) {
+    io.err(`run: cannot read the plugin settings in ${join(vault, SETTINGS_FILE)}: ${e instanceof Error ? e.message : e}`);
+    return 2;
+  }
+  if (saved) io.err(`run: uses the plugin settings in ${saved.path}`);
   const deps = nodeDeps({
-    vault: o.vault ? resolve(io.cwd, o.vault) : (vaultAbove(noteDir) ?? noteDir),
+    vault,
     cacheDir: o.cache ? resolve(io.cwd, o.cache) : defaultCacheDir(io.env),
     env: io.env,
     fetch: io.fetch,
   });
-  const result = await runNote(text, file, o.block, deps, o.refresh);
+  const result = await runNote(text, file, o.block, deps, o.refresh, saved?.settings ?? DEFAULT_SETTINGS);
   if ('code' in result) {
     io.err(result.message);
     return result.code;

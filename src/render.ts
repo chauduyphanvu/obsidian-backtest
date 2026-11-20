@@ -5,7 +5,7 @@ import { colourLines, colourSource, easeHeight, h, motionOK, reveal, revealBox, 
 import { debounce } from './result-cache.ts';
 import type { AssetState } from './engine.ts';
 import { applyFix, fixWord, shortMessage, suggestions } from './fixes.ts';
-import { DAY, fullStop, isIntraday, isoDate, minus, money, pct, signedPct, stamp } from './format.ts';
+import { DAY, fullStop, isIntraday, isoDate, minus, money, pct, plural, signedPct, stamp } from './format.ts';
 import { commentStart, declaredParams, paramName, settingKey, tokenizeBlock } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, pricesEnd, pricesOld, timingPhrase } from './orders.ts';
@@ -345,20 +345,45 @@ export function renderDefaultsChanged(el: HTMLElement, onRun: () => void): (chan
 }
 
 /**
- * A line at the top of a result whose block was renamed by hand: its record of tries and its links still use the old name
- * `name`, and its button runs `move`, which takes them to the new name. The line goes once the move is done; a move that
- * fails gives its button back.
+ * A record of tries that a block left elsewhere: under its old name in its own note (`renamed`), or in another note that it
+ * was moved from (`moved`) or copied from (`copied`, whose block has `tries` that this block does not count). `take` brings
+ * them to the block.
  */
-export function renderRenamed(el: HTMLElement, name: string, move: () => Promise<void>): void {
+export type OldRecord =
+  | { kind: 'renamed'; name: string; take(): Promise<void> }
+  | { kind: 'moved'; note: string; take(): Promise<void> }
+  | { kind: 'copied'; note: string; name: string; tries: number; take(): Promise<void> };
+
+/** What the line of an old record says, and its button. */
+export function oldRecordWords(found: OldRecord): { text: string; button: string } {
+  switch (found.kind) {
+    case 'renamed':
+      return { text: `This block has a new name. Its record of tries and its links still use the old name "${found.name}".`, button: 'Move them to the new name' };
+    case 'moved':
+      return { text: `This block was in ${found.note} before. Its record of tries still belongs to that note.`, button: 'Move the record to this note' };
+    case 'copied':
+      return {
+        text: `This block has the same text as "${found.name}" in ${found.note}. The count of this block does not include ${plural(found.tries, 'try', 'tries')} of that block.`,
+        button: found.tries === 1 ? 'Add it to the count' : 'Add them to the count',
+      };
+  }
+}
+
+/**
+ * A line at the top of a result whose block left a record of tries elsewhere (OldRecord), with a button that runs its
+ * `take`. The line goes once that is done; one that fails gives its button back.
+ */
+export function renderOldRecord(el: HTMLElement, found: OldRecord): void {
   const root = el.querySelector('.bt-root') ?? el;
   root.querySelector('.bt-renamed')?.remove();
+  const { text, button: label } = oldRecordWords(found);
   const line = document.createElement('div');
   line.className = 'bt-defaults-changed bt-renamed';
-  h(line, 'span', 'bt-defaults-changed-text', `This block has a new name. Its record of tries and its links still use the old name "${name}".`);
-  const button = h(line, 'button', 'bt-button', 'Move them to the new name');
+  h(line, 'span', 'bt-defaults-changed-text', text);
+  const button = h(line, 'button', 'bt-button', label);
   button.addEventListener('click', () => {
     button.disabled = true;
-    move().then(
+    found.take().then(
       () => line.remove(),
       () => {
         button.disabled = false;
@@ -517,6 +542,12 @@ export function blockStateKey(notePath: string, name: string | null, index: numb
 
 /** The start of the key of every named block in the note at `path`. */
 export const blockNameKeyPrefix = (path: string): string => `${blockKeyPrefix(path, false)}name:`;
+
+/** The end of the key of every block called `name`, in any note. */
+export const blockNameKeySuffix = (name: string): string => `\u0000name:${name.toLowerCase()}`;
+
+/** The path of the note a block's key belongs to. */
+export const keyNote = (key: string): string => key.slice(0, key.indexOf('\u0000'));
 
 /** The start of the key of every block in the note at `path`, or with `folder`, in every note under the folder at `path`. */
 export function blockKeyPrefix(path: string, folder: boolean): string {

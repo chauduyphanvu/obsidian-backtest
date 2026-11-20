@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import type { DataDeps } from '../src/data.ts';
 import type { Defaults } from '../src/dsl.ts';
 import { Ledgers, type Ledger, type LedgerStore } from '../src/ledger.ts';
+import { ADD_NAME, NAME_IT, UNNAMED } from '../src/render-luck.ts';
 import { blockStateKey } from '../src/render.ts';
 import { Results } from '../src/results.ts';
 import { normalizeSettings } from '../src/settings-core.ts';
@@ -67,11 +68,12 @@ function setup(more: Partial<BlocksHost> = {}) {
     showMenu: () => {},
     ...more,
   });
-  const draw = async (source: string, opts: { panel?: boolean; key?: string } = {}) => {
+  const draw = async (source: string, opts: { panel?: boolean; key?: string; rename?: () => void } = {}) => {
     const el = new El('div');
     const child = {};
-    const key = opts.key ?? blockStateKey('N.md', source.match(/^name: (.*)$/m)![1], 0);
-    await blocks.renderStrategy(source, el as unknown as HTMLElement, child, { notePath: 'N.md', ...(opts.panel ? { panel: true, blockKey: key } : { stateKey: key, blockKey: key }) });
+    const key = opts.key ?? blockStateKey('N.md', source.match(/^name: (.*)$/m)?.[1] ?? null, 0);
+    const place = opts.panel ? { panel: true, blockKey: key } : { stateKey: key, blockKey: key, ...(opts.rename ? { rename: opts.rename } : {}) };
+    await blocks.renderStrategy(source, el as unknown as HTMLElement, child, { notePath: 'N.md', ...place });
     return { el, child, card: () => el.byClass('bt-result')[0] };
   };
   return { blocks, results, reads, draw, records };
@@ -125,24 +127,68 @@ test('folding a note folds its results on screen, not the preview\'s, and the ot
   assert.ok(renamed.card().classes().includes('bt-folded'));
 });
 
-test('a block in its note shows the line of a rename by hand when the plugin finds one, and the preview does not', async () => {
+test('a block in its note shows the line of a record it left elsewhere when the plugin finds one, and the preview does not', async () => {
   const asked: string[] = [];
+  const take = async () => {};
   const { draw } = setup({
-    renamedFrom: async (note, key, name, text) => {
-      // The block's text is what tells a rename from a new block.
+    oldRecord: async (note, key, name, text) => {
+      // The block's text is what tells a rename, a move or a copy from a new block.
       assert.equal(text, block(name));
       asked.push(`${note} ${key} ${name}`);
-      return name === 'Trend v2' ? { name: 'Trend', move: async () => {} } : null;
+      if (name === 'Trend v2') return { kind: 'renamed', name: 'Trend', take };
+      if (name === 'Moved') return { kind: 'moved', note: 'Scratch.md', take };
+      if (name === 'Copied') return { kind: 'copied', note: 'Scratch.md', name: 'Copied', tries: 120, take };
+      return null;
     },
   });
   const renamed = await draw(block('Trend v2'));
   await settle();
   assert.equal(renamed.el.byClass('bt-renamed').length, 1);
   assert.match(renamed.el.byClass('bt-renamed')[0].textContent, /the old name "Trend"/);
+  const moved = await draw(block('Moved'));
+  await settle();
+  assert.match(moved.el.byClass('bt-renamed')[0].textContent, /was in Scratch\.md before.*Move the record to this note/);
+  const copied = await draw(block('Copied'));
+  await settle();
+  assert.match(copied.el.byClass('bt-renamed')[0].textContent, /does not include 120 tries of that block\.Add them to the count/);
   const other = await draw(block('Swing'));
   await settle();
   assert.equal(other.el.byClass('bt-renamed').length, 0);
   await draw(block('Trend v2'), { panel: true });
   await settle();
-  assert.deepEqual(asked, [`N.md ${blockStateKey('N.md', 'Trend v2', 0)} Trend v2`, `N.md ${blockStateKey('N.md', 'Swing', 0)} Swing`]);
+  assert.deepEqual(
+    asked,
+    ['Trend v2', 'Moved', 'Copied', 'Swing'].map((n) => `N.md ${blockStateKey('N.md', n, 0)} ${n}`),
+  );
+});
+
+test('a block with no name counts no tries, has no Versions section, and asks for a name in "How many tries"', async () => {
+  let asked = 0;
+  const { draw, records } = setup({
+    oldRecord: async () => {
+      asked++;
+      return null;
+    },
+  });
+  const unnamed = 'universe: csv:a.csv\nbuy when close > sma(20)\nsell when close < sma(20)';
+  let renames = 0;
+  const note = await draw(unnamed, { rename: () => renames++ });
+  await settle();
+  assert.equal(records.size, 0, 'nothing is recorded under the place of the block');
+  assert.equal(note.el.byClass('bt-versions').length, 0);
+  assert.equal(note.el.byClass('bt-figures-note')[0]?.textContent ?? '', '');
+  note.el.byClass('bt-luck')[0].dispatch('toggle');
+  const tries = note.el.byClass('bt-luck-verdict')[0];
+  assert.equal(tries.textContent, UNNAMED);
+  const button = tries.parent!.byClass('bt-button').find((b) => b.textContent === NAME_IT)!;
+  button.dispatch('click');
+  assert.equal(renames, 1);
+  assert.equal(asked, 0);
+  // The preview panel can't edit the block, so it says how to name it instead.
+  const panel = await draw(unnamed, { panel: true });
+  panel.el.byClass('bt-luck')[0].dispatch('toggle');
+  const said = panel.el.byClass('bt-luck-verdict')[0];
+  assert.equal(said.textContent, `${UNNAMED} ${ADD_NAME}`);
+  assert.equal(said.parent!.byClass('bt-button').filter((b) => b.textContent === NAME_IT).length, 0);
+  assert.equal(records.size, 0);
 });

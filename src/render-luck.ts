@@ -73,7 +73,9 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
   const used = valuesUsed(bt.spec.params);
   const ours = used ? SHOWN : NOTE;
   if (used) h(body, 'p', 'bt-note', used);
-  const stopTries = input.ledger ? triesBlock(h(body, 'div'), input.ledger, bt) : () => {};
+  let stopTries = () => {};
+  if (input.ledger) stopTries = triesBlock(h(body, 'div'), input.ledger, bt);
+  else if (input.unnamed) unnamedTries(h(body, 'div'), input.unnamed.rename);
   const controls = h(body, 'div', 'bt-run-row');
   const run = h(controls, 'button', 'bt-button mod-cta', 'Run checks');
   const progress = progressBar(controls);
@@ -289,6 +291,17 @@ export function triesNote(t: Tries): string | null {
 
 export const RESET = 'Start the count again';
 
+export const UNNAMED = 'The plugin counts tries and keeps versions only for a strategy with a name. This strategy has no name. Thus the plugin does not correct its Sharpe ratio for other tries.';
+export const ADD_NAME = 'To start the count, add a name line to the block, for example name: Trend.';
+export const NAME_IT = 'Give the strategy a name';
+
+/** Draws "How many tries" for a block with no name, which keeps no count: why, and the button that gives it a name, or how to add one where the block can't be edited. */
+function unnamedTries(el: HTMLElement, rename?: () => void): void {
+  const sec = check(el, 'How many tries');
+  h(sec, 'p', 'bt-luck-verdict', rename ? UNNAMED : `${UNNAMED} ${ADD_NAME}`);
+  if (rename) h(h(sec, 'div', 'bt-run-row'), 'button', 'bt-button', NAME_IT).addEventListener('click', rename);
+}
+
 /** Draws the count of tries, following the record as it changes; returns what stops it following. */
 function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => void {
   let gone = false;
@@ -318,7 +331,7 @@ function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => v
     how(
       sec,
       'The count includes each run shown in the note or the preview panel, each slider position, and each variant of a sweep or walk-forward. Each set of rules and values that traded counts one time. Two blocks that trade the same count one time, also when their text is different. The deflated Sharpe ratio (Bailey and López de Prado, 2014) calculates the best Sharpe ratio that this number of tries usually has with no edge. It uses the spread of their Sharpe ratios. Then it calculates the probability that the run shown is above this value. It uses the length of the history and the skew and heavy tails of the returns.',
-      'The count does not include tries in other places, for example in a different program or in a previous copy of the block. It also does not include ideas that you did not run, or the reshuffles and random entries of these checks. Runs of the orders window and of compare and backtests blocks are not in the count. The count is for one block only. A new name line starts a new count. If a block has no name line, a move of the block starts a new count.',
+      'The count does not include tries in other places, for example in a different program or in a previous copy of the block. It also does not include ideas that you did not run, or the reshuffles and random entries of these checks. Runs of the orders window and of compare and backtests blocks are not in the count. The count is for one block only. A new name line starts a new count. A move or a copy of the block to a different note also starts a new count. If the plugin finds the first block, a line at the top of the result offers to add its tries.',
     );
   };
   const unwatch = follow(ledger, draw);

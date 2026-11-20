@@ -485,8 +485,8 @@ body {
   overflow-x: auto;
 }
 
-/* A result whose default settings have since changed, or whose block was renamed by hand (.bt-renamed): the line and its
-   button sit on one row, and wrap in a narrow pane. */
+/* A result whose default settings have since changed, or whose block left a record of tries elsewhere (.bt-renamed: renamed
+   by hand, moved or copied from another note): the line and its button sit on one row, and wrap in a narrow pane. */
 .bt-defaults-changed {
   display: flex;
   flex-wrap: wrap;

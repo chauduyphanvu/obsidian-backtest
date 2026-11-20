@@ -9,7 +9,7 @@ import { parseSpec } from '../src/dsl.ts';
 import { awayText, nextOrder, orderLine, watchText } from '../src/render-now.ts';
 import { renderPriceCharts } from '../src/render-price.ts';
 import { renderRegimes } from '../src/render-regimes.ts';
-import { oldPrices, renderRenamed, renderResult, type ResultView } from '../src/render.ts';
+import { oldPrices, oldRecordWords, renderOldRecord, renderResult, type ResultView } from '../src/render.ts';
 import { versusView } from '../src/render-versus.ts';
 import type { AssetRef } from '../src/types.ts';
 import type { RunOutput } from '../src/runner.ts';
@@ -674,8 +674,8 @@ test('a result renamed by hand says which name its record still uses, and its bu
     moves++;
     if (fail) throw new Error('The disk is full.');
   };
-  renderRenamed(root as unknown as HTMLElement, 'Trend', move);
-  renderRenamed(root as unknown as HTMLElement, 'Trend', move);
+  renderOldRecord(root as unknown as HTMLElement, { kind: 'renamed', name: 'Trend', take: move });
+  renderOldRecord(root as unknown as HTMLElement, { kind: 'renamed', name: 'Trend', take: move });
   assert.equal(root.byClass('bt-renamed').length, 1, 'one line, however often it is asked for');
   const line = root.byClass('bt-renamed')[0];
   assert.equal(root.byClass('bt-result')[0].children[0], line);
@@ -693,4 +693,25 @@ test('a result renamed by hand says which name its record still uses, and its bu
   await settle();
   assert.equal(moves, 2);
   assert.equal(root.byClass('bt-renamed').length, 0);
+});
+
+test('a result moved or copied from another note says where its record is, and a later line takes the place of an earlier one', () => {
+  const take = async () => {};
+  assert.deepEqual(oldRecordWords({ kind: 'moved', note: 'Ideas/Scratch.md', take }), {
+    text: 'This block was in Ideas/Scratch.md before. Its record of tries still belongs to that note.',
+    button: 'Move the record to this note',
+  });
+  assert.deepEqual(oldRecordWords({ kind: 'copied', note: 'Scratch.md', name: 'Trend', tries: 120, take }), {
+    text: 'This block has the same text as "Trend" in Scratch.md. The count of this block does not include 120 tries of that block.',
+    button: 'Add them to the count',
+  });
+  assert.deepEqual(oldRecordWords({ kind: 'copied', note: 'Scratch.md', name: 'Trend', tries: 1, take }), {
+    text: 'This block has the same text as "Trend" in Scratch.md. The count of this block does not include 1 try of that block.',
+    button: 'Add it to the count',
+  });
+  const root = draw(run(TREND));
+  renderOldRecord(root as unknown as HTMLElement, { kind: 'renamed', name: 'Trend', take });
+  renderOldRecord(root as unknown as HTMLElement, { kind: 'moved', note: 'Scratch.md', take });
+  assert.equal(root.byClass('bt-renamed').length, 1);
+  assert.equal(root.byClass('bt-renamed')[0].byClass('bt-button')[0].textContent, 'Move the record to this note');
 });
