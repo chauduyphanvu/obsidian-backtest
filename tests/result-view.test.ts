@@ -259,7 +259,7 @@ test('folded, the line has the growth, the figures and what is held; the chip sa
   const report: TriggerReport = { next: 0, intraday: false, closeFill: false, decision: null, triggers: [near] };
   const root = draw(out, { compact: true, triggers: () => Promise.resolve(report) });
   assert.ok(root.children[0] instanceof El && (root.children[0] as El).classes().includes('bt-folded'));
-  const facts = root.byClass('bt-fold-facts')[0];
+  const facts = root.byClass('bt-fold-text')[0];
   assert.equal(facts.byClass('bt-spark').length, 1);
   assert.equal(facts.byClass('bt-fold-tickers')[0].textContent, 'A');
   // Each figure is a number over its unit, in a column of its own.

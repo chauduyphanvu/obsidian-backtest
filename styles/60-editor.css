@@ -1,15 +1,8 @@
-.bt-diag {
-  text-decoration-line: underline;
-  text-decoration-style: wavy;
-  text-decoration-thickness: 1px;
-  text-decoration-skip-ink: none;
-  text-underline-offset: 3px;
-}
 .bt-diag-error {
-  text-decoration-color: var(--text-error);
+  --bt-wave: var(--text-error);
 }
 .bt-diag-warning {
-  text-decoration-color: var(--text-warning);
+  --bt-wave: var(--text-warning);
 }
 
 /* CodeMirror puts the message inside its own tooltip box, which is the element that needs the frame. When the window has

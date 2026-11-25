@@ -10,6 +10,7 @@ import { SYSTEM_PROMPT } from '../src/llm.ts';
 import { PriceStore, type PriceFiles } from '../src/price-store.ts';
 import { Runner } from '../src/runner.ts';
 import { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, validateSetting } from '../src/settings-core.ts';
+import { settingRows } from '../src/settings-rows.ts';
 import { SymbolLookup, blockSource, blockTickers } from '../src/symbols.ts';
 import type { AssetRef, KeyedService } from '../src/types.ts';
 import { DAY } from './helpers.ts';
@@ -326,9 +327,9 @@ test('the settings save the names of the secrets, never a key, and the setting n
   assert.equal(defaultsFrom({ ...DEFAULT_SETTINGS, dataSource: 'tiingo' }).dataSource, 'tiingo');
   const defaults = JSON.stringify(defaultsFrom({ ...DEFAULT_SETTINGS, tiingoSecret: 'tiingo-secret', fredSecret: 'fred-secret', tiingoFallback: true }));
   assert.ok(!/secret|fallback/i.test(defaults), defaults);
-  const tab = readFileSync(new URL('../src/settings.ts', import.meta.url), 'utf8');
-  for (const name of Object.values(KEY_SETTING)) assert.ok(tab.includes(`.setName('${name}')`), name);
-  assert.ok(tab.includes(".setName('Use Tiingo when Yahoo is not available')"));
+  const rows = settingRows(DEFAULT_SETTINGS);
+  for (const name of Object.values(KEY_SETTING)) assert.ok(rows.some((r) => r.kind === 'secret' && r.name === name), name);
+  assert.ok(rows.some((r) => r.kind === 'toggle' && r.name === 'Use Tiingo when Yahoo is not available'));
 });
 
 test('a saved FRED series with its note is ready to run with no download', async () => {

@@ -273,8 +273,9 @@ export function applyParamAtCursor(view: EditorView): boolean {
   return true;
 }
 
-const element = (doc: Document, tag: string, cls: string, text?: string): HTMLElement => {
-  const el = doc.createElement(tag);
+// Made with the createEl of the editor's own window, which may be a popout: Obsidian gives each window its own.
+const element = (doc: Document, tag: keyof HTMLElementTagNameMap, cls: string, text?: string): HTMLElement => {
+  const el = (doc.win as Window & typeof globalThis).createEl(tag);
   el.className = cls;
   if (text !== undefined) el.textContent = text;
   return el;

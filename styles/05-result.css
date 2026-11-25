@@ -145,7 +145,7 @@
   width: 1px;
   height: 1px;
   overflow: hidden;
-  clip-path: inset(50%);
+  clip: rect(0 0 0 0);
   white-space: nowrap;
 }
 /* Holds its line while empty, so the shapes under it do not move when the count comes. */
@@ -643,25 +643,6 @@
   gap: 6px;
 }
 
-/* A button that reads as a link. */
-.bt-root button.bt-link-button {
-  align-self: flex-start;
-  height: auto;
-  padding: 2px 0;
-  border: none;
-  background: none;
-  box-shadow: none;
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-  text-decoration: underline;
-  text-decoration-color: var(--background-modifier-border-hover);
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-.bt-root button.bt-link-button:hover {
-  color: var(--text-normal);
-}
-
 /* The block's text, its settings folded away. */
 .bt-src {
   display: flex;
@@ -869,10 +850,9 @@
   cursor: pointer;
 }
 .bt-root button.bt-vs-label:hover {
-  background: none;
   box-shadow: none;
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
+  /* A dotted line under the name, drawn as a background. */
+  background: linear-gradient(to right, currentColor 1px, transparent 1px) 0 100% / 3px 1px repeat-x;
 }
 .bt-root button.bt-vs-label:focus-visible {
   box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
@@ -1605,10 +1585,7 @@
   box-shadow: inset 3px 0 0 var(--bt-warn-dot);
 }
 .bt-squig {
-  text-decoration: underline wavy var(--bt-bad);
-  text-decoration-skip-ink: none;
-  text-decoration-thickness: 1.5px;
-  text-underline-offset: 4px;
+  --bt-wave: var(--bt-bad);
 }
 .bt-squig-fixed {
   border-radius: 3px;

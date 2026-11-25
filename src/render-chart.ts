@@ -781,7 +781,7 @@ let sparks = 0;
  * A small chart of a strategy against its benchmark: both on one log scale, and the gap between them shaded in the colour
  * of whichever is ahead, as in the value chart. No axes.
  */
-export function drawSpark(parent: HTMLElement, series: SparkSeries, width = 68, height = 24): void {
+export function drawSpark(parent: HTMLElement, series: SparkSeries, width = 68, height = 24): HTMLElement {
   const { strategy, benchmark } = series;
   const n = benchmark.length;
   let [least, most] = [Infinity, 0];
@@ -794,7 +794,7 @@ export function drawSpark(parent: HTMLElement, series: SparkSeries, width = 68, 
   }
   const box = h(parent, 'span', 'bt-spark');
   const svg = s(box, 'svg', { width, height, viewBox: `0 0 ${width} ${height}`, class: 'bt-svg', role: 'img', 'aria-label': `Value of the strategy and of ${series.label}` });
-  if (n < 2 || most === 0) return;
+  if (n < 2 || most === 0) return box;
   const lo = Math.log(least);
   const span = Math.log(most) - lo || 1;
   const x = (i: number) => ((i / (n - 1)) * (width - 2) + 1).toFixed(1);
@@ -814,9 +814,10 @@ export function drawSpark(parent: HTMLElement, series: SparkSeries, width = 68, 
   }
   if (b.length > 1) s(svg, 'path', { d: `M${b.join('L')}`, class: 'bt-line bt-line-benchmark bt-spark-line' });
   if (m.length > 1) s(svg, 'path', { d: `M${m.join('L')}`, class: 'bt-line bt-line-strategy bt-spark-line' });
+  return box;
 }
 
 /** A small line of the strategy against its benchmark, for the folded result: no axes, both on one log scale. */
-export function sparkline(parent: HTMLElement, bt: Backtest, width = 68, height = 24): void {
-  drawSpark(parent, sparkSeries(bt), width, height);
+export function sparkline(parent: HTMLElement, bt: Backtest, width = 68, height = 24): HTMLElement {
+  return drawSpark(parent, sparkSeries(bt), width, height);
 }

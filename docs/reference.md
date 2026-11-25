@@ -1492,7 +1492,7 @@ A strategy block shows its result only when the cursor leaves it in live preview
 
 ## Settings
 
-Settings are under Community plugins, then Backtest Blocks.
+Settings are under Community plugins, then Backtest Blocks. In Obsidian 1.13 and later, the search of the settings window also finds them.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
@@ -1820,7 +1820,7 @@ Layout of `src/`:
 - `render-account.ts`: drawing the `account` block: its orders, how to split, and your fills against the strategies' trades, with the form that names an unrecognised file's columns.
 - `live-core.ts`, `live-view.ts`: the strategy preview panel: choosing the block to show, and the panel.
 - `render.ts`, `render-chart.ts`, `render-versus.ts`, `verdict.ts`, `render-now.ts`, `tabs.ts`, `render-params.ts`, `render-trades.ts`, `render-stats.ts`, `render-price.ts`, `price-chart.ts`, `render-debug.ts`, `render-sweep.ts`, `render-luck.ts`, `render-compare.ts`, `render-dashboard.ts`, `render-actions.ts`, `orders-view.ts`, `dom.ts`: drawing results, charts, tables and windows. `render.ts` lays out a result and its folded line, `verdict.ts` words its verdict and picks its figures, `render-versus.ts` draws them, `render-chart.ts` draws its value chart and the small one on the folded line, `render-now.ts` the status line under the title, its panel and the mark of a near order, `tabs.ts` turns its sections into tabs, `render-stats.ts` draws the Years and Months tabs, `render-params.ts` the numbers you can drag in the rules and the sliders, `render-debug.ts` the bar-by-bar table, `render-sweep.ts` and `render-luck.ts` the sweep and luck sections, `render-compare.ts` the compare block and `render-dashboard.ts` the `backtests` block.
-- `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `types.ts`: the plugin itself, settings and shared types.
+- `main.ts`, `blocks.ts`, `settings.ts`, `settings-core.ts`, `settings-rows.ts`, `types.ts`: the plugin itself, settings (`settings-rows.ts` holds the rows of the settings tab, which Obsidian 1.13 and later draws from definitions and older versions by hand) and shared types.
 - `format.ts`: how numbers, dates and times are written, and the ticks of chart axes, for the logic and the drawing alike.
 
 `styles/*.css` are joined into `styles.css` when you build. `tests/` holds the unit tests, including `readme.test.ts`, which checks every `strategy`, `compare`, `account`, `backtests` and `forward` block in this reference and in the README.

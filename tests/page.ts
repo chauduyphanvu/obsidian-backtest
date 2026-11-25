@@ -176,7 +176,12 @@ export class El {
 }
 
 // Each test file runs in a process of its own, so the page stays a stand-in for the whole run of the file that imports this.
-(globalThis as { document?: unknown }).document = { activeElement: null, createElement: (tag: string) => new El(tag), createElementNS: (_ns: string, tag: string) => new El(tag) };
+(globalThis as { document?: unknown }).document = {
+  activeElement: null,
+  createElement: (tag: string) => new El(tag),
+  createElementNS: (_ns: string, tag: string) => new El(tag),
+  win: { createEl: (tag: string) => new El(tag) },
+};
 // Obsidian's own globals for making elements, and the document of the window that has focus.
 Object.assign(globalThis, {
   activeDocument: globalThis.document,

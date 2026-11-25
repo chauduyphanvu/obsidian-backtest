@@ -50,23 +50,37 @@ body {
   --bt-tok-value: 88%;
 }
 /* With "reduce motion" on, every change is a cut, and the one repeating motion (an order near) is a still ring (05-result.css).
-   Only !important reaches every animation and transition, whatever the selector that set it. */
+   No element has the id bt-motion, so :not(#bt-motion) matches every element; the id puts these rules above every class
+   selector, so they win over each animation and transition that the plugin and Obsidian set on these elements. */
 @media (prefers-reduced-motion: reduce) {
-  .bt-root,
-  .bt-root *,
-  .bt-root *::before,
-  .bt-root *::after,
-  .bt-orders *,
-  .bt-orders *::before,
-  .bt-orders *::after,
-  .bt-help *,
-  .bt-live-view * {
-    animation-duration: 1ms !important;
-    animation-iteration-count: 1 !important;
-    animation-delay: 0ms !important;
-    transition-duration: 1ms !important;
-    transition-delay: 0ms !important;
+  .bt-root:not(#bt-motion),
+  .bt-root *:not(#bt-motion),
+  .bt-root *:not(#bt-motion)::before,
+  .bt-root *:not(#bt-motion)::after,
+  .bt-orders *:not(#bt-motion),
+  .bt-orders *:not(#bt-motion)::before,
+  .bt-orders *:not(#bt-motion)::after,
+  .bt-help *:not(#bt-motion),
+  .bt-live-view *:not(#bt-motion) {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+    animation-delay: 0ms;
+    transition-duration: 1ms;
+    transition-delay: 0ms;
   }
+}
+
+/* A wavy line under words with a problem, in the colour --bt-wave: a zigzag of two gradients along the bottom, drawn as a
+   background. */
+.bt-squig,
+.bt-diag {
+  padding-bottom: 2px;
+  background-image:
+    linear-gradient(45deg, transparent 60%, var(--bt-wave) 60% 80%, transparent 80%),
+    linear-gradient(135deg, transparent 20%, var(--bt-wave) 20% 40%, transparent 40%);
+  background-position: 0 100%;
+  background-repeat: repeat-x;
+  background-size: 4px 2px;
 }
 
 /* A box that opens and closes (dom.ts reveal): the space first, then the content. */

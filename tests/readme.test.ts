@@ -21,6 +21,8 @@ import { RESTORE } from '../src/render-versions.ts';
 import { WAITING, WRITTEN } from '../src/render-sweep.ts';
 import { NOTE_CHANGED } from '../src/rewrite.ts';
 import { oldRecordWords, type OldRecord } from '../src/render.ts';
+import { DEFAULT_SETTINGS } from '../src/settings-core.ts';
+import { settingRows } from '../src/settings-rows.ts';
 import { bars } from './helpers.ts';
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -190,9 +192,9 @@ test('the reference layout names no source file that is not there', () => {
 
 /** The names of the settings the settings tab shows, in the plugin's own words. */
 function tabSettings(): string[] {
-  const tab = read('src/settings.ts');
-  const named = [...tab.matchAll(/\.setName\('([^']+)'\)([^;]*);/g)].filter((m) => !m[2].includes('.setHeading()'));
-  return [...named, ...tab.matchAll(/this\.field\(\s*'([^']+)'/g)].map((m) => m[1]);
+  return settingRows(DEFAULT_SETTINGS)
+    .filter((r) => r.kind !== 'heading')
+    .map((r) => r.name);
 }
 
 test('the reference names every setting the settings tab shows', () => {

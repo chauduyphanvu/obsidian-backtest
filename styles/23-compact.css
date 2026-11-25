@@ -1,8 +1,9 @@
 /* The title of a result is a button that folds it to one line and opens it again. */
 
-/* A button's own display rule would otherwise beat the hidden attribute. */
-.bt-root [hidden] {
-  display: none !important;
+/* A button's own display rule would otherwise beat the hidden attribute. No element has the id bt-shown, so the :not()
+   matches every element and puts this rule above every class selector. */
+.bt-root [hidden]:not(#bt-shown) {
+  display: none;
 }
 .bt-root.bt-folded {
   padding: 6px 10px;
@@ -55,7 +56,7 @@
   gap: 4px 14px;
   min-width: 0;
 }
-.bt-fold[aria-expanded='true'] .bt-fold-facts {
+.bt-fold[aria-expanded='true'] .bt-fold-fact {
   display: none;
 }
 
@@ -82,10 +83,6 @@
 .bt-root.bt-folded .bt-meta {
   display: none;
 }
-.bt-root.bt-folded .bt-fold-facts {
-  display: contents;
-  animation: none;
-}
 .bt-fold-sub {
   grid-column: 1;
   grid-row: 2;
@@ -102,7 +99,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.bt-root.bt-folded .bt-fold-facts > .bt-spark {
+.bt-root.bt-folded .bt-fold-text > .bt-spark {
   grid-column: 2;
   grid-row: 1 / span 2;
 }
@@ -203,13 +200,13 @@
     gap: 4px 10px;
     padding-top: 4px;
   }
-  .bt-root.bt-folded .bt-fold-facts > .bt-spark {
+  .bt-root.bt-folded .bt-fold-text > .bt-spark {
     grid-column: 2;
     grid-row: 3;
     justify-self: end;
     padding-top: 4px;
   }
-  .bt-root.bt-folded .bt-fold-facts > .bt-spark svg {
+  .bt-root.bt-folded .bt-fold-text > .bt-spark svg {
     width: 56px;
     height: auto;
   }
@@ -223,7 +220,7 @@
   opacity: 0;
   transition: opacity 120ms var(--bt-ease);
 }
-.bt-root.bt-folded .bt-fold-facts > * {
+.bt-root.bt-folded .bt-fold-fact {
   animation: bt-fade-in var(--bt-t-comp) var(--bt-ease) both;
 }
 

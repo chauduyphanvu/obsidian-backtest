@@ -79,10 +79,9 @@ export function renderLoading(el: HTMLElement, o: { title: string; tickers: stri
   const say = h(root, 'div', 'bt-loading-say', start);
   say.setAttribute('aria-live', 'polite');
   if (o.folded) {
-    const line = h(text, 'span', 'bt-fold-facts');
-    h(line, 'span', 'bt-sk bt-sk-spark');
-    h(line, 'span', 'bt-sk bt-sk-fact');
-    h(line, 'span', 'bt-sk bt-sk-fact');
+    h(text, 'span', 'bt-fold-fact bt-sk bt-sk-spark');
+    h(text, 'span', 'bt-fold-fact bt-sk bt-sk-fact');
+    h(text, 'span', 'bt-fold-fact bt-sk bt-sk-fact');
     return { tickers: () => {}, prices: () => (say.textContent = 'The plugin runs the backtest…') };
   }
   h(text, 'span', 'bt-meta', o.tickers.join(' \u00b7 '));
@@ -823,7 +822,8 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
   const titleRow = h(text, 'span', 'bt-title-row');
   h(titleRow, 'span', 'bt-title', first.spec.name ?? 'Backtest');
   const meta = h(text, 'span', 'bt-meta');
-  const line = h(text, 'span', 'bt-fold-facts');
+  // The facts of the folded line, each a cell of its grid (23-compact.css).
+  let foldCells: HTMLElement[] = [];
   const tools = h(head, 'div', 'bt-head-tools');
   const refresh = h(tools, 'button', 'bt-icon-button bt-refresh');
   refresh.type = 'button';
@@ -862,20 +862,23 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     // Folded, the line is on fixed columns, so a stack of folded results reads as one list: the tickers (and any notes)
     // under the name, the growth against the benchmark, the return per year, the worst drawdown, then the position and
     // what is near or due.
-    line.replaceChildren();
-    const sub = h(line, 'span', 'bt-fold-sub');
+    for (const old of foldCells) old.remove();
+    const sub = h(text, 'span', 'bt-fold-sub bt-fold-fact');
     h(sub, 'span', 'bt-fold-tickers', tickerList(out.spec.universe.map((a) => a.name)));
     const noteCount = notesOf(view, out).length;
     if (noteCount > 0) h(sub, 'span', 'bt-fold-mark', noteCount === 1 ? '1 note' : `${noteCount} notes`);
-    sparkline(line, bt);
+    const spark = sparkline(text, bt);
+    spark.classList.add('bt-fold-fact');
     const figure = (cls: string, value: string, unit: string) => {
-      const f = h(line, 'span', `bt-fold-fig ${cls}`);
+      const f = h(text, 'span', `bt-fold-fig bt-fold-fact ${cls}`);
       h(f, 'span', 'bt-fold-fig-value', value);
       h(f, 'span', 'bt-fold-fig-unit', unit);
+      return f;
     };
-    figure('bt-fold-cagr', signedPct(bt.stats.cagr), 'a year');
-    figure('bt-fold-dd', pct(bt.stats.maxDrawdown), 'worst');
-    const state = h(line, 'span', 'bt-fold-state');
+    const cagr = figure('bt-fold-cagr', signedPct(bt.stats.cagr), 'a year');
+    const dd = figure('bt-fold-dd', pct(bt.stats.maxDrawdown), 'worst');
+    const state = h(text, 'span', 'bt-fold-state bt-fold-fact');
+    foldCells = [sub, spark, cagr, dd, state];
     const holding = holdingFacts(out);
     const held = h(state, 'span', `bt-fold-held${holding.held === null ? ' bt-chip-cash' : ''}`);
     h(held, 'span', 'bt-chip-dot');
