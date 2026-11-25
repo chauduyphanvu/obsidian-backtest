@@ -1,7 +1,6 @@
 import {
   Notice,
   PluginSettingTab,
-  requireApiVersion,
   SecretComponent,
   Setting,
   type App,
@@ -10,6 +9,7 @@ import {
   type SettingDefinition,
   type SettingDefinitionGroup,
   type SettingDefinitionItem,
+  type TextComponent,
 } from 'obsidian';
 import type { Settings } from './settings-core.ts';
 import { savedText, settingRows, type SettingRow } from './settings-rows.ts';
@@ -26,9 +26,16 @@ export interface SettingsHost {
 type Row = Exclude<SettingRow, { kind: 'heading' }>;
 type ValueRow = Exclude<Row, { kind: 'clear-prices' }>;
 
+// The rows whose description and placeholder depend on the provider. The plugin draws them itself in both ways of drawing
+// the tab, so that a change of provider can rewrite them in place: Obsidian's update(), which draws the tab again from
+// its definitions, is newer than minAppVersion.
+const BY_PROVIDER = new Set<string>(['llmBaseUrl', 'llmModel', 'llmSecret']);
+
 export class BacktestSettingTab extends PluginSettingTab {
   // Only what the tab needs: through Plugin, `settings` would read as the API of Obsidian 1.13, newer than minAppVersion.
   private host: SettingsHost;
+  /** The rows that depend on the provider, as last drawn. */
+  private providerRows = new Map<string, { setting: Setting; text?: TextComponent; message?: HTMLElement }>();
 
   constructor(app: App, plugin: Plugin & SettingsHost) {
     super(app, plugin);
@@ -59,57 +66,22 @@ export class BacktestSettingTab extends PluginSettingTab {
     if (!row) return;
     const saved = row.kind === 'text' ? savedText(row, String(value)) : row.kind === 'number' ? Number(value) : row.kind === 'secret' ? (value ?? '') : value;
     await this.change(row, saved);
-    // What the rows of the strategy writer say depends on its provider.
-    if (key === 'llmProvider' && requireApiVersion('1.13.0')) this.update();
   }
 
   /** The tab drawn by hand, for Obsidian before 1.13. */
   display(): void {
-    this.draw();
-  }
-
-  private draw(): void {
     const { containerEl } = this;
-    const settings = this.host.settings;
     containerEl.empty();
-    for (const row of settingRows(settings)) {
+    for (const row of settingRows(this.host.settings)) {
       const setting = new Setting(containerEl).setName(row.name);
-      if (row.kind === 'heading') {
-        setting.setHeading();
-        continue;
-      }
-      setting.setDesc(row.desc);
-      switch (row.kind) {
-        case 'text':
-        case 'number':
-          this.field(setting, row, String(settings[row.key]));
-          break;
-        case 'dropdown':
-          setting.addDropdown((d) =>
-            d
-              .addOptions(row.options)
-              .setValue(settings[row.key])
-              .onChange(async (v) => {
-                await this.change(row, v);
-                if (row.key === 'llmProvider') this.draw();
-              }),
-          );
-          break;
-        case 'toggle':
-          setting.addToggle((t) => t.setValue(settings[row.key]).onChange((v) => this.change(row, v)));
-          break;
-        case 'secret':
-          setting.addComponent((el) => new SecretComponent(this.app, el).setValue(settings[row.key]).onChange((name) => this.change(row, name ?? '')));
-          break;
-        case 'clear-prices':
-          setting.addButton((b) => this.clearPricesButton(b));
-          break;
-      }
+      if (row.kind === 'heading') setting.setHeading();
+      else this.drawRow(setting.setDesc(row.desc), row);
     }
   }
 
   private definition(row: Row): SettingDefinition {
     const { name, desc } = row;
+    if (row.kind === 'clear-prices' || BY_PROVIDER.has(row.key)) return { name, desc, render: (setting) => this.drawRow(setting, row) };
     switch (row.kind) {
       case 'text':
         return { name, desc, control: { type: 'text', key: row.key, placeholder: row.placeholder, validate: (v) => row.check?.(v) ?? undefined } };
@@ -123,14 +95,37 @@ export class BacktestSettingTab extends PluginSettingTab {
         return { name, desc, control: { type: 'toggle', key: row.key } };
       case 'secret':
         return { name, desc, control: { type: 'secret', key: row.key } };
+    }
+  }
+
+  /** Draws the control of a row on its setting, which already has the row's name and description. */
+  private drawRow(setting: Setting, row: Row): void {
+    const settings = this.host.settings;
+    switch (row.kind) {
+      case 'text':
+      case 'number': {
+        const drawn = this.field(setting, row, String(settings[row.key]));
+        if (BY_PROVIDER.has(row.key)) this.providerRows.set(row.key, { setting, ...drawn });
+        break;
+      }
+      case 'dropdown':
+        setting.addDropdown((d) =>
+          d
+            .addOptions(row.options)
+            .setValue(settings[row.key])
+            .onChange((v) => this.change(row, v)),
+        );
+        break;
+      case 'toggle':
+        setting.addToggle((t) => t.setValue(settings[row.key]).onChange((v) => this.change(row, v)));
+        break;
+      case 'secret':
+        setting.addComponent((el) => new SecretComponent(this.app, el).setValue(settings[row.key]).onChange((name) => this.change(row, name ?? '')));
+        if (BY_PROVIDER.has(row.key)) this.providerRows.set(row.key, { setting });
+        break;
       case 'clear-prices':
-        return {
-          name,
-          desc,
-          render: (setting) => {
-            setting.addButton((b) => this.clearPricesButton(b));
-          },
-        };
+        setting.addButton((b) => this.clearPricesButton(b));
+        break;
     }
   }
 
@@ -138,16 +133,30 @@ export class BacktestSettingTab extends PluginSettingTab {
   private async change(row: ValueRow, value: unknown): Promise<void> {
     (this.host.settings as unknown as Record<string, unknown>)[row.key] = value;
     if (row.key === 'ordersOnStartup') this.host.setOrdersBadge(value === true);
+    if (row.key === 'llmProvider') this.followProvider();
     await this.host.saveSettings();
+  }
+
+  /** Rewrites the description and placeholder of the rows that depend on the provider, for the provider now set. */
+  private followProvider(): void {
+    for (const row of settingRows(this.host.settings)) {
+      const drawn = 'key' in row ? this.providerRows.get(row.key) : undefined;
+      if (!drawn || row.kind === 'heading') continue;
+      drawn.setting.setDesc(row.desc);
+      if (drawn.message) drawn.setting.descEl.append(drawn.message);
+      if (drawn.text && 'placeholder' in row) drawn.text.setPlaceholder(row.placeholder);
+    }
   }
 
   /**
    * A text row drawn by hand. A value that fails its check shows its message under the description and is not applied
    * or saved; the field keeps what was typed.
    */
-  private field(setting: Setting, row: Extract<Row, { kind: 'text' | 'number' }>, value: string): void {
+  private field(setting: Setting, row: Extract<Row, { kind: 'text' | 'number' }>, value: string): { text: TextComponent; message: HTMLElement } {
     const message = setting.descEl.createDiv({ cls: 'bt-setting-error' });
+    let text!: TextComponent;
     setting.addText((t) => {
+      text = t;
       if (row.kind === 'number') t.inputEl.type = 'number';
       t.setPlaceholder(row.placeholder)
         .setValue(value)
@@ -159,6 +168,7 @@ export class BacktestSettingTab extends PluginSettingTab {
           await this.change(row, row.kind === 'number' ? Number(v) : savedText(row, v));
         });
     });
+    return { text, message };
   }
 
   private clearPricesButton(b: ButtonComponent): void {
