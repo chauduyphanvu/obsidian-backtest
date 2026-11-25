@@ -1481,7 +1481,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     // Ranking: on a decision bar hold the top scores among the eligible; in between, sell rules
     // and stops can still exit, and a freed slot waits for the next decision.
     if (p.rank && decisions![k] === 1) {
-      const lag = mixed && new Set(live.map((a) => clocks![a.order])).size > 1;
+      const lag = mixed && new Set(live.map((a) => clocks[a.order])).size > 1;
       /** The bar of each ticker this decision reads. */
       const at = assets.map((a) => (!mixed || (isLive.has(a) && !lag) ? a.i : endedAt![a.order][k]));
       const read = (a: A) => at[a.order];

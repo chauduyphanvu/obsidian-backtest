@@ -1,7 +1,7 @@
 // The "Versions" section: each version of the block's text that was run, with its figures and what changed from the one
 // before, the changed lines on a click, and a way to put an older text back into the note.
 
-import { h } from './dom.ts';
+import { h, onClick } from './dom.ts';
 import type { Defaults } from './dsl.ts';
 import { minus, pct, plural } from './format.ts';
 import { defaultsHash, follow, lineDiff, MAX_VERSIONS, normalText, versionHash, type BlockLedger, type DiffLine, type Ledger, type Version, type VersionFigures } from './ledger.ts';
@@ -151,7 +151,7 @@ function versionItem(li: HTMLElement, row: VersionRow, input: VersionsInput): vo
   if (!restore || normalText(row.version.text) === normalText(input.source)) return;
   const put = h(actions, 'button', 'bt-button', RESTORE);
   const said = h(actions, 'span', 'bt-note');
-  put.addEventListener('click', async () => {
+  onClick(put, async () => {
     put.disabled = true;
     said.textContent = '';
     try {

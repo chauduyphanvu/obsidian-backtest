@@ -179,7 +179,7 @@ const values = (text: string, data: Record<string, Bars>, extra = ''): number[] 
   const { spec, errors } = parseSpec(`universe: A\n${extra}buy when ${text}`);
   assert.deepEqual(errors, [], text);
   const e = spec!.rules.A.buy;
-  return new Evaluator(new Map(Object.entries(data))).eval(e.k === 'cmp' ? e.a : e, 'A');
+  return new Evaluator(new Map(Object.entries(data))).series(e.k === 'cmp' ? e.a : e, 'A');
 };
 const at = (text: string, data: Record<string, Bars>) => values(`${text} > -1000000000`, data);
 
@@ -276,9 +276,9 @@ test('no function reads a later bar, through the evaluator and across other tick
     const { spec, errors } = parseSpec(`universe: A\nbuy when ${text} > -1000000000`);
     assert.deepEqual(errors, [], text);
     const e = (spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a;
-    const whole = new Evaluator(new Map([['A', a], ['B', b]])).eval(e, 'A');
+    const whole = new Evaluator(new Map([['A', a], ['B', b]])).series(e, 'A');
     for (const k of [1, 2, 5, 21, 30, 59, 60, 61, 120, 299]) {
-      const part = new Evaluator(new Map([['A', cut(a, k)], ['B', cut(b, k)]])).eval(e, 'A');
+      const part = new Evaluator(new Map([['A', cut(a, k)], ['B', cut(b, k)]])).series(e, 'A');
       assert.deepEqual(part, whole.slice(0, k), `${text}: the first ${k} values depend on later bars`);
     }
   }
@@ -291,14 +291,14 @@ test('a Clenow momentum ranking runs: the annualised slope of the log price time
   const { spec, errors } = parseSpec('universe: A, B, C\nhold: top 2 by (exp(slope(log(close), 90) * 252) - 1) * rsquared(log(close), 90)\nrebalance: monthly');
   assert.deepEqual(errors, []);
   const data = new Map([['A', A], ['B', B], ['C', C]]);
-  const score = new Evaluator(data).eval(spec!.rank!.by, 'A');
+  const score = new Evaluator(data).series(spec!.rank!.by, 'A');
   const byHand = ind.slope(A.c.map(Math.log), 90).map((s, i) => (Math.exp(s * 252) - 1) * ind.rsquared(A.c.map(Math.log), 90)[i]);
   assert.deepEqual(score, byHand);
   assert.ok(score.slice(89).every((x) => !Number.isNaN(x)) && score.slice(0, 89).every(Number.isNaN));
   const bt = runBacktest(spec!, data);
   assert.ok(bt.run.trades.length > 5, String(bt.run.trades.length));
   // At each month's first bar from the score's first known one, the two held are the two with the best scores.
-  const scores = ['A', 'B', 'C'].map((n) => new Evaluator(data).eval(spec!.rank!.by, n));
+  const scores = ['A', 'B', 'C'].map((n) => new Evaluator(data).series(spec!.rank!.by, n));
   const decided = bt.run.trades.filter((t) => t.entryT > A.t[100]);
   assert.ok(decided.length > 3);
   const first = bt.run.trades[0];
@@ -313,7 +313,7 @@ test('Connors RSI is written with streak and runs', () => {
   const { spec, errors } = parseSpec(`universe: A\nbuy when ${crsi} < 15\nsell when ${crsi} > 70`);
   assert.deepEqual(errors, []);
   const e = (spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a;
-  const got = new Evaluator(new Map([['A', m]])).eval(e, 'A');
+  const got = new Evaluator(new Map([['A', m]])).series(e, 'A');
   const [a, b, c] = [ind.rsi(m.c, 3), ind.rsi(ind.streak(m.c), 2), ind.percentRank(ind.roc(m.c, 1), 100)];
   assert.deepEqual(got, a.map((x, i) => (x + b[i] + c[i]) / 3));
   // Known from bar 101 (the rank needs the 100 changes before this one), and a score from 0 to 100.
@@ -389,12 +389,12 @@ test('each function is known, and settled, from the first bar of a run that has 
     assert.deepEqual(errors, [], text);
     const lb = lookbackBars(spec!);
     const e = (spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a;
-    const all = new Evaluator(new Map([['A', full]])).eval(e, 'A');
+    const all = new Evaluator(new Map([['A', full]])).series(e, 'A');
     // A run needs its history before it, so a start is tried only where the bars reach back that far.
     const fits = starts.filter((s) => s >= lb);
     assert.ok(fits.length >= 2, `${text}: ${lb} bars of history leave too few starts to try`);
     for (const s of fits) {
-      const part = new Evaluator(new Map([['A', cut(full, s - lb)]])).eval(e, 'A');
+      const part = new Evaluator(new Map([['A', cut(full, s - lb)]])).series(e, 'A');
       const [got, want] = [part[lb], all[s]];
       assert.ok(!Number.isNaN(got), `${text}: unknown at the first bar of a run starting at bar ${s} with ${lb} bars before it`);
       assert.ok(Math.abs(got - want) <= tol * Math.max(1, Math.abs(want)), `${text}: ${got} with ${lb} bars of history, ${want} with all of it, at bar ${s}`);

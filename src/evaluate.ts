@@ -310,7 +310,7 @@ export class Evaluator {
     this.shared = shared;
   }
 
-  eval(e: Expr, asset: string): number[] {
+  series(e: Expr, asset: string): number[] {
     const key = asset + '\u0000' + JSON.stringify(e);
     let out = this.memo.get(key);
     if (!out) {
@@ -330,7 +330,7 @@ export class Evaluator {
    */
   compile(e: Expr, asset: string): BarRule {
     if (!findPos(e)) {
-      const values = this.eval(e, asset);
+      const values = this.series(e, asset);
       return (i) => values[i];
     }
     switch (e.k) {
@@ -466,47 +466,47 @@ export class Evaluator {
       case 'pos':
         throw new Error('Position values must have a position: use compile()');
       case 'math': {
-        const a = this.eval(e.args[0], asset);
+        const a = this.series(e.args[0], asset);
         if (e.fn === 'abs') return each((i) => Math.abs(a[i]));
         const fn = e.fn;
         if (fn === 'sqrt' || fn === 'log' || fn === 'exp') return each((i) => unary(fn, a[i]));
-        const b = this.eval(e.args[1], asset);
+        const b = this.series(e.args[1], asset);
         if (fn === 'if') {
-          const c = this.eval(e.args[2], asset);
+          const c = this.series(e.args[2], asset);
           return each((i) => choose(a[i], b[i], c[i]));
         }
         // Math.min and Math.max already give NaN when either side is NaN.
         return each((i) => (e.fn === 'min' ? Math.min(a[i], b[i]) : Math.max(a[i], b[i])));
       }
       case 'bin': {
-        const a = this.eval(e.a, asset);
-        const b = this.eval(e.b, asset);
+        const a = this.series(e.a, asset);
+        const b = this.series(e.b, asset);
         return each((i) => arith(e.op, a[i], b[i]));
       }
       case 'neg': {
-        const a = this.eval(e.a, asset);
+        const a = this.series(e.a, asset);
         return each((i) => -a[i]);
       }
       case 'cmp': {
-        const a = this.eval(e.a, asset);
-        const b = this.eval(e.b, asset);
+        const a = this.series(e.a, asset);
+        const b = this.series(e.b, asset);
         return each((i) => compare(e.op, a[i], b[i], i > 0 ? a[i - 1] : NaN, i > 0 ? b[i - 1] : NaN));
       }
       case 'logic': {
-        const a = this.eval(e.a, asset);
-        const b = this.eval(e.b, asset);
+        const a = this.series(e.a, asset);
+        const b = this.series(e.b, asset);
         return each((i) => logic(e.op, a[i], b[i]));
       }
       case 'not': {
-        const a = this.eval(e.a, asset);
+        const a = this.series(e.a, asset);
         return each((i) => 1 - a[i]);
       }
       case 'lag':
-        return ind.lag(this.eval(e.a, asset), e.n);
+        return ind.lag(this.series(e.a, asset), e.n);
       case 'of': {
-        if (e.asset === asset) return this.eval(e.a, asset);
+        if (e.asset === asset) return this.series(e.a, asset);
         // The other ticker's value from its latest bar that had ended when this asset's bar ended.
-        const values = this.eval(e.a, e.asset);
+        const values = this.series(e.a, e.asset);
         const at = this.aligned(e.asset, asset);
         return each((i) => (at[i] < 0 ? NaN : values[at[i]]));
       }
@@ -530,7 +530,7 @@ export class Evaluator {
     if (bars.unpriced && (e.src === null || OWN_PRICES.includes(e.fn))) {
       throw new Error(`${asset} has no prices, only columns. Thus the plugin cannot calculate ${e.fn}() for it. Read a column with column(name) of ${asset}.`);
     }
-    const src = e.src ? this.eval(e.src, asset) : bars.c;
+    const src = e.src ? this.series(e.src, asset) : bars.c;
     const [a, b, c] = e.args;
     if (NEEDS_VOLUME.includes(e.fn) && !bars.v.some((x) => x > 0)) {
       throw new Error(`${asset} has no volume, but ${e.fn}() must have volume. A FRED series and some indexes have no volume. A CSV file must have a volume column.`);

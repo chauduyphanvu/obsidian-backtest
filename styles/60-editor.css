@@ -14,7 +14,7 @@
 
 /* CodeMirror puts the message inside its own tooltip box, which is the element that needs the frame. When the window has
    not room for all of the box on its side of the line, CodeMirror makes the box shorter, and the rest scrolls. */
-.cm-editor .cm-tooltip:has(> .bt-diag-tip) {
+.cm-editor .cm-tooltip.bt-diag-frame {
   max-width: min(420px, 90vw);
   overflow-y: auto;
   background: var(--background-primary);

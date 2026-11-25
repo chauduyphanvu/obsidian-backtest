@@ -164,7 +164,7 @@ export function recognize(g: Grammar, text: string): boolean {
 
   const ends = (n: Node, at: number): Set<number> => {
     let byPos = memo.get(n);
-    if (!byPos) memo.set(n, (byPos = new Map()));
+    if (!byPos) memo.set(n, (byPos = new Map<number, Set<number>>()));
     const known = byPos.get(at);
     if (known) return known;
     const out = new Set<number>();

@@ -23,7 +23,7 @@ export const sectionsIn = (host: Element | null): HTMLDetailsElement[] =>
 /** The tools in the order "Test the idea" lists them: the tests first, then the views, then the versions. */
 const TOOL_ORDER = ['Was it luck?', 'Try other values', 'Rule values, bar by bar', 'Prices and trades', 'Versions'];
 
-type Mark = [string, Record<string, string | number>];
+type Mark = [keyof SVGElementTagNameMap, Record<string, string | number>];
 const LINE = { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
 const dot = (cx: number, cy: number): Mark => ['circle', { cx, cy, r: 1.1, fill: 'currentColor' }];
 
@@ -52,7 +52,7 @@ export function tabify(host: HTMLElement): () => void {
   const sections = sectionsIn(host);
   if (sections.length === 0) return () => {};
   host.classList.add('bt-tabbed');
-  const bar = document.createElement('div');
+  const bar = createDiv();
   bar.className = 'bt-tabbar';
   host.prepend(bar);
   const main = h(bar, 'div', 'bt-tabs-main');

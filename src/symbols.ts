@@ -82,8 +82,13 @@ interface BinanceList {
   at: number;
 }
 
+/** The parts of a Yahoo search answer read here. Nothing checks the JSON against it, so each field is looked at before use. */
+interface YahooSearchAnswer {
+  quotes?: ({ symbol?: unknown; quoteType?: unknown; exchDisp?: unknown; exchange?: unknown; typeDisp?: unknown; longname?: unknown; shortname?: unknown } | null)[];
+}
+
 function parseYahooSearch(text: string): Found {
-  const body = JSON.parse(text);
+  const body = JSON.parse(text) as YahooSearchAnswer | null;
   if (!Array.isArray(body?.quotes)) throw new Error('Yahoo did not send a list of tickers');
   const out: Quote[] = [];
   for (const q of body.quotes) {
@@ -96,9 +101,9 @@ function parseYahooSearch(text: string): Found {
 }
 
 function parseBinancePrices(text: string): string[] {
-  const rows = JSON.parse(text);
+  const rows = JSON.parse(text) as unknown;
   if (!Array.isArray(rows)) throw new Error('Binance did not send prices');
-  const symbols = rows.map((r) => r?.symbol).filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{3,20}$/.test(s));
+  const symbols = (rows as ({ symbol?: unknown } | null)[]).map((r) => r?.symbol).filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{3,20}$/.test(s));
   if (symbols.length === 0) throw new Error('Binance sent no markets');
   return symbols;
 }

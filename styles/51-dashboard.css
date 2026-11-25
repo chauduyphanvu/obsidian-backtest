@@ -220,7 +220,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) 8.5em 6em;
     align-items: center;
-    column-gap: 10px;
+    gap: 0 10px;
     padding: 4px 0;
     border-bottom: 1px solid var(--background-modifier-border);
   }

@@ -47,23 +47,23 @@ const cond = (text: string): Expr => {
 
 test('crosses fire once, on the bar of the cross', () => {
   const ev = new Evaluator(new Map([['A', bars([1, 2, 3, 4, 3, 2, 3, 4])]]));
-  assert.deepEqual(round(ev.eval(cond('close crosses above 2.5'), 'A')), [null, 0, 1, 0, 0, 0, 1, 0]);
-  assert.deepEqual(round(ev.eval(cond('close crosses below 2.5'), 'A')), [null, 0, 0, 0, 0, 1, 0, 0]);
+  assert.deepEqual(round(ev.series(cond('close crosses above 2.5'), 'A')), [null, 0, 1, 0, 0, 0, 1, 0]);
+  assert.deepEqual(round(ev.series(cond('close crosses below 2.5'), 'A')), [null, 0, 0, 0, 0, 1, 0, 0]);
 });
 
 test('unknown values follow three-valued logic and never hold', () => {
   const ev = new Evaluator(new Map([['A', bars([1, 2, 3, 4])]]));
-  assert.deepEqual(round(ev.eval(cond('close > sma(3)'), 'A')), [null, null, 1, 1]);
-  assert.deepEqual(round(ev.eval(cond('not close > sma(3)'), 'A')), [null, null, 0, 0]);
-  assert.deepEqual(round(ev.eval(cond('close > sma(3) or close >= 2'), 'A')), [null, 1, 1, 1]);
-  assert.deepEqual(round(ev.eval(cond('close > sma(3) and close >= 2'), 'A')), [0, null, 1, 1]);
+  assert.deepEqual(round(ev.series(cond('close > sma(3)'), 'A')), [null, null, 1, 1]);
+  assert.deepEqual(round(ev.series(cond('not close > sma(3)'), 'A')), [null, null, 0, 0]);
+  assert.deepEqual(round(ev.series(cond('close > sma(3) or close >= 2'), 'A')), [null, 1, 1, 1]);
+  assert.deepEqual(round(ev.series(cond('close > sma(3) and close >= 2'), 'A')), [0, null, 1, 1]);
 });
 
 test('lag and arithmetic', () => {
   const ev = new Evaluator(new Map([['A', bars([1, 2, 4, 8])]]));
-  assert.deepEqual(round(ev.eval(cond('close / close[1] - 1 >= 100%'), 'A')), [null, 1, 1, 1]);
-  assert.deepEqual(round(ev.eval(cond('roc(2) > 250%'), 'A')), [null, null, 1, 1]);
-  assert.deepEqual(round(ev.eval(cond('max(close, 3) - abs(-1) == 3'), 'A')), [0, 0, 1, 0]);
+  assert.deepEqual(round(ev.series(cond('close / close[1] - 1 >= 100%'), 'A')), [null, 1, 1, 1]);
+  assert.deepEqual(round(ev.series(cond('roc(2) > 250%'), 'A')), [null, null, 1, 1]);
+  assert.deepEqual(round(ev.series(cond('max(close, 3) - abs(-1) == 3'), 'A')), [0, 0, 1, 0]);
 });
 
 test('"of" reads another ticker as of each bar, never ahead', () => {
@@ -74,7 +74,7 @@ test('"of" reads another ticker as of each bar, never ahead', () => {
   ]);
   const { spec } = parseSpec('universe: A\ndata: yahoo\nbuy when close of B >= 20');
   const ev = new Evaluator(data);
-  assert.deepEqual(round(ev.eval(spec!.rules.A.buy, 'A')), [null, null, 0, 0, 1]);
+  assert.deepEqual(round(ev.series(spec!.rules.A.buy, 'A')), [null, null, 0, 0, 1]);
 });
 
 const utc = (y: number, m: number, d: number, hour = 0) => Date.UTC(y, m - 1, d, hour);
@@ -125,7 +125,7 @@ test('"of" on a weekly series dated at the start of its week waits for the week 
   const W = bars([100, 120, 120], { times: [6, 13, 20].map((d) => utc(2020, 1, d)) });
   const ev = new Evaluator(new Map([['X', bars(daily.map(() => 100), { times: daily })], ['W', W]]));
   const { spec } = parseSpec('universe: X\nbuy when close of csv:W.csv > 110');
-  const rule = ev.eval(spec!.rules.X.buy, 'X');
+  const rule = ev.series(spec!.rules.X.buy, 'X');
   assert.equal(daily[rule.indexOf(1)], utc(2020, 1, 20));
 });
 
@@ -140,7 +140,7 @@ const onDays = (days: number[]) => ({ t: days, o: days.map(() => 1), h: days.map
 test('calendar values come from the UTC date of each bar', () => {
   // Thursday 30 January to Monday 3 February 2020, weekend included.
   const ev = new Evaluator(new Map([['A', bars([1, 1, 1, 1, 1], { start: at(2020, 1, 30) })]]));
-  const num = (name: string) => ev.eval({ k: 'cal', name } as Expr, 'A');
+  const num = (name: string) => ev.series({ k: 'cal', name } as Expr, 'A');
   assert.deepEqual(num('month'), [1, 1, 2, 2, 2]);
   assert.deepEqual(num('day'), [30, 31, 1, 2, 3]);
   assert.deepEqual(num('weekday'), [4, 5, 6, 7, 1]);
@@ -153,12 +153,12 @@ test('calendar values come from the UTC date of each bar', () => {
 test('month_end on the last bar looks at the next weekday, or the next day when the series trades on weekends', () => {
   // 2020 is a leap year: Friday 28 February is followed by Saturday the 29th.
   const weekdays = new Evaluator(new Map([['A', onDays([at(2020, 2, 26), at(2020, 2, 27), at(2020, 2, 28)])]]));
-  assert.deepEqual(weekdays.eval(cond('month_end'), 'A'), [0, 0, 1]);
+  assert.deepEqual(weekdays.series(cond('month_end'), 'A'), [0, 0, 1]);
   const everyDay = new Evaluator(new Map([['A', bars([1, 1, 1, 1, 1, 1, 1], { start: at(2020, 2, 22) })]]));
-  assert.deepEqual(everyDay.eval(cond('month_end'), 'A'), [0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(everyDay.series(cond('month_end'), 'A'), [0, 0, 0, 0, 0, 0, 0]);
   // Weekly bars step a week past the last one.
   const weekly = new Evaluator(new Map([['A', onDays([at(2024, 1, 15), at(2024, 1, 22), at(2024, 1, 29)])]]));
-  assert.deepEqual(weekly.eval(cond('month_end'), 'A'), [0, 0, 1]);
+  assert.deepEqual(weekly.series(cond('month_end'), 'A'), [0, 0, 1]);
 });
 
 test('a sell rule with position values is worked out bar by bar with the open position', () => {

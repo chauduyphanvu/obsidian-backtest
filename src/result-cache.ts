@@ -112,8 +112,8 @@ export async function csvVersions(paths: string[], modified: (path: string) => P
 }
 
 const REAL_TIMERS = {
-  set: (fn: () => void, ms: number): unknown => setTimeout(fn, ms),
-  clear: (id: unknown): void => clearTimeout(id as ReturnType<typeof setTimeout>),
+  set: (fn: () => void, ms: number): unknown => window.setTimeout(fn, ms),
+  clear: (id: unknown): void => window.clearTimeout(id as number),
 };
 
 /** Calls `fn` with the latest arguments once calls have stopped for `ms`. `cancel` drops a call that is waiting. */

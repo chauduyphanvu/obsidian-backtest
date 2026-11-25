@@ -206,7 +206,7 @@ function checkIndicators(ctx: Ctx): IndicatorResult[] {
     for (const tk of tickers) {
       if (only && !only.includes(tk)) continue;
       const bars = ctx.data.get(tk)!;
-      const mine = ev.eval(spec.rank!.by, tk);
+      const mine = ev.series(spec.rank!.by, tk);
       const theirsByDate = values.get(tk)!.get(`i${i}`)!;
       const firstMine = mine.findIndex((x) => !Number.isNaN(x));
       const firstTheirs = bars.t.findIndex((t) => !Number.isNaN(theirsByDate.get(iso(t)) ?? NaN));
@@ -519,7 +519,7 @@ function runCase(name: string, dir: string, ctx: Ctx): CaseResult {
       // Each side re-arms on its own entry rule, after its own stop or target, or after a margin call of either side.
       const exited = [...mine, ...theirs].some((t) => t.asset === r.asset && t.exit === signalDay && ((t.side === r.side && protective(t)) || t.reason === 'margin call'));
       const rules = spec.rules[r.asset];
-      if (exited && ev.eval(r.side === 'short' ? rules.short! : rules.buy, r.asset)[signal] === 1) why.set(r, 'rearm');
+      if (exited && ev.series(r.side === 'short' ? rules.short! : rules.buy, r.asset)[signal] === 1) why.set(r, 'rearm');
     }
   }
   if (allowed.has('halt')) {

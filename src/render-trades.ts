@@ -157,7 +157,7 @@ function drawPayoff(chart: HTMLElement, read: HTMLElement, idle: string, width: 
   const at = (clientX: number) => Math.min(n - 1, Math.max(0, Math.floor((clientX - svg.getBoundingClientRect().left - left) / step)));
   const say = (t: Trade) => `${t.asset}${t.side === 'short' ? ', short' : ''} · ${stamp(t.entryT, intraday)} to ${stamp(t.exitT, intraday)} · ${plural(t.bars, 'bar')} · ${signedPct(t.ret)}, ${(t.pnl > 0 ? '+' : '') + minus(money(t.pnl))}`;
   hit.addEventListener('pointermove', (e) => {
-    const i = at((e as PointerEvent).clientX);
+    const i = at((e).clientX);
     hl.setAttribute('x', String(left + i * step));
     hl.setAttribute('visibility', 'visible');
     read.textContent = say(sorted[i]);
@@ -209,7 +209,7 @@ function explainButton(cell: HTMLElement, row: HTMLTableRowElement, bt: Backtest
       else window.setTimeout(() => gone.remove(), LAYOUT_MS + 60);
       return;
     }
-    const tr = document.createElement('tr');
+    const tr = createEl('tr');
     tr.className = 'bt-explain-tr';
     const td = h(tr, 'td');
     td.colSpan = columns;

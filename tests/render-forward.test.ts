@@ -238,6 +238,7 @@ function stage(over: { failRun?: boolean; refuse?: boolean; source?: string } = 
 
 // Each test file runs in a process of its own, so the page stays a stand-in for the whole run of this file.
 (globalThis as { document?: unknown }).document = { createElement: (tag: string) => new El(tag) };
+(globalThis as { createEl?: unknown }).createEl = (tag: string) => new El(tag);
 
 function draw(source: string, host: ForwardHost): { root: El; stop: () => void } {
   const root = new El('div');

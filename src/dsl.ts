@@ -1663,7 +1663,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
 
   const defaultSource = get('data', oneOf(DATA_SOURCES, 'data'), defaults.dataSource as Source);
   const size = get('size', (v, w) => parsePercent(v, w, 'size', MAX_GROSS * 100), null as number | null);
-  const rebalance = get('rebalance', oneOf(REBALANCE, 'rebalance'), 'never' as Rebalance);
+  const rebalance = get('rebalance', oneOf(REBALANCE, 'rebalance'), 'never');
 
   let rankTop: number | null = null;
   let rankBy: { text: string; from: number; line: number } | null = null;
@@ -1689,7 +1689,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       for (const pm of u.value.matchAll(/[^,]+/g)) {
         const part = pm[0].trim();
         if (!part) continue;
-        const from = u.valueAt.from! + pm.index! + pm[0].length - pm[0].trimStart().length;
+        const from = u.valueAt.from! + pm.index + pm[0].length - pm[0].trimStart().length;
         const partAt: At = { line: u.line, from, to: from + part.length };
         const m = part.match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)\s*%)?$/);
         if (!m) {
@@ -1899,7 +1899,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const short = own.get(a.name)?.short ?? shared.short;
     const cover = own.get(a.name)?.cover ?? shared.cover;
     // A ticker with only short rules never goes long: its buy rule is the parser's false.
-    const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true } as Expr) : short ? ({ k: 'bool', v: false } as Expr) : undefined);
+    const buy = own.get(a.name)?.buy ?? shared.buy ?? (rankTop !== null ? ({ k: 'bool', v: true }) : short ? ({ k: 'bool', v: false }) : undefined);
     const sell = own.get(a.name)?.sell ?? shared.sell ?? null;
     const add = own.get(a.name)?.add ?? shared.add;
     for (const e of [buy, sell, add, short, cover]) if (e) ownColumnsOf(ownReads.get(e) ?? [], a);
@@ -2102,7 +2102,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     sizing: risk ?? weighting ?? { k: 'fixed' },
     params: [...params.values()],
     rules,
-    fill: get('fill', (v, w) => oneOf(FILL, 'fill')(v.replace(/\s+/g, ' '), w), 'next open' as Fill),
+    fill: get('fill', (v, w) => oneOf(FILL, 'fill')(v.replace(/\s+/g, ' '), w), 'next open'),
     written: { rules: writtenRules, rank: rankWritten },
   };
   const commission = settings.has('commission') ? get('commission', parseCommission, null) : (defaults.commission ?? null);

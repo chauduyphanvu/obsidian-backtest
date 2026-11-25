@@ -11,6 +11,7 @@ import { runSweep, type Parse } from '../src/sweep.ts';
 import { computeTriggers, triggerRun } from '../src/trigger.ts';
 import type { Bars } from '../src/types.ts';
 import { bars } from './helpers.ts';
+import './window.ts';
 
 const DEFAULTS: Partial<Defaults> = { capital: 25_000, costBps: 5, slippageBps: 2, cashRate: '2%' };
 

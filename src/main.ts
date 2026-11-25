@@ -102,6 +102,7 @@ export default class BacktestBlocks extends Plugin {
     },
     tiingoFallback: () => this.settings.tiingoFallback,
     parseCsv: parseCsvInWorker,
+    sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
   });
   private results = new Results({
     deps: () => this.prices.deps(),

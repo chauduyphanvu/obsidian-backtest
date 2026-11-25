@@ -3,7 +3,7 @@
 
 import type { Backtest, Stats } from './backtest.ts';
 import type { TrackPaint } from './render-params.ts';
-import { h, s } from './dom.ts';
+import { h, onClick, s } from './dom.ts';
 import type { Defaults } from './dsl.ts';
 import { applyFix } from './fixes.ts';
 import { minus, niceStep, ordinal, pct, plural, tidy } from './format.ts';
@@ -259,7 +259,7 @@ function build(body: HTMLElement, input: SweepInput, params: SweepParam[], life:
   const results = h(body, 'div', 'bt-sweep-results');
   let running: Running<SweepResult> | null = null;
   stop.addEventListener('click', () => running?.stop());
-  run.addEventListener('click', async () => {
+  onClick(run, async () => {
     run.hidden = true;
     stop.hidden = false;
     const first = `0 of ${total}`;
@@ -698,8 +698,8 @@ function drawDotLine(chart: HTMLElement, tip: HTMLElement, width: number, result
     }
     placeTip(tip, x(xs[i]), top, width);
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
+  hit.addEventListener('pointermove', (e) => show((e).clientX));
+  hit.addEventListener('pointerdown', (e) => show((e).clientX));
   hit.addEventListener('pointerleave', () => {
     tip.hidden = true;
     hl.setAttribute('visibility', 'hidden');
@@ -910,7 +910,7 @@ function drawHeatmap(scroll: HTMLElement, tip: HTMLElement, key: HTMLElement, wi
   svg.addEventListener('pointerdown', show);
   // A finger that has lifted has left too, so a touch does not close the tooltip; tapping elsewhere does, and so does scrolling.
   svg.addEventListener('pointerleave', (e) => {
-    if ((e as PointerEvent).pointerType !== 'touch') hide();
+    if ((e).pointerType !== 'touch') hide();
   });
 
   key.replaceChildren();

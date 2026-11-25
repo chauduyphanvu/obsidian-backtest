@@ -25,7 +25,7 @@ function firstRead(text: string, reader: Bars = SPY, readerRef = 'SPY', extra = 
   assert.deepEqual(errors, []);
   const name = spec!.universe[0].name;
   const data = new Map<string, Bars>([[name, reader], ['sig', parseCsv(text)]]);
-  const v = specEvaluator(spec!, data).eval(spec!.rules[name].buy, name);
+  const v = specEvaluator(spec!, data).series(spec!.rules[name].buy, name);
   return reader.t[v.indexOf(1)];
 }
 

@@ -318,7 +318,7 @@ export function agrees(full: Evaluator, cut: Evaluator, exprs: Expr[], asset: st
   let ok = true;
   const visit = (e: Expr, at: string): void => {
     if (!ok) return;
-    if (!findPos(e)) ok = same(full.eval(e, at)[last(at, false)], cut.eval(e, at)[last(at, true)]);
+    if (!findPos(e)) ok = same(full.series(e, at)[last(at, false)], cut.series(e, at)[last(at, true)]);
     for (const c of children(e)) visit(c, e.k === 'of' ? e.asset : at);
   };
   for (const e of exprs) {
@@ -583,7 +583,7 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
       const value = st.shares * (driver === name ? x : st.lastClose);
       return st.targetWeight * (run.equity - st.value + value) - value > 0 ? 'add' : 'none';
     }
-    const buy = ev.eval(rules.buy, name)[n];
+    const buy = ev.series(rules.buy, name)[n];
     if (!Number.isNaN(buy)) known = true;
     if (st.rearming) return buy !== 1 ? 'rearm' : 'none';
     return buy === 1 && !(rules.sell && ev.compile(rules.sell, name)(n, null) === 1) ? 'buy' : 'none';
@@ -595,8 +595,8 @@ function tickerTriggers(spec: Spec, data: Map<string, Bars>, run: TriggerRun, st
    */
   const bothSides = (ev: Evaluator, x: number): string => {
     const holds = (e: Expr | null | undefined, p: PosState | null) => !!e && ev.compile(e, name)(n, p) === 1;
-    const buy = ev.eval(rules.buy, name)[n];
-    const shortSignal = ev.eval(rules.short!, name)[n];
+    const buy = ev.series(rules.buy, name)[n];
+    const shortSignal = ev.series(rules.short!, name)[n];
     if (!Number.isNaN(buy)) known = true;
     if (!Number.isNaN(shortSignal)) knownShort = true;
     const [wantsBuy, wantsShort] = [buy === 1, shortSignal === 1];

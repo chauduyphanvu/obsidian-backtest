@@ -99,7 +99,9 @@ export class BacktestSettingTab extends PluginSettingTab {
           try {
             await this.host.clearPrices();
             b.setButtonText('Deleted');
-            window.setTimeout(() => b.setButtonText('Delete saved prices').setDisabled(false), 2000);
+            window.setTimeout(() => {
+              b.setButtonText('Delete saved prices').setDisabled(false);
+            }, 2000);
           } catch (e) {
             b.setDisabled(false);
             new Notice(`Cannot delete the saved prices: ${e instanceof Error ? e.message : String(e)}`);

@@ -27,7 +27,7 @@ export interface ValueChart {
   span(): number;
   /** Lights up the part of the chart a figure comes from: 'end', 'dd', 'vol', 'held', or null for none. */
   highlight(part: string | null): void;
-  stop(): void;
+  stop: () => void;
 }
 
 interface Key {
@@ -726,8 +726,8 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
     });
     readAt(i, true);
   };
-  hit.addEventListener('pointermove', (e) => show(nearest((e as PointerEvent).clientX)));
-  hit.addEventListener('pointerdown', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointermove', (e) => show(nearest((e).clientX)));
+  hit.addEventListener('pointerdown', (e) => show(nearest((e).clientX)));
   hit.addEventListener('pointerleave', hide);
   hide();
 

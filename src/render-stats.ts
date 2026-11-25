@@ -132,8 +132,8 @@ function drawGaps(chart: HTMLElement, read: HTMLElement, idle: string, width: nu
     hl.setAttribute('visibility', 'hidden');
     read.textContent = idle;
   };
-  hit.addEventListener('pointermove', (e) => show(nearest((e as PointerEvent).clientX)));
-  hit.addEventListener('pointerdown', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointermove', (e) => show(nearest((e).clientX)));
+  hit.addEventListener('pointerdown', (e) => show(nearest((e).clientX)));
   hit.addEventListener('pointerleave', rest);
   return { t: mine.map((p) => p.t), first: 0, at: () => shown, show, rest };
 }

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { withoutQueries, type DataDeps } from '../data.ts';
 import type { KeyedService } from '../types.ts';
 import { PriceStore } from '../price-store.ts';
@@ -10,7 +11,7 @@ export const defaultCacheDir = (env: NodeJS.ProcessEnv): string => join(env.XDG_
 
 /** A vault path as Obsidian's normalizePath writes it: one slash between parts, none at either end, plain spaces. */
 export const vaultPath = (path: string): string =>
-  path.replace(/[\\/]+/g, '/').replace(/^\/+|\/+$/g, '').replace(/[  ]/g, ' ').normalize('NFC') || '/';
+  path.replace(/[\\/]+/g, '/').replace(/^\/+|\/+$/g, '').replace(/[\u00a0\u202f]/g, ' ').normalize('NFC') || '/';
 
 /**
  * What the engine reads from outside, on Node instead of Obsidian: prices over the network, saved under `cacheDir`, CSV
@@ -47,6 +48,7 @@ export function nodeDeps(o: { vault: string; cacheDir: string; env: NodeJS.Proce
     },
     cacheDir: o.cacheDir,
     normalize: vaultPath,
+    sleep: (ms) => delay(ms),
     fetchText: async (url, headers) => {
       let res: Response;
       try {

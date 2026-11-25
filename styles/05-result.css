@@ -102,11 +102,11 @@
 @media (prefers-reduced-motion: reduce) {
   .bt-busy > .bt-edge > i {
     width: 100%;
-    animation: none !important;
+    animation: none;
     opacity: 0.6;
   }
   .bt-busy .bt-refresh svg {
-    animation: none !important;
+    animation: none;
   }
 }
 .bt-refresh-problem {
@@ -411,6 +411,13 @@
   box-shadow: 0 0 0 1.5px var(--bt-warn-dot);
   animation: bt-breathe 2.4s ease-in-out infinite;
 }
+@media (prefers-reduced-motion: reduce) {
+  .bt-breathe::after {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
 .bt-status-next {
   display: inline-flex;
   flex-wrap: wrap;
@@ -513,7 +520,7 @@
   align-items: center;
   padding: 12px 4px 4px;
 }
-.bt-status-in:has(> .bt-wide) {
+.bt-status-in.bt-status-table {
   display: block;
 }
 .bt-status-say {
@@ -828,7 +835,7 @@
 .bt-vs-row {
   display: grid;
   grid-template-columns: minmax(7.5em, 1.15fr) 5em minmax(64px, 1.5fr) 5em minmax(9.5em, 1.2fr);
-  column-gap: 14px;
+  gap: 0 14px;
   align-items: center;
   min-height: 40px;
   margin: 0 -6px;
@@ -941,7 +948,7 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
-.bt-vs-judge:has(.bt-vs-moved) {
+.bt-vs-judge.bt-vs-judge-moved {
   flex-wrap: wrap;
   row-gap: 0;
 }
@@ -1130,9 +1137,9 @@
   color: var(--text-muted);
 }
 .bt-swatch-ghost {
-  height: 0 !important;
+  height: 0;
   border-top: 1.5px dashed var(--text-muted);
-  background: none !important;
+  background: none;
 }
 .bt-read-state {
   display: inline-flex;

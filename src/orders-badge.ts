@@ -103,7 +103,7 @@ export class OrdersBadge {
   private refreshHours: () => number;
   private delayMs: number;
   private now: () => number;
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: number | null = null;
   private started = false;
   private stopped = false;
   private running = false;
@@ -169,12 +169,12 @@ export class OrdersBadge {
   private cancel(): void {
     this.generation++;
     this.epoch++;
-    if (this.timer !== null) clearTimeout(this.timer);
+    if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
   }
 
   private schedule(ms: number): void {
-    this.timer = setTimeout(() => {
+    this.timer = window.setTimeout(() => {
       this.timer = null;
       // A timer has nowhere to report an error to; a check that fails shows it in the badge.
       void this.tick().catch(() => undefined);

@@ -18,12 +18,12 @@ const SERVICE: Record<KeyedService, string> = { tiingo: 'Tiingo', fred: 'FRED' }
 
 export interface DataDeps {
   /** GET a URL with any extra headers and return its body; rejects on a network error or a non-2xx status. */
-  fetchText(url: string, headers?: Record<string, string>): Promise<string>;
+  fetchText: (url: string, headers?: Record<string, string>) => Promise<string>;
   /** Reads a vault file, or null when it does not exist. */
   readVaultFile(path: string): Promise<string | null>;
   cacheRead(key: string): Promise<string | null>;
   cacheWrite(key: string, text: string): Promise<void>;
-  now(): number;
+  now: () => number;
   /** Waits between retries; without it retries go out straight away. */
   sleep?: (ms: number) => Promise<void>;
   /** The API key of a service, read from the user's secret storage when a request is about to go out; null when none is set. */
@@ -147,7 +147,7 @@ function exchangeDay(timeZone: unknown, fallbackOffsetMs: number): (ms: number) 
  * Today's daily bar counts once the regular session it belongs to has closed.
  */
 export function parseYahoo(json: string, now: number, weekly = false): Bars {
-  return yahooBars(json, now, weekly, (r, i, c) => (r.adj[i] != null ? r.adj[i]! / c : 1));
+  return yahooBars(json, now, weekly, (r, i, c) => (r.adj[i] != null ? r.adj[i] / c : 1));
 }
 
 /**
@@ -169,14 +169,32 @@ interface YahooChart {
   splits: { t: number; numerator: number; denominator: number }[];
 }
 
+type YahooPrices = (number | null)[];
+
+/** The parts of a Yahoo chart answer read here. Nothing checks the JSON against it: any part may be missing. */
+interface YahooAnswer {
+  chart?: {
+    result?: {
+      timestamp?: number[];
+      indicators?: {
+        quote?: { open?: YahooPrices; high?: YahooPrices; low?: YahooPrices; close?: YahooPrices; volume?: YahooPrices }[];
+        adjclose?: { adjclose?: YahooPrices }[];
+      };
+      events?: { splits?: Record<string, { date?: number; numerator?: number; denominator?: number }> };
+      meta?: { exchangeTimezoneName?: unknown; gmtoffset?: number; currentTradingPeriod?: { regular?: { end?: unknown } }; tradingPeriods?: unknown };
+    }[];
+    error?: { description?: string };
+  };
+}
+
 /** Yahoo chart JSON to bars, each price of row `i` (close `c`) multiplied by `factor`, without a bar that is still trading. */
 function yahooBars(json: string, now: number, weekly: boolean, factor: (r: YahooChart, i: number, c: number) => number): Bars {
-  const body = JSON.parse(json);
+  const body = JSON.parse(json) as YahooAnswer | null;
   const result = body?.chart?.result?.[0];
   if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo sent no data');
   const ts: number[] = result.timestamp ?? [];
   const q = result.indicators?.quote?.[0] ?? {};
-  const splits = Object.values((result.events?.splits ?? {}) as Record<string, { date?: number; numerator?: number; denominator?: number }>).map((s) => ({
+  const splits = Object.values(result.events?.splits ?? {}).map((s) => ({
     t: Number(s.date) * 1000,
     numerator: Number(s.numerator),
     denominator: Number(s.denominator),
@@ -194,7 +212,7 @@ function yahooBars(json: string, now: number, weekly: boolean, factor: (r: Yahoo
     const c = q.close?.[i];
     if (c == null) continue;
     const f = factor(chart, i, c);
-    push(bars, day, q.open?.[i] * f, q.high?.[i] * f, q.low?.[i] * f, c * f, q.volume?.[i] ?? 0);
+    push(bars, day, (q.open?.[i] ?? NaN) * f, (q.high?.[i] ?? NaN) * f, (q.low?.[i] ?? NaN) * f, c * f, q.volume?.[i] ?? 0);
   }
   return bars;
 }
@@ -212,7 +230,7 @@ function yahooBars(json: string, now: number, weekly: boolean, factor: (r: Yahoo
  * day's bars fall inside that day's daily bar.
  */
 export function parseYahooInside(json: string, now: number, step: number): Bars {
-  const body = JSON.parse(json);
+  const body = JSON.parse(json) as YahooAnswer | null;
   const result = body?.chart?.result?.[0];
   if (!result) throw new Error(body?.chart?.error?.description ?? 'Yahoo sent no data');
   const ts: number[] = result.timestamp ?? [];
@@ -230,7 +248,7 @@ export function parseYahooInside(json: string, now: number, step: number): Bars 
       while (i < ts.length && ts[i] * 1000 < start) i++;
       for (; i < ts.length && ts[i] * 1000 < end; i++) {
         const [o, h, l, c] = [q.open?.[i], q.high?.[i], q.low?.[i], q.close?.[i]];
-        if (ts[i] * 1000 !== next || [o, h, l, c].some((x) => typeof x !== 'number')) {
+        if (ts[i] * 1000 !== next || typeof o !== 'number' || typeof h !== 'number' || typeof l !== 'number' || typeof c !== 'number') {
           whole = false;
           continue;
         }
@@ -330,12 +348,13 @@ function tiingoRows(json: string, now: number, row: (r: Record<string, unknown>,
 
 /** Binance kline rows to bars, without the kline that has not closed yet. */
 export function parseBinance(json: string, now: number): Bars {
-  const rows = JSON.parse(json);
+  // A kline is [open time, open, high, low, close, volume, close time, ...]; an error is { code, msg }.
+  const rows = JSON.parse(json) as unknown[][] | { msg?: string } | null;
   if (!Array.isArray(rows)) throw new Error(rows?.msg ?? 'Binance sent no data');
   const bars = emptyBars();
   for (const r of rows) {
-    if (r[6] >= now) break;
-    push(bars, r[0], Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4]), Number(r[5]));
+    if (Number(r[6]) >= now) break;
+    push(bars, Number(r[0]), Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4]), Number(r[5]));
   }
   return bars;
 }
@@ -520,7 +539,7 @@ function readColumns(names: string[], rows: string[][]): Pick<Bars, 'columns' | 
  * name). A file with a date and such columns but no price header at all has no prices: it is kept as `unpriced`.
  */
 export function parseCsv(text: string): Bars {
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) throw new Error('The CSV has no rows');
   const sep = detectSeparator(lines[0]);
   const names = splitLine(lines[0], sep);
@@ -885,7 +904,7 @@ export async function loadBars(
   if (cached && !force && deps.now() - cached.fetched < (opts?.freshForMs ?? FRESH_FOR)) return loaded(ref.source, cached.bars, cached.fetched, null, false, cached.note ?? null);
 
   let byKey = running.get(deps);
-  if (!byKey) running.set(deps, (byKey = new Map()));
+  if (!byKey) running.set(deps, (byKey = new Map<string, Download>()));
   // Binance downloads differ by start time, so only calls with the same start share one.
   const slot = ref.source === 'binance' ? `${key}@${since}` : key;
   let download = byKey.get(slot);

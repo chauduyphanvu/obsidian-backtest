@@ -3,6 +3,7 @@ import { afterEach, beforeEach, test } from 'node:test';
 import { failedStatus, sortStatuses, todoRows, type OrderRow, type StrategyStatus, type WatchRow } from '../src/orders.ts';
 import { badgeView, ordersText, OrdersBadge, SharedScan, START_DELAY_MS, type BadgeElement, type BadgeHost } from '../src/orders-badge.ts';
 import { DAY, T0 } from './helpers.ts';
+import './window.ts';
 
 // An HTMLElement is what the plugin passes in.
 null as unknown as HTMLElement satisfies BadgeElement;

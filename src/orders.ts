@@ -226,8 +226,8 @@ export const watchClose = (row: WatchRow): string => `${minus(price(row.lastClos
 export interface ListFix {
   label?: string;
   text: string;
-  write?(): Promise<void>;
-  open?(): void;
+  write?: () => Promise<void>;
+  open?: () => void;
 }
 
 /** Every strategy's rows to watch as one list, nearest first. */

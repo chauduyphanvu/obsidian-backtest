@@ -64,7 +64,7 @@ The keys for Tiingo and FRED are in TIINGO_API_KEY and FRED_API_KEY.`;
 
 export function version(): string {
   if (typeof BACKTEST_BLOCKS_VERSION === 'string') return BACKTEST_BLOCKS_VERSION;
-  return JSON.parse(readFileSync(new URL('../../manifest.json', import.meta.url), 'utf8')).version;
+  return (JSON.parse(readFileSync(new URL('../../manifest.json', import.meta.url), 'utf8')) as { version: string }).version;
 }
 
 interface FoundBlock {

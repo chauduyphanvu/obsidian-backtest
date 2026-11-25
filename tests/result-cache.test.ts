@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { parseSpec } from '../src/dsl.ts';
 import { cacheKey, csvPaths, csvVersions, debounce, defaultsMatter, pricesAsOf, ResultCache } from '../src/result-cache.ts';
 import { defaultsFrom, normalizeSettings } from '../src/settings-core.ts';
+import './window.ts';
 
 const clock = () => {
   const c = { t: 1000, now: () => c.t };

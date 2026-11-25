@@ -9,6 +9,7 @@ import { blockKeyPrefix, blockNameKeySuffix, blockStateKey, keyNote } from '../s
 import { runSweep, sweepPbo, sweepTrials, type SweepResult } from '../src/sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, DAY } from './helpers.ts';
+import './window.ts';
 
 /** Daily bars over calendar days, each close the last times `growth(day)`. */
 function daily(from: string, to: string, growth: (d: Date) => number): Bars {

@@ -1,6 +1,8 @@
 // A stand-in for the page, as far as the result views use it: elements with classes, attributes, children, listeners
 // and a fixed width, and the globals they reach for. Importing this installs it for the whole test file.
 
+import './window.ts';
+
 export const WIDTH = 600;
 
 export class El {
@@ -175,12 +177,17 @@ export class El {
 
 // Each test file runs in a process of its own, so the page stays a stand-in for the whole run of the file that imports this.
 (globalThis as { document?: unknown }).document = { activeElement: null, createElement: (tag: string) => new El(tag), createElementNS: (_ns: string, tag: string) => new El(tag) };
-(globalThis as { window?: unknown }).window = {
+// Obsidian's own globals for making elements, and the document of the window that has focus.
+Object.assign(globalThis, {
+  activeDocument: globalThis.document,
+  createEl: (tag: string) => new El(tag),
+  createDiv: () => new El('div'),
+  createSvg: (tag: string) => new El(tag),
+});
+Object.assign(window, {
   requestAnimationFrame: (f: (t: number) => void) => (f(0), 0),
   cancelAnimationFrame: () => {},
-  setTimeout: (f: () => void, ms: number) => setTimeout(f, ms),
-  clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
-};
+});
 (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
   private seen: (entries: { contentRect: { width: number } }[]) => void;
   constructor(seen: (entries: { contentRect: { width: number } }[]) => void) {

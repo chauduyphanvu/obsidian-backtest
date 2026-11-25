@@ -2,10 +2,8 @@
 
 import { tokenizeBlock } from './highlight.ts';
 
-export const SVG = 'http://www.w3.org/2000/svg';
-
 export function h<K extends keyof HTMLElementTagNameMap>(parent: Element, tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
+  const el = createEl(tag);
   if (cls) el.className = cls;
   if (text !== undefined) el.textContent = text;
   parent.appendChild(el);
@@ -48,8 +46,13 @@ export function colourLines(pre: HTMLElement, text: string, token?: (el: HTMLEle
   });
 }
 
-export function s(parent: Element, tag: string, attrs: Record<string, string | number>, text?: string): SVGElement {
-  const el = document.createElementNS(SVG, tag);
+/** Runs `run` at each click of `el`. A listener's return is ignored, so a promise `run` returns is left to settle on its own. */
+export function onClick(el: HTMLElement, run: () => unknown): void {
+  el.addEventListener('click', () => void run());
+}
+
+export function s(parent: Element, tag: keyof SVGElementTagNameMap, attrs: Record<string, string | number>, text?: string): SVGElement {
+  const el = createSvg(tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
   if (text !== undefined) el.textContent = text;
   parent.appendChild(el);
@@ -76,8 +79,7 @@ export function onWidth(box: HTMLElement, draw: (width: number) => void): () => 
  * a cut. Without `matchMedia` (the tests' stand-in page) nothing animates either.
  */
 export function motionOK(): boolean {
-  const media = typeof window === 'undefined' ? undefined : window.matchMedia;
-  return typeof media === 'function' && !media.call(window, '(prefers-reduced-motion: reduce)').matches;
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 export const easeOut = (k: number): number => 1 - (1 - k) ** 3;

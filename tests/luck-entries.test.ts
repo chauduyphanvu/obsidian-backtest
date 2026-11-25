@@ -10,6 +10,7 @@ import { randomPicksWorks, randomTimingWorks } from '../src/render-luck.ts';
 import { makeRng, type Rng } from '../src/rng.ts';
 import type { Bars } from '../src/types.ts';
 import { bars } from './helpers.ts';
+import './window.ts';
 
 function walk(rng: Rng, n: number, vol: number): Bars {
   let c = 100;

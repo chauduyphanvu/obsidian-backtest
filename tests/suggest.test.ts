@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { mock, test } from 'node:test';
 import { SymbolLookup, type LookupDeps } from '../src/symbols.ts';
+import './window.ts';
 
 // The plugin's own `obsidian` package holds only types, so the one class this file needs is stood in for.
 const STUB = 'data:text/javascript,' + encodeURIComponent('export class EditorSuggest { constructor(app) { this.app = app; this.context = null; } }');

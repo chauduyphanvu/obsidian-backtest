@@ -40,7 +40,6 @@ export function renderDashboardErrors(parent: HTMLElement, errors: Diagnostic[],
   }
 }
 
-const DASH = '–';
 /** How long a row takes to glide to its new place when the table is sorted again. */
 const GLIDE_MS = 240;
 
@@ -219,7 +218,7 @@ export function renderDashboard(el: HTMLElement, source: string, host: Dashboard
     tbody = h(table, 'tbody');
     trs = new Map();
     for (const row of rows) {
-      const tr = document.createElement('tr');
+      const tr = createEl('tr');
       trs.set(row, tr);
       fill(tr, row);
     }

@@ -130,7 +130,10 @@ function row(parent: HTMLElement, f: Figure, arrive: boolean, opened: Set<string
     h(judge, 'span', 'bt-vs-delta', f.delta);
   }
   const m = moved(f, was);
-  if (m) h(judge, 'span', `bt-vs-moved${m.better === null ? '' : m.better ? ' bt-moved-better' : ' bt-moved-worse'}`, m.text);
+  if (m) {
+    judge.classList.add('bt-vs-judge-moved');
+    h(judge, 'span', `bt-vs-moved${m.better === null ? '' : m.better ? ' bt-moved-better' : ' bt-moved-worse'}`, m.text);
+  }
   return r;
 }
 
@@ -202,7 +205,7 @@ export function versusView(
     toggle.addEventListener('click', () => {
       more = !more;
       // The button is drawn again with the rows; one pressed from the keyboard keeps the focus.
-      const focused = document.activeElement === toggle;
+      const focused = activeDocument.activeElement === toggle;
       draw(false);
       if (focused) box.querySelector<HTMLElement>('.bt-vs-toggle')?.focus();
     });

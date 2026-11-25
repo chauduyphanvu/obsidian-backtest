@@ -23,7 +23,7 @@ const ruleOf = (rule: string, extra = '') => {
 };
 const exprOf = (rule: string, extra = ''): Expr => ruleOf(rule, extra).rules.A.buy;
 /** The rule's value at each bar of `closes`, or of `b` when given. */
-const values = (rule: string, closes: number[], b: Bars = bars(closes), extra = ''): number[] => new Evaluator(new Map([['A', b]])).eval(exprOf(rule, extra), 'A');
+const values = (rule: string, closes: number[], b: Bars = bars(closes), extra = ''): number[] => new Evaluator(new Map([['A', b]])).series(exprOf(rule, extra), 'A');
 const errorOf = (rule: string, extra = ''): [number, number | undefined, number | undefined, string] => {
   const { errors } = parseSpec(`universe: A\n${extra}buy when ${rule}`);
   assert.equal(errors.length, 1, `${rule}: ${JSON.stringify(errors)}`);
@@ -314,10 +314,10 @@ test('an unknown bar makes every window that holds it unknown, and the rule does
   b.columns = [{ name: 'score', header: 'score', v: [1, 1, N, 1, 1, 1, 0, 1] }];
   const rule = 'column(score) > 0 for 2 bars';
   const spec = parseSpec(`universe: csv:Data/A.csv\nbuy when ${rule}`).spec!;
-  const got = new Evaluator(new Map([['A', b]])).eval(spec.rules.A.buy, 'A');
+  const got = new Evaluator(new Map([['A', b]])).series(spec.rules.A.buy, 'A');
   assert.deepEqual(got, [N, 1, N, N, 1, 1, 0, 0]);
   const within = parseSpec('universe: csv:Data/A.csv\nbuy when column(score) > 0 within 2 bars').spec!;
-  assert.deepEqual(new Evaluator(new Map([['A', b]])).eval(within.rules.A.buy, 'A'), [N, 1, N, N, 1, 1, 1, 1]);
+  assert.deepEqual(new Evaluator(new Map([['A', b]])).series(within.rules.A.buy, 'A'), [N, 1, N, N, 1, 1, 1, 1]);
 });
 
 // ---------------------------------------------------------------- what the table and the explanation say

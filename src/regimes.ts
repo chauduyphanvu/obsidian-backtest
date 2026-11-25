@@ -97,7 +97,7 @@ function scaleJumps(close: number[], window: number): boolean[] {
  * never a day that was still going.
  */
 export function regimeBuckets(regime: Regime, home: Bars, runT: number[]): number[] {
-  const values = new Evaluator(new Map([[regime.ref.name, home]])).eval(regime.rule, regime.ref.name);
+  const values = new Evaluator(new Map([[regime.ref.name, home]])).series(regime.rule, regime.ref.name);
   const jumped = regime.scaleWindow ? scaleJumps(home.c, regime.scaleWindow) : undefined;
   return endedBy(home.t, barEnds(runT)).map((j) => {
     if (j < 0 || jumped?.[j]) return -1;

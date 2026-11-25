@@ -8,6 +8,7 @@ import { makeRng } from '../src/rng.ts';
 import { runSweep, sweepParams } from '../src/sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { bars } from './helpers.ts';
+import './window.ts';
 
 const rng = makeRng(4);
 let c = 100;

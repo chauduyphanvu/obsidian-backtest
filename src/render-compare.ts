@@ -316,7 +316,7 @@ function drawChart(chart: HTMLElement, tip: HTMLElement, width: number, t: numbe
     tip.style.right = flip ? `${width - px + 12}px` : '';
     tip.style.top = `${top + 4}px`;
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
+  hit.addEventListener('pointermove', (e) => show((e).clientX));
+  hit.addEventListener('pointerdown', (e) => show((e).clientX));
   hit.addEventListener('pointerleave', hide);
 }

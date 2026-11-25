@@ -7,6 +7,7 @@ import type { RunOutput } from '../src/runner.ts';
 import { blockOf, EMPTY, STARTERS } from '../src/gallery.ts';
 import { createStrategyNote, createWithFreeName, NoteProperties, saveDatedFile, type NewFiles, type PropertiesHost } from '../src/vault-writes.ts';
 import { bars } from './helpers.ts';
+import './window.ts';
 
 function run(src: string): RunOutput {
   const { spec } = parseSpec(src);

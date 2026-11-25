@@ -14,6 +14,7 @@ import { computeTriggers, triggerRun } from '../src/trigger.ts';
 import type { Bars } from '../src/types.ts';
 import { createJobClient, type JobInput, type MakeWorker, type RunRequest, type RunResult, type TriggersRequest } from '../src/worker-client.ts';
 import { bars, near } from './helpers.ts';
+import './window.ts';
 
 const DEFAULTS: Partial<Defaults> = { capital: 25_000, costBps: 5 };
 const SRC = 'universe: A 50%, B 50%\nfast = 10 in 5..25 step 5\nslow = 40 in 30..50 step 10\nbuy when sma(fast) > sma(slow)\nsell when sma(fast) < sma(slow)';

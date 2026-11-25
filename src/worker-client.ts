@@ -126,8 +126,8 @@ export interface JobClient {
 interface Lane {
   worker: WorkerPort | null;
   ready: boolean;
-  startTimer?: ReturnType<typeof setTimeout>;
-  idleTimer?: ReturnType<typeof setTimeout>;
+  startTimer?: number;
+  idleTimer?: number;
   /** The blocks whose prices this lane's worker holds. */
   sent: Set<number>;
   queue: Task[];
@@ -147,7 +147,7 @@ interface Common {
   settled: boolean;
   /** How long its worker may go without a word before the task is ended. */
   budgetMs: number;
-  watchdog?: ReturnType<typeof setTimeout>;
+  watchdog?: number;
   /** The open tasks of whoever asked, this one among them until it settles. */
   mine: Set<Task>;
 }
@@ -252,15 +252,15 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
   function settle(task: Task, result: unknown, error?: Error): void {
     if (task.settled) return;
     task.settled = true;
-    clearTimeout(task.watchdog);
+    window.clearTimeout(task.watchdog);
     task.mine.delete(task);
     if (error) task.reject(error);
     else (task.resolve as (r: unknown) => void)(result);
   }
 
   function kill(l: Lane): void {
-    clearTimeout(l.startTimer);
-    clearTimeout(l.idleTimer);
+    window.clearTimeout(l.startTimer);
+    window.clearTimeout(l.idleTimer);
     l.worker?.terminate();
     l.worker = null;
     l.ready = false;
@@ -304,10 +304,10 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
 
   function pump(l: Lane): void {
     while (!l.current) {
-      clearTimeout(l.idleTimer);
+      window.clearTimeout(l.idleTimer);
       const task = l.queue.shift();
       if (!task) {
-        if (l.worker) l.idleTimer = setTimeout(() => kill(l), idleMs);
+        if (l.worker) l.idleTimer = window.setTimeout(() => kill(l), idleMs);
         return;
       }
       let there = (task.type !== 'job' || task.input.defaults !== undefined) && !noWorker;
@@ -342,14 +342,14 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
       return false;
     }
     l.ready = false;
-    l.startTimer = setTimeout(() => onSlowStart(l), startMs);
+    l.startTimer = window.setTimeout(() => onSlowStart(l), startMs);
     return true;
   }
 
   /** (Re)starts the task's clock: it is ended when its worker says nothing for its budget. */
   function arm(task: Task): void {
-    clearTimeout(task.watchdog);
-    task.watchdog = setTimeout(() => expire(task), task.budgetMs);
+    window.clearTimeout(task.watchdog);
+    task.watchdog = window.setTimeout(() => expire(task), task.budgetMs);
   }
 
   function expire(task: Task): void {
@@ -384,7 +384,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
   function runHere(task: Task): void {
     task.here = true;
     // Nothing can stop it here, so no clock either: the size limits keep it short.
-    clearTimeout(task.watchdog);
+    window.clearTimeout(task.watchdog);
     const l = task.lane;
     let work: () => Promise<unknown>;
     if (task.type === 'run') {
@@ -411,7 +411,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
             });
     }
     // A turn later, so the caller paints first and `run` never calls back before it returns.
-    pause()
+    void pause()
       .then(work)
       .then(
         (r) => settle(task, r),
@@ -426,7 +426,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     if (m.type === 'ready') {
       l.ready = true;
       l.slowStarts = 0;
-      clearTimeout(l.startTimer);
+      window.clearTimeout(l.startTimer);
       return;
     }
     const task = l.current;

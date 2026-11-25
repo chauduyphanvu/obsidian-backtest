@@ -5,7 +5,7 @@ import { maxDrawdown } from './backtest.ts';
 import { closesFence, extractBlocks, fenceOf, type Block } from './blocks.ts';
 import { commentAt, parseSpec, type Commission, type Defaults, type Diagnostic, type Spec } from './dsl.ts';
 import { barAt, firstAtOrAfter, isFlip, type RunResult } from './engine.ts';
-import { isoDate, localDate, median, plural, price, stamp, tidy } from './format.ts';
+import { localDate, median, plural, price, stamp, tidy } from './format.ts';
 import { hash } from './result-cache.ts';
 import { NOTE_CHANGED } from './rewrite.ts';
 import type { Bars } from './types.ts';
@@ -294,7 +294,7 @@ export function worstFalls(values: number[], steps: number): number[] {
   const w = steps + 1;
   const n = values.length;
   const pre: Part[] = [];
-  const suf: Part[] = new Array(n);
+  const suf = new Array<Part>(n);
   for (let i = 0; i < n; i++) {
     const x = values[i];
     if (i % w === 0) pre.push({ hi: x, lo: x, worst: 0 });
@@ -446,7 +446,7 @@ const tableLine = (cells: string[]): string => `| ${cells.map((c) => c.replace(/
 function cellsOf(line: string): string[] {
   // An escaped bar is set aside as a character no note holds, so every bar left divides cells.
   const text = line.trim().replace(/\\\|/g, '\u0000').replace(/^\|/, '').replace(/\|$/, '');
-  return text.split('|').map((c) => c.replace(/\u0000/g, '|').trim());
+  return text.split('|').map((c) => c.replaceAll('\u0000', '|').trim());
 }
 
 const RULE_CELL = /^:?-{3,}:?$/;

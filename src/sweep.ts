@@ -64,7 +64,8 @@ export interface SweepResult {
   stopped: boolean;
 }
 
-export const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+// For the window only: a worker has no window, and the jobs it runs are given a pause of their own (jobs.ts).
+export const pause = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 
 /** The parameters with a range, each with the values to try. A declared value off the step grid is tried too. */
 export function sweepParams(spec: Spec): SweepParam[] {

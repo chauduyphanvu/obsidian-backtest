@@ -30,6 +30,8 @@ export interface PriceStoreOptions {
   tiingoFallback?: DataDeps['tiingoFallback'];
   /** Parses a CSV file's text away from the main thread (data.ts DataDeps); the command line leaves it out. */
   parseCsv?: DataDeps['parseCsv'];
+  /** Waits before Yahoo is asked again (data.ts DataDeps); without it there is no wait. */
+  sleep?: DataDeps['sleep'];
 }
 
 export class PriceStore {
@@ -73,8 +75,7 @@ export class PriceStore {
     // One object for the plugin's life, so several blocks asking for the same ticker share a download.
     this.dataDeps = {
       now: () => Date.now(),
-      // globalThis, not window: the command line runs this on Node, which has no window.
-      sleep: (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)),
+      sleep: this.o.sleep,
       fetchText: this.o.fetchText,
       secret: this.o.secret,
       tiingoFallback: this.o.tiingoFallback,

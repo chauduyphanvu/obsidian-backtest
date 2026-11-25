@@ -327,7 +327,6 @@ export class StrategyBlocks {
       const sections = (shown: RunOutput): Section[] => {
         const bt = shown.backtest;
         const intraday = isIntraday(bt.run.t);
-        const name = shown.spec.name ?? 'Backtest';
         // The sweep and the luck checks start from the block's own text and put values on top of it.
         const tryValues = {
           source,
@@ -343,8 +342,6 @@ export class StrategyBlocks {
             for (const listen of this.sweepListeners.get(key) ?? []) listen(paint);
           },
         };
-        // A kept note carries the values that made its result.
-        const shownSource = setParamValues(source, Object.fromEntries(shown.spec.params.map((p) => [p.name, p.value])));
         return [
           // Regimes and crises: right after "More statistics".
           (root) =>
@@ -454,7 +451,7 @@ export class StrategyBlocks {
         // Drawn where it cannot be seen, until its chart has laid itself out; then it takes the place of what is shown,
         // and the block's height eases from the one to the other.
         el.classList.add('bt-block');
-        const stage = document.createElement('div');
+        const stage = createDiv();
         stage.className = 'bt-stage';
         el.appendChild(stage);
         drawn = draw(stage);
@@ -501,12 +498,12 @@ export class StrategyBlocks {
       if (inPlace && !(e instanceof LimitError) && old.root.parentElement === el) {
         this.disposers.set(child, stop);
         old.busy(false);
-        old.failed(message, () => redraw({ force: true, inPlace: true }));
+        old.failed(message, () => void redraw({ force: true, inPlace: true }));
         return;
       }
       before?.();
       // A limit is shown in the panel too, since only the block can offer to run it anyway.
-      if (e instanceof LimitError) renderLimit(el, e, source, () => redraw({ force: false, anyway: true }));
+      if (e instanceof LimitError) renderLimit(el, e, source, () => void redraw({ force: false, anyway: true }));
       else if (opts.panel) throw e;
       else showFailure(e);
     }

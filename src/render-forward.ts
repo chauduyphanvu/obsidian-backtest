@@ -13,7 +13,6 @@ import {
   parseForward,
   readLog,
   revisions,
-  type ForwardBlock,
   type ForwardFigures,
   type ForwardLog,
   type LogRow,

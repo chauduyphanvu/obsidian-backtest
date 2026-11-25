@@ -162,7 +162,7 @@ const values = (text: string, data: Record<string, Bars>, extra = ''): number[] 
   const { spec, errors } = parseSpec(`universe: A\n${extra}buy when ${text}`);
   assert.deepEqual(errors, [], text);
   const e = spec!.rules.A.buy;
-  return new Evaluator(new Map(Object.entries(data))).eval(e.k === 'cmp' ? e.a : e, 'A');
+  return new Evaluator(new Map(Object.entries(data))).series(e.k === 'cmp' ? e.a : e, 'A');
 };
 
 test('each function reads the ticker\'s own bars and gives the array its indicator gives', () => {
@@ -256,9 +256,9 @@ test('no function reads a later bar, through the evaluator and across other tick
     const { spec, errors } = parseSpec(`universe: A\nbuy when ${body}`);
     assert.deepEqual(errors, [], text);
     const e = spec!.rules.A.buy;
-    const whole = new Evaluator(new Map([['A', a], ['B', b]])).eval(e.k === 'cmp' ? e.a : e, 'A');
+    const whole = new Evaluator(new Map([['A', a], ['B', b]])).series(e.k === 'cmp' ? e.a : e, 'A');
     for (const k of [1, 2, 5, 21, 30, 59, 60, 61, 120, 299]) {
-      const part = new Evaluator(new Map([['A', cut(a, k)], ['B', cut(b, k)]])).eval(e.k === 'cmp' ? e.a : e, 'A');
+      const part = new Evaluator(new Map([['A', cut(a, k)], ['B', cut(b, k)]])).series(e.k === 'cmp' ? e.a : e, 'A');
       assert.deepEqual(part, whole.slice(0, k), `${text}: the first ${k} values depend on later bars`);
     }
   }
@@ -288,17 +288,17 @@ test('correl lines the other ticker up with this one\'s bars exactly as of does'
   for (const fill of ['', 'fill: close\n']) {
     const { spec, ev } = run(`universe: STK\n${fill}buy when correl(close of binance:CRY, 8) > -2`);
     const e = spec.rules.STK.buy as Extract<Expr, { k: 'cmp' }>;
-    const read = ev.eval({ k: 'of', a: { k: 'series', name: 'close' }, asset: 'CRY' }, 'STK');
+    const read = ev.series({ k: 'of', a: { k: 'series', name: 'close' }, asset: 'CRY' }, 'STK');
     // The plain close of CRY as the rule reads it, bar for bar: the correlation is of that array and STK's closes, which
     // with fill: close are taken a bar early too, as the coin is.
-    assert.deepEqual(ev.eval(e.a, 'STK'), ind.correl(fill ? ind.lag(stock.c, 1) : stock.c, read, 8));
+    assert.deepEqual(ev.series(e.a, 'STK'), ind.correl(fill ? ind.lag(stock.c, 1) : stock.c, read, 8));
     // Bar 10 of the stock is Wednesday 15 January; the coin's bar it reads is that day's, or with fill: close the day before's.
     const k = ev.barOf('CRY', 'STK', 10);
     assert.equal(coin.t[k], stock.t[10] - (fill ? DAY : 0), fill || 'next open');
   }
   // The two readings differ, since the coin is read a bar earlier with fill: close.
   const [open, close] = [run('universe: STK\nbuy when correl(close of binance:CRY, 8) > -2'), run('universe: STK\nfill: close\nbuy when correl(close of binance:CRY, 8) > -2')];
-  const get = (r: ReturnType<typeof run>) => r.ev.eval((r.spec.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a, 'STK');
+  const get = (r: ReturnType<typeof run>) => r.ev.series((r.spec.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a, 'STK');
   assert.notDeepEqual(get(open), get(close));
 });
 
@@ -309,7 +309,7 @@ test('correl pairs the two changes of the same days, with either fill: an identi
   for (const fill of ['', 'fill: close\n']) {
     const { spec } = parseSpec(`universe: STK\n${fill}buy when correl(close of csv:Data/twin.csv, 30) > 0.9`);
     const ev = specEvaluator(spec!, new Map([['STK', stock], ['twin', twin]]));
-    const v = ev.eval((spec!.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a, 'STK').filter((x) => !Number.isNaN(x));
+    const v = ev.series((spec!.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a, 'STK').filter((x) => !Number.isNaN(x));
     assert.ok(v.length > 200 && v.every((x) => near(x, 1, 1e-9)), `${fill || 'next open'}: ${Math.min(...v)}`);
   }
 });
@@ -323,7 +323,7 @@ test('correl worked by hand: the changes of days 2 to 4 at the close of day 4, o
   const last = (fill: string) => {
     const { spec } = parseSpec(`universe: binance:A\n${fill}buy when correl(close of csv:Data/B.csv, 3) > 0`);
     const ev = specEvaluator(spec!, new Map([['A', A], ['B', B]]));
-    return ev.eval((spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a, 'A')[4];
+    return ev.series((spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a, 'A')[4];
   };
   // Days 2 to 4: A's deviations from their mean are 2, -7 and 5 three-hundredths, B's 1, -2 and 1 hundredths.
   assert.ok(near(last(''), 21 / Math.sqrt(78 * 6), 1e-12), String(last('')));
@@ -424,9 +424,9 @@ test('each function is known, and settled, from the first bar of a run that has 
     assert.deepEqual(errors, [], text);
     const lb = lookbackBars(spec!);
     const e = (spec!.rules.A.buy as Extract<Expr, { k: 'cmp' }>).a;
-    const all = new Evaluator(new Map([['A', full], ['B', other]])).eval(e, 'A');
+    const all = new Evaluator(new Map([['A', full], ['B', other]])).series(e, 'A');
     for (const s of starts) {
-      const part = new Evaluator(new Map([['A', cut(full, s - lb)], ['B', cut(other, s - lb)]])).eval(e, 'A');
+      const part = new Evaluator(new Map([['A', cut(full, s - lb)], ['B', cut(other, s - lb)]])).series(e, 'A');
       const [got, want] = [part[lb], all[s]];
       assert.ok(!Number.isNaN(got), `${text}: unknown at the first bar of a run starting at bar ${s} with ${lb} bars before it`);
       assert.ok(Math.abs(got - want) <= (tol === 0 ? 1e-9 : tol) * Math.max(1, Math.abs(want)), `${text}: ${got} with ${lb} bars of history, ${want} with all of it, at bar ${s}`);
@@ -442,12 +442,12 @@ test('bars_since and supertrend_up are known and right at the first bar of a run
     const lb = lookbackBars(spec!);
     const e0 = spec!.rules.A.buy;
     const e = e0.k === 'cmp' ? e0.a : e0;
-    const all = new Evaluator(new Map([['A', full]])).eval(e, 'A');
+    const all = new Evaluator(new Map([['A', full]])).series(e, 'A');
     let known = 0;
     let agree = 0;
     const starts = Array.from({ length: 40 }, (_, k) => 1500 + k * 130);
     for (const s of starts) {
-      const part = new Evaluator(new Map([['A', cut(full, s - lb)]])).eval(e, 'A')[lb];
+      const part = new Evaluator(new Map([['A', cut(full, s - lb)]])).series(e, 'A')[lb];
       if (!Number.isNaN(part)) {
         known++;
         // Known means exact: the count since the last cross, or the trend, as a run with all the history would give it.

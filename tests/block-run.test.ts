@@ -7,6 +7,7 @@ import { makeRng } from '../src/rng.ts';
 import { defaultsFrom, normalizeSettings } from '../src/settings-core.ts';
 import { BlockDrawing, createJobClient, type BlockRuns, type MakeWorker, type RunRequest } from '../src/worker-client.ts';
 import { DAY, T0 } from './helpers.ts';
+import './window.ts';
 
 const SRC = 'universe: csv:a.csv\nn = 20 in 10..40 step 5\nbuy when close > sma(n)\nsell when close < sma(n)';
 

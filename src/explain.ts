@@ -287,8 +287,8 @@ class Explainer {
     const i = barAt(bars.t, t);
     const rank = this.bt.spec.rank;
     if (i < 0) return 'it had no bar to read at that time';
-    if (this.ev.eval(this.bt.spec.rules[asset].buy, asset)[i] !== 1) return 'its buy rule did not hold';
-    if (rank && !Number.isFinite(this.ev.eval(rank.by, asset)[i])) return 'its score was unknown';
+    if (this.ev.series(this.bt.spec.rules[asset].buy, asset)[i] !== 1) return 'its buy rule did not hold';
+    if (rank && !Number.isFinite(this.ev.series(rank.by, asset)[i])) return 'its score was unknown';
     return 'its sell rule held';
   }
 
@@ -302,7 +302,7 @@ class Explainer {
     walk(e, (x) => texts.set(x, written.parts[k++] ?? ''));
     const text = (x: Expr) => texts.get(x) || '';
     const wholes = wholeParts(e, written);
-    const at = (x: Expr, j: number) => (j < 0 ? NaN : findPos(x) ? this.ev.compile(x, asset)(j, pos) : this.ev.eval(x, asset)[j]);
+    const at = (x: Expr, j: number) => (j < 0 ? NaN : findPos(x) ? this.ev.compile(x, asset)(j, pos) : this.ev.series(x, asset)[j]);
     const percentText = (s: string) => s.trim().endsWith('%') || this.bt.spec.params.some((p) => p.percent && p.name.toLowerCase() === s.trim().toLowerCase());
     // A number written out, such as 30, 5% or -2, needs no value beside it.
     const literal = (x: Expr) => (x.k === 'num' || (x.k === 'neg' && x.a.k === 'num')) && /^-?\s*\d*\.?\d+\s*%?$/.test(text(x).trim());
@@ -333,7 +333,7 @@ class Explainer {
           const then = Number.isNaN(pa) || Number.isNaN(pb) ? 'unknown' : (up ? pa <= pb : pa >= pb) ? (up ? 'at or below' : 'at or above') : up ? 'above' : 'below';
           out = `${side(x.a, a)} ${now} ${side(x.b, b)}. On the bar before: ${fa}, ${then} ${fb}`;
         } else {
-          out = `${side(x.a, a)} ${OPS[x.op as keyof typeof OPS]} ${side(x.b, b)}`;
+          out = `${side(x.a, a)} ${OPS[x.op]} ${side(x.b, b)}`;
         }
         const reads = this.reads(x, asset, i);
         return reads ? `${out} (${reads})` : out;

@@ -6,6 +6,7 @@ import { serve, type ToWorker } from '../src/jobs.ts';
 import { Results } from '../src/results.ts';
 import { createJobClient, type BlockRuns, type MakeWorker } from '../src/worker-client.ts';
 import { DAY } from './helpers.ts';
+import './window.ts';
 
 const SRC = 'universe: csv:a.csv\nbuy when close > sma(20)\nsell when close < sma(20)';
 const DEFAULTS: Defaults = { capital: 10_000, costBps: 0, slippageBps: 0, cashRate: '0%', dataSource: 'yahoo' };

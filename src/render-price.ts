@@ -289,8 +289,8 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     tip.style.left = `${px + 12 + w <= width ? px + 12 : Math.max(0, px - 12 - w)}px`;
     tip.style.top = `${top + 4}px`;
   };
-  hit.addEventListener('pointermove', (e) => show(nearest((e as PointerEvent).clientX)));
-  hit.addEventListener('pointerdown', (e) => show(nearest((e as PointerEvent).clientX)));
+  hit.addEventListener('pointermove', (e) => show(nearest((e).clientX)));
+  hit.addEventListener('pointerdown', (e) => show(nearest((e).clientX)));
   hit.addEventListener('pointerleave', hide);
   return { ...marked, keys: { t, first: 0, at: () => shown, show, rest: hide } };
 }

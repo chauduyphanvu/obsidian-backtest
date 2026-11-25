@@ -7,6 +7,7 @@ import { grid, runSweep, splitSummary, summarize, sweepLimit, sweepParams, sweep
 import { heatCentre, MAKE_ONE, NEEDS_RANGE, renderSweep, splitTiles, tint } from '../src/render-sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, near, DAY } from './helpers.ts';
+import './window.ts';
 
 const spec = (src: string) => {
   const { spec, errors } = parseSpec(src);

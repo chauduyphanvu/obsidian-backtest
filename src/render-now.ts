@@ -247,6 +247,8 @@ function panelFor(box: HTMLElement, input: StatusInput, report: TriggerReport | 
     button.addEventListener('click', () => copy(line, 'the order'));
   };
   if (several) {
+    // The table of positions takes the whole width.
+    wrap.classList.add('bt-status-table');
     renderPositions(wrap, bt, input.intraday, input.triggers);
     copyButton(wrap);
     return;
@@ -299,7 +301,7 @@ export function otherSide(out: Pick<RunOutput, 'spec' | 'data'>, t: Trigger): { 
   const label = written.parts[nodes.indexOf(side)]?.trim();
   if (!label) return null;
   try {
-    const values = specEvaluator(out.spec as Spec, out.data).eval(side, t.ticker);
+    const values = specEvaluator(out.spec, out.data).series(side, t.ticker);
     const last = values[values.length - 1];
     if (!Number.isFinite(last) || last < t.last * 0.5 || last > t.last * 2) return null;
     return { label, values };

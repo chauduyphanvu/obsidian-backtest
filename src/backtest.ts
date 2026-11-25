@@ -340,12 +340,12 @@ export function specSignals(spec: Spec, data: Map<string, Bars>): Map<string, Si
   for (const a of spec.universe) {
     const r = spec.rules[a.name];
     const sig: Signals = {
-      buy: evaluator.eval(r.buy, a.name),
+      buy: evaluator.series(r.buy, a.name),
       sell: r.sell ? evaluator.compile(r.sell, a.name) : null,
-      score: spec.rank ? evaluator.eval(spec.rank.by, a.name) : null,
+      score: spec.rank ? evaluator.series(spec.rank.by, a.name) : null,
       add: r.add ? evaluator.compile(r.add, a.name) : null,
     };
-    if (r.short) sig.short = evaluator.eval(r.short, a.name);
+    if (r.short) sig.short = evaluator.series(r.short, a.name);
     if (r.cover) sig.cover = evaluator.compile(r.cover, a.name);
     signals.set(a.name, sig);
   }

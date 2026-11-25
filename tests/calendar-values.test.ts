@@ -23,7 +23,7 @@ import { head, tally, verify, walkBars } from './trigger-helpers.ts';
 
 const HOUR = 3_600_000;
 const N = NaN;
-const cal = (name: CalName, t: number[]): number[] => new Evaluator(new Map([['A', bars(t.map(() => 10), { times: t })]])).eval({ k: 'cal', name } as Expr, 'A');
+const cal = (name: CalName, t: number[]): number[] => new Evaluator(new Map([['A', bars(t.map(() => 10), { times: t })]])).series({ k: 'cal', name } as Expr, 'A');
 const utc = (y: number, m: number, d: number, h = 0) => Date.UTC(y, m - 1, d, h);
 const days = (from: number, count: number, weekends = false): number[] => {
   const out: number[] = [];
@@ -329,7 +329,7 @@ test('trading_day is known at the first bar of a run at every bar size, and is t
       const out = await runner.run(spec!);
       const data = out.data.get('BTCUSDT')!;
       const at = out.backtest.run.t[0];
-      const known = new Evaluator(out.data).eval({ k: 'cal', name: 'trading_day' }, 'BTCUSDT')[data.t.indexOf(at)];
+      const known = new Evaluator(out.data).series({ k: 'cal', name: 'trading_day' }, 'BTCUSDT')[data.t.indexOf(at)];
       const tag = `${interval} from ${from}`;
       // The loader's own reach: lookback bars, 1.6 times as far for bars of a day or more.
       assert.ok(at - data.t[0] >= 38 * DAY - step, `${tag}: the data starts ${(at - data.t[0]) / DAY} days before the run`);
@@ -382,9 +382,9 @@ test('the ends and trading_days_left read the dates of later bars, as month_end 
 test('a gap across a month end: the days still to come are counted from the last bar, and its quarter is its month\'s', () => {
   const b: Bars = bars([1, 2, 3], { times: [utc(2024, 5, 30), utc(2024, 5, 31), utc(2024, 6, 3)] });
   const ev = new Evaluator(new Map([['A', b]]));
-  assert.deepEqual(ev.eval({ k: 'cal', name: 'month_end' }, 'A'), [0, 1, 0]);
-  assert.deepEqual(ev.eval({ k: 'cal', name: 'quarter' }, 'A'), [2, 2, 2]);
-  assert.deepEqual(ev.eval({ k: 'cal', name: 'trading_days_left' }, 'A'), [1, 0, 19]);
+  assert.deepEqual(ev.series({ k: 'cal', name: 'month_end' }, 'A'), [0, 1, 0]);
+  assert.deepEqual(ev.series({ k: 'cal', name: 'quarter' }, 'A'), [2, 2, 2]);
+  assert.deepEqual(ev.series({ k: 'cal', name: 'trading_days_left' }, 'A'), [1, 0, 19]);
 });
 
 // ---------------------------------------------------------------- how they look in the editor, in an explanation and in the table

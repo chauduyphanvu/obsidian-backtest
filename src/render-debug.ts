@@ -20,7 +20,7 @@ import {
   type DebugColumn,
   type DebugRow,
 } from './debug.ts';
-import { h } from './dom.ts';
+import { h, onClick } from './dom.ts';
 import { MARK } from './explain.ts';
 import { isoDate, price, stamp } from './format.ts';
 
@@ -78,10 +78,10 @@ function build(body: HTMLElement, input: DebugInput, life: { open: boolean }): v
   box.tabIndex = 0;
   const legend = h(body, 'div', 'bt-debug-legend');
 
-  const button = (parent: HTMLElement, text: string, onClick: () => void): HTMLButtonElement => {
+  const button = (parent: HTMLElement, text: string, run: () => unknown): HTMLButtonElement => {
     const b = h(parent, 'button', 'bt-button bt-debug-button', text);
     b.type = 'button';
-    b.addEventListener('click', onClick);
+    onClick(b, run);
     return b;
   };
 

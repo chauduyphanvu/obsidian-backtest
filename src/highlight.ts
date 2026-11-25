@@ -40,9 +40,9 @@ const SIZE_SETTINGS = ['interval', 'magnify'];
 
 /** Where a comment starts: a `#` or `//` at the start of a line or after a space. Not inside the quotes of a column's name, as in `column("a # b")`. */
 export function commentStart(line: string): number {
-  const quoted = [...line.matchAll(/\bcolumn\s*\(\s*"[^"]*"/gi)].map((m) => [m.index!, m.index! + m[0].length]);
+  const quoted = [...line.matchAll(/\bcolumn\s*\(\s*"[^"]*"/gi)].map((m) => [m.index, m.index + m[0].length]);
   for (const m of line.matchAll(/(^|\s)(#|\/\/)/g)) {
-    const at = m.index! + m[1].length;
+    const at = m.index + m[1].length;
     if (!quoted.some(([from, to]) => at >= from && at < to)) return at;
   }
   return -1;
@@ -188,7 +188,7 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
     // One or more tickers, separated by commas.
     for (const piece of m[4].matchAll(/[^,\s][^,]*/g)) {
       const name = piece[0].trimEnd();
-      out.push({ from: at + piece.index!, to: at + piece.index! + name.length, kind: name.toLowerCase() === 'all' ? 'keyword' : 'ticker' });
+      out.push({ from: at + piece.index, to: at + piece.index + name.length, kind: name.toLowerCase() === 'all' ? 'keyword' : 'ticker' });
     }
   } else if (kind === 'rule' || kind === 'continuation') {
     // "add" is not a reserved word, so it is coloured only as the head of a rule.
@@ -221,11 +221,11 @@ export function tokenize(line: string, kind: LineKind, params: string[] = []): T
     } else if (NUMERIC_SETTINGS.includes(key)) {
       numericValue(line, colon + 1, end, names, out);
     } else if (SIZE_SETTINGS.includes(key)) {
-      for (const m of line.slice(0, end).matchAll(/[A-Za-z0-9]+/g)) if (m.index! > colon) out.push({ from: m.index!, to: m.index! + m[0].length, kind: 'value' });
+      for (const m of line.slice(0, end).matchAll(/[A-Za-z0-9]+/g)) if (m.index > colon) out.push({ from: m.index, to: m.index + m[0].length, kind: 'value' });
     } else if (key === 'commission') {
       // An amount, and the words of "0.005 per share, min 1, max 1%": a comma or a space belongs to neither.
       for (const m of line.slice(0, end).matchAll(/(\$?(?:\d+(?:\.\d+)?|\.\d+)%?)|([A-Za-z]+)/g)) {
-        if (m.index! > colon) out.push({ from: m.index!, to: m.index! + m[0].length, kind: m[1] ? 'number' : 'value' });
+        if (m.index > colon) out.push({ from: m.index, to: m.index + m[0].length, kind: m[1] ? 'number' : 'value' });
       }
     } else {
       const re = TICKER_SETTINGS.includes(key) ? /(\d+(?:\.\d+)?\s*%)|([A-Za-z0-9^:/._=-]+)/g : /(\$?\d[\d,_.-]*\s*(?:%|bps?|[kKmM]\b)?)|([A-Za-z]+)/g;

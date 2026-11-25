@@ -1,4 +1,4 @@
-import { BINANCE_INTERVALS, CALENDAR, INDICATORS, NUM, POSITION, REBALANCE, SERIES } from './dsl.ts';
+import { BINANCE_INTERVALS, INDICATORS, NUM, POSITION, REBALANCE } from './dsl.ts';
 import { commentStart, declaredDefinitions, declaredParams, lineKinds, RULE_HEADS, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
 import { DATA_SOURCES, SOURCE_PREFIX } from './types.ts';
 
@@ -978,12 +978,12 @@ export function helpAt(lines: string[], row: number, col: number, tokens: Token[
     case 'all':
       return kind === 'for' && prev ? target(prev.from, t.to, 'for all') : null;
     case 'crosses':
-      return nextWord === 'above' || nextWord === 'below' ? target(t.from, next!.to, `crosses ${nextWord}`) : target(t.from, t.to, 'crosses');
+      return nextWord === 'above' || nextWord === 'below' ? target(t.from, next.to, `crosses ${nextWord}`) : target(t.from, t.to, 'crosses');
     case 'above':
     case 'below':
-      return prevWord === 'crosses' ? target(prev!.from, t.to, `crosses ${here}`) : prevWord === 'is' ? target(prev!.from, t.to, here) : target(t.from, t.to, here);
+      return prevWord === 'crosses' ? target(prev.from, t.to, `crosses ${here}`) : prevWord === 'is' ? target(prev.from, t.to, here) : target(t.from, t.to, here);
     case 'is':
-      return nextWord === 'above' || nextWord === 'below' ? target(t.from, next!.to, nextWord) : null;
+      return nextWord === 'above' || nextWord === 'below' ? target(t.from, next.to, nextWord) : null;
     case 'in':
     case 'step':
       return kind === 'param' ? target(t.from, t.to, 'in … step') : null;

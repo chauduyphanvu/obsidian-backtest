@@ -333,7 +333,7 @@ export function renderLimit(el: HTMLElement, error: LimitError, src: string, onA
  */
 export function renderDefaultsChanged(el: HTMLElement, onRun: () => void): (changed: boolean) => void {
   const root = el.querySelector('.bt-root') ?? el;
-  const note = document.createElement('div');
+  const note = createDiv();
   note.className = 'bt-defaults-changed';
   note.hidden = true;
   h(note, 'span', 'bt-defaults-changed-text', 'You changed the default settings after the plugin calculated this result. This result uses the previous settings.');
@@ -377,7 +377,7 @@ export function renderOldRecord(el: HTMLElement, found: OldRecord): void {
   const root = el.querySelector('.bt-root') ?? el;
   root.querySelector('.bt-renamed')?.remove();
   const { text, button: label } = oldRecordWords(found);
-  const line = document.createElement('div');
+  const line = createDiv();
   line.className = 'bt-defaults-changed bt-renamed';
   h(line, 'span', 'bt-defaults-changed-text', text);
   const button = h(line, 'button', 'bt-button', label);
@@ -1066,7 +1066,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     },
     failed(message, retry) {
       problem?.remove();
-      problem = document.createElement('div');
+      problem = createDiv();
       problem.className = 'bt-refresh-problem';
       h(problem, 'span', undefined, `Cannot get new prices. ${message}`);
       h(problem, 'button', 'bt-button', 'Run again').addEventListener('click', retry);

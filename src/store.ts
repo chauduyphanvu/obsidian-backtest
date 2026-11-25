@@ -61,8 +61,8 @@ export class JsonStore<T> {
   constructor(opts: StoreOptions<T>) {
     this.o = {
       delayMs: 2000,
-      setTimer: (fn, ms) => setTimeout(fn, ms),
-      clearTimer: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+      setTimer: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimer: (id) => window.clearTimeout(id as number),
       normalize: (p) => p,
       ...opts,
     };

@@ -8,6 +8,7 @@ import { makeRng, type Rng } from '../src/rng.ts';
 import { quantile } from '../src/sweep.ts';
 import type { Bars } from '../src/types.ts';
 import { bars, near, DAY } from './helpers.ts';
+import './window.ts';
 
 const YEAR = 365.25 * DAY;
 

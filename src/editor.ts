@@ -89,7 +89,7 @@ class StrategyView {
   private cache: ResultCache<BlockAnalysis>;
   private getDefaults: () => Partial<Defaults>;
   private getLookup: () => SymbolLookup | null;
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: number | undefined;
   private dead = false;
   private wanted: { ticker: string; source: 'yahoo' | 'binance' }[] = [];
   private view: EditorView;
@@ -109,7 +109,7 @@ class StrategyView {
 
   destroy(): void {
     this.dead = true;
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
   }
 
   /**
@@ -199,9 +199,9 @@ class StrategyView {
 
   /** Asks about the tickers on screen a moment after the last change. */
   private schedule(): void {
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
     if (!this.wanted.length) return;
-    this.timer = setTimeout(() => void this.ask(), CHECK_DELAY_MS);
+    this.timer = window.setTimeout(() => void this.ask(), CHECK_DELAY_MS);
   }
 
   private async ask(): Promise<void> {
@@ -334,7 +334,7 @@ const STAND_IN_VALUE: HoverValue = { label: 'x', value: 1, close: 1, values: [1,
 function cardHeight(view: EditorView, card: HTMLElement, valueBox: HTMLElement | null): number {
   const doc = view.dom.ownerDocument;
   // The frame and the class CodeMirror gives a hover card, so the same styles lay it out.
-  const frame = element(doc, 'div', 'cm-tooltip cm-tooltip-hover bt-measure');
+  const frame = element(doc, 'div', 'cm-tooltip cm-tooltip-hover bt-diag-frame bt-measure');
   card.classList.add('cm-tooltip-section');
   if (valueBox) valuePanel(doc, valueBox, STAND_IN_VALUE);
   frame.append(card);
@@ -414,6 +414,10 @@ export function tooltipFor(
     create() {
       return {
         dom,
+        // The box CodeMirror puts the card in is the element that needs the frame (60-editor.css).
+        mount() {
+          dom.parentElement?.classList.add('bt-diag-frame');
+        },
         // CodeMirror keeps a tooltip inside the window; a narrow pane is kept inside as well.
         positioned() {
           const frame = dom.parentElement;
@@ -559,7 +563,7 @@ export class StrategySuggest extends EditorSuggest<Completion> {
   private ask: TickerAsk | null = null;
   /** Counts triggers, so an answer for text that has since changed is dropped. */
   private turn = 0;
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: number | undefined;
 
   constructor(app: App, options: SuggestOptions = {}) {
     super(app);
@@ -606,7 +610,7 @@ export class StrategySuggest extends EditorSuggest<Completion> {
     const fetchHits = async (): Promise<Completion[]> => [...own, ...hitCompletions(await ask.lookup.suggest(ask.word, ask.source), own)];
     if (own.length) {
       // The block's own tickers show at once; the hits are added when they arrive, if the text has not changed.
-      this.timer = setTimeout(() => {
+      this.timer = window.setTimeout(() => {
         void fetchHits().then((all) => {
           if (turn === this.turn) this.showMore(all);
         });
@@ -616,7 +620,7 @@ export class StrategySuggest extends EditorSuggest<Completion> {
     // A request that a newer key overtakes never answers: Obsidian takes an empty answer as "nothing matches", closes the
     // list and forgets where it was, so the newer request's hits would then have nowhere to show.
     return new Promise<Completion[]>((resolve) => {
-      this.timer = setTimeout(() => {
+      this.timer = window.setTimeout(() => {
         void fetchHits().then((all) => {
           if (turn === this.turn) resolve(all);
         });
@@ -638,7 +642,7 @@ export class StrategySuggest extends EditorSuggest<Completion> {
   /** Drops a request that is waiting for its turn. */
   private cancel(): void {
     this.turn++;
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
   }
 
   renderSuggestion(item: Completion, el: HTMLElement): void {

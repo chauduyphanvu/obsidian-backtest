@@ -9,7 +9,7 @@ interface Scope {
   onmessage: ((e: { data: ToWorker }) => void) | null;
 }
 
-const scope = globalThis as unknown as Scope;
+const scope = self as unknown as Scope;
 const handle = serve((m) => scope.postMessage(m));
 scope.onmessage = (e) => void handle(e.data);
 scope.postMessage({ type: 'ready' });

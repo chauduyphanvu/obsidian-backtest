@@ -285,12 +285,12 @@ test('a column evaluates to exactly its values, through functions, lags, compari
   const data = new Map<string, Bars>([['A', withColumns(priced(), { score: SCORE })]]);
   const ev = new Evaluator(data);
   const col: Expr = { k: 'column', name: 'score' };
-  same(ev.eval(col, 'A'), SCORE);
-  same(ev.eval({ k: 'lag', a: col, n: 2 }, 'A'), [nan, nan, 1, 2, 3, 4, 3, 2, 1, 2]);
-  same(ev.eval({ k: 'ind', fn: 'sma', src: col, args: [3] }, 'A'), [nan, nan, 2, 3, 10 / 3, 3, 2, 5 / 3, 2, 3]);
-  same(ev.eval({ k: 'cmp', op: '>', a: col, b: { k: 'num', v: 2.5 } }, 'A'), SCORE.map((x) => (x > 2.5 ? 1 : 0)));
-  same(ev.eval({ k: 'cmp', op: 'xup', a: col, b: { k: 'num', v: 2.5 } }, 'A'), [nan, 0, 1, 0, 0, 0, 0, 0, 1, 0]);
-  same(ev.eval({ k: 'bin', op: '*', a: col, b: { k: 'num', v: 10 } }, 'A'), SCORE.map((x) => x * 10));
+  same(ev.series(col, 'A'), SCORE);
+  same(ev.series({ k: 'lag', a: col, n: 2 }, 'A'), [nan, nan, 1, 2, 3, 4, 3, 2, 1, 2]);
+  same(ev.series({ k: 'ind', fn: 'sma', src: col, args: [3] }, 'A'), [nan, nan, 2, 3, 10 / 3, 3, 2, 5 / 3, 2, 3]);
+  same(ev.series({ k: 'cmp', op: '>', a: col, b: { k: 'num', v: 2.5 } }, 'A'), SCORE.map((x) => (x > 2.5 ? 1 : 0)));
+  same(ev.series({ k: 'cmp', op: 'xup', a: col, b: { k: 'num', v: 2.5 } }, 'A'), [nan, 0, 1, 0, 0, 0, 0, 0, 1, 0]);
+  same(ev.series({ k: 'bin', op: '*', a: col, b: { k: 'num', v: 10 } }, 'A'), SCORE.map((x) => x * 10));
   // The same through the parser, as a rule a person writes.
   const { spec } = parseSpec('universe: csv:Data/a.csv\nbuy when sma(column(score), 3)[1] > column(score) / 2 and column(score) crosses above 2.5');
   const bt = runBacktest(spec!, new Map([['a', withColumns(priced(), { score: SCORE })]]));
@@ -300,7 +300,7 @@ test('a column evaluates to exactly its values, through functions, lags, compari
 test('a blank cell makes every rule that reads it unknown, so nothing is bought on it', () => {
   const sc = [1, 5, nan, 5, 5, 5];
   const a = withColumns(priced(6), { score: sc });
-  same(new Evaluator(new Map([['A', a]])).eval(parseCond('column(score) > 3'), 'A'), [0, 1, nan, 1, 1, 1]);
+  same(new Evaluator(new Map([['A', a]])).series(parseCond('column(score) > 3'), 'A'), [0, 1, nan, 1, 1, 1]);
   // Unknown at the close of bar 2 buys nothing: the first buy is at the close of bar 1, and bar 2 does not undo it.
   const bt = run('universe: csv:Data/A.csv\nbuy when column(score) > 3', { A: a });
   assert.deepEqual(trades(bt), [['A', iso(T0 + 2 * DAY), 'open']]);
@@ -318,7 +318,7 @@ test('through of, a row of a file of signals is known at the end of its own day,
   const mondays = [Date.UTC(2020, 0, 6), Date.UTC(2020, 0, 13), Date.UTC(2020, 0, 20)];
   const data = new Map<string, Bars>([['A', bars(weekdays.map((_, i) => 10 + i), { times: weekdays })], ['sig', signals(mondays, { score: [1, 2, 3] })]]);
   const ev = new Evaluator(data);
-  const read = ev.eval({ k: 'of', a: { k: 'column', name: 'score' }, asset: 'sig' }, 'A');
+  const read = ev.series({ k: 'of', a: { k: 'column', name: 'score' }, asset: 'sig' }, 'A');
   const at = (d: number) => read[weekdays.indexOf(Date.UTC(2020, 0, d))];
   assert.ok(Number.isNaN(at(3)));
   assert.equal(at(6), 1);
@@ -328,7 +328,7 @@ test('through of, a row of a file of signals is known at the end of its own day,
   assert.equal(at(20), 3);
   // A file with prices is a file of bars: its weekly bar dated Monday, and the columns on that row, are known once the week is over.
   const priced = withColumns(bars([1, 2, 3], { times: mondays }), { score: [1, 2, 3] });
-  const bars7 = new Evaluator(new Map([['A', data.get('A')!], ['wk', priced]])).eval({ k: 'of', a: { k: 'column', name: 'score' }, asset: 'wk' }, 'A');
+  const bars7 = new Evaluator(new Map([['A', data.get('A')!], ['wk', priced]])).series({ k: 'of', a: { k: 'column', name: 'score' }, asset: 'wk' }, 'A');
   const at7 = (d: number) => bars7[weekdays.indexOf(Date.UTC(2020, 0, d))];
   assert.ok(Number.isNaN(at7(6)) && Number.isNaN(at7(10)));
   assert.deepEqual([at7(13), at7(17), at7(20)], [1, 1, 2]);
@@ -340,9 +340,9 @@ test('a window of the column worked out on its own file, or on the rule\'s ticke
   const ev = new Evaluator(data);
   const col: Expr = { k: 'column', name: 'score' };
   // Two rows averaged on the file's own rows, then read on A's bars from the end of each row's own day.
-  same(ev.eval({ k: 'of', a: { k: 'ind', fn: 'sma', src: col, args: [2] }, asset: 'sig' }, 'A'), [nan, nan, 3, 3, 5, 5, 7, 7]);
+  same(ev.series({ k: 'of', a: { k: 'ind', fn: 'sma', src: col, args: [2] }, asset: 'sig' }, 'A'), [nan, nan, 3, 3, 5, 5, 7, 7]);
   // Two of A's bars averaged after the column was read on them.
-  same(ev.eval({ k: 'ind', fn: 'sma', src: { k: 'of', a: col, asset: 'sig' }, args: [2] }, 'A'), [nan, 2, 3, 4, 5, 6, 7, 8]);
+  same(ev.series({ k: 'ind', fn: 'sma', src: { k: 'of', a: col, asset: 'sig' }, args: [2] }, 'A'), [nan, 2, 3, 4, 5, 6, 7, 8]);
 });
 
 test('with fill: close a column from another source is read one bar early, and the explanation says which row', () => {
@@ -509,7 +509,7 @@ test('the size of a result counts the columns a file carries', () => {
 test('specEvaluator reads a column the same as a new Evaluator does', () => {
   const a = withColumns(priced(5), { score: [1, 2, 3, 4, 5] });
   const spec = parseSpec('universe: csv:Data/a.csv\nbuy when column(score) > 2').spec!;
-  same(specEvaluator(spec, new Map([['a', a]])).eval(spec.rules.a.buy, 'a'), [0, 0, 1, 1, 1]);
+  same(specEvaluator(spec, new Map([['a', a]])).series(spec.rules.a.buy, 'a'), [0, 0, 1, 1, 1]);
   assert.ok(near(1, 1));
 });
 

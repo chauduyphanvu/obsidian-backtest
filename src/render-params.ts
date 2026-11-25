@@ -1,4 +1,4 @@
-import { h } from './dom.ts';
+import { h, onClick } from './dom.ts';
 import { MAX_PERIOD, type Param } from './dsl.ts';
 import { tidy } from './format.ts';
 import { around, plainNumber } from './rewrite.ts';
@@ -440,18 +440,20 @@ export function renderParamBar(parent: HTMLElement, input: ParamBarInput): () =>
     settle();
     rows[0].slider.focus();
   });
-  write?.addEventListener('click', async () => {
-    const values = { ...onScreen };
-    reset.disabled = write.disabled = true;
-    try {
-      await hook.apply!(values);
-      say(null);
-    } catch (e) {
-      say(`Cannot write the values to the block. ${sentence(e)}`);
-    } finally {
-      reset.disabled = write.disabled = false;
-    }
-  });
+  if (write) {
+    onClick(write, async () => {
+      const values = { ...onScreen };
+      reset.disabled = write.disabled = true;
+      try {
+        await hook.apply!(values);
+        say(null);
+      } catch (e) {
+        say(`Cannot write the values to the block. ${sentence(e)}`);
+      } finally {
+        reset.disabled = write.disabled = false;
+      }
+    });
+  }
   sync();
 
   return () => {

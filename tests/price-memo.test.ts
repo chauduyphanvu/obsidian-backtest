@@ -135,7 +135,7 @@ test('a fill: close spec and a next-open spec on the same prices never read each
   const rule = 'universe: STK\nbuy when sma(close of binance:CRY, 3) > sma(close, 5)';
   const [open, close] = [spec(rule), spec(`${rule}\nfill: close`)];
   const left = (s: Spec) => (s.rules.STK.buy as Extract<Expr, { k: 'cmp' }>).a;
-  const fresh = (s: Spec) => specEvaluator(s, alone(data)).eval(left(s), 'STK');
+  const fresh = (s: Spec) => specEvaluator(s, alone(data)).series(left(s), 'STK');
   const want = { open: fresh(open), close: fresh(close) };
   assert.notDeepEqual(want.open, want.close);
   // Either order, and again once both are kept.
@@ -143,12 +143,12 @@ test('a fill: close spec and a next-open spec on the same prices never read each
     [open, close, open],
     [close, open, close],
   ]) {
-    for (const s of order) assert.deepEqual(specEvaluator(s, data).eval(left(s), 'STK'), s === open ? want.open : want.close);
+    for (const s of order) assert.deepEqual(specEvaluator(s, data).series(left(s), 'STK'), s === open ? want.open : want.close);
   }
   // Within one fill the series is worked out once and shared, the same array for every run.
-  assert.equal(specEvaluator(close, data).eval(left(close), 'STK'), specEvaluator(close, data).eval(left(close), 'STK'));
+  assert.equal(specEvaluator(close, data).series(left(close), 'STK'), specEvaluator(close, data).series(left(close), 'STK'));
   // A bare Evaluator, which knows nothing of the spec, shares nothing.
-  assert.notEqual(new Evaluator(data).eval(left(open), 'STK'), new Evaluator(data).eval(left(open), 'STK'));
+  assert.notEqual(new Evaluator(data).series(left(open), 'STK'), new Evaluator(data).series(left(open), 'STK'));
 });
 
 test('a failing indicator and the checks of a strategy\'s tickers run again on every run', () => {

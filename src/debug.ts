@@ -341,12 +341,12 @@ class Ctx {
       const { spec } = this.bt;
       const rules = spec.rules[name];
       sig = {
-        buy: this.ev.eval(rules.buy, name),
+        buy: this.ev.series(rules.buy, name),
         sell: rules.sell ? this.ev.compile(rules.sell, name) : null,
-        short: rules.short ? this.ev.eval(rules.short, name) : null,
+        short: rules.short ? this.ev.series(rules.short, name) : null,
         cover: rules.cover ? this.ev.compile(rules.cover, name) : null,
         add: rules.add ? this.ev.compile(rules.add, name) : null,
-        score: spec.rank ? this.ev.eval(spec.rank.by, name) : null,
+        score: spec.rank ? this.ev.series(spec.rank.by, name) : null,
       };
       this.sigs.set(name, sig);
     }
@@ -404,10 +404,10 @@ class Ctx {
    */
   firstEvent(cond: Expr, asset: string): number {
     let byAsset = this.firstEvents.get(cond);
-    if (!byAsset) this.firstEvents.set(cond, (byAsset = new Map()));
+    if (!byAsset) this.firstEvents.set(cond, (byAsset = new Map<string, number>()));
     let first = byAsset.get(asset);
     if (first === undefined) {
-      const v = this.ev.eval(cond, asset);
+      const v = this.ev.series(cond, asset);
       first = v.findIndex((x) => x === 1 || Number.isNaN(x));
       if (first < 0) first = v.length;
       byAsset.set(asset, first);
@@ -558,7 +558,7 @@ export function* prepareRows(bt: Backtest, asset: string): Generator<Progress, v
   const total = parts.length + inputs.length;
   let done = 0;
   for (const [e, name] of parts) {
-    cx.ev.eval(e, name);
+    cx.ev.series(e, name);
     yield { done: ++done, total };
   }
   for (const work of inputs) {
@@ -920,7 +920,7 @@ function recordedPlace(bought: Trade | undefined, sold: Trade | undefined, t: nu
 
 /** Why a part is unknown at bar `i`, when it can be told from its own pieces. */
 function whyUnknown(cx: Ctx, e: Expr, asset: string, i: number, pos: PosState | null): string {
-  const value = (x: Expr, a: string, j: number): number => (j < 0 ? NaN : findPos(x) ? (pos ? cx.ev.compile(x, a)(j, pos) : NaN) : cx.ev.eval(x, a)[j]);
+  const value = (x: Expr, a: string, j: number): number => (j < 0 ? NaN : findPos(x) ? (pos ? cx.ev.compile(x, a)(j, pos) : NaN) : cx.ev.series(x, a)[j]);
   const visit = (x: Expr, a: string, j: number): string => {
     if (!Number.isNaN(value(x, a, j))) return '';
     if (x.k === 'pos') return 'no position is held';
@@ -966,12 +966,12 @@ function whyIndicator(cx: Ctx, x: Extract<Expr, { k: 'ind' }>, asset: string, j:
   };
   const same = (w: number[] | null) => w !== null && w.every((v) => v === w[0]);
   if (x.fn === 'zscore' || x.fn === 'rsquared' || x.fn === 'efficiency') {
-    const series = x.src ? cx.ev.eval(x.src, asset) : cx.bt.data.get(asset)?.c;
+    const series = x.src ? cx.ev.series(x.src, asset) : cx.bt.data.get(asset)?.c;
     // efficiency compares the value with the one n bars back, so its window has one more.
     return series && same(window(series, x.fn === 'efficiency' ? n + 1 : n)) ? 'all values in the window are the same' : warming;
   }
   if (x.fn === 'correl' && x.src) {
-    const both = [cx.bt.data.get(asset)?.c, cx.ev.eval(x.src, asset)];
+    const both = [cx.bt.data.get(asset)?.c, cx.ev.series(x.src, asset)];
     // Each series' changes over the n bars, as correl reads them, which is one more price than bars.
     const changes = both.map((series) => {
       const w = series ? window(series, n + 1) : null;
@@ -1312,7 +1312,7 @@ export async function inSlices<T>(
   steps: Generator<Progress, T>,
   opts: { budgetMs?: number; wait?: () => Promise<void>; now?: () => number; onSlice?: (p: Progress) => void; stop?: () => boolean } = {},
 ): Promise<T | null> {
-  const { budgetMs = 12, wait = () => new Promise<void>((resolve) => setTimeout(resolve, 0)), now = () => performance.now() } = opts;
+  const { budgetMs = 12, wait = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0)), now = () => performance.now() } = opts;
   for (;;) {
     const start = now();
     let last: Progress | null = null;
@@ -1384,7 +1384,7 @@ export function hoverValue(spec: Spec, data: Map<string, Bars>, call: string): H
   if (!bars || bars.c.length === 0) return null;
   let values: number[];
   try {
-    values = specEvaluator(spec, data).eval(node.e, node.asset);
+    values = specEvaluator(spec, data).series(node.e, node.asset);
   } catch {
     return null;
   }

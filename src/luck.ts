@@ -237,7 +237,7 @@ export function pickRules(bt: Backtest): PickRules {
   return new Map(
     bt.spec.universe.map((a) => {
       const rule = bt.spec.rules[a.name];
-      return [a.name, { buy: ev.eval(rule.buy, a.name), sell: rule.sell ? ev.compile(rule.sell, a.name) : null, add: rule.add ? ev.compile(rule.add, a.name) : null }];
+      return [a.name, { buy: ev.series(rule.buy, a.name), sell: rule.sell ? ev.compile(rule.sell, a.name) : null, add: rule.add ? ev.compile(rule.add, a.name) : null }];
     }),
   );
 }

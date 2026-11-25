@@ -3,7 +3,7 @@
 
 import type { Backtest } from './backtest.ts';
 import type { Param } from './dsl.ts';
-import { h, s } from './dom.ts';
+import { h, onClick, s } from './dom.ts';
 import { isoDate, localDate, minus, money, moneyTicks, niceStep, pct, plural, tidy, timeTicks } from './format.ts';
 import type { JobOf, Kind, Results } from './jobs.ts';
 import { follow, trialOf, trialSpread, type BlockLedger, type Ledger } from './ledger.ts';
@@ -147,7 +147,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
     return r !== null && !r.stopped;
   };
 
-  run.addEventListener('click', async () => {
+  onClick(run, async () => {
     run.hidden = true;
     busy(true);
     try {
@@ -177,7 +177,7 @@ function build(body: HTMLElement, input: SweepInput, life: Life, blocks: Map<HTM
       busy(false);
     }
   });
-  shuffle.addEventListener('click', async () => {
+  onClick(shuffle, async () => {
     seed = 1 + Math.floor(Math.random() * 99_999);
     busy(true);
     try {
@@ -320,7 +320,7 @@ function triesBlock(el: HTMLElement, ledger: BlockLedger, bt: Backtest): () => v
         const yes = h(row, 'button', 'bt-button mod-warning', 'Start again');
         const no = h(row, 'button', 'bt-button', 'Keep the count');
         no.addEventListener('click', () => draw(l));
-        yes.addEventListener('click', async () => {
+        onClick(yes, async () => {
           yes.disabled = no.disabled = true;
           await ledger.reset();
           // The run on screen is the first try of the new count.
@@ -589,8 +589,8 @@ function drawHistogram(chart: HTMLElement, tip: HTMLElement, width: number, o: H
     h(tip, 'div', undefined, o.made(pct(start + i * binW), pct(start + (i + 1) * binW)));
     placeTip(tip, x(start + (i + 1) * binW), top, width);
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
+  hit.addEventListener('pointermove', (e) => show((e).clientX));
+  hit.addEventListener('pointerdown', (e) => show((e).clientX));
   hit.addEventListener('pointerleave', () => {
     tip.hidden = true;
     hl.setAttribute('visibility', 'hidden');
@@ -741,8 +741,8 @@ function drawWalk(chart: HTMLElement, tip: HTMLElement, width: number, w: WalkFo
     if (win) h(tip, 'div', 'bt-tip-foot', `Walk-forward uses ${valuesText(w.params, win.chosen)}`);
     placeTip(tip, px, top + 4, width);
   };
-  hit.addEventListener('pointermove', (e) => show((e as PointerEvent).clientX));
-  hit.addEventListener('pointerdown', (e) => show((e as PointerEvent).clientX));
+  hit.addEventListener('pointermove', (e) => show((e).clientX));
+  hit.addEventListener('pointerdown', (e) => show((e).clientX));
   hit.addEventListener('pointerleave', () => {
     tip.hidden = true;
     cross.setAttribute('visibility', 'hidden');
