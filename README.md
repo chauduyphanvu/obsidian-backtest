@@ -33,7 +33,7 @@ The note shows this:
 - **Tools to test the idea:** numbers that you drag in the rules, sliders, a sweep over a range of values that colours the sliders, and a **Was it luck?** check.
 - **More views:** the result in each market regime and crisis, a price chart with the trades, and the values of each rule, bar by bar.
 
-The full guide is [docs/reference.md](https://github.com/chauduyphanvu/obsidian-backtest/blob/main/docs/reference.md).
+The full guide is [docs/reference.md](https://github.com/chauduyphanvu/obsidian-backtest/blob/main/docs/reference.md), and worked recipes from first strategies to live portfolios are in [docs/cookbook.md](https://github.com/chauduyphanvu/obsidian-backtest/blob/main/docs/cookbook.md).
 
 ## Install
 
