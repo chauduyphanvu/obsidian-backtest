@@ -1,0 +1,139 @@
+/* Phase 1: Composable Strategy DAG & Differential Parent Attribution */
+
+.bt-diff-host:empty {
+  display: none;
+}
+
+.bt-diff-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bt-strategy) 7%, transparent);
+  border-left: 2.5px solid var(--bt-strategy);
+  font-size: var(--font-ui-smaller);
+}
+
+.bt-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.bt-diff-tag {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.bt-diff-metrics {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.bt-diff-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-diff-k { color: var(--text-muted); }
+.bt-diff-v { font-weight: var(--font-semibold); }
+.bt-diff-good .bt-diff-v { color: var(--bt-good); }
+.bt-diff-bad .bt-diff-v { color: var(--bt-bad); }
+.bt-diff-neutral .bt-diff-v { color: var(--text-muted); }
+
+.bt-diff-trades {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.bt-diff-hoverable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+/* Reusable `signal`, `regime`, and `universe` DAG block cards */
+.bt-dag {
+  padding: 14px 18px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+}
+
+.bt-dag-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.bt-dag-badge {
+  font-size: 10px;
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bt-strategy) 14%, transparent);
+  color: var(--bt-strategy-ink);
+}
+
+.bt-dag-tickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.bt-dag-exports {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.bt-dag-export {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+}
+
+.bt-dag-export-name {
+  font-weight: var(--font-semibold);
+  color: var(--bt-strategy-ink);
+}
+
+.bt-dag-blast {
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.bt-dag-blast-title {
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+
+.bt-root .bt-link-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  color: var(--bt-link);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.bt-root .bt-link-btn:hover {
+  text-decoration: underline;
+}

@@ -224,6 +224,16 @@ export interface AssetState {
   levels?: { stop: number | null; target: number | null };
 }
 
+/** Optional adversarial perturbations for the Stress Envelope engine (stress.ts); omitted in normal runs. */
+export interface SimStressHooks {
+  /** Delay every rule/ranking signal by this many bars (>= 0). */
+  signalDelayBars?: number;
+  /** Move entry/exit fill prices adversely into the bar's [low, high] range by this fraction (0..1). */
+  adverseFillFraction?: number;
+  /** Shift periodic rebalance triggers by this many bars within each period (>= 0). */
+  rebalanceDayOffset?: number;
+}
+
 export interface SimParams {
   assets: Asset[];
   from: number | null;
@@ -256,6 +266,8 @@ export interface SimParams {
   onFill?: (fill: FillSeen) => void;
   /** Told about the book at every close once it is marked, for the same tests; absent in a run. */
   onClose?: (seen: CloseSeen) => void;
+  /** Optional adversarial stress hooks; absent in normal runs. */
+  stress?: SimStressHooks;
 }
 
 /** The book at a close as SimParams.onClose sees it: the cash, each asset's shares (in the universe's order) and the closes they are marked at. */
@@ -601,6 +613,22 @@ function monthIndex(day: number): number {
  */
 export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<string, Signals>): RunResult {
   const atClose = p.fill === 'close';
+  const delay = Math.max(0, Math.floor(p.stress?.signalDelayBars ?? 0));
+  const adverse = Math.max(0, Math.min(1, p.stress?.adverseFillFraction ?? 0));
+  const rebalOffset = Math.max(0, Math.floor(p.stress?.rebalanceDayOffset ?? 0));
+  const delayArr = (xs: number[]): number[] => xs.map((_, i) => (i < delay ? NaN : xs[i - delay]));
+  const delayRule = (r: BarRule | null): BarRule | null => (r ? (i, pos) => (i < delay || (pos && i - delay < pos.entryIdx) ? NaN : r(i - delay, pos)) : null);
+  const delayed = (s: Signals): Signals =>
+    delay === 0
+      ? s
+      : {
+          buy: delayArr(s.buy),
+          sell: delayRule(s.sell),
+          score: s.score ? delayArr(s.score) : null,
+          add: delayRule(s.add ?? null),
+          ...(s.short ? { short: delayArr(s.short) } : {}),
+          ...(s.cover ? { cover: delayRule(s.cover) } : {}),
+        };
   const newArm = () => ({ armed: true, stoppedT: 0, blockedT: null as number | null, cleared: null as { exitT: number; heldT: number; clearedT: number; idx: number } | null });
   const steps = p.entries ?? 1;
   const assets = p.assets.map((a, order) => {
@@ -612,7 +640,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       weight: a.weight,
       bars,
       source: a.source,
-      sig: signals.get(a.name)!,
+      sig: delayed(signals.get(a.name)!),
       stops: p.stops[a.name] ?? NO_STOPS,
       i: -1, // index of the latest bar at or before the current time
       shares: 0,
@@ -724,7 +752,11 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
     return rateIdx![k] < 0 ? 0 : rateBars.c[rateIdx![k]] / 100;
   };
 
-  const decisions = !p.rank ? null : p.rebalance === 'never' ? timeline.map(() => 1) : ind.periodEnds(timeline, (x) => periodKey(x, p.rebalance));
+  const rawDecisions = !p.rank ? null : p.rebalance === 'never' ? timeline.map(() => 1) : ind.periodEnds(timeline, (x) => periodKey(x, p.rebalance));
+  const decisions =
+    !rawDecisions || rebalOffset === 0 || p.rebalance === 'never'
+      ? rawDecisions
+      : rawDecisions.map((_, i) => (i >= rebalOffset ? rawDecisions[i - rebalOffset] : 0));
   // A ranking compares tickers' closes, and with close fills trades at them. When the ranked tickers keep different clocks
   // (ind.clockOf), the closes of one period come hours apart, so a decision may read a ticker's bar of that period only
   // when every ticker trading at that time is on its clock. Otherwise it reads each ticker's latest bar that had ended by
@@ -735,12 +767,20 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
   const clocks = atClose && p.rank ? assets.map((a) => ind.clockOf(a.source, a.bars.t)) : null;
   const mixed = clocks !== null && new Set(clocks).size > 1;
   const endedAt = mixed ? assets.map((a) => ind.endedBy(a.bars.t, timeline)) : null;
-  const keys = assets.map((a) => periodKeys(a.bars.t, p.rebalance));
+  const keys = assets.map((a) => {
+    const raw = periodKeys(a.bars.t, p.rebalance);
+    return rebalOffset === 0 ? raw : raw.map((_, i) => raw[Math.max(0, i - rebalOffset)]);
+  });
   /** Whether the asset's current bar is the one its rebalance fills at: its first bar of a period (at the open), or its last (at the close). */
-  const rebalances = (a: A) =>
-    atClose
-      ? p.rebalance !== 'never' && cached(`end ${a.name}`, () => ind.periodEnds(a.bars.t, (x) => periodKey(x, p.rebalance)))[a.i] === 1
-      : a.i > 0 && keys[a.order][a.i] !== keys[a.order][a.i - 1];
+  const rebalances = (a: A) => {
+    if (p.rebalance === 'never') return false;
+    if (atClose) {
+      if (rebalOffset === 0) return cached(`end ${a.name}`, () => ind.periodEnds(a.bars.t, (x) => periodKey(x, p.rebalance)))[a.i] === 1;
+      const ends = cached(`end ${a.name}`, () => ind.periodEnds(a.bars.t, (x) => periodKey(x, p.rebalance)));
+      return a.i >= rebalOffset && ends[a.i - rebalOffset] === 1;
+    }
+    return a.i > 0 && keys[a.order][a.i] !== keys[a.order][a.i - 1];
+  };
 
   const cost = p.costBps / 10_000;
   const slip = p.slippageBps / 10_000;
@@ -1093,6 +1133,14 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
    */
   const fillOrders = (t: number, live: A[], isLive: Set<A>) => {
     const priceOf = (a: A) => (atClose ? a.bars.c[a.i] : a.bars.o[a.i]);
+    const buyPriceOf = (a: A) => {
+      const px = priceOf(a);
+      return adverse === 0 ? px : px + adverse * Math.max(0, a.bars.h[a.i] - px);
+    };
+    const sellPriceOf = (a: A) => {
+      const px = priceOf(a);
+      return adverse === 0 ? px : px - adverse * Math.max(0, px - a.bars.l[a.i]);
+    };
     // The last close known at the fill: for an open, the one before it.
     const known = (a: A) => (isLive.has(a) && !atClose ? a.i - 1 : a.i);
     const mark = (a: A) => (a.shares === 0 ? 0 : a.shares * (isLive.has(a) ? priceOf(a) : a.lastClose));
@@ -1104,8 +1152,9 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       const long = a.shares > 0;
       if (long ? a.pending !== 'sell' && a.pending !== 'short' : a.pending !== 'cover' && a.pending !== 'buy') continue;
       const shares = long ? a.shares : -a.shares;
-      close(a, t, priceOf(a), 'signal', a.sellWhy);
-      a.lastFill = { side: long ? 'sell' : 'cover', shares, price: priceOf(a) * (long ? 1 - slip : 1 + slip), t };
+      const execPx = long ? sellPriceOf(a) : buyPriceOf(a);
+      close(a, t, execPx, 'signal', a.sellWhy);
+      a.lastFill = { side: long ? 'sell' : 'cover', shares, price: execPx * (long ? 1 - slip : 1 + slip), t };
     }
     for (const a of waiting) if (a.shares === 0) waiting.delete(a);
     const entering = new Set(live.filter((a) => (a.pending === 'buy' || a.pending === 'short') && a.shares === 0 && waiting.size === 0));
@@ -1134,11 +1183,12 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         if (delta < 0) {
           if (tooSmall(-delta * (short ? 1 + slip : 1 - slip), -delta / price)) smallTrades++;
           else {
-            if (short) cover(a, -delta / price, price);
-            else sell(a, -delta / price, price);
+            const trimPx = short ? buyPriceOf(a) : sellPriceOf(a);
+            if (short) cover(a, -delta / trimPx, trimPx);
+            else sell(a, -delta / trimPx, trimPx);
             a.trims++;
             held = target;
-            logFill({ t, asset: a.name, kind: 'trim', price, shares: a.shares, cash, equity: NaN, weight: NaN });
+            logFill({ t, asset: a.name, kind: 'trim', price: trimPx, shares: a.shares, cash, equity: NaN, weight: NaN });
           }
         } else {
           buys.push({ a, notional: delta, kind: 'rebalance', weight: 0, full: 0, held: 0, short });
@@ -1183,10 +1233,11 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
         a.borrowPS = 0;
       }
       const before = cash;
-      const fill = priceOf(a) * (short ? 1 - slip : 1 + slip);
+      const execPx = short ? sellPriceOf(a) : buyPriceOf(a);
+      const fill = execPx * (short ? 1 - slip : 1 + slip);
       const starved = charge !== null && affordable(fill) < notional;
-      const spent = short ? sellShort(a, notional, priceOf(a), !entry) : buy(a, notional, priceOf(a), !entry);
-      if (spent > 0) logFill({ t, asset: a.name, kind, price: priceOf(a), shares: a.shares, cash, equity: equityNow, weight: weights.get(a)! });
+      const spent = short ? sellShort(a, notional, execPx, !entry) : buy(a, notional, execPx, !entry);
+      if (spent > 0) logFill({ t, asset: a.name, kind, price: execPx, shares: a.shares, cash, equity: equityNow, weight: weights.get(a)! });
       if (small && (kind === 'add' || kind === 'rebalance')) smallTrades++;
       if (kind === 'rebalance' || kind === 'owed') {
         // The debt is for the period the rebalance opens: this one at an open, the next one at a close. A top-up left
@@ -1198,7 +1249,7 @@ export function simulate(p: SimParams, data: Map<string, Bars>, signals: Map<str
       }
       if (entry && a.shares !== 0) {
         const shares = Math.abs(a.shares);
-        openPosition(a, t, priceOf(a), known(a), { equity: equityNow, weight, wanted: notional, cash: before, spent, shares });
+        openPosition(a, t, execPx, known(a), { equity: equityNow, weight, wanted: notional, cash: before, spent, shares });
         // A flip: the position this fill closed, on the other side.
         const flipped = a.lastFill !== null && a.lastFill.t === t && (a.lastFill.side === 'sell' || a.lastFill.side === 'cover') ? a.lastFill.shares : 0;
         a.lastFill = { side: short ? 'short' : 'buy', shares, price: a.entryPrice, t, ...(flipped ? { closed: flipped } : {}) };

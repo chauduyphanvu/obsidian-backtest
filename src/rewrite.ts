@@ -1,6 +1,6 @@
 import { blockName, extractBlocks, fencedBlocks, type Block } from './blocks.ts';
 import { functionArgs } from './docs.ts';
-import { INDICATORS, isParamValue, LATER_WORDS, MAX_PERIOD, PARAM_LINE, parseSpec, RESERVED, type Defaults } from './dsl.ts';
+import { applyLiteralOverrides, extractLiteralSites, INDICATORS, isParamValue, LATER_WORDS, MAX_PERIOD, PARAM_LINE, parseSpec, RESERVED, type Defaults, type LiteralSite } from './dsl.ts';
 import { applyFix, fixEdits, type Fix, type FixEdit } from './fixes.ts';
 import { tidy } from './format.ts';
 import { declaredDefinitions, declaredParams, lineKinds, NUMERIC_SETTINGS, settingKey, tokenizeBlock, type LineKind, type Token } from './highlight.ts';
@@ -45,6 +45,50 @@ export function setParamValues(source: string, values: Record<string, number>): 
   const wanted = new Map(Object.entries(values).map(([name, v]) => [name.toLowerCase(), v]));
   // Split on "\n" only, so a line keeps its "\r".
   return source.split('\n').map((line) => rewriteLine(line, wanted)).join('\n');
+}
+
+/**
+ * Rewrites direct numeric literals (and any parameter declarations among them) into `source`, preserving formatting,
+ * comments, and line count.
+ */
+export function setLiteralValues(source: string, sites: readonly LiteralSite[], values: Record<string, number>): string {
+  const applied = applyLiteralOverrides(source, sites, values);
+  return Object.keys(applied.paramOverrides).length > 0 ? setParamValues(applied.source, applied.paramOverrides) : applied.source;
+}
+
+/** Toggles a leading `~` mute marker on a 1-based line inside a strategy block. */
+export function toggleMuteLine(source: string, line1Based: number): string {
+  const lines = source.split('\n');
+  const i = line1Based - 1;
+  if (i < 0 || i >= lines.length) return source;
+  const raw = lines[i];
+  const cr = raw.endsWith('\r') ? '\r' : '';
+  const body = cr ? raw.slice(0, -1) : raw;
+  const m = body.match(/^(\s*)(.*)$/);
+  if (!m || !m[2]) return source;
+  const [, indent, rest] = m;
+  lines[i] = rest.startsWith('~') ? `${indent}${rest.slice(1)}${cr}` : `${indent}~${rest}${cr}`;
+  return lines.join('\n');
+}
+
+/** Removes all `~`-muted lines from a strategy block cleanly. */
+export function removeMutedLines(source: string): string {
+  return source
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('~'))
+    .join('\n');
+}
+
+/** Writes direct literal values into the block that opens on `line` of a note. */
+export function writeLiteralValuesInNote(
+  process: (edit: (note: string) => string) => Promise<unknown>,
+  line: number | undefined,
+  source: string,
+  values: Record<string, number>,
+): Promise<void> {
+  const sites = extractLiteralSites(source);
+  const next = setLiteralValues(source, sites, values);
+  return writeBlockInNote(process, line, source, next);
 }
 
 const normal = (text: string) => text.replace(/\r/g, '').trimEnd();

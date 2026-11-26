@@ -1,4 +1,5 @@
 import { DAY } from './format.ts';
+import { validateKillSwitch } from './killswitch.ts';
 import { columnName, DATA_SOURCES, plainSource, SOURCE_PREFIX, type Asset, type AssetRef, type DataSource, type Source } from './types.ts';
 
 export type SeriesName = 'open' | 'high' | 'low' | 'close' | 'volume';
@@ -51,6 +52,36 @@ export interface Rules {
 /** A ticker's rules in the order buy, sell, add, short, cover, without the ones it does not have. */
 export const ruleExprs = (r: Rules): Expr[] => [r.buy, r.sell, r.add, r.short, r.cover].filter((e): e is Expr => !!e);
 
+export interface Span {
+  /** 1-based line inside the block. */
+  line: number;
+  /** 0-based half-open columns on `line`. */
+  from: number;
+  to: number;
+}
+
+/** An editable/perturbable numeric literal discovered in a block's source text. */
+export interface LiteralSite {
+  /** Stable identifier for this literal in the block ("line:from"). */
+  id: string;
+  span: Span;
+  /** Numeric value (fractions for percentages). */
+  value: number;
+  percent: boolean;
+  /** Valid domain inferred from the enclosing indicator, setting, or comparison. */
+  domain: { min: number; max: number; integer: boolean; step: number };
+  /** Declared parameter name when this literal sits on a `name = value` declaration. */
+  param?: string;
+}
+
+/** A deployed strategy pin (`live since: 2026-04-01 @a9f3c`). */
+export interface LivePin {
+  /** UTC midnight (or timestamp) when live tracking began. */
+  date: number;
+  /** Short content hash of the frozen commit. */
+  commit: string;
+}
+
 /**
  * A rule or score as the user wrote it: the whole text, with continuation lines joined by a space;
  * the text of each node of its expression in `walk` order ('' for a part the parser filled in, such
@@ -62,6 +93,8 @@ export interface Written {
   params: string[];
   /** The places in `walk` order of the parts that stand for one thing the user wrote: a definition used by name, a `between`. */
   whole?: number[];
+  /** Source spans in `walk` order (null for synthesized nodes or multi-line spans without columns). */
+  spans?: (Span | null)[];
 }
 
 /** A stop distance: a fraction of the price, or a multiple of the average true range. */
@@ -147,6 +180,14 @@ export interface Spec {
   magnify?: string;
   /** Present only when the block can borrow: it has a short or cover rule, or its weights add up to more than 100%. */
   margin?: Margin;
+  /** 1-based lines muted with a leading `~` (omitted when none). */
+  mutedLines?: number[];
+  /** Parent strategy wikilink when the block inherits via `extends:` (omitted when none). */
+  extends?: string;
+  /** Immutable deployment pin when the strategy is live (`live since: YYYY-MM-DD @hash`). */
+  liveSince?: LivePin;
+  /** Raw `invalidate when ...` condition text for live kill-switch evaluation (omitted when none). */
+  invalidate?: string;
 }
 
 /** A ticker's rules as written; null where the parser supplied the rule, absent where the block has none of that kind. */
@@ -180,6 +221,10 @@ export interface ParseOptions {
   defaults?: Partial<Defaults>;
   /** Parameter name to the value to use instead of the declared one (a fraction for percentages). */
   overrides?: Record<string, number>;
+  /** Direct numeric literal overrides keyed by LiteralSite.id (fractions for percentages). */
+  literalOverrides?: Record<string, number>;
+  /** Additional 1-based lines to treat as muted during this parse (for ephemeral X-Ray muting). */
+  muteLines?: number[];
 }
 
 export interface Diagnostic {
@@ -655,12 +700,16 @@ class ExprParser {
   written(root: Expr): Written {
     const parts: string[] = [];
     const whole: number[] = [];
+    const spans: (Span | null)[] = [];
     walk(root, (e) => {
       if (this.wholes.has(e)) whole.push(parts.length);
       parts.push(this.textOf(e));
+      const p = this.placeOf(e);
+      spans.push(p && p.from !== undefined && p.to !== undefined ? { line: p.line, from: p.from, to: p.to } : null);
     });
     const out: Written = { text: this.ctx.text(this.toks[0], this.toks[this.toks.length - 2]), parts, params: [...this.used] };
     if (whole.length) out.whole = whole;
+    if (spans.some((s) => s !== null)) out.spans = spans;
     return out;
   }
 
@@ -1460,6 +1509,15 @@ interface RawRule extends Open {
 const BUILTIN_DEFAULTS: Defaults = { capital: 10_000, costBps: 0, slippageBps: 0, cashRate: '0%', dataSource: 'yahoo' };
 
 export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult {
+  if (opts.literalOverrides && Object.keys(opts.literalOverrides).length > 0) {
+    const sites = extractLiteralSites(source);
+    const applied = applyLiteralOverrides(source, sites, opts.literalOverrides);
+    return parseSpec(applied.source, {
+      ...opts,
+      literalOverrides: undefined,
+      overrides: { ...(opts.overrides ?? {}), ...applied.paramOverrides },
+    });
+  }
   const given = opts.defaults ?? {};
   // Every key of Defaults, so a new default can't be dropped here without the type check saying so.
   const defaults = {
@@ -1478,6 +1536,13 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   const scoped: { scope: NonNullable<Scope>; s: SettingLine }[] = [];
   const decls: (ParamLine | Definition)[] = [];
   const rawRules: RawRule[] = [];
+  const mutedLines: number[] = [];
+  const extraMuted = new Set(opts.muteLines ?? []);
+  let extendsLink: string | undefined;
+  let liveSinceLine: SettingLine | null = null;
+  let invalidateParts: string[] = [];
+  let invalidateLine = 0;
+  let inInvalidate = false;
   let scope: Scope = null;
   let open: Open | null = null;
   /** The rule or definition that blank lines ended, while nothing else follows them. */
@@ -1524,23 +1589,55 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const comment = commentAt(raw);
     // The space or tab before the mark goes with the comment.
     const stripped = comment < 0 ? raw : raw.slice(0, Math.max(0, comment - 1));
-    plainLines.push(stripped);
     const text = stripped.trim();
     const lead = stripped.length - stripped.trimStart().length;
     if (!text) {
+      plainLines.push(stripped);
       // A comment line ends a rule as well, but only a blank line is the slip that the message below names.
       cut = raw.trim() ? null : (open ?? cut);
       open = null;
+      inInvalidate = false;
       return;
     }
+    // Non-destructive muted clause or setting (`~and rsi(14) < 70`, `~stop loss: 8%`), or ephemeral muteLines.
+    if (text.startsWith('~') || extraMuted.has(line)) {
+      plainLines.push('');
+      mutedLines.push(line);
+      return;
+    }
+    plainLines.push(stripped);
     const ended = cut;
     cut = null;
     let m: RegExpMatchArray | null;
     const forName = /^for\s/i.test(text) && text.endsWith(':') ? text.slice(4, -1).trim() : '';
     if (forName) {
       open = null;
+      inInvalidate = false;
       scope = readScope(text, lead, line);
+    } else if ((m = text.match(/^invalidate\s+when\b(.*)$/i))) {
+      open = null;
+      inInvalidate = true;
+      if (invalidateLine === 0) invalidateLine = line;
+      const body = m[1].trim();
+      if (body) invalidateParts.push(body);
+    } else if (inInvalidate && /^(and|or)\b/i.test(text)) {
+      invalidateParts.push(text);
+    } else if ((m = text.match(/^extends\s*:\s*(.*)$/i))) {
+      open = null;
+      inInvalidate = false;
+      const val = m[1].trim();
+      if (!val) errors.push(diag({ line, from: lead, to: lead + 7 }, '"extends" has no value. Write a strategy link, for example extends: [[Trend Core]]'));
+      else extendsLink = val;
+    } else if ((m = text.match(/^live\s+since\s*:\s*(.*)$/i))) {
+      open = null;
+      inInvalidate = false;
+      const val = m[1].trim();
+      const keyAt = { line, from: lead, to: lead + text.indexOf(':') };
+      const valueAt = { line, from: lead + text.length - m[1].length, to: lead + text.length };
+      if (!val) errors.push(diag(keyAt, '"live since" has no value. Write a date and commit hash, for example live since: 2026-04-01 @a9f3c'));
+      else liveSinceLine = { key: 'live since', value: val, line, keyAt, valueAt };
     } else if ((m = text.match(/^(buy|sell|add|short|cover)\s+when\b(.*)$/i))) {
+      inInvalidate = false;
       const exprFrom = text.length - m[2].length;
       const rule: RawRule = { side: m[1].toLowerCase() as RawRule['side'], scope, line, head: { line, from: lead, to: lead + exprFrom }, toks: [] };
       open = rule;
@@ -1548,6 +1645,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
       guard(() => lex(m![2], line, lead + exprFrom, rule.toks));
     } else if ((m = text.match(SETTING_LINE)) && SETTINGS.includes(m[1].toLowerCase().replace(/\s+/g, ' '))) {
       open = null;
+      inInvalidate = false;
       const key = m[1].toLowerCase().replace(/\s+/g, ' ').replace(/^symbol$/, 'universe');
       const keyAt = { line, from: lead, to: lead + m[1].length };
       const s: SettingLine = { key, value: m[2], line, keyAt, valueAt: { line, from: lead + text.length - m[2].length, to: lead + text.length } };
@@ -1746,7 +1844,7 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
     const parts = [plainLines[a.line - 1].slice(a.from)];
     for (let l = a.line + 1; l < b.line; l++) parts.push(plainLines[l - 1]);
     parts.push(plainLines[b.line - 1].slice(0, b.to));
-    return parts.map((s) => s.trim()).join(' ');
+    return parts.map((s) => s.trim()).filter(Boolean).join(' ');
   };
   const context = (positions: boolean, ruleScope: string[] | null): ExprContext => ({
     resolveAsset,
@@ -2125,6 +2223,22 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   }
   if (entries !== null) spec.entries = entries;
   if (magnify !== null) spec.magnify = magnify;
+  if (mutedLines.length > 0) spec.mutedLines = mutedLines;
+  if (extendsLink !== undefined) spec.extends = extendsLink;
+  if (liveSinceLine !== null) {
+    const ls: SettingLine = liveSinceLine;
+    guard(() => {
+      const lm = ls.value.match(/^(\d{4}-\d{2}-\d{2})(?:\s+@([A-Za-z0-9_-]+))?$/);
+      if (!lm) throw new SpecError(ls.valueAt, 'Write live since as a date and optional commit hash, for example live since: 2026-04-01 @a9f3c');
+      spec.liveSince = { date: parseDate(lm[1], ls.valueAt), commit: lm[2] ?? '' };
+    });
+  }
+  if (invalidateLine > 0) {
+    const expr = invalidateParts.join(' ');
+    const ksErr = validateKillSwitch(expr);
+    if (ksErr) errors.push({ line: invalidateLine, message: ksErr });
+    else spec.invalidate = expr;
+  }
 
   // With a problem elsewhere a rule may not have been read at all, so a name it would have used is not reported as unused.
   if (errors.length === 0) {
@@ -2138,4 +2252,206 @@ export function parseSpec(source: string, opts: ParseOptions = {}): ParseResult 
   errs.sort((a, b) => a.line - b.line);
   warns.sort((a, b) => a.line - b.line);
   return { spec: errs.length ? null : spec, errors: errs, warnings: warns };
+}
+
+/**
+ * Extracts every scrubbable / perturbable numeric literal in a strategy block's source text, with its exact span and
+ * inferred valid domain. Covers rule numbers, indicator periods, lags, stop/target/sizing settings, and declared parameter
+ * values (marking those with `param`). Pure; never throws.
+ */
+export function extractLiteralSites(source: string): LiteralSite[] {
+  const sites: LiteralSite[] = [];
+  const lines = source.split('\n');
+  const SKIP_SETTINGS = new Set(['name', 'universe', 'symbol', 'from', 'to', 'test from', 'data', 'interval', 'capital', 'costs', 'slippage', 'commission', 'rebalance', 'benchmark', 'cash rate', 'fill', 'magnify', 'borrow fee', 'margin rate', 'size', 'extends', 'live since']);
+  const inferStep = (val: number, integer: boolean, percent: boolean): number => {
+    if (percent) return Math.abs(val) < 0.05 ? 0.0025 : 0.01;
+    if (integer) {
+      const a = Math.abs(val);
+      return a >= 100 ? 10 : a >= 25 ? 5 : 1;
+    }
+    const a = Math.abs(val);
+    return a >= 100 ? 5 : a >= 10 ? 1 : a >= 1 ? 0.25 : 0.05;
+  };
+  const push = (line: number, from: number, to: number, raw: string, opts: { integer?: boolean; min?: number; max?: number; param?: string } = {}) => {
+    const percent = raw.includes('%');
+    const num = Number(raw.replace('%', '').trim());
+    if (!Number.isFinite(num)) return;
+    const value = percent ? num / 100 : num;
+    const integer = opts.integer ?? (!percent && !raw.includes('.') && Number.isInteger(value));
+    const min = opts.min ?? (percent ? (value < 0 ? -10 : 0.001) : integer && value > 0 ? 1 : -1e9);
+    const max = opts.max ?? (percent ? 10 : integer ? MAX_PERIOD : 1e9);
+    sites.push({
+      id: `${line}:${from}`,
+      span: { line, from, to },
+      value,
+      percent,
+      domain: { min, max, integer, step: inferStep(value, integer, percent) },
+      ...(opts.param ? { param: opts.param } : {}),
+    });
+  };
+  /** Finds the innermost enclosing `fn(...)` call across nested parentheses, with its 0-based argument index and first-arg slice. */
+  const enclosingCall = (before: string): { fn: string; argIndex: number; firstArg: string } | null => {
+    let depth = 0;
+    let commas = 0;
+    let firstCommaPos = -1;
+    let openPos = -1;
+    for (let i = before.length - 1; i >= 0; i--) {
+      const ch = before[i];
+      if (ch === ')') depth++;
+      else if (ch === '(') {
+        if (depth === 0) {
+          openPos = i;
+          break;
+        }
+        depth--;
+      } else if (ch === ',' && depth === 0) {
+        commas++;
+        firstCommaPos = i;
+      }
+    }
+    if (openPos < 0) return null;
+    const m = before.slice(0, openPos).match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+    if (!m) return null;
+    const firstArg = firstCommaPos >= 0 ? before.slice(openPos + 1, firstCommaPos) : before.slice(openPos + 1);
+    return { fn: m[1].toLowerCase(), argIndex: commas, firstArg };
+  };
+  /** Scans numeric literals inside an expression slice `code.slice(startOffset)` with full enclosing-call context. */
+  const scanExprLiterals = (code: string, startOffset: number, line: number) => {
+    const slice = code.slice(startOffset);
+    for (const m of slice.matchAll(/(\d+(?:\.\d+)?|\.\d+)(\s*%)?/g)) {
+      const from = startOffset + m.index!;
+      if (from > 0 && /[A-Za-z0-9_]/.test(code[from - 1])) continue;
+      const before = code.slice(0, from);
+      // Skip numbers inside column("...") quotes or after `of TICKER`.
+      if (/\bcolumn\s*\(\s*"[^"]*$/i.test(before) || /\bof\s+[A-Za-z0-9^:/._=-]*$/i.test(before)) continue;
+      const call = enclosingCall(before);
+      const isLag = /\[\s*$/.test(before);
+      const isWindow = /\b(for|within)\s+$/i.test(before);
+      if (isLag || isWindow) {
+        push(line, from, from + m[0].length, m[0], { integer: true, min: 1, max: MAX_PERIOD });
+      } else if (call && call.fn in INDICATORS) {
+        const def = INDICATORS[call.fn];
+        const hasLeadArg = (def.src !== null || def.lead !== undefined) && call.argIndex > 0 && !/^\s*-?(?:\d|\.)/.test(call.firstArg);
+        const pIdx = hasLeadArg ? call.argIndex - 1 : call.argIndex;
+        const isReal = !!def.real?.[pIdx];
+        push(line, from, from + m[0].length, m[0], {
+          integer: !isReal,
+          min: isReal ? 0.01 : pIdx === 0 ? (def.min ?? 1) : 1,
+          max: isReal ? 20 : MAX_PERIOD,
+        });
+      } else {
+        const isPosCount = /\b(?:bars\s+held|entries\s+made)\s*(?:>=|<=|==|!=|>|<|above|below)\s*$/i.test(before);
+        const isPct = !!m[2];
+        push(line, from, from + m[0].length, m[0], {
+          integer: isPosCount ? true : false,
+          ...(isPct ? { min: -10, max: 10 } : isPosCount ? { min: 1, max: MAX_PERIOD } : {}),
+        });
+      }
+    }
+  };
+  let inInvalidate = false;
+  lines.forEach((rawLine, idx) => {
+    const line = idx + 1;
+    const raw = rawLine.replace(/\r$/, '');
+    const comment = commentAt(raw);
+    const code = comment < 0 ? raw : raw.slice(0, comment);
+    const trimmed = code.trim();
+    if (!trimmed || trimmed.startsWith('~') || /^for\s+.+:$/i.test(trimmed)) {
+      if (!trimmed) inInvalidate = false;
+      return;
+    }
+    if (/^invalidate\s+when\b/i.test(trimmed)) {
+      inInvalidate = true;
+      return;
+    }
+    if (inInvalidate && /^(and|or)\b/i.test(trimmed)) return;
+    inInvalidate = false;
+    const sm = trimmed.match(SETTING_LINE);
+    if (sm) {
+      const key = sm[1].toLowerCase().replace(/\s+/g, ' ');
+      if (SKIP_SETTINGS.has(key)) return;
+      const valStart = code.indexOf(':') + 1;
+      const rest = code.slice(valStart);
+      if (key === 'hold') {
+        const byMatch = rest.match(/\bby\b/i);
+        const topHead = byMatch ? rest.slice(0, byMatch.index!) : rest;
+        const topNum = topHead.match(/\b(\d+)\b/);
+        if (topNum) {
+          const from = valStart + topNum.index!;
+          push(line, from, from + topNum[1].length, topNum[1], { integer: true, min: 1, max: 100 });
+        }
+        if (byMatch) scanExprLiterals(code, valStart + byMatch.index! + byMatch[0].length, line);
+        return;
+      }
+      for (const m of rest.matchAll(/(\d+(?:\.\d+)?|\.\d+)(\s*%)?/g)) {
+        const from = valStart + m.index!;
+        if (from > 0 && /[A-Za-z0-9_]/.test(code[from - 1])) continue;
+        const isAtrPeriod = /\batr\s*\(\s*$/i.test(rest.slice(0, m.index!));
+        const isPct = !!m[2];
+        push(line, from, from + m[0].length, m[0], {
+          integer: isAtrPeriod || key === 'entries' || key === 'weighting',
+          min: key === 'weighting' ? 2 : isAtrPeriod || key === 'entries' ? 1 : isPct ? 0.0025 : 0.1,
+          max: key === 'entries' ? MAX_ENTRIES : isPct ? (key === 'take profit' ? 10 : 0.99) : MAX_PERIOD,
+        });
+      }
+      return;
+    }
+    const pm = trimmed.match(PARAM_LINE);
+    if (pm && !RESERVED.has(pm[1].toLowerCase()) && isParamValue(pm[2])) {
+      const eq = code.indexOf('=');
+      const afterEq = code.slice(eq + 1);
+      const dm = afterEq.match(/^(\s*)(-?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*%)?)/);
+      if (dm) {
+        const from = eq + 1 + dm[1].length;
+        const percent = pm[2].includes('%');
+        const range = pm[2].match(/\bin\s+(-?(?:\d+(?:\.\d+)?|\.\d+))%?\s*\.\.\s*(-?(?:\d+(?:\.\d+)?|\.\d+))%?/i);
+        const lo = range ? Number(range[1]) / (percent ? 100 : 1) : undefined;
+        const hi = range ? Number(range[2]) / (percent ? 100 : 1) : undefined;
+        push(line, from, from + dm[2].length, percent && !dm[2].includes('%') ? `${dm[2]}%` : dm[2], {
+          param: pm[1],
+          ...(lo !== undefined && Number.isFinite(lo) ? { min: lo } : {}),
+          ...(hi !== undefined && Number.isFinite(hi) ? { max: hi } : {}),
+        });
+      }
+      return;
+    }
+    // Rules, continuations, or definitions: scan numeric literals with enclosing call context.
+    scanExprLiterals(code, 0, line);
+  });
+  return sites;
+}
+
+/**
+ * Applies direct literal overrides (keyed by `LiteralSite.id`) onto `source`, returning the updated source text and any
+ * parameter overrides (for literals belonging to declared parameters, which pass through `ParseOptions.overrides`).
+ */
+export function applyLiteralOverrides(
+  source: string,
+  sites: readonly LiteralSite[],
+  overrides: Record<string, number>,
+): { source: string; paramOverrides: Record<string, number> } {
+  const paramOverrides: Record<string, number> = {};
+  const edits: { site: LiteralSite; value: number }[] = [];
+  for (const site of sites) {
+    if (!Object.hasOwn(overrides, site.id)) continue;
+    const raw = overrides[site.id];
+    if (!Number.isFinite(raw)) continue;
+    const clamped = Math.min(site.domain.max, Math.max(site.domain.min, site.domain.integer ? Math.round(raw) : raw));
+    if (site.param) paramOverrides[site.param] = clamped;
+    else edits.push({ site, value: clamped });
+  }
+  if (edits.length === 0) return { source, paramOverrides };
+  const lines = source.split('\n');
+  // Sort bottom-to-top, right-to-left so earlier spans never shift.
+  edits.sort((a, b) => b.site.span.line - a.site.span.line || b.site.span.from - a.site.span.from);
+  for (const { site, value } of edits) {
+    const idx = site.span.line - 1;
+    if (idx < 0 || idx >= lines.length) continue;
+    const line = lines[idx];
+    const shown = site.percent ? value * 100 : value;
+    const rounded = Number(shown.toPrecision(10));
+    const formatted = `${rounded === 0 ? '0' : rounded.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 12 })}${site.percent ? '%' : ''}`;
+    lines[idx] = line.slice(0, site.span.from) + formatted + line.slice(site.span.to);
+  }
+  return { source: lines.join('\n'), paramOverrides };
 }

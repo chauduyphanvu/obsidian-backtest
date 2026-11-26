@@ -22,6 +22,8 @@ test('the defaults are the documented ones', () => {
     ordersNote: '',
     snapshotFolder: 'Backtests',
     resultView: 'full',
+    cardLayout: 'v2',
+    activeBook: '',
     ordersOnStartup: true,
     tickerLookup: true,
     llmProvider: 'anthropic',

@@ -1,0 +1,192 @@
+/* Phase 3: Always-On Adversarial Stress Envelope, Breaking-Point Readout, & v2 Card Rhythm */
+
+.bt-standalone-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bt-stress-host:empty {
+  display: none;
+}
+
+/* Clean, borderless stress header anchored directly above the chart + stress fan */
+.bt-stress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+}
+
+.bt-stress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.bt-stress-grade {
+  font-size: 11px;
+  font-weight: var(--font-semibold);
+  padding: 2px 9px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.bt-stress-grade-robust {
+  background: color-mix(in srgb, var(--bt-good) 15%, transparent);
+  color: var(--bt-good);
+}
+
+.bt-stress-grade-sensitive {
+  background: var(--bt-warn-bg);
+  color: var(--bt-warn-ink);
+}
+
+.bt-stress-grade-fragile {
+  background: color-mix(in srgb, var(--bt-bad) 15%, transparent);
+  color: var(--bt-bad);
+}
+
+.bt-stress-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-stress-kv {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.bt-stress-k {
+  color: var(--text-muted);
+}
+
+.bt-stress-v {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.bt-stress-bad .bt-stress-v {
+  color: var(--bt-bad);
+}
+
+/* Lightweight segmented axis bar */
+.bt-stress-axes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.bt-root .bt-stress-pill {
+  appearance: none;
+  box-shadow: none;
+  height: auto;
+  font-size: 11px;
+  font-weight: var(--font-medium);
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--bt-t-micro) var(--bt-ease), color var(--bt-t-micro) var(--bt-ease);
+}
+
+.bt-root .bt-stress-pill:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.bt-root .bt-stress-pill.is-active {
+  background: var(--background-secondary);
+  border-color: var(--background-modifier-border);
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+
+.bt-root .bt-stress-pill.is-collapsed {
+  color: var(--bt-bad);
+}
+
+.bt-root .bt-stress-pill.is-collapsed.is-active {
+  background: color-mix(in srgb, var(--bt-bad) 12%, transparent);
+  border-color: color-mix(in srgb, var(--bt-bad) 35%, transparent);
+}
+
+/* Stress fan SVG layers inside the main equity chart */
+.bt-stress-fan {
+  fill: var(--bt-strategy);
+  opacity: 0.13;
+}
+
+.bt-stress-fan-robust {
+  fill: var(--bt-good);
+  opacity: 0.11;
+}
+
+.bt-stress-fan-sensitive {
+  fill: var(--bt-warning);
+  opacity: 0.14;
+}
+
+.bt-stress-fan-fragile {
+  fill: var(--bt-bad);
+  opacity: 0.14;
+}
+
+.bt-stress-median {
+  fill: none;
+  stroke: var(--bt-strategy);
+  stroke-width: 1.3;
+  stroke-dasharray: 4 3;
+  opacity: 0.65;
+}
+
+/* v2 expandable classic Buy & Hold scorecard — flat hairline disclosure matching v1 rhythm */
+.bt-classic-drawer {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 12px;
+}
+
+.bt-classic-summary {
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.bt-classic-summary:hover {
+  color: var(--text-normal);
+}
+
+.bt-classic-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+/* Universal AST literal scrubber action bar (inline .bt-scrub tokens styled by 22-params.css) */
+.bt-lit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+}
+
+.bt-lit-msg {
+  color: var(--text-muted);
+  margin-right: auto;
+}

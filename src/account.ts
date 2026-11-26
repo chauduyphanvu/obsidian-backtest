@@ -28,6 +28,8 @@ export interface AccountConfig {
   capitalAtStart: number | null;
   /** The headers the fills file's columns go by, where they are not the usual ones. */
   fillColumns: Partial<FillColumns> | null;
+  /** True when marked `book: active` so this account serves as the vault's Active Book for "+ In My Book" analysis. */
+  activeBook?: boolean;
 }
 
 export const SETTINGS = ['name', 'holdings', 'cash', 'whole shares', 'skip under', 'fills', 'fills from', 'capital at start', 'fills columns'] as const;
@@ -173,12 +175,24 @@ export function parseAccount(source: string): ParsedAccount {
   let borrowed: Diagnostic | null = null;
   let shorted: Diagnostic | null = null;
   const seen = new Map<Setting, number>();
+  let seenBook: number | null = null;
   source.split(/\r?\n/).forEach((raw, i) => {
     const text = raw.trim();
     const line = i + 1;
     if (!text || text.startsWith('#')) return;
     const m = text.startsWith('[[') ? null : text.match(SETTING_LINE);
     if (m) {
+      if (m[1].toLowerCase().replace(/\s+/g, ' ') === 'book') {
+        if (seenBook !== null) {
+          errors.push({ line, message: `book is also set on line ${seenBook}` });
+          return;
+        }
+        seenBook = line;
+        const v = m[2].trim().toLowerCase();
+        if (v === 'active' || v === 'yes' || v === 'true') config.activeBook = true;
+        else if (v !== 'no' && v !== 'false') errors.push({ line, message: 'Write book: active to use this account for "+ In My Book" analysis' });
+        return;
+      }
       const key = SETTINGS.find((s) => s === m[1].toLowerCase().replace(/\s+/g, ' '));
       if (!key) {
         errors.push({ line, message: `"${m[1]}" is not a setting of an account. The settings are ${settingList()}` });

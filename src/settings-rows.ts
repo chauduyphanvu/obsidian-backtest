@@ -143,6 +143,20 @@ export function settingRows(settings: Settings): SettingRow[] {
       options: { full: 'Full', compact: 'Compact' },
     },
     {
+      kind: 'dropdown',
+      key: 'cardLayout',
+      name: 'Card layout',
+      desc: 'Stress tests first leads with parameter/cost/timing tests and clause effects, with the buy-and-hold table folded below. Classic shows the full table first.',
+      options: { v2: 'Stress tests first', classic: 'Classic table first' },
+    },
+    {
+      kind: 'text',
+      key: 'activeBook',
+      name: 'Active book note',
+      desc: 'Vault path of the note with the account block used by the "+ In My Book" lens (for example Trading/Main Account.md). Leave empty to use the first account block marked "book: active".',
+      placeholder: 'Trading/Main Account.md',
+    },
+    {
       kind: 'toggle',
       key: 'ordersOnStartup',
       name: 'Find orders when Obsidian starts',

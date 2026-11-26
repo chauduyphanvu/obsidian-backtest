@@ -2,17 +2,25 @@
 // what a drawing leaves behind (its runs, its sections, its place among the blocks on screen) until the block is drawn
 // again or goes away. The plugin says where each block is and hands in the settings, the results and the vault writes.
 
+import { applyClauseMutes, type AblationReport } from './ablation.ts';
+import { runBacktest } from './backtest.ts';
+import type { ActiveBookSnapshot } from './book.ts';
+import { diffBacktests, hasDagRefs, type ResolvedStrategy, type StrategyDiff } from './dag.ts';
 import { priceFailure } from './data.ts';
 import { runStep, type RunStep } from './diagnostics.ts';
-import type { Defaults } from './dsl.ts';
+import { extractLiteralSites, parseSpec, type Defaults } from './dsl.ts';
 import { easeHeight } from './dom.ts';
 import { equityCsv, resultMarkdown, snapshotMarkdown, tradesCsv } from './export.ts';
 import { isIntraday } from './format.ts';
 import { applyFix } from './fixes.ts';
 import { forwardLink, type ForwardStart } from './forward.ts';
+import type { KillSwitchReport } from './killswitch.ts';
 import { trialOf, versionFigures, type Ledgers } from './ledger.ts';
+import type { DeploymentCommit, RealityTape } from './lifecycle.ts';
 import { LimitError } from './limits.ts';
 import type { Action, MenuItems } from './render-actions.ts';
+import { renderBarProbeHud, renderContrastPopover } from './render-inverse.ts';
+import type { LifecyclePanelOptions } from './render-lifecycle.ts';
 import type { TrackPaint } from './render-params.ts';
 import { renderDebug } from './render-debug.ts';
 import { renderLuck, renderTriesNote } from './render-luck.ts';
@@ -23,11 +31,11 @@ import { renderVersions } from './render-versions.ts';
 import { blockStateKey, renderDefaultsChanged, renderErrors, renderFailure, renderLimit, renderLoading, renderOldRecord, renderResult, type DrawnResult, type Loading, type NextAction, type OldRecord, type Section, type ViewState } from './render.ts';
 import { ResultCache, debounce, defaultsMatter } from './result-cache.ts';
 import type { Results } from './results.ts';
-import { setParamValues } from './rewrite.ts';
+import { removeMutedLines, setLiteralValues, setParamValues, toggleMuteLine } from './rewrite.ts';
 import type { RunOutput } from './runner.ts';
 import { defaultsFrom, type Settings } from './settings-core.ts';
 import type { SymbolLookup } from './symbols.ts';
-import { blockRuns } from './worker-client.ts';
+import { AMBIENT, blockJobs, blockRuns } from './worker-client.ts';
 
 /** Blocks whose open or folded state is remembered for the session. */
 const KEPT_BLOCK_STATES = 500;
@@ -91,6 +99,16 @@ export interface BlocksHost {
    * it here; null when there is no clear sign of one.
    */
   oldRecord?(notePath: string, key: string, name: string, text: string): Promise<OldRecord | null>;
+  /** Phase 1: Resolves `extends:`, `universe: [[...]]`, and `[[Signal]]` DAG links for a strategy block. */
+  resolveDag?(source: string, notePath: string): Promise<ResolvedStrategy>;
+  /** Phase 2: Pushes completed X-Ray ablation results to CodeMirror inline decorations. */
+  onAblation?(notePath: string, source: string, report: AblationReport): void;
+  /** Phase 5: Returns the cached Active Book snapshot for ambient "+ In My Book" analysis. */
+  activeBook?(): Promise<ActiveBookSnapshot | null>;
+  /** Phase 6: Loads any deployment commit, 3-track reality tape, and kill-switch evaluation for a strategy block. */
+  lifecycle?(blockKey: string, source: string, out: RunOutput): Promise<{ commit: DeploymentCommit | null; tape: RealityTape | null; killSwitch: KillSwitchReport | null; hasDraftChanges: boolean }>;
+  /** Phase 6: Freezes and deploys (or promotes) a strategy block in-place with `live since: YYYY-MM-DD @hash`. */
+  deployStrategy?(notePath: string, blockKey: string, source: string, out: RunOutput, restore?: (text: string) => Promise<void>): Promise<void>;
 }
 
 /** The block's text with the values of the run on screen written into it, as a kept note and a forward test carry it. */
@@ -265,9 +283,22 @@ export class StrategyBlocks {
       runs.close();
       before?.();
     };
-    this.disposers.set(child, stop);
+    let activeStop = stop;
+    this.disposers.set(child, activeStop);
+    // Phase 1: Resolve any DAG `extends:` / `[[...]]` references before parsing and running.
+    let runSource = source;
+    let dag: ResolvedStrategy | null = null;
+    if (this.host.resolveDag && hasDagRefs(source)) {
+      dag = await this.host.resolveDag(source, opts.notePath);
+      if (this.disposers.get(child) !== stop) return;
+      if (dag.errors.length > 0) {
+        renderErrors(el, dag.errors, source, { defaults: this.host.settings() ? defaultsFrom(this.host.settings()) : undefined, fix: opts.restore });
+        return;
+      }
+      runSource = dag.mergedSource;
+    }
     // Everything this drawing parses, runs and hands to its sections is made with the defaults it reads here, once.
-    const drawing = this.host.results.drawing(source, runs, { anyway: opts.anyway });
+    const drawing = this.host.results.drawing(runSource, runs, { anyway: opts.anyway });
     const force = opts.force ?? false;
     // In the panel a failed first run is for the panel to show, but a retry has nobody above it: it draws its own failure.
     const redraw = (more: Pick<StrategyOptions, 'force' | 'anyway' | 'inPlace'>): Promise<void> =>
@@ -296,7 +327,7 @@ export class StrategyBlocks {
       }
       // The panel keeps its own view of a block, apart from the note's folded or open state.
       const stateKey = opts.panel ? undefined : (opts.stateKey ?? (spec.name ? blockStateKey(opts.notePath, spec.name, -1) : undefined));
-      const key = await this.host.results.resultKey(spec, source, drawing.defaults);
+      const key = await this.host.results.resultKey(spec, runSource, drawing.defaults);
       if (this.disposers.get(child) !== stop) return;
       let loading: Loading | null = null;
       if (inPlace) old.busy(true);
@@ -324,16 +355,72 @@ export class StrategyBlocks {
       const named = out.spec.name !== null;
       const ledger = named && opts.blockKey ? this.host.ledgers?.forBlock(opts.blockKey) : undefined;
       void ledger?.add([trialOf(out.spec, out.backtest)], { text: source, defaults: drawing.defaults, figures: versionFigures(out.backtest) });
+      // Phase 1: If `extends:` resolved a parent strategy, compute the exact parent-vs-child diff.
+      let diff: StrategyDiff | null = null;
+      if (dag?.parentSource) {
+        try {
+          const parentOut = await this.host.results.runSource(dag.parentSource, { background: true });
+          diff = diffBacktests(parentOut.backtest, out.backtest, dag.parentName ?? 'Parent');
+        } catch {
+          diff = null;
+        }
+      }
+      if (this.disposers.get(child) !== stop) return;
+
+      // Phase 6: Load deployment commit, 3-track Reality Tape, and Kill-Switch status when available.
+      let lifecycleOpts: LifecyclePanelOptions | null = null;
+      if (!opts.panel && opts.blockKey && this.host.lifecycle) {
+        try {
+          const life = await this.host.lifecycle(opts.blockKey, source, out);
+          if (this.disposers.get(child) !== stop) return;
+          lifecycleOpts = {
+            ...life,
+            hasKillSwitchRule: !!out.spec.invalidate,
+            onDeploy: this.host.deployStrategy ? () => this.host.deployStrategy!(opts.notePath, opts.blockKey!, source, out, opts.restore) : undefined,
+            onPromoteDraft: this.host.deployStrategy ? () => this.host.deployStrategy!(opts.notePath, opts.blockKey!, source, out, opts.restore) : undefined,
+          };
+        } catch {
+          lifecycleOpts = null;
+        }
+      }
+
+      // Ambient background job runner for passive Stress Envelope, Inline X-Ray Ablation, and Inverse Backtesting.
+      // Recreates cleanly if the user scrubs a parameter slider so ambient analytics & inverse probes always match `shown`.
+      let disposed = false;
+      let ambientFor: RunOutput = out;
+      let ambientJobs = blockJobs({ source: runSource, defaults: drawing.defaults, parse: drawing.parse, backtest: out.backtest });
+      const getAmbient = (shown: RunOutput) => {
+        if (shown !== ambientFor) {
+          ambientJobs.close();
+          ambientFor = shown;
+          const shownSrc = shownText(runSource, shown);
+          ambientJobs = blockJobs({ source: shownSrc, defaults: drawing.defaults, parse: drawing.parse, backtest: shown.backtest });
+        }
+        return ambientJobs;
+      };
+      const prevStop = stop;
+      const stopWithAmbient = () => {
+        disposed = true;
+        ambientJobs.close();
+        prevStop();
+      };
+      activeStop = stopWithAmbient;
+      this.disposers.set(child, activeStop);
+      const isActive = () => !disposed;
+      const isV2 = this.host.settings().cardLayout !== 'classic';
+      let inverseSeq = 0;
+
       const sections = (shown: RunOutput): Section[] => {
         const bt = shown.backtest;
         const intraday = isIntraday(bt.run.t);
         // The sweep and the luck checks start from the block's own text and put values on top of it.
         const tryValues = {
-          source,
+          source: runSource,
           backtest: bt,
           parse: drawing.parse,
           defaults: drawing.defaults,
-          apply: opts.apply,
+          // Kill List #2: in v2 layout, disable peak-hunting "Use best values" in sweep while keeping plateau/PBO diagnostics.
+          apply: isV2 ? undefined : opts.apply,
           rewrite: opts.restore,
           ledger,
           ...(named ? {} : { unnamed: { rename: opts.rename } }),
@@ -361,6 +448,62 @@ export class StrategyBlocks {
               from: bt.run.t[0],
               to: bt.run.t[bt.run.t.length - 1],
               intraday,
+              // Phase 4: Inverse Backtesting (Brush-to-Contrast + Click-Any-Bar Counterfactual Probe)
+              onBrushTrades: (indices, hostEl) => {
+                const req = ++inverseSeq;
+                hostEl.replaceChildren();
+                void getAmbient(shown)
+                  .run({ kind: 'contrast', tradeIndices: indices }, { priority: 0 })
+                  .done.then((res) => {
+                    if (req !== inverseSeq || !res || !hostEl.isConnected || !isActive()) return;
+                    hostEl.replaceChildren();
+                    renderContrastPopover(hostEl, res, {
+                      onClose: () => {
+                        inverseSeq++;
+                        hostEl.replaceChildren();
+                      },
+                      onInjectClause:
+                        opts.restore && !dag
+                          ? (feat, tax) => {
+                              const lines = source.split('\n');
+                              const entryIdx = lines.findIndex((l) => /^\s*(?:buy|short)\s+when\b/i.test(l));
+                              if (entryIdx >= 0) {
+                                // If the entry line uses top-level `or`, wrap its condition in parens so `and` applies to the whole rule.
+                                const headMatch = lines[entryIdx].match(/^(\s*(?:buy|short)\s+when\s+)(.+)$/i);
+                                if (headMatch && /\bor\b/i.test(headMatch[2]) && !headMatch[2].trim().startsWith('(')) {
+                                  lines[entryIdx] = `${headMatch[1]}(${headMatch[2].trim()})`;
+                                }
+                                lines.splice(entryIdx + 1, 0, `  ~${feat.suggestedClause} # contrast AUC ${feat.auc.toFixed(2)}, +${tax} trials`);
+                                void opts.restore!(lines.join('\n')).catch(() => {});
+                              }
+                            }
+                          : undefined,
+                    });
+                  });
+              },
+              onClickBar: (ticker, barIdx, hostEl) => {
+                const req = ++inverseSeq;
+                hostEl.replaceChildren();
+                void getAmbient(shown)
+                  .run({ kind: 'probe', ticker, barIndex: barIdx }, { priority: 0 })
+                  .done.then((res) => {
+                    if (req !== inverseSeq || !res || !hostEl.isConnected || !isActive()) return;
+                    hostEl.replaceChildren();
+                    renderBarProbeHud(hostEl, res, intraday, {
+                      onClose: () => {
+                        inverseSeq++;
+                        hostEl.replaceChildren();
+                      },
+                      onApplyCounterfactual:
+                        opts.restore && !dag
+                          ? (litId, newVal) => {
+                              const sites = extractLiteralSites(source);
+                              void opts.restore!(setLiteralValues(source, sites, { [litId]: newVal })).catch(() => {});
+                            }
+                          : undefined,
+                    });
+                  });
+              },
             }),
           (root) => renderDebug(root, { backtest: bt, intraday, save: (title, csv) => this.host.saveFile(title, 'csv', csv) }),
           (root) => renderSweep(root, tryValues),
@@ -398,6 +541,15 @@ export class StrategyBlocks {
           // A copy carries the values that made its result.
           { label: 'Copy as Markdown', icon: 'copy', run: () => this.host.copy(resultMarkdown({ source: shownText(source, shown), backtest: bt }), 'the result') },
           ...(next || (!opts.panel && opts.notePath) ? [null] : []),
+          ...(!opts.panel && opts.blockKey && this.host.deployStrategy
+            ? [
+                {
+                  label: lifecycleOpts?.commit ? 'Update live rules to current text' : 'Start live tracking',
+                  icon: 'play',
+                  run: () => this.host.deployStrategy!(opts.notePath, opts.blockKey!, source, shown, opts.restore),
+                },
+              ]
+            : []),
           ...(next ? [next] : []),
           ...(!opts.panel && opts.notePath ? [{ label: "Save this note's results to its properties", icon: 'save', run: () => this.host.saveProperties(opts.notePath) }] : []),
         ];
@@ -427,6 +579,7 @@ export class StrategyBlocks {
           return opts.apply!(values);
         });
       const initial: ViewState | undefined = inPlace ? old.view() : stateKey === undefined ? undefined : this.views.get(stateKey);
+      const litSites = spec.params.length === 0 && !dag ? extractLiteralSites(source) : [];
       const draw = (target: HTMLElement): DrawnResult =>
         renderResult(target, {
           source,
@@ -445,6 +598,83 @@ export class StrategyBlocks {
           initial,
           arrive,
           onHeight: stateKey === undefined ? undefined : (height, folded) => this.heights.set(stateKey, { height, folded }),
+          cardLayout: this.host.settings().cardLayout,
+          diff,
+          stress: (shown) => getAmbient(shown).run({ kind: 'stress', seed: 42 }, { priority: AMBIENT }).done,
+          ablation: (shown) =>
+            getAmbient(shown)
+              .run({ kind: 'ablation' }, { priority: AMBIENT })
+              .done.then((report) => {
+                // Only publish CodeMirror line pills when source lines map 1-to-1 (not DAG-merged child blocks).
+                if (report && isActive() && !dag && shown === out) this.host.onAblation?.(opts.notePath, source, report);
+                return report;
+              }),
+          onMuteClauses: async (muted) => {
+            if (muted.size === 0) return out;
+            const mutedSpec = applyClauseMutes(out.spec, runSource, muted);
+            const bt = runBacktest(mutedSpec, out.data);
+            return { ...out, spec: mutedSpec, backtest: bt };
+          },
+          onCommitMuted:
+            opts.restore && !dag
+              ? async (muted) => {
+                  const rep = await getAmbient(out).run({ kind: 'ablation' }, { priority: 0 }).done;
+                  if (!rep) return;
+                  const lines = source.split('\n');
+                  const toDeleteLines = new Set<number>();
+                  const inlineEdits: { lineIdx: number; from: number; to: number }[] = [];
+                  for (const c of rep.clauses) {
+                    if (!muted.has(c.id) || !c.span) continue;
+                    const idx = c.span.line - 1;
+                    if (idx < 0 || idx >= lines.length) continue;
+                    const raw = lines[idx];
+                    const trimmed = raw.trim();
+                    const isStandalone = /^(and|or)\b/i.test(trimmed) || /^(stop\s+loss|trailing\s+stop|take\s+profit|rebalance)\s*:/i.test(trimmed);
+                    if (isStandalone) {
+                      toDeleteLines.add(idx);
+                      continue;
+                    }
+                    // Inline sub-clause removal (e.g. `buy when A and B` -> remove ` and B`, or `A and ` before B).
+                    const before = raw.slice(0, c.span.from);
+                    const after = raw.slice(c.span.to);
+                    const prevConn = before.match(/\s+(?:and|or)\s+$/i);
+                    const nextConn = after.match(/^\s+(?:and|or)\s+/i);
+                    if (prevConn) {
+                      inlineEdits.push({ lineIdx: idx, from: c.span.from - prevConn[0].length, to: c.span.to });
+                    } else if (nextConn) {
+                      inlineEdits.push({ lineIdx: idx, from: c.span.from, to: c.span.to + nextConn[0].length });
+                    }
+                  }
+                  if (toDeleteLines.size === 0 && inlineEdits.length === 0) return;
+                  // Apply inline span removals right-to-left per line so offsets never shift.
+                  inlineEdits.sort((a, b) => b.lineIdx - a.lineIdx || b.from - a.from);
+                  for (const e of inlineEdits) {
+                    if (toDeleteLines.has(e.lineIdx)) continue;
+                    lines[e.lineIdx] = lines[e.lineIdx].slice(0, e.from) + lines[e.lineIdx].slice(e.to);
+                  }
+                  const next = lines.filter((_, i) => !toDeleteLines.has(i)).join('\n');
+                  try {
+                    await opts.restore!(next);
+                  } catch {
+                    // Note changed since render; leave note intact.
+                  }
+                }
+              : undefined,
+          book: this.host.activeBook ? () => this.host.activeBook!() : undefined,
+          lifecycle: lifecycleOpts,
+          scrubLiterals:
+            litSites.length > 0
+              ? {
+                  sites: litSites,
+                  rerun: async (values) => {
+                    const parsed = parseSpec(source, { defaults: drawing.defaults, literalOverrides: values });
+                    if (!parsed.spec) return null;
+                    const bt = runBacktest(parsed.spec, out.data);
+                    return { ...out, spec: parsed.spec, backtest: bt };
+                  },
+                  apply: opts.restore ? (values) => opts.restore!(setLiteralValues(source, litSites, values)) : undefined,
+                }
+              : undefined,
         });
       let drawn: DrawnResult;
       if (loading || inPlace) {
@@ -456,7 +686,7 @@ export class StrategyBlocks {
         el.appendChild(stage);
         drawn = draw(stage);
         await frames(2);
-        if (this.disposers.get(child) !== stop) {
+        if (!isActive()) {
           drawn.dispose();
           stage.remove();
           return;
@@ -481,22 +711,26 @@ export class StrategyBlocks {
           if (found && this.cards.get(child) === drawn) renderOldRecord(el, found);
         });
       }
-      this.disposers.set(child, () => {
+      const finalStop = () => {
+        disposed = true;
         if (stateKey !== undefined) this.views.set(stateKey, drawn.view());
         drawn.dispose();
+        ambientJobs.close();
         runs.close();
         this.onScreen.delete(child);
-      });
+      };
+      activeStop = finalStop;
+      this.disposers.set(child, finalStop);
       // The settings may have changed while the result was on its way.
       this.checkDefaults();
       if (this.host.settings().writeProperties && !opts.panel) this.host.scheduleProperties(opts.notePath);
     } catch (e) {
       // A drawing that was replaced or went away while it ran leaves the block to whatever replaced it.
-      if (this.disposers.get(child) !== stop) return;
+      if (this.disposers.get(child) !== activeStop && !(e instanceof LimitError)) return;
       const message = e instanceof Error ? e.message : String(e);
       // A refresh that failed leaves the result on screen as it was, with a line that says why.
       if (inPlace && !(e instanceof LimitError) && old.root.parentElement === el) {
-        this.disposers.set(child, stop);
+        this.disposers.set(child, activeStop);
         old.busy(false);
         old.failed(message, () => void redraw({ force: true, inPlace: true }));
         return;

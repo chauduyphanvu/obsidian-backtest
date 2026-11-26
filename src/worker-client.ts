@@ -48,6 +48,8 @@ export interface RunOptions {
   onProgress?: (done: number, total: number) => void;
   /** True when the job has to wait for another block's job, false when it then starts. */
   onWait?: (waiting: boolean) => void;
+  /** Lower goes first: 0 for interactive sweeps/luck checks, AMBIENT (2) for passive post-run analyses. */
+  priority?: number;
 }
 
 export interface Running<R> {
@@ -201,6 +203,8 @@ interface CsvTask extends Common {
 type Task = JobTask | RunTask | TriggersTask | CsvTask;
 
 const BACKGROUND = 1;
+/** Passive post-run analyses (ablation, stress envelope): yield to interactive sweeps and luck checks. */
+export const AMBIENT = 2;
 
 /**
  * Jobs run one at a time in each of two workers. Single runs go to one, by priority and then in the order asked; sweeps
@@ -244,7 +248,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
     const overrides = overridesOf(task);
     const key = JSON.stringify(overrides);
     let bench = task.benches.get(key);
-    if (!bench) task.benches.set(key, (bench = benchWith(task.input.source, task.input.parse, task.input.backtest.data, overrides)));
+    if (!bench) task.benches.set(key, (bench = benchWith(task.input.source, task.input.parse, task.input.backtest.data, overrides, task.input.defaults)));
     return bench;
   };
   const stoppedOf = (task: Task) => (task.type === 'job' ? stoppedResult(task.job.kind, benchOf(task), task.sofar) : null);
@@ -528,7 +532,7 @@ export function createJobClient(opts: { makeWorker: MakeWorker; idleMs?: number;
           lane: long,
           prices,
           data,
-          priority: 0,
+          priority: o.priority ?? 0,
           here: false,
           stopped: false,
           settled: false,

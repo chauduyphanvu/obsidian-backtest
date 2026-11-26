@@ -1,11 +1,14 @@
 // Single backtests, the sweep and the luck checks as jobs: plain data in, progress and plain data out, so the same
 // functions run in a worker (see worker.ts and worker-client.ts) or, when no worker can start, on the main thread.
 
+import { runAblation, type AblationReport } from './ablation.ts';
 import { runBacktest, type Backtest } from './backtest.ts';
 import { parseCsv } from './data.ts';
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
+import { brushContrast, probeBar, type BarProbeResult, type ContrastResult } from './inverse.ts';
 import { blockFor, bootstrap, randomEntries, walkForward, type BootstrapResult, type RandomEntriesResult, type WalkForwardResult } from './luck.ts';
 import { priceMemo } from './price-memo.ts';
+import { runStress, type StressReport } from './stress.ts';
 import { baseSpec, runSweep, sweepParams, sweepSize, type Parse, type SweepPoint, type SweepResult } from './sweep.ts';
 import { computeTriggers, type TriggerReport, type TriggerRun } from './trigger.ts';
 import type { Bars } from './types.ts';
@@ -18,7 +21,15 @@ export interface Block {
   overrides: Record<string, number>;
 }
 
-export type Job = { kind: 'sweep' } | { kind: 'reshuffle'; seed: number; runs: number } | { kind: 'random'; seed: number; runs: number } | { kind: 'walk' };
+export type Job =
+  | { kind: 'sweep' }
+  | { kind: 'reshuffle'; seed: number; runs: number }
+  | { kind: 'random'; seed: number; runs: number }
+  | { kind: 'walk' }
+  | { kind: 'ablation' }
+  | { kind: 'stress'; seed: number }
+  | { kind: 'contrast'; tradeIndices: number[]; seed?: number }
+  | { kind: 'probe'; ticker: string; barIndex: number };
 export type Kind = Job['kind'];
 export type JobOf<K extends Kind> = Extract<Job, { kind: K }>;
 
@@ -28,6 +39,10 @@ export interface Results {
   reshuffle: BootstrapResult;
   random: RandomEntriesResult;
   walk: WalkForwardResult | null;
+  ablation: AblationReport;
+  stress: StressReport;
+  contrast: ContrastResult;
+  probe: BarProbeResult | null;
 }
 
 /** What a job works on: the block's text, its prices, and the block as written, run once on them. */
@@ -35,6 +50,8 @@ export interface Bench {
   source: string;
   parse: Parse;
   data: Map<string, Bars>;
+  defaults?: Partial<Defaults>;
+  overrides?: Record<string, number>;
   backtest: () => Backtest;
 }
 
@@ -53,15 +70,15 @@ export function jobOverrides(kind: Kind, shown: Spec): Record<string, number> {
  * The bench a job works on, the same wherever it runs: the block read with `parse`, `overrides` on top, run once on `data`
  * when a job first needs it.
  */
-export function benchWith(source: string, parse: Parse, data: Map<string, Bars>, overrides: Record<string, number>): Bench {
+export function benchWith(source: string, parse: Parse, data: Map<string, Bars>, overrides: Record<string, number>, defaults?: Partial<Defaults>): Bench {
   const withValues: Parse = (values) => parse({ ...overrides, ...values });
   let bt: Backtest | undefined;
-  return { source, parse: withValues, data, backtest: () => (bt ??= runBacktest(baseSpec(withValues), data)) };
+  return { source, parse: withValues, data, defaults, overrides, backtest: () => (bt ??= runBacktest(baseSpec(withValues), data)) };
 }
 
 /** A bench built from plain data, as a worker has to. */
 export function benchFor(block: Block, data: Map<string, Bars>): Bench {
-  return benchWith(block.source, (overrides) => parseSpec(block.source, { defaults: block.defaults, overrides }), data, block.overrides);
+  return benchWith(block.source, (overrides) => parseSpec(block.source, { defaults: block.defaults, overrides }), data, block.overrides, block.defaults);
 }
 
 /** A backtest without the strategy and the prices it ran on: whoever asked for it holds both, so they are not sent back. */
@@ -100,6 +117,22 @@ const RUNNERS: { [K in Kind]: Runner<K> } = {
   },
   random: (job, b, hooks) => randomEntries(b.backtest(), { seed: job.seed, runs: job.runs, ...hooks }),
   walk: (_, b, hooks) => walkForward(b.source, b.data, { parse: b.parse, ...hooks }),
+  ablation: async (_, b, hooks) => {
+    const bt = b.backtest();
+    return runAblation(bt.spec, b.data, bt, b.source, { onProgress: hooks.onProgress, shouldStop: hooks.shouldStop });
+  },
+  stress: async (job, b, hooks) => {
+    const bt = b.backtest();
+    return runStress(b.source, bt.spec, b.data, bt, b.defaults, job.seed, b.overrides, { onProgress: hooks.onProgress, shouldStop: hooks.shouldStop });
+  },
+  contrast: async (job, b) => {
+    const bt = b.backtest();
+    return brushContrast(bt.spec, b.data, bt, job.tradeIndices, job.seed);
+  },
+  probe: async (job, b) => {
+    const bt = b.backtest();
+    return probeBar(b.source, bt.spec, b.data, bt, job.ticker, job.barIndex, b.defaults, b.overrides);
+  },
 };
 
 export function runJob<K extends Kind>(job: JobOf<K>, bench: Bench, hooks: Hooks = {}): Promise<Results[K]> {

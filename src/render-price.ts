@@ -40,6 +40,10 @@ export interface PriceInput {
   from: number;
   to: number;
   intraday: boolean;
+  /** Inverse backtesting: called when the user drag-brushes a span covering trades on the price chart. */
+  onBrushTrades?: (tradeIndices: number[], host: HTMLElement) => void;
+  /** Inverse backtesting: called when the user clicks a bar to probe blocking rules and counterfactuals. */
+  onClickBar?: (ticker: string, barIndex: number, host: HTMLElement) => void;
 }
 
 /** Up to this many tickers get a button each; more get a drop-down. */
@@ -113,12 +117,13 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
   tip.hidden = true;
   tip.setAttribute('aria-live', 'polite');
   const note = h(body, 'div', 'bt-note bt-price-note', TOO_MANY);
+  const inverseHost = h(body, 'div', 'bt-inverse-host');
   let drawn: Drawn | null = null;
   readByKeys(chart, 'Chart of the price. Use the arrow keys to read the closes.', () => drawn?.keys ?? null);
 
   const redraw = () => {
     if (width <= 0) return;
-    drawn = drawPrice(chart, tip, width, current, input);
+    drawn = drawPrice(chart, tip, inverseHost, width, current, input);
     const shorts = current.held.filter((w) => w.trade.side === 'short').length;
     heldKey.hidden = current.held.length === shorts;
     shortHeldKey.hidden = shorts === 0;
@@ -130,6 +135,7 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
   };
   const pick = (i: number) => {
     current = view(names[i]);
+    inverseHost.replaceChildren();
     summary.textContent = summaryLine(current.held.length, heldShare(current.held, input.from, input.to), buyAndHold(current.series.c));
     redraw();
   };
@@ -171,7 +177,7 @@ function build(body: HTMLElement, input: PriceInput): ResizeObserver {
   return observer;
 }
 
-function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: View, input: PriceInput): Drawn {
+function drawPrice(chart: HTMLElement, tip: HTMLElement, inverseHost: HTMLElement, width: number, view: View, input: PriceInput): Drawn {
   chart.querySelector('svg')?.remove();
   tip.hidden = true;
   const { from, to, intraday } = input;
@@ -239,18 +245,24 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     for (const kind of kinds) if (marks[kind].length) s(svg, 'path', { d: marks[kind].join(''), class: `bt-price-${kind}` });
   }
 
-  // Hover: a crosshair on the nearest bar.
+  // Hover + Inverse backtesting: drag-to-brush trades, or click any bar to probe counterfactuals.
+  const brushRect = s(svg, 'rect', { y: top, height: plotH, class: 'bt-brush-rect', visibility: 'hidden' });
   const cross = s(svg, 'line', { y1: top, y2: top + plotH, class: 'bt-cross', visibility: 'hidden' });
   const dot = s(svg, 'circle', { r: 4, class: 'bt-dot bt-price-dot', visibility: 'hidden' });
   const hit = s(svg, 'rect', { x: left, y: top, width: Math.max(plotW, 0), height: plotH, fill: 'transparent' });
   let shown: number | null = null;
+  let dragStartX: number | null = null;
   const hide = () => {
     shown = null;
+    dragStartX = null;
+    brushRect.setAttribute('visibility', 'hidden');
     tip.hidden = true;
     cross.setAttribute('visibility', 'hidden');
     dot.setAttribute('visibility', 'hidden');
   };
-  const nearest = (clientX: number) => nearestIndex(t, from + ((clientX - svg.getBoundingClientRect().left - left) / plotW) * span);
+  const plotX = (clientX: number) => Math.max(left, Math.min(left + plotW, clientX - svg.getBoundingClientRect().left));
+  const timeOfX = (px: number) => from + ((px - left) / Math.max(1, plotW)) * span;
+  const nearest = (clientX: number) => nearestIndex(t, timeOfX(plotX(clientX)));
   const show = (i: number) => {
     shown = i;
     const px = x(t[i]);
@@ -289,8 +301,50 @@ function drawPrice(chart: HTMLElement, tip: HTMLElement, width: number, view: Vi
     tip.style.left = `${px + 12 + w <= width ? px + 12 : Math.max(0, px - 12 - w)}px`;
     tip.style.top = `${top + 4}px`;
   };
-  hit.addEventListener('pointermove', (e) => show(nearest((e).clientX)));
-  hit.addEventListener('pointerdown', (e) => show(nearest((e).clientX)));
-  hit.addEventListener('pointerleave', hide);
+  hit.addEventListener('pointermove', (e) => {
+    if (dragStartX !== null && (input.onBrushTrades || input.onClickBar)) {
+      const curX = plotX(e.clientX);
+      if (Math.abs(curX - dragStartX) > 6) {
+        brushRect.setAttribute('x', String(Math.min(dragStartX, curX)));
+        brushRect.setAttribute('width', String(Math.abs(curX - dragStartX)));
+        brushRect.setAttribute('visibility', 'visible');
+      }
+    }
+    show(nearest(e.clientX));
+  });
+  hit.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    hit.setPointerCapture?.(e.pointerId);
+    dragStartX = plotX(e.clientX);
+    show(nearest(e.clientX));
+  });
+  hit.addEventListener('pointerup', (e) => {
+    if (dragStartX === null || e.button !== 0) return;
+    const endX = plotX(e.clientX);
+    const delta = Math.abs(endX - dragStartX);
+    const startX = dragStartX;
+    dragStartX = null;
+    brushRect.setAttribute('visibility', 'hidden');
+    if (delta > 8 && input.onBrushTrades) {
+      const t0 = timeOfX(Math.min(startX, endX));
+      const t1 = timeOfX(Math.max(startX, endX));
+      const indices: number[] = [];
+      input.trades.forEach((tr, idx) => {
+        if (tr.asset === view.name && tr.reason !== 'open' && tr.entryT <= t1 && tr.exitT >= t0) indices.push(idx);
+      });
+      if (indices.length > 0) input.onBrushTrades(indices, inverseHost);
+    } else if (delta <= 8 && input.onClickBar) {
+      const fullBars = input.data.get(view.name);
+      const barTime = t[nearest(e.clientX)];
+      if (fullBars) {
+        const fullIdx = fullBars.t.findIndex((x) => x >= barTime);
+        if (fullIdx >= 0) input.onClickBar(view.name, fullIdx, inverseHost);
+      }
+    }
+  });
+  hit.addEventListener('pointercancel', hide);
+  hit.addEventListener('pointerleave', () => {
+    if (dragStartX === null) hide();
+  });
   return { ...marked, keys: { t, first: 0, at: () => shown, show, rest: hide } };
 }

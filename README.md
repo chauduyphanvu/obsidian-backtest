@@ -210,6 +210,7 @@ The status bar shows the number of orders. To keep the list open while you trade
 | Open strategy preview | Shows the result of the block that you edit, in the sidebar. |
 | Correct the problem at the cursor | Applies the suggested correction. |
 | Make the number at the cursor a parameter | Changes a number such as the 200 in `sma(200)` into a parameter with a range. |
+| Toggle mute on the clause at the cursor | Prefixes or removes `~` on a rule clause inside a strategy block to ablate it non-destructively. |
 | Insert strategy dashboard | Adds a `backtests` block. |
 | Show today's orders | Opens the orders window. |
 | Show today's orders in the sidebar | Keeps the list of orders open in the sidebar. |

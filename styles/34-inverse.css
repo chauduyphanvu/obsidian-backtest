@@ -1,0 +1,100 @@
+/* Phase 4: Inverse Backtesting (Brush-to-Contrast Popover & Click-Any-Bar Counterfactual HUD) */
+
+.bt-inverse-host:empty {
+  display: none;
+}
+
+.bt-inverse-host {
+  margin-top: 12px;
+}
+
+.bt-inverse-pop,
+.bt-probe-hud {
+  padding: 12px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--bt-strategy);
+  border-radius: 10px;
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+}
+
+.bt-inverse-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bt-inverse-title {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+  margin-right: auto;
+}
+
+.bt-inverse-tax {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bt-warn-bg);
+  color: var(--bt-warn-ink);
+  font-size: 11px;
+}
+
+.bt-inverse-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.bt-inverse-table {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.bt-inverse-sig td {
+  font-weight: var(--font-semibold);
+}
+
+.bt-probe-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 7px 10px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.bt-probe-clause {
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  font-weight: var(--font-semibold);
+}
+
+.bt-probe-vals {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-probe-cf {
+  margin-left: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Price chart brush selection overlay */
+.bt-brush-rect {
+  fill: var(--bt-strategy);
+  fill-opacity: 0.16;
+  stroke: var(--bt-strategy);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}

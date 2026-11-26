@@ -1,6 +1,7 @@
-import { Facet, StateEffect, type Extension, type Range } from '@codemirror/state';
-import { Decoration, EditorView, ViewPlugin, hoverTooltip, type DecorationSet, type Tooltip, type ViewUpdate } from '@codemirror/view';
+import { Facet, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
+import { Decoration, EditorView, ViewPlugin, WidgetType, hoverTooltip, type DecorationSet, type Tooltip, type ViewUpdate } from '@codemirror/view';
 import { EditorSuggest, type App, type Editor, type EditorPosition, type EditorSuggestContext, type EditorSuggestTriggerInfo } from 'obsidian';
+import type { AblationReport, ClauseAttribution } from './ablation.ts';
 import { closesFence, fenceOf, findBlocks } from './blocks.ts';
 import { complete, hitCompletions, localTickers, tickerPosition, writtenTickers, type Completion } from './complete.ts';
 import { analyzeBlock, fixesForDiagnostic, fixForDiagnostic, unknownTickers, type BlockAnalysis, type BlockDiagnostic } from './diagnostics.ts';
@@ -10,6 +11,7 @@ import type { HoverValue } from './debug.ts';
 import { fixChanges, fixWord, type Fix } from './fixes.ts';
 import { pct, price, stamp } from './format.ts';
 import { lineKinds, TICKER_SETTINGS, type TokenKind } from './highlight.ts';
+import { ablationPillText } from './render-ablation.ts';
 import { ResultCache } from './result-cache.ts';
 import { paramFromNumber } from './rewrite.ts';
 import { blockSource, blockTickers, isLookupSource, type SymbolLookup, type TickerRef } from './symbols.ts';
@@ -77,6 +79,78 @@ export interface EditorOptions {
 
 /** Marks that a lookup answered, so the underlines are drawn again. */
 const lookupAnswered = StateEffect.define<null>();
+
+/** Pushes X-Ray clause ablation results (keyed by trimmed block source) into CodeMirror for inline end-of-line pills. */
+export const setAblationResults = StateEffect.define<Map<string, AblationReport>>();
+
+class ClausePillWidget extends WidgetType {
+  private clause: ClauseAttribution;
+  constructor(clause: ClauseAttribution) {
+    super();
+    this.clause = clause;
+  }
+  eq(other: ClausePillWidget): boolean {
+    return other.clause.id === this.clause.id && other.clause.verdict === this.clause.verdict && Math.abs(other.clause.deltaSharpe - this.clause.deltaSharpe) < 1e-4;
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.className = `bt-cm-pill bt-clause-pill bt-clause-pill-${this.clause.verdict}`;
+    el.textContent = ablationPillText(this.clause);
+    el.title = `Effect of this clause (${this.clause.label}) — use "Toggle mute on the clause at the cursor" to mute`;
+    return el;
+  }
+}
+
+const ablationDecorations = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decos, tr) {
+    let next = tr.docChanged ? decos.map(tr.changes) : decos;
+    for (const e of tr.effects) {
+      if (!e.is(setAblationResults)) continue;
+      const map = e.value;
+      const doc = tr.state.doc;
+      const marks: Range<Decoration>[] = [];
+      for (const block of findBlocks(doc.iterLines())) {
+        if (block.last < block.first) continue;
+        const lines = Array.from(doc.iterLines(block.first + 1, block.last + 2));
+        const report = map.get(lines.join('\n').trim());
+        if (!report) continue;
+        const byLine = new Map<number, ClauseAttribution[]>();
+        for (const c of report.clauses) {
+          if (!c.span) continue;
+          const list = byLine.get(c.span.line) ?? [];
+          list.push(c);
+          byLine.set(c.span.line, list);
+        }
+        for (const [relLine, clauses] of byLine) {
+          const docLineNo = block.first + relLine;
+          if (docLineNo < block.first + 1 || docLineNo > block.last + 1 || docLineNo > doc.lines) continue;
+          const lineEnd = doc.line(docLineNo).to;
+          for (const clause of clauses) {
+            marks.push(Decoration.widget({ widget: new ClausePillWidget(clause), side: 1 }).range(lineEnd));
+          }
+        }
+      }
+      next = Decoration.set(marks, true);
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+/** Toggles a leading `~` mute marker on the strategy block line at the cursor; returns whether an edit was made. */
+export function toggleMuteAtCursor(view: EditorView): boolean {
+  const doc = view.state.doc;
+  const line = doc.lineAt(view.state.selection.main.head);
+  const block = findBlocks(doc.iterLines(), line.number - 1).find((b) => line.number - 1 >= b.first && line.number - 1 <= b.last);
+  if (!block) return false;
+  const m = line.text.match(/^(\s*)(.*)$/);
+  if (!m || !m[2]) return false;
+  const [, indent, rest] = m;
+  const insert = rest.startsWith('~') ? `${indent}${rest.slice(1)}` : `${indent}~${rest}`;
+  view.dispatch({ changes: { from: line.from, to: line.to, insert }, userEvent: 'input.mute' });
+  return true;
+}
 
 class StrategyView {
   tokens: DecorationSet = Decoration.none;
@@ -500,7 +574,7 @@ export function strategyEditor(getDefaults: () => Partial<Defaults>, options: Ed
       return (paramOffer(view, block, row, pos - line.from) ?? paramOffer(view, block, row, pos - line.from - 1))?.change ?? null;
     },
   };
-  return [plugin, hover, handles.of(handle)];
+  return [plugin, ablationDecorations, hover, handles.of(handle)];
 }
 
 /** The offer to make the number the pointer is over a parameter. */

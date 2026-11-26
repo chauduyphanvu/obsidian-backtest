@@ -1,5 +1,8 @@
+import type { AblationReport } from './ablation.ts';
 import type { Backtest, Segment } from './backtest.ts';
-import { STOP_SETTINGS, type Commission, type Defaults, type Diagnostic, type Spec, type StopLevel } from './dsl.ts';
+import type { ActiveBookSnapshot } from './book.ts';
+import type { StrategyDiff } from './dag.ts';
+import { STOP_SETTINGS, type Commission, type Defaults, type Diagnostic, type LiteralSite, type Spec, type StopLevel } from './dsl.ts';
 import { placeDiagnostic } from './diagnostics.ts';
 import { colourLines, colourSource, easeHeight, h, motionOK, reveal, revealBox, s } from './dom.ts';
 import { debounce } from './result-cache.ts';
@@ -9,13 +12,19 @@ import { DAY, fullStop, isIntraday, isoDate, minus, money, pct, plural, signedPc
 import { commentStart, declaredParams, paramName, settingKey, tokenizeBlock } from './highlight.ts';
 import { anywayLabel, type LimitError } from './limits.ts';
 import { pendingTiming, pricesEnd, pricesOld, timingPhrase } from './orders.ts';
+import { renderAblationStrip } from './render-ablation.ts';
 import { renderNextStep, type Action } from './render-actions.ts';
+import { renderBookPanel } from './render-book.ts';
+import { renderStrategyDiff } from './render-diff.ts';
+import { renderLifecycleStrip, type LifecyclePanelOptions } from './render-lifecycle.ts';
 import { formatParam, renderParamBar, type ParamsHook } from './render-params.ts';
 import { renderValueChart, sparkline } from './render-chart.ts';
 import { statusView, watchText, type Holding } from './render-now.ts';
 import { renderMonths, renderYears } from './render-stats.ts';
+import { renderStressPanel } from './render-stress.ts';
 import { renderTrades } from './render-trades.ts';
 import { verdictView, versusView } from './render-versus.ts';
+import type { StressReport } from './stress.ts';
 import { sectionsIn, tabify, tabName } from './tabs.ts';
 import type { RunOutput, Waiting } from './runner.ts';
 import type { Source } from './types.ts';
@@ -497,6 +506,28 @@ export interface ResultView {
   copy?: (text: string, what: string) => void;
   /** Told the card's height once it has settled, so the block can wait in that height next time it loads. */
   onHeight?: (height: number, folded: boolean) => void;
+  /** v2 stress-first layout (default) or classic scorecard-first layout. */
+  cardLayout?: 'v2' | 'classic';
+  /** Differential attribution when the strategy inherits from a parent via `extends:`. */
+  diff?: StrategyDiff | null;
+  /** Passive background Adversarial Stress Envelope computation. */
+  stress?: (out: RunOutput) => Promise<StressReport | null> | null;
+  /** Passive background Inline X-Ray Clause Ablation computation. */
+  ablation?: (out: RunOutput) => Promise<AblationReport | null> | null;
+  /** Live non-destructive clause mute handler: re-runs strategy with muted clause IDs. */
+  onMuteClauses?: (muted: ReadonlySet<string>) => Promise<RunOutput | null>;
+  /** Commits muted clause deletions to the note. */
+  onCommitMuted?: (muted: ReadonlySet<string>) => Promise<void>;
+  /** Ambient "+ In My Book" Active Book provider. */
+  book?: () => Promise<ActiveBookSnapshot | null>;
+  /** Continuous Reality Tape, deployment commit, and executable kill-switch options. */
+  lifecycle?: LifecyclePanelOptions | null;
+  /** Universal AST literal scrubbing for undeclared numbers inside the rules box. */
+  scrubLiterals?: {
+    sites: LiteralSite[];
+    rerun: (values: Record<string, number>, settled: boolean) => Promise<RunOutput | null>;
+    apply?: (values: Record<string, number>) => Promise<void>;
+  };
 }
 
 /** What a reader set on a drawn result, so a drawing that replaces it starts from the same place. */
@@ -750,7 +781,13 @@ function moreIcon(parent: HTMLElement): void {
  * well's right, since the line under the title says them in words. Settings after a `for` line are the ticker's own and
  * stay in view, and so does a setting the parser has a note about (`flagged`, 1-based lines of the block).
  */
-function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = new Set(), scrubs?: Map<string, HTMLElement>): HTMLElement | null {
+function sourcePanel(
+  parent: HTMLElement,
+  text: string,
+  flagged: Set<number> = new Set(),
+  scrubs?: Map<string, HTMLElement>,
+  tokenByPos?: Map<string, HTMLElement>,
+): HTMLElement | null {
   const src = text.trim();
   if (!src) return null;
   // Lines the trim took off the top, so the parser's line numbers still point at the right lines.
@@ -770,6 +807,7 @@ function sourcePanel(parent: HTMLElement, text: string, flagged: Set<number> = n
   const lines = colourLines(pre, src, (el, i, from) => {
     const v = values.get(i);
     if (v && from === v.at && scrubs && !scrubs.has(v.name)) scrubs.set(v.name, el);
+    if (tokenByPos) tokenByPos.set(`${i + 1 + skipped}:${from}`, el);
   });
   let inFor = false;
   let afterSetting = false;
@@ -923,30 +961,237 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     };
     const tuned = !!view.params && first.spec.params.length > 0;
     const scrubs = tuned ? new Map<string, HTMLElement>() : undefined;
-    const well = sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)), scrubs);
+    const tokenByPos = !tuned && view.scrubLiterals?.sites.length ? new Map<string, HTMLElement>() : undefined;
+    const well = sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)), scrubs, tokenByPos);
 
-    // The bar is made once, before the result it drives, and is never redrawn; it sits in the well with the rules it changes.
+    // Phase 5: Ambient "Standalone" <-> "+ In My Book" segmented lens toggle (shown when an Active Book is available).
+    const bookHost = h(body, 'div', 'bt-book-host');
+    bookHost.hidden = true;
+    const standaloneWrap = h(body, 'div', 'bt-standalone-wrap');
+    let lens: 'standalone' | 'book' = 'standalone';
+    let activeBook: ActiveBookSnapshot | null = null;
+    let redrawBook = () => {};
+    let forceChartRedraw = () => {};
+    if (view.book) {
+      void view.book().then((snap) => {
+        if (!snap || !root.isConnected) return;
+        activeBook = snap;
+        const switcher = h(tools, 'div', 'bt-lens-toggle');
+        switcher.setAttribute('role', 'group');
+        switcher.setAttribute('aria-label', 'Evaluation lens');
+        const btnStd = h(switcher, 'button', 'bt-lens-btn is-active', 'Standalone');
+        const btnBook = h(switcher, 'button', 'bt-lens-btn', 'In Book');
+        btnStd.type = btnBook.type = 'button';
+        redrawBook = () => {
+          if (lens === 'book' && activeBook) {
+            bookHost.replaceChildren();
+            renderBookPanel(bookHost, activeBook, onScreen.backtest);
+          }
+        };
+        const setLens = (next: 'standalone' | 'book') => {
+          lens = next;
+          btnStd.classList.toggle('is-active', lens === 'standalone');
+          btnBook.classList.toggle('is-active', lens === 'book');
+          standaloneWrap.hidden = lens === 'book';
+          bookHost.hidden = lens === 'standalone';
+          if (lens === 'book') redrawBook();
+          else forceChartRedraw();
+        };
+        btnStd.addEventListener('click', () => setLens('standalone'));
+        btnBook.addEventListener('click', () => setLens('book'));
+        tools.prepend(switcher);
+      }, () => {});
+    }
+
+    // Phase 6: Continuous Reality Tape & Executable Kill-Switch strip.
+    if (view.lifecycle) renderLifecycleStrip(standaloneWrap, view.lifecycle);
+
+    // Phase 2: Inline X-Ray Clause Attribution slot inside the rules well (collapsed summary strip by default).
+    const ablationHost = h(well ?? standaloneWrap, 'div', 'bt-ablation-host');
+    const mutedClauses = new Set<string>();
+    let ablationOpen = false;
+
+    // Phase 3: Universal literal scrubbing on undeclared numeric literals when no explicit params exist.
     let show = (_out: RunOutput, _settled: boolean): void => {};
+    let clearLiteralPreview = () => {};
     if (tuned) {
       well?.classList.add('bt-src-tune');
       cleanups.push(renderParamBar(well ?? body, { params: first.spec.params, hook: view.params!, scrubs, show: (out, settled) => show(out, settled) }));
+    } else if (view.scrubLiterals && view.scrubLiterals.sites.length > 0 && well && tokenByPos) {
+      const litHook = view.scrubLiterals;
+      const litVals: Record<string, number> = {};
+      let scrubSeq = 0;
+      const litBar = h(well, 'div', 'bt-lit-bar');
+      litBar.hidden = true;
+      const litMsg = h(litBar, 'span', 'bt-lit-msg');
+      const litReset = h(litBar, 'button', 'bt-button', 'Reset');
+      litReset.type = 'button';
+      const litApply = litHook.apply ? h(litBar, 'button', 'bt-button mod-cta', 'Write to block') : null;
+      if (litApply) litApply.type = 'button';
+      const siteEls = new Map<string, HTMLElement>();
+      const activeDrags = new Set<() => void>();
+      cleanups.push(() => {
+        for (const end of [...activeDrags]) end();
+      });
+      for (const site of litHook.sites) {
+        const el = tokenByPos.get(site.id);
+        if (!el) continue;
+        siteEls.set(site.id, el);
+        el.classList.add('bt-scrub');
+        el.title = 'Drag left or right to scrub this value';
+        let startX = 0;
+        let baseVal = site.value;
+        el.addEventListener('pointerdown', (ev) => {
+          if (ev.button !== 0) return;
+          ev.preventDefault();
+          el.setPointerCapture?.(ev.pointerId);
+          startX = ev.clientX;
+          baseVal = litVals[site.id] ?? site.value;
+          mutedClauses.clear();
+          const onMove = (m: PointerEvent) => {
+            const steps = Math.round((m.clientX - startX) / 16);
+            const raw = baseVal + steps * site.domain.step;
+            const clamped = Math.min(site.domain.max, Math.max(site.domain.min, site.domain.integer ? Math.round(raw) : Number(raw.toPrecision(6))));
+            if (clamped === (litVals[site.id] ?? site.value)) return;
+            litVals[site.id] = clamped;
+            el.textContent = site.percent ? `${Number((clamped * 100).toPrecision(6))}%` : String(clamped);
+            litBar.hidden = false;
+            litMsg.textContent = 'Previewing scrubbed literal values';
+            const seq = ++scrubSeq;
+            void litHook.rerun({ ...litVals }, false).then((next) => {
+              if (seq === scrubSeq && next) show(next, false);
+            });
+          };
+          const finish = () => {
+            el.removeEventListener('pointermove', onMove);
+            el.removeEventListener('pointerup', finish);
+            el.removeEventListener('pointercancel', finish);
+            el.removeEventListener('lostpointercapture', finish);
+            activeDrags.delete(finish);
+            const seq = ++scrubSeq;
+            void litHook.rerun({ ...litVals }, true).then((next) => {
+              if (seq === scrubSeq && next) show(next, true);
+            });
+          };
+          activeDrags.add(finish);
+          el.addEventListener('pointermove', onMove);
+          el.addEventListener('pointerup', finish);
+          el.addEventListener('pointercancel', finish);
+          el.addEventListener('lostpointercapture', finish);
+        });
+      }
+      clearLiteralPreview = () => {
+        if (Object.keys(litVals).length === 0) return;
+        for (const k of Object.keys(litVals)) delete litVals[k];
+        for (const site of litHook.sites) {
+          const el = siteEls.get(site.id);
+          if (el) el.textContent = site.percent ? `${Number((site.value * 100).toPrecision(6))}%` : String(site.value);
+        }
+        litBar.hidden = true;
+      };
+      litReset.addEventListener('click', () => {
+        scrubSeq++;
+        clearLiteralPreview();
+        show(first, true);
+      });
+      litApply?.addEventListener('click', () => {
+        litApply.disabled = true;
+        void litHook.apply!({ ...litVals }).then(
+          () => {
+            litBar.hidden = true;
+            litApply.disabled = false;
+          },
+          (e: unknown) => {
+            litApply.disabled = false;
+            litMsg.textContent = `Cannot write values: ${e instanceof Error ? e.message : String(e)}`;
+          },
+        );
+      });
     }
 
-    const notes = h(body, 'div', 'bt-notes');
-    const said = verdictView(body);
+    const notes = h(standaloneWrap, 'div', 'bt-notes');
+    // Phase 1: Differential parent-vs-child attribution banner when `extends:` is active.
+    const diffHost = h(standaloneWrap, 'div', 'bt-diff-host');
+    // Phase 3: Always-on Adversarial Stress Breaking-Point Gauge & 4-axis isolation pills.
+    const stressHost = h(standaloneWrap, 'div', 'bt-stress-host');
+
+    const isV2 = (view.cardLayout ?? 'v2') === 'v2';
+    // In v2 Stress-first layout, scalar Buy & Hold scorecard moves inside a secondary expandable drawer (Kill List #1).
+    let scalarParent: HTMLElement = standaloneWrap;
+    if (isV2) {
+      const drawer = h(standaloneWrap, 'details', 'bt-classic-drawer');
+      h(drawer, 'summary', 'bt-classic-summary', 'Figures vs. buy and hold');
+      scalarParent = h(drawer, 'div', 'bt-classic-body');
+    }
+    const said = verdictView(scalarParent);
     // A figure's row lights up the part of the chart it comes from.
     let lit: (part: string | null) => void = () => {};
-    const figs = versusView(body, { more: view.initial?.more ?? false, link: (part) => lit(part) });
-    const figuresNote = h(body, 'div', 'bt-figures-note');
-    const chart = renderValueChart(body, { span: view.initial?.span ?? 0 });
+    const figs = versusView(scalarParent, { more: view.initial?.more ?? false, link: (part) => lit(part) });
+    const figuresNote = h(scalarParent, 'div', 'bt-figures-note');
+    const chart = renderValueChart(standaloneWrap, { span: view.initial?.span ?? 0 });
     lit = (part) => chart.highlight(part);
+    forceChartRedraw = () => chart.show(onScreen.backtest, { ghost: onScreen === first ? null : first.backtest });
     cleanups.push(chart.stop);
+    if (view.diff) renderStrategyDiff(diffHost, view.diff, (times) => chart.highlightTimes(times));
+    if (view.lifecycle?.tape) chart.setRealityTape(view.lifecycle.tape);
+
+    // Move the classic drawer below the Stress Fan chart in v2 mode so the Fragility Field owns the top!
+    if (isV2 && scalarParent.parentElement) standaloneWrap.appendChild(scalarParent.parentElement);
+
     // What waits for a drag to end: the trades and the tabs, blurred while the result above them follows the drag.
-    const restWrap = h(body, 'div', 'bt-rest-wrap');
+    const restWrap = h(standaloneWrap, 'div', 'bt-rest-wrap');
     const rest = h(restWrap, 'div', 'bt-rest');
     const staleNote = h(restWrap, 'div', 'bt-stale-note', 'Let go to update the trades and the tabs');
     staleNote.setAttribute('aria-hidden', 'true');
     current = () => ({ tab: tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null), span: chart.span(), more: figs.more() });
+
+    let ambientToken = 0;
+    const refreshAmbient = (out: RunOutput) => {
+      const mine = ++ambientToken;
+      if (view.stress) {
+        void view.stress(out)?.then(
+          (report) => {
+            if (mine !== ambientToken || !report || !root.isConnected) return;
+            stressHost.replaceChildren();
+            renderStressPanel(stressHost, report, (axis) => chart.setStress(report, axis));
+            chart.setStress(report, 'all');
+          },
+          () => {},
+        );
+      }
+      if (view.ablation) {
+        void view.ablation(out)?.then(
+          (report) => {
+            if (mine !== ambientToken || !report || !root.isConnected || report.clauses.length === 0) return;
+            const drawAblation = () => {
+              ablationHost.replaceChildren();
+              renderAblationStrip(ablationHost, report, {
+                muted: mutedClauses,
+                open: ablationOpen,
+                onOpenChange: (open) => {
+                  ablationOpen = open;
+                },
+                onHoverTimes: (times) => chart.highlightTimes(times),
+                onToggleMute: (id) => {
+                  if (mutedClauses.has(id)) mutedClauses.delete(id);
+                  else mutedClauses.add(id);
+                  clearLiteralPreview();
+                  drawAblation();
+                  if (view.onMuteClauses) {
+                    void view.onMuteClauses(new Set(mutedClauses)).then((next) => {
+                      if (next) paintAll(next, showHead(next), false, false);
+                    });
+                  }
+                },
+                ...(view.onCommitMuted ? { onCommitRemove: () => void view.onCommitMuted!(new Set(mutedClauses)) } : {}),
+              });
+            };
+            drawAblation();
+          },
+          () => {},
+        );
+      }
+    };
 
     // The run as written stays on the chart as a dashed line while a slider shows other values, and each figure says how
     // far it moved from it. While a drag goes on the sentence waits, so its length does not move what is under it.
@@ -964,7 +1209,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     };
     cleanups.push(stopRest);
 
-    const paintAll = (out: RunOutput, triggers: Promise<TriggerReport | null> | null, arrive = false) => {
+    const paintAll = (out: RunOutput, triggers: Promise<TriggerReport | null> | null, arrive = false, runAmbient = true) => {
       notes.replaceChildren();
       for (const text of notesOf(view, out)) h(notes, 'div', 'bt-warning', text);
       paint(out, arrive);
@@ -983,6 +1228,8 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       stops = [...fillRest(rest, out, view.sections?.(out) ?? [], view.nextStep?.(out) ?? null), ...(watching ? [watching] : [])];
       const again = sectionsIn(rest.querySelector('.bt-sections')).find((d) => tabName(d) === open);
       if (again) again.open = true;
+      redrawBook();
+      if (runAmbient) refreshAmbient(out);
     };
     // Between two frames of a drag only what is at the top is worth redrawing; the rest says it is out of date.
     show = (out, settled) => {

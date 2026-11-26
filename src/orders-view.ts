@@ -1,6 +1,8 @@
 import { ItemView, Modal, Notice, setIcon, type App, type WorkspaceLeaf } from 'obsidian';
 import { h, motionOK, reveal, revealBox, s } from './dom.ts';
+import type { LedgerEventSide } from './fill-ledger.ts';
 import { shortMessage } from './fixes.ts';
+import type { KillSwitchReport } from './killswitch.ts';
 import { awayText } from './render-now.ts';
 import { fullStop, price, shareCount, signedPct } from './format.ts';
 import {
@@ -62,6 +64,10 @@ export interface OrdersHost {
   newNote(): void;
   /** Opens the list in a pane of the right sidebar. */
   openPane(): void;
+  /** Evaluates pre-committed `invalidate when` kill-switches across deployed strategies. */
+  killSwitches?(): Promise<{ note: string; strategy: string; line?: number; report: KillSwitchReport }[]>;
+  /** Appends a 1-click confirmed fill to `fills.jsonl` and refreshes derived holdings. */
+  confirmFill?(fill: { account: string; ticker: string; side: LedgerEventSide; quantity: number; price: number; fees: number }): Promise<void>;
 }
 
 export class OrdersModal extends Modal {
@@ -228,6 +234,20 @@ export class OrdersPanel {
     }
     const todo = todoRows(list);
     this.header(root, list, accounts, scan.at);
+    const ksHost = h(root, 'div', 'bt-orders-ks-host');
+    if (this.host.killSwitches) {
+      void this.host.killSwitches().then((alerts) => {
+        const active = alerts.filter((a) => a.report.status !== 'healthy');
+        if (active.length === 0) return;
+        const sec = this.group(ksHost, 'Thesis Kill-Switches', `${active.length} ${active.length === 1 ? 'alert' : 'alerts'}`);
+        for (const a of active) {
+          const item = h(sec, 'div', `bt-ks bt-ks-${a.report.status}`);
+          h(item, 'span', 'bt-ks-badge', a.report.status === 'halted' ? 'Stopped — stop rule tripped' : 'Near stop rule');
+          this.link(item, { note: a.note, strategy: a.strategy, line: a.line });
+          if (a.report.trippedClauses.length) h(item, 'span', 'bt-ks-detail', a.report.trippedClauses.join(' · '));
+        }
+      }, () => {});
+    }
     this.todo(root, todo);
     this.accounts(root, accounts);
     const watching = this.watch(root, list);
@@ -375,6 +395,26 @@ export class OrdersPanel {
         const px = h(row, 'div', 'bt-orders-px');
         h(px, 'span', undefined, `last ${price(o.price)}`);
         h(px, 'small', undefined, `held ${shareCount(o.holding)}`);
+        if (this.host.confirmFill) {
+          const cfBtn = h(row, 'button', 'bt-chip-button bt-orders-confirm', 'Confirm fill');
+          cfBtn.type = 'button';
+          cfBtn.addEventListener('click', () => {
+            cfBtn.disabled = true;
+            const side: LedgerEventSide = badge.style === 'short' ? 'short' : badge.style === 'cover' ? 'cover' : o.shares >= 0 ? 'buy' : 'sell';
+            void this.host
+              .confirmFill!({ account: a.name, ticker: o.ticker, side, quantity: Math.abs(o.shares), price: o.price, fees: 0 })
+              .then(
+                () => {
+                  new Notice(`Logged ${side} ${shareCount(Math.abs(o.shares))} ${o.ticker} @ ${price(o.price)} to fills.jsonl`);
+                  void this.load(false);
+                },
+                (e: unknown) => {
+                  cfBtn.disabled = false;
+                  new Notice(`Cannot log fill: ${e instanceof Error ? e.message : String(e)}`);
+                },
+              );
+          });
+        }
       }
     }
   }

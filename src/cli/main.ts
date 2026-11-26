@@ -1,8 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { extractBlocks } from '../blocks.ts';
+import { runAblation } from '../ablation.ts';
+import { extractBlocks, fencedBlocks } from '../blocks.ts';
+import { hasDagRefs, resolveStrategyDag, type VaultReader } from '../dag.ts';
 import { ALL_DOCS, docFor, type Doc } from '../docs.ts';
 import { parseSpec, type Diagnostic } from '../dsl.ts';
 import { applyFix, suggestions, type Fix } from '../fixes.ts';
@@ -12,6 +14,7 @@ import { replaceBlockInNote } from '../rewrite.ts';
 import { Runner, type RunOutput } from '../runner.ts';
 import { HOUR } from '../format.ts';
 import { DEFAULT_SETTINGS, defaultsFrom, normalizeSettings, type Settings } from '../settings-core.ts';
+import { runStress } from '../stress.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
@@ -252,14 +255,35 @@ async function check(files: string[], o: { json: boolean; fix: boolean }, io: Io
         unwritten++;
       }
     }
-    const found = checkSource(text, file);
-    // A note with no block to check is a mistake too: the fence may be misspelt.
-    if (found.blocks === 0) {
+    const foundBlocks = blocksIn(text, isNote(file));
+    const hasSharedBlocks =
+      isNote(file) &&
+      (['signal', 'regime', 'universe'] as const).some((lang) => fencedBlocks(text, lang).length > 0);
+    if (foundBlocks.length === 0 && !hasSharedBlocks) {
       io.err(`${file}: ${noBlock(file)}`);
       empty++;
+      continue;
     }
-    blocks += found.blocks;
-    problems.push(...found.problems);
+    blocks += foundBlocks.length;
+    const noteDir = file === '-' ? io.cwd : dirname(resolve(io.cwd, file));
+    const vault = vaultAbove(noteDir) ?? noteDir;
+    for (const b of foundBlocks) {
+      if (file !== '-' && hasDagRefs(b.source)) {
+        const relNote = isNote(file) ? relative(vault, resolve(io.cwd, file)).replace(/\\/g, '/') : file;
+        const dag = await resolveStrategyDag(b.source, relNote, fsVaultReader(vault));
+        if (dag.errors.length > 0) {
+          for (const d of dag.errors) {
+            problems.push({ file, block: b.name, line: b.start + d.line, column: null, severity: 'error', message: d.message, fixes: [] });
+          }
+          continue;
+        }
+        const { errors: mergedErrs, warnings: mergedWarns } = parseSpec(dag.mergedSource);
+        for (const d of mergedErrs) problems.push({ file, block: b.name, line: b.start + d.line, column: null, severity: 'error', message: d.message, fixes: [] });
+        for (const d of mergedWarns) problems.push({ file, block: b.name, line: b.start + d.line, column: null, severity: 'warning', message: d.message, fixes: [] });
+      } else {
+        problems.push(...problemsOf(file, text, b));
+      }
+    }
   }
   const errors = problems.filter((p) => p.severity === 'error').length;
   if (o.json) {
@@ -323,15 +347,79 @@ export function pickBlock(text: string, file: string, block: string | undefined,
 /** Why a block was not run: which block to run is unclear (2), or it has errors, each at its line in the note (1). */
 export type NotRun = { code: 1 | 2; message: string };
 
+/** Lightweight filesystem VaultReader for resolving `extends:` and `[[Signal]]` links in CLI/MCP outside Obsidian. */
+function fsVaultReader(vaultRoot: string): VaultReader {
+  let index: Map<string, string> | null = null;
+  const build = (): Map<string, string> => {
+    const map = new Map<string, string>();
+    const walkDir = (dir: string) => {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (e.name.startsWith('.')) continue;
+        const full = join(dir, e.name);
+        if (e.isDirectory()) walkDir(full);
+        else if (/\.md$/i.test(e.name)) {
+          const rel = relative(vaultRoot, full).replace(/\\/g, '/');
+          const noExt = rel.replace(/\.md$/i, '');
+          const base = noExt.split('/').pop()!;
+          map.set(rel.toLowerCase(), rel);
+          map.set(noExt.toLowerCase(), rel);
+          if (!map.has(base.toLowerCase())) map.set(base.toLowerCase(), rel);
+        }
+      }
+    };
+    walkDir(vaultRoot);
+    return map;
+  };
+  return {
+    resolve(link) {
+      index ??= build();
+      const key = link.replace(/\.md$/i, '').replace(/\\/g, '/').toLowerCase();
+      return index.get(key) ?? index.get(`${key}.md`) ?? null;
+    },
+    async read(path) {
+      try {
+        return await readFile(join(vaultRoot, path), 'utf8');
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 /** Runs one block of a note, or a bare block, with the plugin settings `settings`. Shared by `run` and the MCP tool. */
-export async function runNote(text: string, file: string, block: string | undefined, deps: DataDeps, refresh: boolean, settings: Settings, how = '--block'): Promise<{ out: RunOutput } | NotRun> {
+export async function runNote(
+  text: string,
+  file: string,
+  block: string | undefined,
+  deps: DataDeps,
+  refresh: boolean,
+  settings: Settings,
+  how = '--block',
+  vaultRoot?: string,
+): Promise<{ out: RunOutput; source: string } | NotRun> {
   const picked = pickBlock(text, file, block, how);
   if ('error' in picked) return { code: 2, message: picked.error };
-  const errors = problemsOf(file, text, picked.block).filter((p) => p.severity === 'error');
-  if (errors.length > 0) return { code: 1, message: `The block has errors. It did not run:\n${errors.map(problemLine).join('\n')}` };
+  let source = picked.block.source;
+  if (hasDagRefs(source) && vaultRoot) {
+    const relNote = file === '-' || !isNote(file) ? file : relative(vaultRoot, resolve(file)).replace(/\\/g, '/');
+    const dag = await resolveStrategyDag(source, relNote, fsVaultReader(vaultRoot));
+    if (dag.errors.length > 0) return { code: 1, message: dag.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n') };
+    source = dag.mergedSource;
+  } else {
+    const errors = problemsOf(file, text, picked.block).filter((p) => p.severity === 'error');
+    if (errors.length > 0) return { code: 1, message: `The block has errors. It did not run:\n${errors.map(problemLine).join('\n')}` };
+  }
   const runner = new Runner(deps, defaultsFrom(settings), { freshForMs: settings.cacheHours * HOUR });
+  const parsed = runner.parse(source);
+  if (!parsed.spec) return { code: 1, message: parsed.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n') };
   try {
-    return { out: await runner.run(runner.parse(picked.block.source).spec!, refresh) };
+    return { out: await runner.run(parsed.spec, refresh), source };
   } catch (e) {
     return { code: 1, message: `The backtest did not run: ${e instanceof Error ? e.message : e}` };
   }
@@ -365,12 +453,39 @@ async function run(file: string | undefined, o: { block?: string; vault?: string
     env: io.env,
     fetch: io.fetch,
   });
-  const result = await runNote(text, file, o.block, deps, o.refresh, saved?.settings ?? DEFAULT_SETTINGS);
+  const result = await runNote(text, file, o.block, deps, o.refresh, saved?.settings ?? DEFAULT_SETTINGS, '--block', vault);
   if ('code' in result) {
     io.err(result.message);
     return result.code;
   }
-  io.out(o.json ? JSON.stringify(runSummary(result.out), null, 2) : runText(result.out));
+  if (o.json) {
+    const defaults = defaultsFrom(saved?.settings ?? DEFAULT_SETTINGS);
+    const stress = runStress(result.source, result.out.spec, result.out.data, result.out.backtest, defaults);
+    const ablation = runAblation(result.out.spec, result.out.data, result.out.backtest, result.source);
+    io.out(
+      JSON.stringify(
+        {
+          ...runSummary(result.out),
+          stress: {
+            ...stress.breakingPoints,
+            breakevenBps: Number.isFinite(stress.breakingPoints.breakevenBps) ? stress.breakingPoints.breakevenBps : null,
+            breakevenCapped: !Number.isFinite(stress.breakingPoints.breakevenBps),
+          },
+          ablation: ablation.clauses.map((c) => ({
+            id: c.id,
+            label: c.label,
+            verdict: c.verdict,
+            deltaSharpe: c.deltaSharpe,
+            deltaMaxDD: c.deltaMaxDD,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    io.out(runText(result.out));
+  }
   return 0;
 }
 

@@ -31,6 +31,10 @@ export interface Settings {
   snapshotFolder: string;
   /** How a result first appears: everything, or one line that opens on a click. */
   resultView: 'full' | 'compact';
+  /** v2 stress-first result card or classic scorecard layout. */
+  cardLayout: 'v2' | 'classic';
+  /** Vault path of the note holding the active `account` book for ambient "+ In My Book" analysis; empty for auto-detect. */
+  activeBook: string;
   /** Work out today's orders when Obsidian starts and show the count in the status bar. */
   ordersOnStartup: boolean;
   /** Look tickers up at Yahoo and Binance while a strategy is being written. */
@@ -64,6 +68,8 @@ export const DEFAULT_SETTINGS: Settings = {
   ordersNote: '',
   snapshotFolder: 'Backtests',
   resultView: 'full',
+  cardLayout: 'v2',
+  activeBook: '',
   ordersOnStartup: true,
   tickerLookup: true,
   llmProvider: 'anthropic',
@@ -164,7 +170,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export function normalizeSettings(saved: unknown): Settings {
   const given = isObject(saved) ? saved : {};
   const d = DEFAULT_SETTINGS;
-  const text = (key: 'ordersNote' | 'llmBaseUrl' | 'llmModel' | 'llmSecret' | 'tiingoSecret' | 'fredSecret'): string => (typeof given[key] === 'string' ? given[key].trim() : d[key]);
+  const text = (key: 'ordersNote' | 'activeBook' | 'llmBaseUrl' | 'llmModel' | 'llmSecret' | 'tiingoSecret' | 'fredSecret'): string => (typeof given[key] === 'string' ? given[key].trim() : d[key]);
   const readable = (key: TextKey): string => (typeof given[key] === 'string' && validateSetting(key, given[key]) === null ? given[key].trim() : d[key]);
   const hours = given.cacheHours;
   const folder = typeof given.snapshotFolder === 'string' ? given.snapshotFolder.trim() : '';
@@ -185,6 +191,8 @@ export function normalizeSettings(saved: unknown): Settings {
     ordersNote: text('ordersNote'),
     snapshotFolder: folder || d.snapshotFolder,
     resultView: given.resultView === 'full' || given.resultView === 'compact' ? given.resultView : d.resultView,
+    cardLayout: given.cardLayout === 'v2' || given.cardLayout === 'classic' ? given.cardLayout : d.cardLayout,
+    activeBook: text('activeBook'),
     ordersOnStartup: typeof given.ordersOnStartup === 'boolean' ? given.ordersOnStartup : d.ordersOnStartup,
     tickerLookup: typeof given.tickerLookup === 'boolean' ? given.tickerLookup : d.tickerLookup,
     llmProvider: given.llmProvider === 'anthropic' || given.llmProvider === 'openai' ? given.llmProvider : d.llmProvider,

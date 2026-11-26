@@ -1,13 +1,17 @@
 import type { EditorView } from '@codemirror/view';
 import { MarkdownRenderChild, MarkdownView, Menu, Notice, Platform, Plugin, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownFileInfo, type MarkdownPostProcessorContext } from 'obsidian';
-import { runAccount } from './account.ts';
+import type { AblationReport } from './ablation.ts';
+import { allocations, parseAccount, runAccount } from './account.ts';
 import { blockAt, extractBlocks, hasStrategyBlock, targetBlock, type Block } from './blocks.ts';
+import { buildBookSnapshot, type ActiveBookSnapshot } from './book.ts';
 import { compareCurves, parseCompare, type CompareHost } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
+import { DagIndex, dagNodeKey, hasDagRefs, parseSignalBlock, parseUniverseBlock, resolveStrategyDag, type DagBlockKind, type VaultReader } from './dag.ts';
 import { DASHBOARD_TEMPLATE, NOTES_PER_PAUSE, findStrategies as findInNotes, mayHoldStrategy, type FoundStrategy } from './dashboard.ts';
 import { withoutQueries, type PriceFailure } from './data.ts';
 import { runStep } from './diagnostics.ts';
-import { StrategySuggest, applyFixAtCursor, applyParamAtCursor, strategyEditor } from './editor.ts';
+import { StrategySuggest, applyFixAtCursor, applyParamAtCursor, setAblationResults, strategyEditor, toggleMuteAtCursor } from './editor.ts';
+import { createConfirmFillEvent, parseLedgerJsonl, projectAccountState, serializeLedgerEvent, type LedgerEvent } from './fill-ledger.ts';
 import { hoverValue, type HoverValue } from './debug.ts';
 import { parseSpec, type Spec } from './dsl.ts';
 import type { Bars } from './types.ts';
@@ -15,7 +19,9 @@ import { applyFix, suggestion } from './fixes.ts';
 import { HOUR, isoDate, plural } from './format.ts';
 import { forwardLink, isForwardNote, makeForward, writeLog, type ForwardStart } from './forward.ts';
 import { GalleryModal } from './gallery-modal.ts';
+import { evaluateKillSwitch, killSwitchContext, type KillSwitchReport } from './killswitch.ts';
 import { Ledgers, mergeLedgers, parseLedger, type Ledger } from './ledger.ts';
+import { buildDeploymentCommit, computeRealityTape, liveSinceLine, type DeploymentCommit } from './lifecycle.ts';
 import { DEFAULT_MODEL, draftStrategy } from './llm.ts';
 import { DraftModal } from './llm-modal.ts';
 import { drawHeld, viewText } from './live-core.ts';
@@ -26,6 +32,7 @@ import { OrdersModal, OrdersView, VIEW_TYPE_ORDERS, openOrdersPane, type OrdersH
 import { PriceStore } from './price-store.ts';
 import { renderAccount, type AccountHost } from './render-account.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
+import { renderDagBlock, type BlastRadiusRow } from './render-dag.ts';
 import { renderDashboard, type DashboardHost } from './render-dashboard.ts';
 import { renderForward, type ForwardHost } from './render-forward.ts';
 import { blockKeyPrefix, blockNameKeyPrefix, blockNameKeySuffix, blockStateKey, keyNote, type OldRecord } from './render.ts';
@@ -159,7 +166,21 @@ export default class BacktestBlocks extends Plugin {
       menu.showAtPosition({ x: box.right, y: box.bottom + 4, left: true }, at.ownerDocument);
     },
     oldRecord: (notePath, key, name, text) => this.oldRecord(notePath, key, name, text),
+    resolveDag: (source, notePath) => this.resolveDag(source, notePath),
+    onAblation: (_notePath, source, report) => this.publishAblation(source, report),
+    activeBook: () => this.activeBookSnapshot(),
+    lifecycle: (blockKey, source, out) => this.lifecycleFor(blockKey, source, out),
+    deployStrategy: (notePath, blockKey, source, out, restore) => this.deployStrategy(notePath, blockKey, source, out, restore),
   });
+  /** Reverse-dependency index for `extends:` / `signal` / `regime` / `universe` DAG blocks. */
+  private dagIndex = new DagIndex();
+  /** Latest X-Ray ablation results keyed by trimmed strategy source, synced into open CodeMirror editors. */
+  private ablationCache = new Map<string, AblationReport>();
+  /** Cached Active Book snapshot for ambient "+ In My Book" evaluation (invalidated on fill or settings change). */
+  private cachedBook: { at: number; snapshot: ActiveBookSnapshot | null } | null = null;
+  private bookInFlight: Promise<ActiveBookSnapshot | null> | null = null;
+  /** Serializes append-only `fills.jsonl` writes so rapid 1-click Confirm Fill actions never race. */
+  private fillWriteQueue: Promise<void> = Promise.resolve();
   /** When the plugin loaded: a block's record that began since then was made in this session. */
   private loadedAt = Date.now();
   /** The scan of the vault for today's orders, with each result's trigger prices worked out before its runs close. */
@@ -173,6 +194,12 @@ export default class BacktestBlocks extends Plugin {
   private accountScan: AccountScanHost = {
     find: () => this.findStrategies('account'),
     strategies: (note) => ({ ...this.compareHost(note), run: (source) => this.results.runSource(source, { background: true }) }),
+    project: async (accountName, config) => {
+      const events = await this.readFillEvents();
+      if (events.length === 0) return config;
+      const projected = projectAccountState(events, accountName, { holdings: config.holdings, cash: config.cash });
+      return projected.eventCount > 0 ? { ...config, holdings: projected.holdings, cash: projected.cash } : config;
+    },
   };
   /** The one scan of the vault for today's orders at a time, for the status bar, the orders window and the pane. */
   private scans = new SharedScan((force, onProgress) => scanOrders(this.orders, force, onProgress));
@@ -210,6 +237,14 @@ export default class BacktestBlocks extends Plugin {
       ctx.addChild(child);
       child.register(renderForward(el, source, this.forwardHost(el, ctx)));
     });
+    for (const dagKind of ['signal', 'regime', 'universe'] as const) {
+      this.registerMarkdownCodeBlockProcessor(dagKind, (source, el, ctx) => {
+        const child = new MarkdownRenderChild(el);
+        ctx.addChild(child);
+        const parsedName = dagKind === 'universe' ? parseUniverseBlock(source).name : parseSignalBlock(source, dagKind).name;
+        child.register(renderDagBlock(el, dagKind, source, this.dagBlockHost(dagKind, ctx.sourcePath, parsedName)));
+      });
+    }
     this.registerView(VIEW_TYPE_LIVE, (leaf) => new LiveView(leaf, this.liveHost()));
     this.registerView(VIEW_TYPE_ORDERS, (leaf) => new OrdersView(leaf, this.ordersHost()));
     this.registerEditorExtension(liveEditorExtension(pokeLiveViews));
@@ -291,6 +326,14 @@ export default class BacktestBlocks extends Plugin {
         if (!view || !applyParamAtCursor(view)) new Notice('There is no number at the cursor that can be a parameter.');
       },
     });
+    this.addCommand({
+      id: 'toggle-mute-clause',
+      name: 'Toggle mute on the clause at the cursor',
+      editorCallback: (editor) => {
+        const view = (editor as unknown as { cm?: EditorView }).cm;
+        if (!view || !toggleMuteAtCursor(view)) new Notice('Place the cursor inside a strategy block to mute or unmute a clause.');
+      },
+    });
     this.addCommand({ id: 'open-live', name: 'Open strategy preview', callback: () => void openLivePanel(this.app) });
     this.addCommand({
       id: 'insert-dashboard',
@@ -366,6 +409,7 @@ export default class BacktestBlocks extends Plugin {
     await this.saveData(this.settings);
     // Defaults are part of every result's key, but the freshness window is not.
     this.results.reset(this.settings.cacheHours * HOUR);
+    this.cachedBook = null;
     this.prices.ready.changed();
     // Blocks already on screen keep the defaults they were drawn with and say so; this runs once typing in a setting has paused.
     this.blocks.checkDefaults();
@@ -836,7 +880,275 @@ export default class BacktestBlocks extends Plugin {
       },
       newNote: () => this.newStrategyNote(),
       openPane: () => void openOrdersPane(this.app),
+      killSwitches: () => this.evaluateVaultKillSwitches(),
+      confirmFill: (fill) => this.confirmFill(fill),
     };
+  }
+
+  /** Vault reader for Phase 1 DAG resolution (`extends:`, `universe: [[...]]`, `[[Signal]]`). */
+  private vaultReader(): VaultReader {
+    return {
+      resolve: (link, fromPath) => this.app.metadataCache.getFirstLinkpathDest(link, fromPath)?.path ?? null,
+      read: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? this.app.vault.cachedRead(file) : null;
+      },
+    };
+  }
+
+  private async resolveDag(source: string, notePath: string) {
+    const resolved = await resolveStrategyDag(source, notePath, this.vaultReader());
+    const nameMatch = source.match(/^\s*name\s*:\s*(.+)$/im);
+    const selfKey = dagNodeKey(notePath, nameMatch ? nameMatch[1].trim() : null, 'strategy');
+    this.dagIndex.record(selfKey, resolved.dependencies);
+    return resolved;
+  }
+
+  /** Host for `signal`, `regime`, and `universe` blocks showing every direct and transitive dependent strategy in the vault. */
+  private dagBlockHost(kind: Exclude<DagBlockKind, 'strategy'>, notePath: string, blockName: string | null) {
+    const exactKey = dagNodeKey(notePath, blockName, kind);
+    return {
+      dependents: async (): Promise<BlastRadiusRow[]> => {
+        const strategies = await this.findStrategies('strategy');
+        const rows: BlastRadiusRow[] = [];
+        for (const s of strategies) {
+          // Include every strategy that uses DAG links so transitive dependents (`Child -> Parent -> Signal`) are found too.
+          if (!hasDagRefs(s.source)) continue;
+          const dag = await this.resolveDag(s.source, s.note);
+          const linksHere = dag.dependencies.includes(exactKey);
+          if (!linksHere) continue;
+          rows.push({
+            note: s.note,
+            strategy: s.name ?? s.note.replace(/\.md$/i, ''),
+            deltaSharpe: null,
+            deltaMaxDD: null,
+            status: dag.errors.length > 0 ? dag.errors[0].message : 'Linked',
+          });
+        }
+        return rows;
+      },
+      openNote: (note: string) => void this.app.workspace.openLinkText(note, notePath, false),
+    };
+  }
+
+  /** Broadcasts fresh X-Ray clause ablation pills into every open Markdown CodeMirror view. */
+  private publishAblation(source: string, report: AblationReport): void {
+    this.ablationCache.set(source.trim(), report);
+    if (this.ablationCache.size > 120) {
+      const oldest = this.ablationCache.keys().next().value;
+      if (oldest !== undefined) this.ablationCache.delete(oldest);
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view;
+      if (!(view instanceof MarkdownView)) continue;
+      const cm = (view.editor as unknown as { cm?: EditorView }).cm;
+      cm?.dispatch({ effects: setAblationResults.of(this.ablationCache) });
+    }
+  }
+
+  /** Vault-synced ledger folder (`<snapshotFolder>/_ledger`) storing commits and `fills.jsonl`. */
+  private ledgerDir(): string {
+    return normalizePath(`${this.settings.snapshotFolder}/_ledger`);
+  }
+
+  private async ensureFolder(path: string): Promise<void> {
+    const parts = normalizePath(path).split('/').filter(Boolean);
+    let cur = '';
+    for (const part of parts) {
+      cur = cur ? `${cur}/${part}` : part;
+      if (!(await this.app.vault.adapter.exists(cur))) {
+        try {
+          await this.app.vault.createFolder(cur);
+        } catch {
+          // Concurrent createFolder calls may race; ignore if it already exists.
+        }
+      }
+    }
+  }
+
+  private async readFillEvents(): Promise<LedgerEvent[]> {
+    const path = normalizePath(`${this.ledgerDir()}/fills.jsonl`);
+    if (!(await this.app.vault.adapter.exists(path))) return [];
+    try {
+      return parseLedgerJsonl(await this.app.vault.adapter.read(path));
+    } catch {
+      return [];
+    }
+  }
+
+  private appendFillEvent(event: LedgerEvent): Promise<void> {
+    const run = this.fillWriteQueue.then(async () => {
+      const dir = this.ledgerDir();
+      await this.ensureFolder(dir);
+      const path = normalizePath(`${dir}/fills.jsonl`);
+      const existing = (await this.app.vault.adapter.exists(path)) ? await this.app.vault.adapter.read(path) : '';
+      const line = serializeLedgerEvent(event);
+      const next = existing.trimEnd() ? `${existing.trimEnd()}\n${line}\n` : `${line}\n`;
+      await this.app.vault.adapter.write(path, next);
+      this.cachedBook = null;
+      this.bookInFlight = null;
+    });
+    this.fillWriteQueue = run.catch(() => {});
+    return run;
+  }
+
+  private async confirmFill(fill: { account: string; ticker: string; side: 'buy' | 'sell' | 'short' | 'cover'; quantity: number; price: number; fees: number }): Promise<void> {
+    const ev = createConfirmFillEvent(fill);
+    await this.appendFillEvent(ev);
+  }
+
+  private async loadCommit(commitHash: string): Promise<DeploymentCommit | null> {
+    const path = normalizePath(`${this.ledgerDir()}/commits/${commitHash}.json`);
+    if (!(await this.app.vault.adapter.exists(path))) return null;
+    try {
+      return JSON.parse(await this.app.vault.adapter.read(path)) as DeploymentCommit;
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveCommit(commit: DeploymentCommit): Promise<void> {
+    const dir = normalizePath(`${this.ledgerDir()}/commits`);
+    await this.ensureFolder(dir);
+    const path = normalizePath(`${dir}/${commit.commitHash}.json`);
+    await this.app.vault.adapter.write(path, JSON.stringify(commit, null, 2));
+  }
+
+  /** Evaluates Deployment Commit, 3-Track Reality Tape, and Kill-Switch for a strategy block. */
+  private async lifecycleFor(blockKey: string, source: string, out: RunOutput) {
+    const pin = out.spec.liveSince;
+    let commit: DeploymentCommit | null = null;
+    if (pin?.commit) commit = await this.loadCommit(pin.commit);
+    if (!commit) {
+      return { commit: null, tape: null, killSwitch: null, hasDraftChanges: false };
+    }
+    const events = await this.readFillEvents();
+    const book = await this.activeBookSnapshot().catch(() => null);
+    const tape = computeRealityTape(commit, out.backtest, events, book?.name);
+    const killSwitch = tape && out.spec.invalidate ? evaluateKillSwitch(out.spec.invalidate, killSwitchContext(commit, tape.shortfall)) : null;
+    const stripLive = (s: string) => s.replace(/^\s*live\s+since\s*:.*$/gim, '').trim();
+    const hasDraftChanges = stripLive(source) !== stripLive(commit.frozenSource);
+    return { commit, tape, killSwitch, hasDraftChanges };
+  }
+
+  /** Freezes the current strategy as an immutable DeploymentCommit and writes `live since: YYYY-MM-DD @hash` in-place. */
+  private async deployStrategy(notePath: string, blockKey: string, source: string, out: RunOutput, restore?: (text: string) => Promise<void>): Promise<void> {
+    try {
+      const prevHash = out.spec.liveSince?.commit;
+      const prev = prevHash ? await this.loadCommit(prevHash) : null;
+      const version = prev ? prev.version + 1 : 1;
+      const commit = buildDeploymentCommit({
+        blockKey,
+        version,
+        source,
+        defaults: defaultsFrom(this.settings),
+        bt: out.backtest,
+      });
+      const value = liveSinceLine(commit);
+      // Write the note pin BEFORE persisting the commit file so a failed/stale note write never orphans a commit JSON.
+      if (restore) {
+        const hasLine = /^\s*live\s+since\s*:/im.test(source);
+        const next = hasLine ? source.replace(/^(\s*live\s+since\s*:).*$/im, `$1 ${value}`) : `${source.trimEnd()}\nlive since: ${value}`;
+        await restore(next);
+      } else {
+        const file = this.app.vault.getAbstractFileByPath(notePath);
+        if (file instanceof TFile) {
+          await this.app.vault.process(file, (note) => {
+            const found = extractBlocks(note).find((b) => b.source.trim() === source.trim());
+            if (!found) return note;
+            return setSettingInNote(note, found.line, found.source, 'strategy', 'live since', value) ?? note;
+          });
+        }
+      }
+      await this.saveCommit(commit);
+      new Notice(`Deployed Live v${version} (${value}) to ${this.ledgerDir()}/commits/${commit.commitHash}.json.`);
+    } catch (e) {
+      new Notice(`Cannot deploy strategy: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Builds or returns the cached Active Book snapshot from `settings.activeBook` or the first `account` block with `book: active`. */
+  private activeBookSnapshot(): Promise<ActiveBookSnapshot | null> {
+    if (this.cachedBook && Date.now() - this.cachedBook.at < 60_000) return Promise.resolve(this.cachedBook.snapshot);
+    if (this.bookInFlight) return this.bookInFlight;
+    const job = (async (): Promise<ActiveBookSnapshot | null> => {
+      const accounts = await this.findStrategies('account');
+      let picked: { note: string; name: string; source: string; parsed: ReturnType<typeof parseAccount> } | null = null;
+      const configured = this.settings.activeBook.trim()
+        ? normalizePath(this.settings.activeBook.trim()).replace(/\.md$/i, '').toLowerCase()
+        : '';
+      for (const a of accounts) {
+        const parsed = parseAccount(a.source);
+        if (parsed.entries.length === 0) continue;
+        const noteStem = a.note.replace(/\.md$/i, '').toLowerCase();
+        const noteBase = noteStem.split('/').pop() ?? noteStem;
+        if (configured && (noteStem === configured || noteBase === configured || (parsed.config.name ?? '').toLowerCase() === configured)) {
+          picked = { note: a.note, name: a.name, source: a.source, parsed };
+          break;
+        }
+        if (parsed.config.activeBook && !picked) {
+          picked = { note: a.note, name: a.name, source: a.source, parsed };
+        }
+      }
+      if (!picked) {
+        this.cachedBook = { at: Date.now(), snapshot: null };
+        return null;
+      }
+      try {
+        const host = { ...this.compareHost(picked.note), run: (s: string) => this.results.runSource(s, { background: true }) };
+        const runs = await runAccount(picked.parsed.entries, host);
+        const weights = allocations(picked.parsed.entries);
+        // Match `findStrategies('account')` naming (basename for unnamed blocks) so `fills.jsonl` events align cleanly.
+        const name = picked.parsed.config.name ?? picked.name;
+        const events = await this.readFillEvents();
+        const projected = projectAccountState(events, name, {
+          holdings: picked.parsed.config.holdings,
+          cash: picked.parsed.config.cash,
+        });
+        const snapshot = buildBookSnapshot(name, picked.note, runs, weights, projected.holdings, projected.cash, picked.parsed.config.capitalAtStart ?? this.settings.capital);
+        this.cachedBook = { at: Date.now(), snapshot };
+        return snapshot;
+      } catch {
+        this.cachedBook = { at: Date.now(), snapshot: null };
+        return null;
+      }
+    })();
+    this.bookInFlight = job;
+    return job.finally(() => {
+      if (this.bookInFlight === job) this.bookInFlight = null;
+    });
+  }
+
+  /** Evaluates `invalidate when` kill-switches across every deployed strategy in the vault for Today's Orders. */
+  private async evaluateVaultKillSwitches(): Promise<{ note: string; strategy: string; line?: number; report: KillSwitchReport }[]> {
+    const strategies = await this.findStrategies('strategy');
+    const results: { note: string; strategy: string; line?: number; report: KillSwitchReport }[] = [];
+    const events = await this.readFillEvents();
+    const book = await this.activeBookSnapshot().catch(() => null);
+    for (const s of strategies) {
+      if (!/^\s*live\s+since\s*:/im.test(s.source)) continue;
+      try {
+        let runSource = s.source;
+        if (hasDagRefs(s.source)) {
+          const dag = await this.resolveDag(s.source, s.note);
+          if (dag.errors.length > 0) continue;
+          runSource = dag.mergedSource;
+        }
+        if (!/^\s*invalidate\s+when\b/im.test(runSource)) continue;
+        const out = await this.results.runSource(runSource, { background: true });
+        const pin = out.spec.liveSince;
+        if (!pin?.commit || !out.spec.invalidate) continue;
+        const commit = await this.loadCommit(pin.commit);
+        if (!commit) continue;
+        const tape = computeRealityTape(commit, out.backtest, events, book?.name);
+        if (!tape) continue;
+        const report = evaluateKillSwitch(out.spec.invalidate, killSwitchContext(commit, tape.shortfall));
+        results.push({ note: s.note, strategy: s.name ?? out.spec.name ?? s.note, line: s.line, report });
+      } catch {
+        // Skip strategies that failed to run; Today's Orders already reports their error.
+      }
+    }
+    return results;
   }
 
   private offerToPanes(scan: Scan): void {

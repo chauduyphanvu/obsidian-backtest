@@ -1,0 +1,190 @@
+/* Phase 2: Inline X-Ray Clause Ablation (hairline collapsible footer inside rules well + CM6 pills) */
+
+.bt-ablation-host:empty {
+  display: none;
+}
+
+.bt-ablation {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.bt-ablation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  list-style: none;
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  user-select: none;
+}
+
+.bt-ablation-summary::-webkit-details-marker {
+  display: none;
+}
+
+.bt-ablation-title {
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+.bt-ablation-tally {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.bt-ablation-tag {
+  font-size: 11px;
+  font-weight: var(--font-medium);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.bt-ablation-tag-load-bearing {
+  background: color-mix(in srgb, var(--bt-good) 14%, transparent);
+  color: var(--bt-good);
+}
+
+.bt-ablation-tag-helpful {
+  background: color-mix(in srgb, var(--bt-strategy) 12%, transparent);
+  color: var(--bt-strategy-ink);
+}
+
+.bt-ablation-tag-neutral {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.bt-ablation-tag-destructive {
+  background: color-mix(in srgb, var(--bt-bad) 14%, transparent);
+  color: var(--bt-bad);
+}
+
+.bt-ablation-tag-muted {
+  background: var(--bt-warn-bg);
+  color: var(--bt-warn-ink);
+}
+
+.bt-ablation-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  transition: transform var(--bt-t-micro) var(--bt-ease);
+}
+
+.bt-ablation[open] .bt-ablation-chevron {
+  transform: rotate(90deg);
+}
+
+.bt-ablation-body {
+  margin-top: 8px;
+}
+
+.bt-ablation-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bt-ablation-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.bt-ablation-commit {
+  margin-left: auto;
+}
+
+.bt-ablation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bt-root .bt-clause {
+  appearance: none;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  width: 100%;
+  height: auto;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  transition: background-color var(--bt-t-micro) var(--bt-ease);
+}
+
+.bt-root .bt-clause:hover {
+  background: var(--background-modifier-hover);
+}
+
+.bt-root .bt-clause.is-muted {
+  opacity: 0.55;
+}
+
+.bt-root .bt-clause.is-muted .bt-clause-label {
+  text-decoration: line-through;
+}
+
+.bt-clause-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-monospace);
+}
+
+.bt-clause-pill {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bt-clause-pill-load-bearing {
+  background: color-mix(in srgb, var(--bt-good) 14%, transparent);
+  color: var(--bt-good);
+}
+
+.bt-clause-pill-helpful {
+  background: color-mix(in srgb, var(--bt-strategy) 12%, transparent);
+  color: var(--bt-strategy-ink);
+}
+
+.bt-clause-pill-neutral {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.bt-clause-pill-destructive {
+  background: color-mix(in srgb, var(--bt-bad) 14%, transparent);
+  color: var(--bt-bad);
+}
+
+.bt-cm-pill {
+  margin-left: 10px;
+  user-select: none;
+  vertical-align: middle;
+}
+
+/* Causal trade highlight ticks on the equity curve */
+.bt-causal-marks .bt-causal-tick {
+  stroke: var(--bt-strategy);
+  stroke-width: 1.5;
+  opacity: 0.75;
+}

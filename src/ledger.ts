@@ -56,7 +56,17 @@ const hashText = (text: string) => hash(text).toString(36);
  * widest value of each parameter's range, and recursive averages such as an EMA depend on where they started.
  */
 export function trialHash(spec: Spec): string {
-  const { written: _written, name: _name, testFrom: _testFrom, params: _params, ...trading } = spec;
+  const {
+    written: _written,
+    name: _name,
+    testFrom: _testFrom,
+    params: _params,
+    mutedLines: _mutedLines,
+    liveSince: _liveSince,
+    invalidate: _invalidate,
+    extends: _extends,
+    ...trading
+  } = spec;
   return hashText(stable([withoutParamNames(trading), spec.from === null ? null : lookbackBars(spec)]));
 }
 
@@ -185,6 +195,20 @@ export function trialSpread(ledger: Ledger, perYear: number): { trials: number; 
   if (n < 2) return { trials: n, variance: 0 };
   const mean = srs.reduce((s, x) => s + x, 0) / n;
   return { trials: n, variance: srs.reduce((s, x) => s + (x - mean) ** 2, 0) / (n - 1) };
+}
+
+/**
+ * Aggregates distinct trials across an `extends` inheritance family so branching child variants cannot reset Deflated
+ * Sharpe Ratio trial counts. Each trial hash is counted once across all family ledgers.
+ */
+export function familyTrialSpread(ledgers: readonly Ledger[], perYear: number): { trials: number; variance: number } {
+  const merged: Record<string, Trial> = {};
+  for (const ledger of ledgers) {
+    for (const [id, t] of Object.entries(ledger.trials)) {
+      if (!Object.hasOwn(merged, id) || t[2] < merged[id][2]) merged[id] = t;
+    }
+  }
+  return trialSpread({ trials: merged, versions: [], resetAt: 0 }, perYear);
 }
 
 /** One run as the block's tries count it. */

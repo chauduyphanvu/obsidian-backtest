@@ -5,7 +5,9 @@
 import type { Backtest } from './backtest.ts';
 import { easeOut, h, motionOK, onWidth, s, tween } from './dom.ts';
 import { DAY, YEAR, isIntraday, money, moneyTicks, niceStep, pct, stamp, timeTicks } from './format.ts';
+import type { RealityTape } from './lifecycle.ts';
 import { crisesFor, type Crisis } from './regimes.ts';
+import type { StressAxis, StressReport } from './stress.ts';
 
 /** The shorter spans a chart can show, each offered only when the run is clearly longer. */
 const RANGES = [
@@ -27,6 +29,12 @@ export interface ValueChart {
   span(): number;
   /** Lights up the part of the chart a figure comes from: 'end', 'dd', 'vol', 'held', or null for none. */
   highlight(part: string | null): void;
+  /** Overlays the Adversarial Stress Fan (`p10..p90` + `p50` median) for the chosen axis. */
+  setStress(report: StressReport | null, axis?: StressAxis | 'all'): void;
+  /** Overlays the 3-track Reality Tape & Bootstrap Cone past `live since`. */
+  setRealityTape(tape: RealityTape | null): void;
+  /** Highlights specific historical timestamps on the chart (e.g. trades causally affected by an X-Ray clause). */
+  highlightTimes(times: number[] | null): void;
   stop: () => void;
 }
 
@@ -165,6 +173,9 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
 
   let bt: Backtest | null = null;
   let ghost: Backtest | null = null;
+  let stress: { report: StressReport; axis: StressAxis | 'all' } | null = null;
+  let realityTape: RealityTape | null = null;
+  let litTimes: number[] | null = null;
   let span = o.span ?? 0;
   let width = 0;
   let drawnWidth = 0;
@@ -218,7 +229,7 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
   const draw = (o2: { from?: number; arrive?: boolean; settled?: boolean; run?: Backtest } = {}) => {
     if (!bt || width <= 0) return null;
     drawnWidth = width;
-    const drawn = drawChart({ chart, legend, width, bt: o2.run ?? bt, ghost, span, from: o2.from, id, read: readout, keep: keep ?? undefined });
+    const drawn = drawChart({ chart, legend, width, bt: o2.run ?? bt, ghost, stress, realityTape, litTimes, span, from: o2.from, id, read: readout, keep: keep ?? undefined });
     const svg = chart.querySelector('svg');
     if (svg && part) svg.setAttribute('data-bt-hl', part);
     if (svg && (o2.arrive || arriving) && motionOK()) svg.classList.add('bt-arrive');
@@ -268,10 +279,14 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
     });
   };
 
+  let dirtyWhileHidden = false;
   const stop = onWidth(chart, (w) => {
     width = w;
     // The first notice of a width already drawn would draw it again and cut short a new result's arrival.
-    if (w !== drawnWidth) draw();
+    if (w !== drawnWidth || dirtyWhileHidden) {
+      dirtyWhileHidden = false;
+      draw();
+    }
   });
   return {
     show(next, opts = {}) {
@@ -283,8 +298,9 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
       theirs.label.textContent = next.benchmark.label;
       ghostKey.label.parentElement!.hidden = !ghost;
       buildRanges(next.run.t[next.run.t.length - 1] - next.run.t[0]);
-      // While the block is folded the chart has no width; the observer draws it when it opens.
+      // While the block is folded or in "+ In My Book" lens the chart has no width; mark dirty so it redraws on return.
       width = Math.floor(chart.clientWidth);
+      if (width <= 0) dirtyWhileHidden = true;
       if (opts.arrive && motionOK()) {
         arriving = true;
         window.setTimeout(() => {
@@ -322,6 +338,18 @@ export function renderValueChart(parent: HTMLElement, o: { span?: number } = {})
       if (next) svg.setAttribute('data-bt-hl', next);
       else svg.removeAttribute('data-bt-hl');
     },
+    setStress(report, axis = 'all') {
+      stress = report ? { report, axis } : null;
+      if (bt && width > 0) draw();
+    },
+    setRealityTape(tape) {
+      realityTape = tape;
+      if (bt && width > 0) draw();
+    },
+    highlightTimes(times) {
+      litTimes = times && times.length > 0 ? times : null;
+      if (bt && width > 0) draw();
+    },
     stop: () => {
       stopTween();
       stop();
@@ -347,6 +375,9 @@ interface DrawInput {
   bt: Backtest;
   /** The run as written, as a dashed line, or null. */
   ghost: Backtest | null;
+  stress?: { report: StressReport; axis: StressAxis | 'all' } | null;
+  realityTape?: RealityTape | null;
+  litTimes?: number[] | null;
   /** The last span of time shown, or 0 for the whole run. */
   span: number;
   /** Draws the run from this time on, even before the span starts (for the eased change of the span). */
@@ -371,7 +402,7 @@ interface Drawn {
   keys: KeyReading;
 }
 
-function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, read, keep }: DrawInput): Drawn {
+function drawChart({ chart, legend, width, bt, ghost, stress, realityTape, litTimes, span, from: drawFrom, id, read, keep }: DrawInput): Drawn {
   chart.querySelector('svg')?.remove();
   const { run, benchmark, drawdown } = bt;
   const t = run.t;
@@ -435,9 +466,13 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
   ddMin = Math.min(ddMin, -0.01) * 1.05;
   const yDd = (v: number) => ddTop + (v / ddMin) * ddH;
 
-  const clip = s(s(svg, 'defs', {}), 'clipPath', { id: `bt-plot-${id}` });
+  const defs = s(svg, 'defs', {});
+  const clip = s(defs, 'clipPath', { id: `bt-plot-${id}` });
   s(clip, 'rect', { x: left, y: 0, width: plotW, height });
-  const layer = (cls: string, clipped = true) => s(s(svg, 'g', clipped ? { 'clip-path': `url(#bt-plot-${id})` } : {}), 'g', { class: cls });
+  // Vertical clip strictly for the equity plot so Stress Fans and Reality Cones never bleed into the Held strip or Drawdown panel.
+  const valClip = s(defs, 'clipPath', { id: `bt-val-${id}` });
+  s(valClip, 'rect', { x: left, y: top, width: plotW, height: eqH });
+  const layer = (cls: string, clipped = true, clipId = `bt-plot-${id}`) => s(s(svg, 'g', clipped ? { 'clip-path': `url(#${clipId})` } : {}), 'g', { class: cls });
   const labels = s(svg, 'g', { class: 'bt-l-labels' });
 
   // Market falls, under everything else.
@@ -510,7 +545,7 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
   };
 
   // Which line is ahead: the space between them, split where they cross.
-  const val = layer('bt-l-val');
+  const val = layer('bt-l-val', true, `bt-val-${id}`);
   let ahead = '';
   let behind = '';
   let top1: string[] = [];
@@ -554,6 +589,76 @@ function drawChart({ chart, legend, width, bt, ghost, span, from: drawFrom, id, 
   const fills = s(val, 'g', { class: 'bt-fills' });
   if (ahead) s(fills, 'path', { d: ahead, class: 'bt-ahead' });
   if (behind) s(fills, 'path', { d: behind, class: 'bt-behind' });
+
+  // Phase 3: Adversarial Stress Fan (`p10..p90` envelope + dashed `p50` median).
+  if (stress) {
+    const { report, axis } = stress;
+    const env = report.envelopes[axis];
+    const stT = report.t;
+    const upper: string[] = [];
+    const lower: string[] = [];
+    const med: string[] = [];
+    for (let i = 0; i < stT.length; i++) {
+      if (stT[i] < ta || stT[i] > tb) continue;
+      const px = x(stT[i]);
+      const p90 = env.p90[i];
+      const p10 = env.p10[i];
+      const p50 = env.p50[i];
+      if (p90 > 0 && p10 > 0) {
+        upper.push(p(px, yEq(p90)));
+        lower.push(p(px, yEq(p10)));
+      }
+      if (p50 > 0) med.push(p(px, yEq(p50)));
+    }
+    if (upper.length > 1) {
+      s(val, 'path', { d: `M${upper.join('L')}L${lower.reverse().join('L')}Z`, class: `bt-stress-fan bt-stress-fan-${report.breakingPoints.grade}` });
+    }
+    if (med.length > 1) {
+      s(val, 'path', { d: `M${med.join('L')}`, class: 'bt-line bt-stress-median' });
+    }
+  }
+
+  // Phase 6: Continuous Reality Tape (vertical live divider, bootstrap cone p5..p90, and realized broker equity).
+  if (realityTape && realityTape.t.length > 1) {
+    const rt = realityTape;
+    const deployT = rt.t[0];
+    // Anchor at deployT across the full run (from index 0), not `first`, so zooming to 1Y/5Y never shifts the cone vertically.
+    const anchorIdx = barAt(t, 0, deployT);
+    const anchorVal = eq(anchorIdx);
+    if (Number.isFinite(anchorVal) && anchorVal > 0 && deployT <= tb) {
+      const dx = x(deployT);
+      if (dx >= left && dx <= left + plotW) {
+        s(val, 'line', { x1: dx, x2: dx, y1: top, y2: top + eqH, class: 'bt-live-divider' });
+        s(val, 'text', { x: dx + 4, y: top + 11, class: 'bt-axis bt-live-label' }, 'Live');
+      }
+      const cHi: string[] = [];
+      const cLo: string[] = [];
+      const realPts: string[] = [];
+      for (let i = 0; i < rt.t.length; i++) {
+        if (rt.t[i] < ta || rt.t[i] > tb) continue;
+        const px = x(rt.t[i]);
+        const hiV = anchorVal * rt.cone.p90[i];
+        const loV = anchorVal * rt.cone.p5[i];
+        if (hiV > 0 && loV > 0) {
+          cHi.push(p(px, yEq(hiV)));
+          cLo.push(p(px, yEq(loV)));
+        }
+        if (rt.realized && rt.realized[i] > 0) realPts.push(p(px, yEq(anchorVal * rt.realized[i])));
+      }
+      if (cHi.length > 1) s(val, 'path', { d: `M${cHi.join('L')}L${cLo.reverse().join('L')}Z`, class: 'bt-live-cone' });
+      if (realPts.length > 1) s(val, 'path', { d: `M${realPts.join('L')}`, class: 'bt-line bt-line-realized' });
+    }
+  }
+
+  // Phase 2 & 1: Causal trade highlights when hovering an X-Ray clause pill or `extends` diff.
+  if (litTimes && litTimes.length > 0) {
+    const marksG = s(val, 'g', { class: 'bt-causal-marks' });
+    for (const tm of litTimes) {
+      if (tm < ta || tm > tb) continue;
+      const cx = x(tm);
+      s(marksG, 'line', { x1: cx, x2: cx, y1: top, y2: top + eqH, class: 'bt-causal-tick' });
+    }
+  }
 
   if (ghostOn) s(val, 'path', { d: path(gh, yEq), class: 'bt-line bt-line-ghost' });
   s(val, 'path', { d: path(be, yEq), class: 'bt-line bt-line-benchmark', pathLength: 1 });

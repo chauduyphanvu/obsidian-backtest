@@ -1,0 +1,130 @@
+/* Phase 6: Continuous Reality Tape, Event-Sourced Fills, & Executable Kill-Switches */
+
+.bt-lifecycle {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bt-ks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: var(--font-ui-smaller);
+}
+
+.bt-ks-halted {
+  background: color-mix(in srgb, var(--bt-bad) 12%, transparent);
+  border-left: 3px solid var(--bt-bad);
+  color: var(--bt-bad);
+}
+
+.bt-ks-warning {
+  background: var(--bt-warn-bg);
+  border-left: 3px solid var(--bt-warning);
+  color: var(--bt-warn-ink);
+}
+
+.bt-ks-badge {
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.03em;
+}
+
+.bt-ks-detail {
+  color: var(--text-normal);
+}
+
+.bt-life-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+}
+
+.bt-life-status {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-life-status.is-live {
+  color: var(--bt-good);
+  font-weight: var(--font-semibold);
+}
+
+.bt-life-status.is-draft {
+  color: var(--bt-warn-ink);
+  font-weight: var(--font-semibold);
+}
+
+.bt-life-deploy {
+  margin-left: auto;
+}
+
+.bt-shortfall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 0 2px;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-sf-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.bt-sf-k { color: var(--text-muted); }
+.bt-sf-v { font-weight: var(--font-semibold); }
+.bt-sf-good .bt-sf-v { color: var(--bt-good); }
+.bt-sf-warn .bt-sf-v { color: var(--bt-warn-ink); }
+.bt-sf-bad .bt-sf-v { color: var(--bt-bad); }
+
+/* Reality Tape SVG layers inside the main equity chart */
+.bt-live-divider {
+  stroke: var(--bt-good);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.bt-live-label {
+  fill: var(--bt-good);
+  font-weight: var(--font-semibold);
+}
+
+.bt-live-cone {
+  fill: var(--bt-good);
+  opacity: 0.13;
+}
+
+.bt-line-realized {
+  fill: none;
+  stroke: var(--bt-benchmark);
+  stroke-width: 2;
+}
+
+/* Today's Orders kill-switch banner + 1-click Confirm Fill button */
+.bt-orders-ks-host:empty {
+  display: none;
+}
+
+.bt-orders-ks-host {
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bt-orders-confirm {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 2px 8px;
+}

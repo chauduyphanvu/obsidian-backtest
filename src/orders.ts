@@ -1,4 +1,4 @@
-import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountOrder } from './account.ts';
+import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountConfig, type AccountOrder } from './account.ts';
 import type { CompareHost } from './compare.ts';
 import { priceFailure, type PriceFailure } from './data.ts';
 import type { Fill } from './dsl.ts';
@@ -534,6 +534,8 @@ export interface AccountScanHost {
   find(): Promise<{ note: string; name: string; source: string; line?: number }[]>;
   /** How the block in `note` finds and runs the strategies it lists; runs already kept are reused. */
   strategies(note: string): CompareHost<{ basename: string }>;
+  /** Optional event-sourced `fills.jsonl` projection overriding static holdings & cash for `accountName`. */
+  project?(accountName: string, config: AccountConfig): Promise<AccountConfig>;
 }
 
 export const ACCOUNTS_HEADING = 'Accounts';
@@ -554,7 +556,8 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
       const borrowed = borrowedError(parsed, runs);
       if (borrowed) return { ...status, error: `Line ${borrowed.line}: ${borrowed.message}` };
       const strategies = runs.map((r) => accountStrategy(r.label, r.alloc, r.out));
-      const plan = accountOrders(config, strategies);
+      const effectiveConfig = host.project ? await host.project(f.name, config) : config;
+      const plan = accountOrders(effectiveConfig, strategies);
       return { ...status, orders: plan.orders.filter((o) => o.shares !== 0), asOf: Math.max(...strategies.map((s) => s.asOf)) };
     } catch (e) {
       return { ...status, error: e instanceof Error ? e.message : String(e) };

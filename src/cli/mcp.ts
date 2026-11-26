@@ -1,12 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { runAblation } from '../ablation.ts';
 import { CORPUS } from '../corpus/examples.ts';
 import { MISTAKES } from '../corpus/mistakes.ts';
 import type { DataDeps } from '../data.ts';
 import { generatedFiles, wordList } from '../llm-files.ts';
 import { SYSTEM_PROMPT, userMessage } from '../llm.ts';
-import type { Settings } from '../settings-core.ts';
+import { defaultsFrom, type Settings } from '../settings-core.ts';
+import { runStress } from '../stress.ts';
 import { checkSource, correctSource, explainText, noBlock, problemLine, runNote, settingsIn, version, WORD_KINDS, wordNames, type Io } from './main.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
@@ -98,9 +100,28 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps, s
       } catch (e) {
         return { content: [text(`Cannot read the plugin settings of the vault: ${e instanceof Error ? e.message : e}`)], isError: true };
       }
-      const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, settings, 'the block argument');
+      const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, settings, 'the block argument', vault_path);
       if ('code' in result) return { content: [text(/There is no file at /.test(result.message) ? `${result.message}\n${csvFolder(vault_path)}` : result.message)], isError: true };
-      return { content: [text(runText(result.out))], structuredContent: runSummary(result.out) };
+      const stress = runStress(result.source, result.out.spec, result.out.data, result.out.backtest, defaultsFrom(settings));
+      const ablation = runAblation(result.out.spec, result.out.data, result.out.backtest, result.source);
+      return {
+        content: [text(runText(result.out))],
+        structuredContent: {
+          ...runSummary(result.out),
+          stress: {
+            ...stress.breakingPoints,
+            breakevenBps: Number.isFinite(stress.breakingPoints.breakevenBps) ? stress.breakingPoints.breakevenBps : null,
+            breakevenCapped: !Number.isFinite(stress.breakingPoints.breakevenBps),
+          },
+          ablation: ablation.clauses.map((c) => ({
+            id: c.id,
+            label: c.label,
+            verdict: c.verdict,
+            deltaSharpe: c.deltaSharpe,
+            deltaMaxDD: c.deltaMaxDD,
+          })),
+        },
+      };
     },
   );
 
