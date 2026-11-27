@@ -35,7 +35,7 @@ import { removeMutedLines, setLiteralValues, setParamValues, toggleMuteLine } fr
 import type { RunOutput } from './runner.ts';
 import { defaultsFrom, type Settings } from './settings-core.ts';
 import type { SymbolLookup } from './symbols.ts';
-import { AMBIENT, blockJobs, blockRuns } from './worker-client.ts';
+import { blockJobs, blockRuns } from './worker-client.ts';
 
 /** Blocks whose open or folded state is remembered for the session. */
 const KEPT_BLOCK_STATES = 500;
@@ -199,7 +199,7 @@ export class StrategyBlocks {
     const refresh = (source: string): Promise<boolean> => {
       const drawn = [...this.onScreen].filter(([, b]) => b.note === notePath && plainText(b.source) === plainText(source));
       if (drawn.length === 0) {
-        return this.host.results.runSource(source, { force: true }).then(
+        return this.host.results.runSource(source, { force: true, notePath }).then(
           () => true,
           (e: unknown) => {
             problem ??= e instanceof Error ? e.message : String(e);
@@ -384,14 +384,15 @@ export class StrategyBlocks {
         }
       }
 
-      // Ambient background job runner for passive Stress Envelope, Inline X-Ray Ablation, and Inverse Backtesting.
-      // Recreates cleanly if the user scrubs a parameter slider so ambient analytics & inverse probes always match `shown`.
+      // Lazy background job runner for Stress Envelope, Clause Ablation, and Inverse Backtesting.
+      // Allocated only when the user clicks Stress, Ablation, Contrast, or Bar Probe — never on passive card render.
       let disposed = false;
-      let ambientFor: RunOutput = out;
-      let ambientJobs = blockJobs({ source: runSource, defaults: drawing.defaults, parse: drawing.parse, backtest: out.backtest });
+      let ambientFor: RunOutput | null = null;
+      let ambientJobs: ReturnType<typeof blockJobs> | null = null;
       const getAmbient = (shown: RunOutput) => {
-        if (shown !== ambientFor) {
-          ambientJobs.close();
+        if (disposed) return null;
+        if (!ambientJobs || shown !== ambientFor) {
+          ambientJobs?.close();
           ambientFor = shown;
           const shownSrc = shownText(runSource, shown);
           ambientJobs = blockJobs({ source: shownSrc, defaults: drawing.defaults, parse: drawing.parse, backtest: shown.backtest });
@@ -401,7 +402,7 @@ export class StrategyBlocks {
       const prevStop = stop;
       const stopWithAmbient = () => {
         disposed = true;
-        ambientJobs.close();
+        ambientJobs?.close();
         prevStop();
       };
       activeStop = stopWithAmbient;
@@ -453,7 +454,7 @@ export class StrategyBlocks {
                 const req = ++inverseSeq;
                 hostEl.replaceChildren();
                 void getAmbient(shown)
-                  .run({ kind: 'contrast', tradeIndices: indices }, { priority: 0 })
+                  ?.run({ kind: 'contrast', tradeIndices: indices }, { priority: 0 })
                   .done.then((res) => {
                     if (req !== inverseSeq || !res || !hostEl.isConnected || !isActive()) return;
                     hostEl.replaceChildren();
@@ -485,7 +486,7 @@ export class StrategyBlocks {
                 const req = ++inverseSeq;
                 hostEl.replaceChildren();
                 void getAmbient(shown)
-                  .run({ kind: 'probe', ticker, barIndex: barIdx }, { priority: 0 })
+                  ?.run({ kind: 'probe', ticker, barIndex: barIdx }, { priority: 0 })
                   .done.then((res) => {
                     if (req !== inverseSeq || !res || !hostEl.isConnected || !isActive()) return;
                     hostEl.replaceChildren();
@@ -519,7 +520,7 @@ export class StrategyBlocks {
           : {
               label: 'Start a forward test',
               icon: 'arrow-right',
-              run: () => this.host.startForward(forwardStart(source, shown, drawing.defaults, opts.notePath)),
+              run: () => this.host.startForward(forwardStart(runSource, shown, drawing.defaults, opts.notePath)),
             };
       // The menu of the run on screen: the saves, then the forward test and the note's properties.
       const menu = (at: HTMLElement, shown: RunOutput): void => {
@@ -600,15 +601,15 @@ export class StrategyBlocks {
           onHeight: stateKey === undefined ? undefined : (height, folded) => this.heights.set(stateKey, { height, folded }),
           cardLayout: this.host.settings().cardLayout,
           diff,
-          stress: (shown) => getAmbient(shown).run({ kind: 'stress', seed: 42 }, { priority: AMBIENT }).done,
+          stress: (shown) => getAmbient(shown)?.run({ kind: 'stress', seed: 42 }, { priority: 0 }).done ?? null,
           ablation: (shown) =>
             getAmbient(shown)
-              .run({ kind: 'ablation' }, { priority: AMBIENT })
+              ?.run({ kind: 'ablation' }, { priority: 0 })
               .done.then((report) => {
                 // Only publish CodeMirror line pills when source lines map 1-to-1 (not DAG-merged child blocks).
                 if (report && isActive() && !dag && shown === out) this.host.onAblation?.(opts.notePath, source, report);
                 return report;
-              }),
+              }) ?? null,
           onMuteClauses: async (muted) => {
             if (muted.size === 0) return out;
             const mutedSpec = applyClauseMutes(out.spec, runSource, muted);
@@ -618,7 +619,7 @@ export class StrategyBlocks {
           onCommitMuted:
             opts.restore && !dag
               ? async (muted) => {
-                  const rep = await getAmbient(out).run({ kind: 'ablation' }, { priority: 0 }).done;
+                  const rep = await getAmbient(out)?.run({ kind: 'ablation' }, { priority: 0 }).done;
                   if (!rep) return;
                   const lines = source.split('\n');
                   const toDeleteLines = new Set<number>();
@@ -715,7 +716,7 @@ export class StrategyBlocks {
         disposed = true;
         if (stateKey !== undefined) this.views.set(stateKey, drawn.view());
         drawn.dispose();
-        ambientJobs.close();
+        ambientJobs?.close();
         runs.close();
         this.onScreen.delete(child);
       };

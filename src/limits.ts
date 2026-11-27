@@ -50,7 +50,7 @@ export const LIMITS = {
    */
   dragMs: 12,
   /** Results kept in memory, so a block drawn again does not run again: how many, and their total size in bytes. */
-  keptResults: 40,
+  keptResults: 120,
   keptBytes: 100_000_000,
   /**
    * The largest CSV file a block reads, in characters (bytes, for a file of numbers), by where its text is parsed. Here the

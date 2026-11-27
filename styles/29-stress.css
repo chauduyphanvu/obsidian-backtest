@@ -10,6 +10,11 @@
   display: none;
 }
 
+.bt-stress-trigger {
+  display: flex;
+  align-items: center;
+}
+
 /* Clean, borderless stress header anchored directly above the chart + stress fan */
 .bt-stress {
   display: flex;

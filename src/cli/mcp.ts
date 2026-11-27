@@ -4,12 +4,13 @@ import { z } from 'zod';
 import { runAblation } from '../ablation.ts';
 import { CORPUS } from '../corpus/examples.ts';
 import { MISTAKES } from '../corpus/mistakes.ts';
+import { hasDagRefs } from '../dag.ts';
 import type { DataDeps } from '../data.ts';
 import { generatedFiles, wordList } from '../llm-files.ts';
 import { SYSTEM_PROMPT, userMessage } from '../llm.ts';
 import { defaultsFrom, type Settings } from '../settings-core.ts';
 import { runStress } from '../stress.ts';
-import { checkSource, correctSource, explainText, noBlock, problemLine, runNote, settingsIn, version, WORD_KINDS, wordNames, type Io } from './main.ts';
+import { checkSource, checkSourceWithVault, correctSource, explainText, noBlock, problemLine, runNote, settingsIn, version, WORD_KINDS, wordNames, type Io } from './main.ts';
 import { defaultCacheDir, nodeDeps } from './node-deps.ts';
 import { runSummary, runText } from './report.ts';
 
@@ -53,7 +54,10 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps, s
       title: 'Examine a strategy block',
       description:
         'Examines a Backtest Blocks strategy with the parser of the plugin. The input is one block without a fence, or a full note that contains ```strategy blocks. Returns each error and warning with its line, and the corrections that the plugin has for it. corrected_source is the input with each correction made that is the only one for its problem. Examine each block that you write before you give it to the user. Correct the problems that it shows.',
-      inputSchema: { source: z.string().describe('A strategy block (its lines, without the fence), or a Markdown note that contains ```strategy blocks') },
+      inputSchema: {
+        source: z.string().describe('A strategy block (its lines, without the fence), or a Markdown note that contains ```strategy blocks'),
+        vault_path: z.string().optional().describe('The Obsidian vault folder, for resolving extends: and [[Signal]]/[[Universe]] links'),
+      },
       outputSchema: {
         blocks: z.number(),
         errors: z.number(),
@@ -66,10 +70,10 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps, s
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ source }) => {
-      const { blocks, problems } = checkSource(source, 'strategy');
+    async ({ source, vault_path }) => {
+      const { blocks, problems } = vault_path ? await checkSourceWithVault(source, 'strategy', vault_path) : checkSource(source, 'strategy');
       const errors = problems.filter((p) => p.severity === 'error').length;
-      const corrected = correctSource(source, 'strategy');
+      const corrected = vault_path && hasDagRefs(source) ? { text: source, fixed: [] } : correctSource(source, 'strategy');
       const summary = blocks === 0 ? `Found ${noBlock('strategy')}.` : problems.length === 0 ? `${blocks === 1 ? 'The block has' : `All ${blocks} blocks have`} no problems.` : problems.map(problemLine).join('\n');
       const more = corrected.fixed.length ? `\n\nThe source with each correction that is the only one for its problem:\n${corrected.text}` : '';
       return {
@@ -90,10 +94,12 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps, s
         block: z.string().optional().describe('The block of a note to run: its name, or its number (the first block is 1). Necessary when the note has more than one block'),
         vault_path: z.string().optional().describe('The Obsidian vault folder, for the CSV files that the block reads and the plugin settings'),
         refresh: z.boolean().optional().describe('Download the prices again, and do not use the saved prices'),
+        include_stress: z.boolean().optional().describe('Also run adversarial stress tests (±15% parameter perturbations, 3x costs, +1 bar delay, drop best year)'),
+        include_ablation: z.boolean().optional().describe('Also run per-clause ablation analysis'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ source, block, vault_path, refresh }) => {
+    async ({ source, block, vault_path, refresh, include_stress, include_ablation }) => {
       let settings: Settings;
       try {
         settings = await settingsFor(vault_path);
@@ -102,24 +108,30 @@ export function createServer(depsFor: (vault: string | undefined) => DataDeps, s
       }
       const result = await runNote(source, 'strategy', block, depsFor(vault_path), refresh ?? false, settings, 'the block argument', vault_path);
       if ('code' in result) return { content: [text(/There is no file at /.test(result.message) ? `${result.message}\n${csvFolder(vault_path)}` : result.message)], isError: true };
-      const stress = runStress(result.source, result.out.spec, result.out.data, result.out.backtest, defaultsFrom(settings));
-      const ablation = runAblation(result.out.spec, result.out.data, result.out.backtest, result.source);
+      const extra: Record<string, unknown> = {};
+      if (include_stress) {
+        const stress = runStress(result.source, result.out.spec, result.out.data, result.out.backtest, defaultsFrom(settings));
+        extra.stress = {
+          ...stress.breakingPoints,
+          breakevenBps: Number.isFinite(stress.breakingPoints.breakevenBps) ? stress.breakingPoints.breakevenBps : null,
+          breakevenCapped: !Number.isFinite(stress.breakingPoints.breakevenBps),
+        };
+      }
+      if (include_ablation) {
+        const ablation = runAblation(result.out.spec, result.out.data, result.out.backtest, result.source);
+        extra.ablation = ablation.clauses.map((c) => ({
+          id: c.id,
+          label: c.label,
+          verdict: c.verdict,
+          deltaSharpe: c.deltaSharpe,
+          deltaMaxDD: c.deltaMaxDD,
+        }));
+      }
       return {
         content: [text(runText(result.out))],
         structuredContent: {
           ...runSummary(result.out),
-          stress: {
-            ...stress.breakingPoints,
-            breakevenBps: Number.isFinite(stress.breakingPoints.breakevenBps) ? stress.breakingPoints.breakevenBps : null,
-            breakevenCapped: !Number.isFinite(stress.breakingPoints.breakevenBps),
-          },
-          ablation: ablation.clauses.map((c) => ({
-            id: c.id,
-            label: c.label,
-            verdict: c.verdict,
-            deltaSharpe: c.deltaSharpe,
-            deltaMaxDD: c.deltaMaxDD,
-          })),
+          ...extra,
         },
       };
     },

@@ -73,7 +73,7 @@ export function killSwitchContext(commit: DeploymentCommit, sf: ShortfallBreakdo
     liveSlippageBps: Math.max(0, commit.modeledSlippageBps + sf.slippageDriftBps),
     modeledSlippageBps: commit.modeledSlippageBps,
     liveBars: sf.liveBars,
-    liveReturn: sf.realizedReturn ?? sf.shadowReturn,
+    liveReturn: sf.realizedReturn ?? sf.shadowReturn ?? sf.modelReturn,
   };
 }
 

@@ -1,4 +1,5 @@
 import { ItemView, Modal, Notice, setIcon, type App, type WorkspaceLeaf } from 'obsidian';
+import { orderSteps, type Holding } from './account.ts';
 import { h, motionOK, reveal, revealBox, s } from './dom.ts';
 import type { LedgerEventSide } from './fill-ledger.ts';
 import { shortMessage } from './fixes.ts';
@@ -39,6 +40,16 @@ import {
 } from './orders.ts';
 import type { Scan } from './orders-badge.ts';
 
+export interface ConfirmFillLeg {
+  account: string;
+  strategy?: string;
+  ticker: string;
+  side: LedgerEventSide;
+  quantity: number;
+  price: number;
+  fees: number;
+}
+
 export interface OrdersHost {
   /**
    * Runs every strategy in the vault, or joins the scan that runs already (SharedScan); calls onProgress as each finishes.
@@ -66,8 +77,8 @@ export interface OrdersHost {
   openPane(): void;
   /** Evaluates pre-committed `invalidate when` kill-switches across deployed strategies. */
   killSwitches?(): Promise<{ note: string; strategy: string; line?: number; report: KillSwitchReport }[]>;
-  /** Appends a 1-click confirmed fill to `fills.jsonl` and refreshes derived holdings. */
-  confirmFill?(fill: { account: string; ticker: string; side: LedgerEventSide; quantity: number; price: number; fees: number }): Promise<void>;
+  /** Appends one or more 1-click confirmed fill legs (2 legs for a Flip) to `fills.jsonl` and refreshes derived holdings. */
+  confirmFill?(fill: ConfirmFillLeg | ConfirmFillLeg[], opening?: { holdings: readonly Holding[]; cash: number }): Promise<void>;
 }
 
 export class OrdersModal extends Modal {
@@ -400,12 +411,25 @@ export class OrdersPanel {
           cfBtn.type = 'button';
           cfBtn.addEventListener('click', () => {
             cfBtn.disabled = true;
-            const side: LedgerEventSide = badge.style === 'short' ? 'short' : badge.style === 'cover' ? 'cover' : o.shares >= 0 ? 'buy' : 'sell';
+            const steps = orderSteps(o);
+            const legs: ConfirmFillLeg[] = steps.map((st) => ({
+              account: a.name,
+              ...(a.strategyKey ? { strategy: a.strategyKey } : {}),
+              ticker: o.ticker,
+              side: st.action,
+              quantity: st.shares,
+              price: o.price,
+              fees: 0,
+            }));
             void this.host
-              .confirmFill!({ account: a.name, ticker: o.ticker, side, quantity: Math.abs(o.shares), price: o.price, fees: 0 })
+              .confirmFill!(legs, a.opening)
               .then(
                 () => {
-                  new Notice(`Logged ${side} ${shareCount(Math.abs(o.shares))} ${o.ticker} @ ${price(o.price)} to fills.jsonl`);
+                  const summary =
+                    legs.length === 2
+                      ? `flip (${legs.map((l) => `${l.side} ${shareCount(l.quantity)}`).join(', then ')})`
+                      : `${legs[0].side} ${shareCount(legs[0].quantity)}`;
+                  new Notice(`Logged ${summary} ${o.ticker} at last close ${price(o.price)} ($0 fees; editable in fills.jsonl)`);
                   void this.load(false);
                 },
                 (e: unknown) => {

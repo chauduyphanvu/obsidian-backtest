@@ -3,7 +3,6 @@
 // Pure; zero Obsidian imports.
 
 import type { Holding } from './account.ts';
-import { readFills, type FillColumns } from './fills.ts';
 import { hash } from './result-cache.ts';
 import type { Bars } from './types.ts';
 
@@ -51,10 +50,17 @@ export const utcDay = (t: number): number => Math.floor(t / DAY_MS) * DAY_MS;
 
 const KIND_ORDER: Record<LedgerEventKind, number> = { opening_balance: 0, cash_flow: 1, dividend: 2, fill: 3 };
 const compareEvents = (a: LedgerEvent, b: LedgerEvent): number =>
-  a.t - b.t || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  a.t - b.t || (KIND_ORDER[a.kind] ?? 99) - (KIND_ORDER[b.kind] ?? 99) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
-/** Deterministic content hash for an execution event so re-importing the same broker CSV never duplicates fills. */
+/** Deterministic content hash for an execution event so re-imports and multi-device watermarks deduplicate cleanly. */
 export function eventId(e: Omit<LedgerEvent, 'id'>, occurrence = 0): string {
+  const holdingsKey = e.holdings?.length
+    ? [...e.holdings]
+        .filter((h) => Math.abs(h.shares) > 1e-9)
+        .map((h) => `${h.ticker.toUpperCase()}:${h.shares}`)
+        .sort()
+        .join(',')
+    : '';
   return hash(
     [
       e.t,
@@ -66,6 +72,7 @@ export function eventId(e: Omit<LedgerEvent, 'id'>, occurrence = 0): string {
       e.price ?? 0,
       e.fees ?? 0,
       e.cashDelta ?? 0,
+      ...(holdingsKey ? [holdingsKey] : []),
       ...(occurrence > 0 ? [occurrence] : []),
     ].join('|'),
   ).toString(36);
@@ -93,8 +100,137 @@ export function parseLedgerJsonl(text: string): LedgerEvent[] {
       // Skip malformed line without corrupting the rest of the ledger.
     }
   }
-  out.sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  out.sort(compareEvents);
   return out;
+}
+
+/**
+ * Sync-safe JSONL merge: parses existing disk lines, deduplicates by `id` while preserving events synced from other
+ * devices, adds any new `incoming` events, and returns deterministically sorted JSONL.
+ */
+export function mergeLedgerJsonl(diskText: string, incoming: readonly LedgerEvent[]): string {
+  const byId = new Map<string, LedgerEvent>();
+  for (const e of parseLedgerJsonl(diskText)) byId.set(e.id, e);
+  for (const e of incoming) {
+    if (!byId.has(e.id)) byId.set(e.id, e);
+  }
+  const merged = [...byId.values()].sort(compareEvents);
+  return merged.length ? `${merged.map(serializeLedgerEvent).join('\n')}\n` : '';
+}
+
+/**
+ * Emits a one-time `opening_balance` watermark event anchored at `t = 0` for `account` when no `opening_balance`
+ * exists for it yet. Anchoring at epoch 0 ensures the watermark always sorts before any pre-existing or concurrent
+ * multi-device fills and never leaks into post-deployment reality tapes; canonicalized holdings ensure identical
+ * watermarks emitted on two devices share the same `id` and deduplicate cleanly during `mergeLedgerJsonl`.
+ */
+export function ensureOpeningBalanceEvent(
+  existing: readonly LedgerEvent[],
+  account: string,
+  opening: { holdings: readonly Holding[]; cash: number },
+  _beforeTs?: number,
+): LedgerEvent | null {
+  const acctLower = account.toLowerCase();
+  if (existing.some((e) => e.account.toLowerCase() === acctLower && e.kind === 'opening_balance')) return null;
+  const holdings: Holding[] = opening.holdings
+    .filter((h) => Math.abs(h.shares) > 1e-9)
+    .map((h) => ({ ticker: h.ticker.toUpperCase(), shares: h.shares }))
+    .sort((a, b) => (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0));
+  const base: Omit<LedgerEvent, 'id'> = {
+    t: 0,
+    account,
+    kind: 'opening_balance',
+    holdings,
+    cashDelta: opening.cash,
+    source: 'migration',
+  };
+  return { id: eventId(base), ...base };
+}
+
+/**
+ * Rewrites `LedgerEvent.strategy` across a JSONL ledger when a note, folder, or named strategy block is renamed.
+ * Event `id`s are preserved so cross-device sync deduplication remains intact.
+ */
+export function rewriteLedgerStrategyKey(
+  jsonlText: string,
+  from: string,
+  to: string,
+  exact: boolean,
+): { text: string; changed: number } {
+  if (!jsonlText || !from || from === to) return { text: jsonlText, changed: 0 };
+  const hasTrailingNewline = jsonlText.endsWith('\n');
+  const lines = jsonlText.split(/\r?\n/);
+  let changed = 0;
+  const out = lines.map((raw) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return raw;
+    try {
+      const obj = JSON.parse(trimmed) as Partial<LedgerEvent>;
+      if (obj && typeof obj.strategy === 'string') {
+        if (exact && obj.strategy === from) {
+          obj.strategy = to;
+          changed++;
+          return JSON.stringify(obj);
+        }
+        if (!exact && obj.strategy.startsWith(from)) {
+          obj.strategy = to + obj.strategy.slice(from.length);
+          changed++;
+          return JSON.stringify(obj);
+        }
+      }
+    } catch {
+      // Leave unparseable lines untouched.
+    }
+    return raw;
+  });
+  if (changed === 0) return { text: jsonlText, changed: 0 };
+  const joined = out.join('\n');
+  return { text: hasTrailingNewline && !joined.endsWith('\n') ? `${joined}\n` : joined, changed };
+}
+
+function sameHoldingsAndCash(
+  a: { holdings: readonly Holding[]; cash: number },
+  b: { holdings: readonly Holding[]; cash: number },
+): boolean {
+  if (Math.abs(a.cash - b.cash) > 1e-4) return false;
+  const mapOf = (hs: readonly Holding[]) => {
+    const m = new Map<string, number>();
+    for (const h of hs) {
+      if (Math.abs(h.shares) <= 1e-9) continue;
+      const tk = h.ticker.toUpperCase();
+      m.set(tk, (m.get(tk) ?? 0) + h.shares);
+    }
+    return m;
+  };
+  const ma = mapOf(a.holdings);
+  const mb = mapOf(b.holdings);
+  if (ma.size !== mb.size) return false;
+  for (const [k, v] of ma) {
+    if (Math.abs(v - (mb.get(k) ?? 0)) > 1e-6) return false;
+  }
+  return true;
+}
+
+/**
+ * Projects an account against `fills.jsonl` and checks whether manual Markdown `holdings:`/`cash:` edits diverge from
+ * the authoritative `opening_balance` watermark (and projected state).
+ */
+export function projectAccountWithStatus(
+  events: readonly LedgerEvent[],
+  account: string,
+  opening: { holdings: readonly Holding[]; cash: number },
+): { projected: ProjectedAccount; loggedEvents: number; divergesFromBlock: boolean } {
+  const acctLower = account.toLowerCase();
+  const mine = events.filter((e) => e.account.toLowerCase() === acctLower).sort(compareEvents);
+  const projected = projectAccountState(mine, account, opening);
+  const loggedEvents = mine.filter((e) => e.kind !== 'opening_balance').length;
+  const watermarks = mine.filter((e) => e.kind === 'opening_balance');
+  const latestWatermark = watermarks.length > 0 ? watermarks[watermarks.length - 1] : null;
+  const divergesFromBlock =
+    latestWatermark !== null &&
+    !sameHoldingsAndCash(opening, { holdings: latestWatermark.holdings ?? [], cash: latestWatermark.cashDelta ?? 0 }) &&
+    !sameHoldingsAndCash(opening, { holdings: projected.holdings, cash: projected.cash });
+  return { projected, loggedEvents, divergesFromBlock };
 }
 
 /** Creates an event from a 1-click "Confirm Fill" action in Today's Orders. */
@@ -123,57 +259,6 @@ export function createConfirmFillEvent(input: {
     ...(input.note ? { note: input.note } : {}),
   };
   return { id: eventId(base), ...base };
-}
-
-/**
- * Ingests a broker CSV export (Schwab, Fidelity, IBKR Flex/Statement, or generic CSV via `fills.ts`) and returns only
- * newly discovered `LedgerEvent[]` not already present in `existingIds`.
- */
-export function ingestBrokerCsv(
-  csvText: string,
-  account: string,
-  existingIds: ReadonlySet<string>,
-  opts: { traded?: string[]; columns?: Partial<FillColumns> | null; since?: number } = {},
-): { added: LedgerEvent[]; skippedDuplicates: number; warnings: string[] } {
-  const saved = opts.columns ?? {};
-  let parsed = readFills(csvText, opts.traded ?? [], saved);
-  if (!parsed.ok) return { added: [], skippedDuplicates: 0, warnings: [parsed.reason] };
-  if (!opts.traded && parsed.fills.length === 0 && parsed.untraded.length > 0) {
-    parsed = readFills(csvText, parsed.untraded.map((u) => u.ticker), saved);
-    if (!parsed.ok) return { added: [], skippedDuplicates: 0, warnings: [parsed.reason] };
-  }
-  const added: LedgerEvent[] = [];
-  const seen = new Set(existingIds);
-  const dupCounts = new Map<string, number>();
-  let skippedDuplicates = 0;
-  for (const f of parsed.fills) {
-    if (opts.since !== undefined && f.date < opts.since) continue;
-    const side: LedgerEventSide =
-      f.action === 'short' ? 'short' : f.action === 'cover' ? 'cover' : f.side === 'buy' ? 'buy' : 'sell';
-    const base: Omit<LedgerEvent, 'id'> = {
-      t: f.date,
-      account,
-      kind: 'fill',
-      ticker: f.ticker.toUpperCase(),
-      side,
-      quantity: f.quantity,
-      price: f.price,
-      fees: f.fees,
-      source: 'csv',
-    };
-    // Distinguish multiple identical partial fills within the same CSV while keeping repeated CSV imports idempotent.
-    const baseId = eventId(base);
-    const occ = dupCounts.get(baseId) ?? 0;
-    dupCounts.set(baseId, occ + 1);
-    const id = occ === 0 ? baseId : eventId(base, occ);
-    if (seen.has(id)) {
-      skippedDuplicates++;
-      continue;
-    }
-    seen.add(id);
-    added.push({ id, ...base });
-  }
-  return { added, skippedDuplicates, warnings: [] };
 }
 
 /**

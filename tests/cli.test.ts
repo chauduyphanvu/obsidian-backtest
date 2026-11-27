@@ -84,6 +84,91 @@ test('check reads a bare block from standard input, and fails a note with no str
   assert.match(prose.err, /Prose\.md: no strategy block/);
 });
 
+test('check on a DAG child clamps merged-source diagnostics past the child block end and tags them [resolved]', async () => {
+  writeFileSync(
+    join(vault, 'DagBadParent.md'),
+    ['```strategy', 'name: Bad Parent', 'universe: SPY', 'a = 1', 'b = 2', 'c = 3', 'buy when close > unknown_fn(10)', '```'].join('\n'),
+  );
+  writeFileSync(
+    join(vault, 'DagChild.md'),
+    ['# Child', '', '```strategy', 'name: Child', 'extends: [[DagBadParent]]', '```'].join('\n'),
+  );
+  const r = await call(['check', '--json', 'DagChild.md']);
+  assert.equal(r.code, 1);
+  const j = JSON.parse(r.out) as { problems: { line: number; message: string }[] };
+  assert.ok(j.problems.length > 0);
+  // Child block starts at line 4 (0-based 3) with only 2 lines (4..5); parent error anchors on `extends:` (line 5) with [resolved].
+  for (const p of j.problems) {
+    assert.equal(p.line, 5, `expected parent error anchored on extends line (5), got ${p.line}`);
+    assert.match(p.message, /^\[resolved\] /);
+  }
+});
+
+test('check on a DAG child with comments maps in-range parent errors to extends: and child token errors to the child rule line', async () => {
+  writeFileSync(
+    join(vault, 'DagBadParentShort.md'),
+    ['```strategy', 'name: Bad Parent Short', 'universe: SPY', 'buy when close > bogus_parent_fn(10)', '```'].join('\n'),
+  );
+  writeFileSync(
+    join(vault, 'DagChildWithComments.md'),
+    [
+      '```strategy',
+      'name: Commented Child',
+      'extends: [[DagBadParentShort]]',
+      '# comment line 1',
+      '# comment line 2',
+      '# comment line 3',
+      '# comment line 4',
+      '```',
+    ].join('\n'),
+  );
+  const parentErr = await call(['check', '--json', 'DagChildWithComments.md']);
+  assert.equal(parentErr.code, 1);
+  const pj = JSON.parse(parentErr.out) as { problems: { line: number; message: string }[] };
+  assert.ok(pj.problems.length > 0);
+  // Must anchor on `extends:` (line 3) with [resolved], NOT land on a comment line inside the child block!
+  for (const p of pj.problems) {
+    assert.equal(p.line, 3);
+    assert.match(p.message, /^\[resolved\] /);
+  }
+
+  writeFileSync(
+    join(vault, 'DagGoodParent2.md'),
+    ['```strategy', 'name: Good Parent 2', 'universe: SPY', 'buy when close > sma(20)', '```'].join('\n'),
+  );
+  writeFileSync(
+    join(vault, 'DagBadChildRule.md'),
+    [
+      '```strategy',
+      'name: Bad Child Rule',
+      'extends: [[DagGoodParent2]]',
+      '# extra note',
+      'buy when base and close > smaa_typo(10)',
+      '```',
+    ].join('\n'),
+  );
+  const childErr = await call(['check', '--json', 'DagBadChildRule.md']);
+  assert.equal(childErr.code, 1);
+  const cj = JSON.parse(childErr.out) as { problems: { line: number; message: string }[] };
+  assert.equal(cj.problems.length, 1);
+  // Must map directly to line 5 (`buy when base and close > smaa_typo(10)`) with [resolved]!
+  assert.equal(cj.problems[0].line, 5);
+  assert.match(cj.problems[0].message, /^\[resolved\] .*smaa_typo/);
+});
+
+test('check --fix skips unresolved DAG blocks and never corrupts valid extends/base syntax', async () => {
+  writeFileSync(
+    join(vault, 'DagGoodParent.md'),
+    ['```strategy', 'name: Good Parent', 'universe: SPY', 'buy when close > sma(50)', 'sell when close < sma(50)', '```'].join('\n'),
+  );
+  const childContent = ['```strategy', 'name: Good Child', 'extends: [[DagGoodParent]]', 'buy when base and rsi(14) < 70', '```', ''].join('\n');
+  const childPath = join(vault, 'DagGoodChild.md');
+  writeFileSync(childPath, childContent);
+  const r = await call(['check', '--fix', 'DagGoodChild.md']);
+  assert.equal(r.code, 0);
+  assert.equal(readFileSync(childPath, 'utf8'), childContent);
+});
+
 test('check --json gives every problem with its place', async () => {
   const r = await call(['check', '--json', 'Broken.md']);
   const j = JSON.parse(r.out);

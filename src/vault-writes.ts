@@ -16,7 +16,7 @@ export interface PropertiesHost<F> {
   /** The note's properties as Obsidian last read them. */
   frontmatter(file: F): Record<string, unknown> | undefined;
   processFrontMatter(file: F, edit: (fm: Record<string, unknown>) => void): Promise<void>;
-  runSource(source: string, opts: { cachedOnly: boolean }): Promise<RunOutput>;
+  runSource(source: string, opts: { cachedOnly: boolean; notePath?: string }): Promise<RunOutput>;
   notice(text: string): void;
 }
 
@@ -58,7 +58,7 @@ export class NoteProperties<F extends { path: string }> {
     let ran = 0;
     for (const [i, block] of blocks.entries()) {
       try {
-        const out = await this.host.runSource(block.source, { cachedOnly: !announce });
+        const out = await this.host.runSource(block.source, { cachedOnly: !announce, notePath: file.path });
         Object.assign(produced, resultProperties(out.backtest, Date.now(), ids[i]));
         ran++;
       } catch {

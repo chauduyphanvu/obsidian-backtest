@@ -417,3 +417,96 @@ test('the call under the pointer runs to its closing bracket, or is the word alo
   assert.equal(callAt(line, 9, 14), 'close');
   assert.equal(callAt(line, 37, 40), 'rsi (2)');
 });
+
+test('renderResult keeps Stress, Ablation, and Active Book lazy until explicitly clicked', async () => {
+  const { El } = await import('./page.ts');
+  const { renderResult } = await import('../src/render.ts');
+  const { runStress } = await import('../src/stress.ts');
+  const { runAblation } = await import('../src/ablation.ts');
+  const { DEFAULT_SETTINGS, defaultsFrom } = await import('../src/settings-core.ts');
+  const closes = Array.from({ length: 400 }, (_, i) => 100 * (1 + i * 0.0006) + 3 * Math.sin(i / 8));
+  const src = 'name: Trend\nuniverse: A\nbuy when close > sma(20) and rsi(14) < 70\nsell when close < sma(20)';
+  const { spec } = parseSpec(src);
+  const data = new Map([['A', bars(closes)]]);
+  const bt = runBacktest(spec!, data);
+  const out = { spec: spec!, backtest: bt, data, warnings: [], prices: [] };
+
+  let stressCalls = 0;
+  let ablationCalls = 0;
+  let bookCalls = 0;
+  const root = new El('div');
+  const drawn = renderResult(root as unknown as HTMLElement, {
+    source: src,
+    out,
+    notes: [],
+    onRefresh: () => {},
+    stress: async (o) => {
+      stressCalls++;
+      return runStress(src, o.spec, o.data, o.backtest, defaultsFrom(DEFAULT_SETTINGS));
+    },
+    ablation: async (o) => {
+      ablationCalls++;
+      return runAblation(o.spec, o.data, o.backtest, src);
+    },
+    book: async () => {
+      bookCalls++;
+      return null;
+    },
+  });
+  await new Promise((r) => setTimeout(r, 0));
+
+  // Passive mount MUST trigger zero ambient analytics or book fetches!
+  assert.equal(stressCalls, 0);
+  assert.equal(ablationCalls, 0);
+  assert.equal(bookCalls, 0);
+
+  // Trigger buttons are present and run on click.
+  const stressBtn = root.byClass('bt-stress-run')[0];
+  assert.equal(stressBtn.textContent, 'Run stress test');
+  stressBtn.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(stressCalls, 1);
+  assert.equal(root.byClass('bt-stress').length, 1);
+
+  const ablationBtn = root.byClass('bt-ablation-run')[0];
+  assert.equal(ablationBtn.textContent, 'Analyze clauses');
+  ablationBtn.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(ablationCalls, 1);
+  assert.equal(root.byClass('bt-ablation').length, 1);
+
+  // Clicking "In Book" lazily invokes view.book() once and shows a helpful note when no Active Book exists.
+  const stdBtn = root.byClass('bt-lens-btn').find((b) => b.textContent === 'Standalone')!;
+  const bookBtn = root.byClass('bt-lens-btn').find((b) => b.textContent === 'In Book')!;
+  bookBtn.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(bookCalls, 1);
+  assert.match(root.byClass('bt-book-host')[0].textContent, /book: active/);
+
+  // Returning to Standalone and back to In Book retries view.book() instead of latching permanently.
+  stdBtn.dispatch('click');
+  bookBtn.dispatch('click');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(bookCalls, 2);
+  drawn.dispose();
+
+  // Nullish stress/ablation return values reset the trigger button cleanly instead of staying disabled.
+  const nullRoot = new El('div');
+  const nullDrawn = renderResult(nullRoot as unknown as HTMLElement, {
+    source: src,
+    out,
+    notes: [],
+    onRefresh: () => {},
+    stress: () => null,
+    ablation: () => null,
+  });
+  const sBtn = nullRoot.byClass('bt-stress-run')[0];
+  sBtn.dispatch('click');
+  assert.equal(sBtn.disabled, false);
+  assert.equal(sBtn.textContent, 'Run stress test');
+  const aBtn = nullRoot.byClass('bt-ablation-run')[0];
+  aBtn.dispatch('click');
+  assert.equal(aBtn.disabled, false);
+  assert.equal(aBtn.textContent, 'Analyze clauses');
+  nullDrawn.dispose();
+});

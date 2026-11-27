@@ -255,7 +255,7 @@ export interface FollowedRun extends EntryRun {
 }
 
 /** Runs each entry's strategy, one after another, as a compare block does. Rejects as `runEntry` does, at the first entry that fails. */
-export async function runAccount<F extends { basename: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<FollowedRun[]> {
+export async function runAccount<F extends { basename: string; path?: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<FollowedRun[]> {
   const shares = allocations(entries);
   const out: FollowedRun[] = [];
   for (const [i, entry] of entries.entries()) out.push({ entry, alloc: shares[i], ...(await runEntry(entry, host)) });

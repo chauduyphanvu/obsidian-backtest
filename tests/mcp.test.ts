@@ -186,3 +186,35 @@ test('check_strategy on a block in a plain fence says how to fence it', async ()
   const r = await client.callTool({ name: 'check_strategy', arguments: { source: '```\nuniverse: SPY\nbuy when close > sma(200)\n```' } });
   assert.match(textOf(r), /```strategy/);
 });
+
+test('run_backtest omits stress and ablation by default and computes them when opted in', async () => {
+  const source = 'name: Walk\nuniverse: csv:Data/walk.csv\nbuy when close > sma(30) and rsi(14) < 70\nsell when close < sma(30)';
+  const fast = await client.callTool({ name: 'run_backtest', arguments: { source, vault_path: vault } });
+  assert.ok(!fast.isError, textOf(fast));
+  const fastContent = fast.structuredContent as Record<string, unknown>;
+  assert.equal('stress' in fastContent, false);
+  assert.equal('ablation' in fastContent, false);
+
+  const full = await client.callTool({
+    name: 'run_backtest',
+    arguments: { source, vault_path: vault, include_stress: true, include_ablation: true },
+  });
+  assert.ok(!full.isError, textOf(full));
+  const fullContent = full.structuredContent as Record<string, unknown>;
+  assert.ok('stress' in fullContent && fullContent.stress !== null);
+  assert.ok(Array.isArray(fullContent.ablation) && fullContent.ablation.length > 0);
+});
+
+test('check_strategy resolves DAG links when vault_path is provided', async () => {
+  writeFileSync(join(vault, 'Parent.md'), '```strategy\nname: Parent\nuniverse: csv:Data/walk.csv\nbuy when close > sma(30)\nsell when close < sma(30)\n```');
+  const child = 'name: Child\nextends: [[Parent]]\nstop loss: 10%\nbuy when base';
+  const ok = await client.callTool({ name: 'check_strategy', arguments: { source: child, vault_path: vault } });
+  const okContent = ok.structuredContent as { errors: number; blocks: number };
+  assert.equal(okContent.blocks, 1);
+  assert.equal(okContent.errors, 0);
+
+  const broken = await client.callTool({ name: 'check_strategy', arguments: { source: 'name: Bad\nextends: [[MissingParent]]\nbuy when base', vault_path: vault } });
+  const brokenContent = broken.structuredContent as { errors: number; problems: { message: string }[] };
+  assert.equal(brokenContent.errors, 1);
+  assert.match(brokenContent.problems[0].message, /MissingParent/);
+});

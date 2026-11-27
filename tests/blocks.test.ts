@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blockAt, extractBlocks, hasStrategyBlock, targetBlock } from '../src/blocks.ts';
+import { blockAt, blockDisplayName, extractBlocks, hasStrategyBlock, targetBlock } from '../src/blocks.ts';
 
 test('finds strategy blocks with their names and lines, and skips other languages', () => {
   const note = ['# Note', '```strategy', 'name: First one', 'universe: SPY', '```', 'text', '```js', 'name: no', '```', '~~~~strategy', 'universe: QQQ', '~~~~', '```strategy', 'unterminated'].join('\n');
@@ -155,4 +155,11 @@ test('a note has a strategy block only when a strategy fence opens one', () => {
   assert.equal(hasStrategyBlock(['# Note', ...strategy('universe: SPY')].join('\n')), true);
   assert.equal(hasStrategyBlock('A note about a strategy, with no block.'), false);
   assert.equal(hasStrategyBlock(['````md', '```strategy', 'universe: SPY', '```', '````'].join('\n')), false);
+});
+
+test('blockDisplayName uses explicit name or numbers multiple unnamed blocks consistently', () => {
+  assert.equal(blockDisplayName('Accounts', 'IRA', 0, 2), 'IRA');
+  assert.equal(blockDisplayName('Accounts', null, 0, 1), 'Accounts');
+  assert.equal(blockDisplayName('Accounts', null, 0, 2), 'Accounts 1');
+  assert.equal(blockDisplayName('Accounts', null, 1, 2), 'Accounts 2');
 });

@@ -19,9 +19,9 @@ export interface LiveHost {
    */
   show(source: string, el: HTMLElement, opts: { notePath: string; blockKey?: string; apply: (values: Record<string, number>) => Promise<void>; signal: AbortSignal }): Promise<() => void>;
   /** True when the block parses and every ticker's prices are already saved, so running it needs no download. */
-  pricesReady(source: string): Promise<boolean>;
+  pricesReady(source: string, notePath?: string): Promise<boolean>;
   /** The block's problems, empty when it can run. */
-  errors(source: string): Diagnostic[];
+  errors(source: string, notePath?: string): Diagnostic[] | Promise<Diagnostic[]>;
   /** The parser defaults the settings imply now, for the fixes the problems offer. */
   defaults(): Partial<Defaults>;
   /** The block's text with these parameter values written in. */
@@ -198,11 +198,21 @@ export class LiveView extends ItemView {
     this.lastIndex.set(note, choice.index);
     const selected: Shown = { note, index: choice.index, text: choice.text };
     let change = changeKind(this.drawn, this.pending, selected);
-    const errors = change === 'edit' || change === 'switch' ? this.host.errors(selected.text) : [];
+    let errors: Diagnostic[] = [];
+    if (change === 'edit' || change === 'switch') {
+      try {
+        errors = await this.host.errors(selected.text, reading.note);
+      } catch {
+        errors = [];
+      }
+      if (seq !== this.looks) return;
+      // Re-evaluate change kind in case a run finished or state changed while awaiting async DAG resolution.
+      change = changeKind(this.drawn, this.pending, selected);
+    }
     let pricesReady = false;
     if (change === 'edit' && errors.length === 0) {
       try {
-        pricesReady = await this.host.pricesReady(selected.text);
+        pricesReady = await this.host.pricesReady(selected.text, reading.note);
       } catch {
         pricesReady = false;
       }
@@ -234,7 +244,16 @@ export class LiveView extends ItemView {
     this.pending = selected;
     const id = ++this.runId;
     const signal = this.latest.start();
-    const errors = this.host.errors(selected.text);
+    let errors: Diagnostic[] = [];
+    try {
+      errors = await this.host.errors(selected.text, reading.note);
+    } catch (e) {
+      if (id === this.runId && !signal.aborted) {
+        this.showProblem(reading, selected, { kind: 'failed', message: e instanceof Error ? e.message : String(e), retry: () => void this.run(reading, selected) });
+      }
+      return;
+    }
+    if (id !== this.runId || signal.aborted) return;
     if (errors.length > 0) {
       this.showProblem(reading, selected, { kind: 'errors', errors, text: selected.text });
       return;

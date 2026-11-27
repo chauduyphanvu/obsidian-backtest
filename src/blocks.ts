@@ -154,6 +154,14 @@ export function extractBlocks(markdown: string, lang = 'strategy'): Block[] {
 }
 
 /**
+ * The display name of a block in a note: its explicit `name:`, else the note's basename (numbered `basename 1`,
+ * `basename 2`, ... when the note holds more than one block of that kind).
+ */
+export function blockDisplayName(basename: string, name: string | null, index: number, total: number): string {
+  return name ?? (total > 1 ? `${basename} ${index + 1}` : basename);
+}
+
+/**
  * The strategy block the cursor on `line` (0-based) is in, from its opening fence to its closing fence, with its place
  * among the note's strategy blocks; null when the cursor is in none. Only that block's name is read.
  */

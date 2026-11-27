@@ -618,55 +618,6 @@ export async function resolveStrategyDag(source: string, notePath: string, reade
   };
 }
 
-/** Maintains reverse dependency edges across the vault so editing a signal/regime/parent notifies downstream strategies. */
-export class DagIndex {
-  /** nodeKey -> upstream dependency nodeKeys */
-  private upstream = new Map<string, Set<string>>();
-  /** upstream nodeKey -> downstream dependent nodeKeys */
-  private downstream = new Map<string, Set<string>>();
-
-  /** Records a node's current dependencies, replacing any older edges for `nodeKey`. */
-  record(nodeKey: string, dependencies: readonly string[]): void {
-    const prev = this.upstream.get(nodeKey);
-    if (prev) {
-      for (const dep of prev) {
-        const set = this.downstream.get(dep);
-        set?.delete(nodeKey);
-        if (set?.size === 0) this.downstream.delete(dep);
-      }
-    }
-    const next = new Set(dependencies);
-    this.upstream.set(nodeKey, next);
-    for (const dep of next) {
-      let set = this.downstream.get(dep);
-      if (!set) this.downstream.set(dep, (set = new Set()));
-      set.add(nodeKey);
-    }
-  }
-
-  /** Returns all transitive downstream node keys affected when `nodeKey` changes. */
-  dependentsOf(nodeKey: string): string[] {
-    const visited = new Set<string>();
-    const queue = [nodeKey];
-    while (queue.length > 0) {
-      const cur = queue.shift()!;
-      for (const dep of this.downstream.get(cur) ?? []) {
-        if (!visited.has(dep)) {
-          visited.add(dep);
-          queue.push(dep);
-        }
-      }
-    }
-    return [...visited];
-  }
-
-  /** Removes a node from the graph (e.g. when deleted). */
-  remove(nodeKey: string): void {
-    this.record(nodeKey, []);
-    this.upstream.delete(nodeKey);
-  }
-}
-
 /** Computes exact marginal performance & trade set-diffs between a parent strategy and an inherited child strategy. */
 export function diffBacktests(parent: Backtest, child: Backtest, parentName = parent.spec.name ?? 'Parent'): StrategyDiff {
   const keyOf = (t: { asset: string; entryT: number; side?: 'short' }) => `${t.asset}:${t.side ?? 'long'}:${t.entryT}`;

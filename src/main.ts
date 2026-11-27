@@ -1,17 +1,26 @@
 import type { EditorView } from '@codemirror/view';
 import { MarkdownRenderChild, MarkdownView, Menu, Notice, Platform, Plugin, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownFileInfo, type MarkdownPostProcessorContext } from 'obsidian';
 import type { AblationReport } from './ablation.ts';
-import { allocations, parseAccount, runAccount } from './account.ts';
-import { blockAt, extractBlocks, hasStrategyBlock, targetBlock, type Block } from './blocks.ts';
+import { allocations, parseAccount, runAccount, type Holding } from './account.ts';
+import { blockAt, blockDisplayName, extractBlocks, hasStrategyBlock, targetBlock, type Block } from './blocks.ts';
 import { buildBookSnapshot, type ActiveBookSnapshot } from './book.ts';
 import { compareCurves, parseCompare, type CompareHost } from './compare.ts';
 import { CsvModal } from './csv-modal.ts';
-import { DagIndex, dagNodeKey, hasDagRefs, parseSignalBlock, parseUniverseBlock, resolveStrategyDag, type DagBlockKind, type VaultReader } from './dag.ts';
+import { dagNodeKey, hasDagRefs, parseSignalBlock, parseUniverseBlock, resolveStrategyDag, type DagBlockKind, type VaultReader } from './dag.ts';
 import { DASHBOARD_TEMPLATE, NOTES_PER_PAUSE, findStrategies as findInNotes, mayHoldStrategy, type FoundStrategy } from './dashboard.ts';
 import { withoutQueries, type PriceFailure } from './data.ts';
 import { runStep } from './diagnostics.ts';
 import { StrategySuggest, applyFixAtCursor, applyParamAtCursor, setAblationResults, strategyEditor, toggleMuteAtCursor } from './editor.ts';
-import { createConfirmFillEvent, parseLedgerJsonl, projectAccountState, serializeLedgerEvent, type LedgerEvent } from './fill-ledger.ts';
+import {
+  createConfirmFillEvent,
+  ensureOpeningBalanceEvent,
+  mergeLedgerJsonl,
+  parseLedgerJsonl,
+  projectAccountState,
+  projectAccountWithStatus,
+  rewriteLedgerStrategyKey,
+  type LedgerEvent,
+} from './fill-ledger.ts';
 import { hoverValue, type HoverValue } from './debug.ts';
 import { parseSpec, type Spec } from './dsl.ts';
 import type { Bars } from './types.ts';
@@ -28,7 +37,7 @@ import { drawHeld, viewText } from './live-core.ts';
 import { LiveView, VIEW_TYPE_LIVE, liveEditorExtension, openLivePanel, pokeLiveViews, type LiveHost } from './live-view.ts';
 import { ordersSavePlan, scanAccounts, scanOrders, type AccountScanHost, type ListFix, type ScanHost } from './orders.ts';
 import { OrdersBadge, SharedScan, type Scan } from './orders-badge.ts';
-import { OrdersModal, OrdersView, VIEW_TYPE_ORDERS, openOrdersPane, type OrdersHost } from './orders-view.ts';
+import { OrdersModal, OrdersView, VIEW_TYPE_ORDERS, openOrdersPane, type ConfirmFillLeg, type OrdersHost } from './orders-view.ts';
 import { PriceStore } from './price-store.ts';
 import { renderAccount, type AccountHost } from './render-account.ts';
 import { renderCompare, renderCompareErrors, renderCompareMessage } from './render-compare.ts';
@@ -116,6 +125,7 @@ export default class BacktestBlocks extends Plugin {
     defaults: () => defaultsFrom(this.settings),
     freshForMs: () => this.settings.cacheHours * HOUR,
     modified: async (path) => (await this.app.vault.adapter.stat(normalizePath(path)))?.mtime ?? null,
+    resolveDag: (source, notePath) => this.resolveDag(source, notePath),
   });
   private properties = new NoteProperties<TFile>({
     read: (file) => this.app.vault.cachedRead(file),
@@ -172,13 +182,12 @@ export default class BacktestBlocks extends Plugin {
     lifecycle: (blockKey, source, out) => this.lifecycleFor(blockKey, source, out),
     deployStrategy: (notePath, blockKey, source, out, restore) => this.deployStrategy(notePath, blockKey, source, out, restore),
   });
-  /** Reverse-dependency index for `extends:` / `signal` / `regime` / `universe` DAG blocks. */
-  private dagIndex = new DagIndex();
   /** Latest X-Ray ablation results keyed by trimmed strategy source, synced into open CodeMirror editors. */
   private ablationCache = new Map<string, AblationReport>();
-  /** Cached Active Book snapshot for ambient "+ In My Book" evaluation (invalidated on fill or settings change). */
+  /** Cached Active Book snapshot for "+ In My Book" evaluation (invalidated on fill, settings, or Markdown vault edits). */
   private cachedBook: { at: number; snapshot: ActiveBookSnapshot | null } | null = null;
   private bookInFlight: Promise<ActiveBookSnapshot | null> | null = null;
+  private bookVersion = 0;
   /** Serializes append-only `fills.jsonl` writes so rapid 1-click Confirm Fill actions never race. */
   private fillWriteQueue: Promise<void> = Promise.resolve();
   /** When the plugin loaded: a block's record that began since then was made in this session. */
@@ -193,7 +202,7 @@ export default class BacktestBlocks extends Plugin {
   /** The vault's account blocks for the orders window, run after the strategies so their kept results are reused. */
   private accountScan: AccountScanHost = {
     find: () => this.findStrategies('account'),
-    strategies: (note) => ({ ...this.compareHost(note), run: (source) => this.results.runSource(source, { background: true }) }),
+    strategies: (note) => ({ ...this.compareHost(note), run: (source, path) => this.results.runSource(source, { background: true, notePath: path }) }),
     project: async (accountName, config) => {
       const events = await this.readFillEvents();
       if (events.length === 0) return config;
@@ -266,14 +275,28 @@ export default class BacktestBlocks extends Plugin {
         if (view instanceof MarkdownView && view.file) this.blocks.checkAges(view.file.path, Date.now());
       }),
     );
-    this.registerEvent(this.app.vault.on('delete', (file) => this.prices.forgetColumns(file.path)));
+    this.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        if (file instanceof TFile && file.extension === 'md') this.invalidateBook();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on('delete', (file) => {
+        this.prices.forgetColumns(file.path);
+        if (file instanceof TFolder || (file instanceof TFile && file.extension === 'md')) this.invalidateBook();
+      }),
+    );
     this.registerEvent(this.app.vault.on('rename', (_file, oldPath) => this.prices.forgetColumns(oldPath)));
     this.registerEvent(
       this.app.vault.on('rename', (file, oldPath) => {
         // Only notes hold blocks, and folders hold notes.
         if (file instanceof TFile && file.extension !== 'md') return;
+        this.invalidateBook();
         const folder = file instanceof TFolder;
-        void this.ledgers.rename(blockKeyPrefix(oldPath, folder), blockKeyPrefix(file.path, folder));
+        const fromPrefix = blockKeyPrefix(oldPath, folder);
+        const toPrefix = blockKeyPrefix(file.path, folder);
+        void this.ledgers.rename(fromPrefix, toPrefix);
+        void this.renameLifecycleRefs(fromPrefix, toPrefix, false);
       }),
     );
 
@@ -409,10 +432,16 @@ export default class BacktestBlocks extends Plugin {
     await this.saveData(this.settings);
     // Defaults are part of every result's key, but the freshness window is not.
     this.results.reset(this.settings.cacheHours * HOUR);
-    this.cachedBook = null;
+    this.invalidateBook();
     this.prices.ready.changed();
     // Blocks already on screen keep the defaults they were drawn with and say so; this runs once typing in a setting has paused.
     this.blocks.checkDefaults();
+  }
+
+  private invalidateBook(): void {
+    this.bookVersion++;
+    this.cachedBook = null;
+    this.bookInFlight = null;
   }
 
   setOrdersBadge(on: boolean): void {
@@ -456,8 +485,12 @@ export default class BacktestBlocks extends Plugin {
         const child = new MarkdownRenderChild(el);
         return drawHeld(() => this.blocks.renderStrategy(source, el, child, { notePath, blockKey, apply, compact: false, panel: true }), () => this.blocks.dispose(child), signal);
       },
-      pricesReady: (source) => this.pricesReady(source),
-      errors: (source) => this.results.runner().parse(source).errors,
+      pricesReady: (source, notePath) => this.pricesReady(source, notePath),
+      errors: async (source, notePath) => {
+        const { source: resolved, dag } = await this.results.resolveSource(source, notePath);
+        if (dag && dag.errors.length > 0) return dag.errors;
+        return this.results.runner().parse(resolved).errors;
+      },
       defaults: () => defaultsFrom(this.settings),
       rewrite: setParamValues,
       newNote: () => this.newStrategyNote(),
@@ -465,8 +498,10 @@ export default class BacktestBlocks extends Plugin {
   }
 
   /** Whether running the block needs no download (PriceStore.pricesReady), with the settings as they are now. */
-  private pricesReady(source: string): Promise<boolean> {
-    return this.prices.pricesReady(source, defaultsFrom(this.settings), this.settings.cacheHours * HOUR);
+  private async pricesReady(source: string, notePath?: string): Promise<boolean> {
+    const { source: resolved, dag } = await this.results.resolveSource(source, notePath);
+    if (dag && dag.errors.length > 0) return false;
+    return this.prices.pricesReady(resolved, defaultsFrom(this.settings), this.settings.cacheHours * HOUR);
   }
 
   /**
@@ -481,7 +516,8 @@ export default class BacktestBlocks extends Plugin {
         if (force) this.results.clear();
         return this.findStrategies();
       },
-      run: (source, force) => this.results.runSource(source, { background: true, ...(force ? { freshForMs: Date.now() - started } : {}) }),
+      run: (source, force, notePath) =>
+        this.results.runSource(source, { background: true, notePath, ...(force ? { freshForMs: Date.now() - started } : {}) }),
       openBlock: (note, name, line) => this.openListed(note, name, line),
       newNote: () => this.newStrategyNote(),
       now: () => Date.now(),
@@ -501,7 +537,7 @@ export default class BacktestBlocks extends Plugin {
         const f = file();
         return f ? { text: await this.app.vault.read(f), line: ctx.getSectionInfo(el)?.lineStart } : null;
       },
-      run: (source, force) => this.results.runSource(source, { force }),
+      run: (source, force) => this.results.runSource(source, { force, notePath: ctx.sourcePath }),
       append: async (rows, through) => {
         const f = file();
         if (!f) return { ok: false, message: 'Cannot find this note. The plugin wrote nothing.' };
@@ -568,7 +604,7 @@ export default class BacktestBlocks extends Plugin {
   /** The block's result, kept or run now, for a command that needs no drawn result; null, and a message, when it does not run. */
   private async runAtCursor(at: AtCursor, what: string): Promise<RunOutput | null> {
     try {
-      return await this.results.runSource(at.block.source);
+      return await this.results.runSource(at.block.source, { notePath: at.file.path });
     } catch (e) {
       new Notice(`Cannot ${what}. ${e instanceof Error ? e.message : String(e)}`);
       return null;
@@ -586,7 +622,9 @@ export default class BacktestBlocks extends Plugin {
   /** Starts a forward test of the block at the cursor, as "Start a forward test" in its menu does. */
   private async forwardAtCursor(at: AtCursor): Promise<void> {
     const out = await this.runAtCursor(at, `start a forward test for ${strategyLabel(at.block)}`);
-    if (out) await this.startForward(forwardStart(at.block.source, out, defaultsFrom(this.settings), at.file.path));
+    if (!out) return;
+    const { source: resolved } = await this.results.resolveSource(at.block.source, at.file.path);
+    await this.startForward(forwardStart(resolved, out, defaultsFrom(this.settings), at.file.path));
   }
 
   /** Asks for a new name for the block at the cursor, then gives it that name (renameStrategy). */
@@ -630,6 +668,8 @@ export default class BacktestBlocks extends Plugin {
    */
   private async moveStrategy(file: TFile, from: { key: string; name: string | null }, to: { key: string; name: string }, record: string | null = from.key): Promise<{ links: number; notes: number }> {
     if (record !== null) await this.ledgers.move(record, to.key);
+    await this.renameLifecycleRefs(from.key, to.key, true);
+    if (record !== null && record !== from.key) await this.renameLifecycleRefs(record, to.key, true);
     this.blocks.moveState(from.key, to.key);
     const old = from.name;
     if (old === null) return { links: 0, notes: 0 };
@@ -723,6 +763,7 @@ export default class BacktestBlocks extends Plugin {
         take: async () => {
           try {
             await this.ledgers.move(carried.key, key);
+            await this.renameLifecycleRefs(carried.key, key, true);
             new Notice(`The plugin moved the record of "${name}" from ${from} to ${notePath}. Links such as ${forwardLink(from, name)} do not change.`);
           } catch (e) {
             new Notice(`Cannot move the record of "${name}" from ${from}. ${e instanceof Error ? e.message : String(e)}`);
@@ -782,7 +823,7 @@ export default class BacktestBlocks extends Plugin {
     return {
       note: (link) => this.app.metadataCache.getFirstLinkpathDest(link, notePath),
       read: (file) => this.app.vault.cachedRead(file),
-      run: (source) => this.results.runSource(source),
+      run: (source, path) => this.results.runSource(source, { notePath: path }),
     };
   }
 
@@ -800,16 +841,41 @@ export default class BacktestBlocks extends Plugin {
   /** What an `account` block needs: its strategies run, the broker's file, prices as they traded, and the two writes it can make to itself. */
   private accountHost(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): AccountHost {
     const write = this.blockWriter(el, ctx);
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    const baseName = file instanceof TFile ? file.basename : ctx.sourcePath.replace(/^.*\//, '').replace(/\.md$/i, '');
+    const resolveFallbackName = async (): Promise<string> => {
+      const info = ctx.getSectionInfo(el);
+      const noteText = info?.text ?? (file instanceof TFile ? await this.app.vault.cachedRead(file) : null);
+      if (noteText === null) return baseName;
+      const all = extractBlocks(noteText, 'account');
+      const found = info ? findBlock(noteText, info.lineStart, source, 'account') : null;
+      const idx = found ? found.index : all.findIndex((b) => b.source.replace(/\r/g, '').trimEnd() === source.replace(/\r/g, '').trimEnd());
+      return idx >= 0 ? blockDisplayName(baseName, null, idx, all.length) : baseName;
+    };
     return {
       run: (entries) => runAccount(entries, this.compareHost(ctx.sourcePath)),
       read: async (path) => {
-        const file = this.app.vault.getAbstractFileByPath(normalizePath(path)) ?? this.app.metadataCache.getFirstLinkpathDest(path, ctx.sourcePath);
-        if (!(file instanceof TFile)) throw new Error(`There is no file ${path} in this vault. Write the path from the top folder of the vault, for example Broker/schwab.csv.`);
-        return this.app.vault.cachedRead(file);
+        const f = this.app.vault.getAbstractFileByPath(normalizePath(path)) ?? this.app.metadataCache.getFirstLinkpathDest(path, ctx.sourcePath);
+        if (!(f instanceof TFile)) throw new Error(`There is no file ${path} in this vault. Write the path from the top folder of the vault, for example Broker/schwab.csv.`);
+        return this.app.vault.cachedRead(f);
       },
       raw: (refs) => this.results.runner().loadRaw(refs),
       weights: write ? (weights) => write((note, line) => setWeightsInNote(note, line, source, 'account', weights)) : null,
       setting: write ? (key, value) => write((note, line) => setSettingInNote(note, line, source, 'account', key, value)) : null,
+      project: async (accountName, config) => {
+        const events = await this.readFillEvents();
+        if (events.length === 0) return { config, eventCount: 0, divergesFromBlock: false };
+        const name = config.name ?? (accountName || (await resolveFallbackName()));
+        const { projected, loggedEvents, divergesFromBlock } = projectAccountWithStatus(events, name, {
+          holdings: config.holdings,
+          cash: config.cash,
+        });
+        return {
+          config: projected.eventCount > 0 ? { ...config, holdings: projected.holdings, cash: projected.cash } : config,
+          eventCount: loggedEvents,
+          divergesFromBlock,
+        };
+      },
     };
   }
 
@@ -881,7 +947,7 @@ export default class BacktestBlocks extends Plugin {
       newNote: () => this.newStrategyNote(),
       openPane: () => void openOrdersPane(this.app),
       killSwitches: () => this.evaluateVaultKillSwitches(),
-      confirmFill: (fill) => this.confirmFill(fill),
+      confirmFill: (fill, opening) => this.confirmFill(fill, opening),
     };
   }
 
@@ -896,12 +962,8 @@ export default class BacktestBlocks extends Plugin {
     };
   }
 
-  private async resolveDag(source: string, notePath: string) {
-    const resolved = await resolveStrategyDag(source, notePath, this.vaultReader());
-    const nameMatch = source.match(/^\s*name\s*:\s*(.+)$/im);
-    const selfKey = dagNodeKey(notePath, nameMatch ? nameMatch[1].trim() : null, 'strategy');
-    this.dagIndex.record(selfKey, resolved.dependencies);
-    return resolved;
+  private resolveDag(source: string, notePath: string) {
+    return resolveStrategyDag(source, notePath, this.vaultReader());
   }
 
   /** Host for `signal`, `regime`, and `universe` blocks showing every direct and transitive dependent strategy in the vault. */
@@ -976,25 +1038,83 @@ export default class BacktestBlocks extends Plugin {
     }
   }
 
-  private appendFillEvent(event: LedgerEvent): Promise<void> {
+  private appendFillEvents(
+    events: readonly LedgerEvent[],
+    opening?: { account: string; holdings: readonly Holding[]; cash: number },
+  ): Promise<void> {
+    if (events.length === 0) return Promise.resolve();
     const run = this.fillWriteQueue.then(async () => {
       const dir = this.ledgerDir();
       await this.ensureFolder(dir);
       const path = normalizePath(`${dir}/fills.jsonl`);
-      const existing = (await this.app.vault.adapter.exists(path)) ? await this.app.vault.adapter.read(path) : '';
-      const line = serializeLedgerEvent(event);
-      const next = existing.trimEnd() ? `${existing.trimEnd()}\n${line}\n` : `${line}\n`;
+      const diskText = (await this.app.vault.adapter.exists(path)) ? await this.app.vault.adapter.read(path) : '';
+      const incoming: LedgerEvent[] = [];
+      if (opening) {
+        const existingEvents = parseLedgerJsonl(diskText);
+        const watermark = ensureOpeningBalanceEvent(existingEvents, opening.account, { holdings: opening.holdings, cash: opening.cash });
+        if (watermark) incoming.push(watermark);
+      }
+      incoming.push(...events);
+      const next = mergeLedgerJsonl(diskText, incoming);
       await this.app.vault.adapter.write(path, next);
-      this.cachedBook = null;
-      this.bookInFlight = null;
+      this.invalidateBook();
     });
     this.fillWriteQueue = run.catch(() => {});
     return run;
   }
 
-  private async confirmFill(fill: { account: string; ticker: string; side: 'buy' | 'sell' | 'short' | 'cover'; quantity: number; price: number; fees: number }): Promise<void> {
-    const ev = createConfirmFillEvent(fill);
-    await this.appendFillEvent(ev);
+  private async confirmFill(
+    fill: ConfirmFillLeg | ConfirmFillLeg[],
+    opening?: { holdings: readonly Holding[]; cash: number },
+  ): Promise<void> {
+    const legs = Array.isArray(fill) ? fill : [fill];
+    if (legs.length === 0) return;
+    const baseTs = Date.now();
+    const events = legs.map((leg, i) => createConfirmFillEvent({ ...leg, t: baseTs + i }));
+    await this.appendFillEvents(events, opening ? { account: legs[0].account, holdings: opening.holdings, cash: opening.cash } : undefined);
+  }
+
+  /**
+   * Propagates a note, folder, or strategy rename into `_ledger/commits/*.json` (`commit.blockKey`) and
+   * `_ledger/fills.jsonl` (`event.strategy`) so live attribution survives renames.
+   */
+  private async renameLifecycleRefs(from: string, to: string, exact: boolean): Promise<void> {
+    if (!from || from === to) return;
+    // Serialize both commit JSON and fills.jsonl rewrites on the ledger write queue so batch renames cannot race.
+    const run = this.fillWriteQueue.then(async () => {
+      const commitsDir = normalizePath(`${this.ledgerDir()}/commits`);
+      if (await this.app.vault.adapter.exists(commitsDir)) {
+        try {
+          const listed = await this.app.vault.adapter.list(commitsDir);
+          for (const path of listed.files) {
+            if (!path.endsWith('.json')) continue;
+            try {
+              const raw = await this.app.vault.adapter.read(path);
+              const commit = JSON.parse(raw) as Partial<DeploymentCommit>;
+              if (typeof commit.blockKey !== 'string') continue;
+              let nextKey: string | null = null;
+              if (exact && commit.blockKey === from) nextKey = to;
+              else if (!exact && commit.blockKey.startsWith(from)) nextKey = to + commit.blockKey.slice(from.length);
+              if (nextKey !== null) {
+                commit.blockKey = nextKey;
+                await this.app.vault.adapter.write(path, JSON.stringify(commit, null, 2));
+              }
+            } catch {
+              // Skip unreadable commit JSON without aborting other commits.
+            }
+          }
+        } catch {
+          // Ignore adapter list errors.
+        }
+      }
+      const fillsPath = normalizePath(`${this.ledgerDir()}/fills.jsonl`);
+      if (!(await this.app.vault.adapter.exists(fillsPath))) return;
+      const diskText = await this.app.vault.adapter.read(fillsPath);
+      const { text, changed } = rewriteLedgerStrategyKey(diskText, from, to, exact);
+      if (changed > 0) await this.app.vault.adapter.write(fillsPath, text);
+    });
+    this.fillWriteQueue = run.catch(() => {});
+    await run;
   }
 
   private async loadCommit(commitHash: string): Promise<DeploymentCommit | null> {
@@ -1023,7 +1143,7 @@ export default class BacktestBlocks extends Plugin {
       return { commit: null, tape: null, killSwitch: null, hasDraftChanges: false };
     }
     const events = await this.readFillEvents();
-    const book = await this.activeBookSnapshot().catch(() => null);
+    const book = events.length > 0 ? await this.activeBookSnapshot().catch(() => null) : null;
     const tape = computeRealityTape(commit, out.backtest, events, book?.name);
     const killSwitch = tape && out.spec.invalidate ? evaluateKillSwitch(out.spec.invalidate, killSwitchContext(commit, tape.shortfall)) : null;
     const stripLive = (s: string) => s.replace(/^\s*live\s+since\s*:.*$/gim, '').trim();
@@ -1071,6 +1191,7 @@ export default class BacktestBlocks extends Plugin {
   private activeBookSnapshot(): Promise<ActiveBookSnapshot | null> {
     if (this.cachedBook && Date.now() - this.cachedBook.at < 60_000) return Promise.resolve(this.cachedBook.snapshot);
     if (this.bookInFlight) return this.bookInFlight;
+    const version = this.bookVersion;
     const job = (async (): Promise<ActiveBookSnapshot | null> => {
       const accounts = await this.findStrategies('account');
       let picked: { note: string; name: string; source: string; parsed: ReturnType<typeof parseAccount> } | null = null;
@@ -1091,11 +1212,11 @@ export default class BacktestBlocks extends Plugin {
         }
       }
       if (!picked) {
-        this.cachedBook = { at: Date.now(), snapshot: null };
+        if (this.bookVersion === version) this.cachedBook = { at: Date.now(), snapshot: null };
         return null;
       }
       try {
-        const host = { ...this.compareHost(picked.note), run: (s: string) => this.results.runSource(s, { background: true }) };
+        const host = { ...this.compareHost(picked.note), run: (s: string, path?: string) => this.results.runSource(s, { background: true, notePath: path }) };
         const runs = await runAccount(picked.parsed.entries, host);
         const weights = allocations(picked.parsed.entries);
         // Match `findStrategies('account')` naming (basename for unnamed blocks) so `fills.jsonl` events align cleanly.
@@ -1106,10 +1227,10 @@ export default class BacktestBlocks extends Plugin {
           cash: picked.parsed.config.cash,
         });
         const snapshot = buildBookSnapshot(name, picked.note, runs, weights, projected.holdings, projected.cash, picked.parsed.config.capitalAtStart ?? this.settings.capital);
-        this.cachedBook = { at: Date.now(), snapshot };
+        if (this.bookVersion === version) this.cachedBook = { at: Date.now(), snapshot };
         return snapshot;
       } catch {
-        this.cachedBook = { at: Date.now(), snapshot: null };
+        if (this.bookVersion === version) this.cachedBook = { at: Date.now(), snapshot: null };
         return null;
       }
     })();
@@ -1122,24 +1243,24 @@ export default class BacktestBlocks extends Plugin {
   /** Evaluates `invalidate when` kill-switches across every deployed strategy in the vault for Today's Orders. */
   private async evaluateVaultKillSwitches(): Promise<{ note: string; strategy: string; line?: number; report: KillSwitchReport }[]> {
     const strategies = await this.findStrategies('strategy');
+    const liveCandidates = strategies.filter((s) => /^\s*live\s+since\s*:/im.test(s.source));
+    if (liveCandidates.length === 0) return [];
     const results: { note: string; strategy: string; line?: number; report: KillSwitchReport }[] = [];
-    const events = await this.readFillEvents();
-    const book = await this.activeBookSnapshot().catch(() => null);
-    for (const s of strategies) {
-      if (!/^\s*live\s+since\s*:/im.test(s.source)) continue;
+    let events: LedgerEvent[] | null = null;
+    let book: ActiveBookSnapshot | null | undefined;
+    for (const s of liveCandidates) {
       try {
-        let runSource = s.source;
-        if (hasDagRefs(s.source)) {
-          const dag = await this.resolveDag(s.source, s.note);
-          if (dag.errors.length > 0) continue;
-          runSource = dag.mergedSource;
-        }
+        const { source: runSource, dag } = await this.results.resolveSource(s.source, s.note);
+        if (dag && dag.errors.length > 0) continue;
         if (!/^\s*invalidate\s+when\b/im.test(runSource)) continue;
-        const out = await this.results.runSource(runSource, { background: true });
+        const out = await this.results.runSource(s.source, { background: true, notePath: s.note });
         const pin = out.spec.liveSince;
         if (!pin?.commit || !out.spec.invalidate) continue;
         const commit = await this.loadCommit(pin.commit);
         if (!commit) continue;
+        // Only load fills and Active Book once at least one live strategy with an active commit & kill-switch exists.
+        events ??= await this.readFillEvents();
+        if (events.length > 0 && book === undefined) book = await this.activeBookSnapshot().catch(() => null);
         const tape = computeRealityTape(commit, out.backtest, events, book?.name);
         if (!tape) continue;
         const report = evaluateKillSwitch(out.spec.invalidate, killSwitchContext(commit, tape.shortfall));
@@ -1238,15 +1359,23 @@ export default class BacktestBlocks extends Plugin {
 
   /** The value of a part of a block's rules on its ticker, from the saved prices only, for the editor's hover. */
   private async hoverValue(source: string, call: string): Promise<HoverValue | null> {
-    const kept = this.hovered.get(source);
+    const notePath = this.app.workspace.getActiveFile()?.path;
+    const hoverKey = `${notePath ?? ''}\u0000${source}`;
+    const kept = this.hovered.get(hoverKey);
     // Prices saved since are read again after a while, so a hover in a long session is not days behind.
     let read = kept && Date.now() - kept.at < HOVER_FRESH_MS ? kept.read : null;
     if (!read) {
       const defaults = defaultsFrom(this.settings);
-      const { spec } = parseSpec(source, { defaults });
-      read = spec ? this.prices.savedData(spec, defaults).then((data) => (data ? { spec, data } : null)) : Promise.resolve(null);
-      this.hovered.delete(source);
-      this.hovered.set(source, { at: Date.now(), read });
+      read = (async () => {
+        const { source: resolved, dag } = await this.results.resolveSource(source, notePath);
+        if (dag && dag.errors.length > 0) return null;
+        const { spec } = parseSpec(resolved, { defaults });
+        if (!spec) return null;
+        const data = await this.prices.savedData(spec, defaults);
+        return data ? { spec, data } : null;
+      })();
+      this.hovered.delete(hoverKey);
+      this.hovered.set(hoverKey, { at: Date.now(), read });
       // A few blocks are kept: the ones being edited.
       for (const key of this.hovered.keys()) if (this.hovered.size > HOVERED_BLOCKS) this.hovered.delete(key);
     }

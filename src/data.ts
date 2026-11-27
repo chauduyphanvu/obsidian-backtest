@@ -23,6 +23,10 @@ export interface DataDeps {
   readVaultFile(path: string): Promise<string | null>;
   cacheRead(key: string): Promise<string | null>;
   cacheWrite(key: string, text: string): Promise<void>;
+  /** Optional in-memory parsed cache reader so repeated loads avoid re-reading disk & JSON.parse(). */
+  cacheReadParsed?(key: string): Promise<Cached | null>;
+  /** Optional in-memory parsed cache updater paired with `cacheWrite`. */
+  cacheWriteParsed?(key: string, entry: Cached): void;
   now: () => number;
   /** Waits between retries; without it retries go out straight away. */
   sleep?: (ms: number) => Promise<void>;
@@ -99,7 +103,7 @@ export interface Retry {
   wait: number;
 }
 
-interface Cached {
+export interface Cached {
   fetched: number;
   /** The `since` the bars were fetched for. */
   since: number;
@@ -638,7 +642,10 @@ async function fetchYahoo(ref: AssetRef, interval: string, deps: DataDeps, raw =
 }
 
 async function fetchBinance(ref: AssetRef, interval: string, since: number, have: Bars | null, deps: DataDeps): Promise<Bars> {
-  const bars = have ?? emptyBars();
+  // Clone `have` arrays so an incremental refresh that fails partway never mutates an in-memory cached `Bars` object.
+  const bars: Bars = have
+    ? { t: [...have.t], o: [...have.o], h: [...have.h], l: [...have.l], c: [...have.c], v: [...have.v] }
+    : emptyBars();
   let start = bars.t.length ? bars.t[bars.t.length - 1] + 1 : since;
   for (let pages = 0; ; pages++) {
     if (pages === 300) throw new Error('there is too much history for this interval. Move the "from" date forward');
@@ -828,7 +835,9 @@ async function refresh(ref: AssetRef, interval: string, since: number, deps: Dat
     const bars = keepFrom > -Infinity ? barsFrom(got.bars, keepFrom) : got.bars;
     if (bars.t.length === 0) throw new Error('the source sent no bars');
     const fetched = deps.now();
-    await deps.cacheWrite(key, JSON.stringify({ fetched, since: Math.max(cached?.since ?? since, keepFrom), bars, ...(got.note ? { note: got.note } : {}) } satisfies Cached));
+    const entry: Cached = { fetched, since: Math.max(cached?.since ?? since, keepFrom), bars, ...(got.note ? { note: got.note } : {}) };
+    await deps.cacheWrite(key, JSON.stringify(entry));
+    deps.cacheWriteParsed?.(key, entry);
     return loaded(ref.source, bars, fetched, null, false, got.note);
   } catch (e) {
     if (priceFailure(e)?.kind === 'ticker') throw e;
@@ -891,12 +900,16 @@ export async function loadBars(
   }
 
   const key = opts?.key ?? cacheKey(ref, interval);
-  const raw = await deps.cacheRead(key);
   let saved: Cached | null = null;
-  try {
-    saved = raw ? (JSON.parse(raw) as Cached) : null;
-  } catch {
-    saved = null;
+  if (deps.cacheReadParsed) {
+    saved = await deps.cacheReadParsed(key);
+  } else {
+    const raw = await deps.cacheRead(key);
+    try {
+      saved = raw ? (JSON.parse(raw) as Cached) : null;
+    } catch {
+      saved = null;
+    }
   }
   // A cache that starts after `since` was built for a shorter run and can't serve this one. Only Binance is asked for less
   // than a whole history.

@@ -149,44 +149,48 @@ export interface Curve {
 }
 
 /** What resolving a compare block's entries needs from the plugin. */
-export interface CompareHost<F extends { basename: string }> {
+export interface CompareHost<F extends { basename: string; path?: string }> {
   /** The note a link points at from the compare block's own note, or null. */
   note(link: string): F | null;
   /** The note's text (Obsidian's cachedRead). */
   read(file: F): Promise<string>;
-  /** Runs a block's text (Results.runSource). */
-  run(source: string): Promise<RunOutput>;
+  /** Runs a block's text (Results.runSource), with the source note path for DAG resolution. */
+  run(source: string, notePath?: string): Promise<RunOutput>;
 }
 
 /** An entry's strategy, run: the name it goes by (the entry's label, else the block's `name:`, else the note's name) and the output. */
 export interface EntryRun {
   label: string;
   out: RunOutput;
+  /** Stable strategy block key (`notePath\0name:...` or `notePath\0block:i`) when the host provides `file.path`. */
+  blockKey?: string;
 }
 
 /**
  * Finds the strategy block an entry names and runs it. Rejects with a message that names the entry's line when its note,
  * strategy or run is missing.
  */
-export async function runEntry<F extends { basename: string }>(entry: CompareEntry, host: CompareHost<F>): Promise<EntryRun> {
+export async function runEntry<F extends { basename: string; path?: string }>(entry: CompareEntry, host: CompareHost<F>): Promise<EntryRun> {
   const file = host.note(entry.link.replace(/\.md$/i, ''));
   if (!file) throw new Error(`Line ${entry.line}: there is no note with the name "${entry.link}".`);
   const blocks = extractBlocks(await host.read(file));
-  const block = entry.block === null ? blocks[0] : blocks.find((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
+  const index = entry.block === null ? 0 : blocks.findIndex((b) => b.name?.toLowerCase() === entry.block!.toLowerCase());
+  const block = index >= 0 ? blocks[index] : undefined;
   if (!block) {
     throw new Error(entry.block === null ? `Line ${entry.line}: "${file.basename}" has no strategy block.` : `Line ${entry.line}: "${file.basename}" has no strategy named "${entry.block}".`);
   }
   let out: RunOutput;
   try {
-    out = await host.run(block.source);
+    out = await host.run(block.source, file.path);
   } catch (e) {
     throw new Error(`Line ${entry.line}: "${block.name ?? file.basename}" did not run. ${e instanceof Error ? e.message : String(e)}`);
   }
-  return { label: entry.label ?? block.name ?? file.basename, out };
+  const blockKey = file.path ? `${file.path}\u0000${block.name ? `name:${block.name.toLowerCase()}` : `block:${index}`}` : undefined;
+  return { label: entry.label ?? block.name ?? file.basename, out, ...(blockKey ? { blockKey } : {}) };
 }
 
 /** The curve of each entry's strategy, in the order of the entries, run one after another. Rejects as `runEntry` does, at the first entry that fails. */
-export async function compareCurves<F extends { basename: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<Curve[]> {
+export async function compareCurves<F extends { basename: string; path?: string }>(entries: CompareEntry[], host: CompareHost<F>): Promise<Curve[]> {
   const curves: Curve[] = [];
   for (const entry of entries) {
     const { label, out } = await runEntry(entry, host);

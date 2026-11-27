@@ -36,7 +36,10 @@ test('a scan runs every strategy found, in the background, and says how far it g
   assert.deepEqual(list.map((s) => [s.note, s.strategy, s.error]), [['A.md', 'One', null], ['B.md', 'Two', 'It broke.']]);
   assert.deepEqual(progress, ['0/2', '1/2', '2/2']);
   assert.equal(cleared, 0);
-  assert.deepEqual(asked, [{ freshForMs: undefined, background: true }, { freshForMs: undefined, background: true }]);
+  assert.deepEqual(asked, [
+    { freshForMs: undefined, background: true, notePath: 'A.md' },
+    { freshForMs: undefined, background: true, notePath: 'B.md' },
+  ]);
 });
 
 test('a forced scan drops the kept results first and takes prices fetched since it began as fresh', async () => {

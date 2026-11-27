@@ -53,6 +53,8 @@ export interface AccountHost {
   weights: ((weights: { line: number; percent: number }[]) => Promise<void>) | null;
   /** Writes a setting into the block; null likewise. */
   setting: ((key: string, value: string) => Promise<void>) | null;
+  /** Optional event-sourced `fills.jsonl` projection overriding static holdings & cash for this account. */
+  project?(accountName: string, config: AccountConfig): Promise<{ config: AccountConfig; eventCount: number; divergesFromBlock: boolean }>;
 }
 
 /** An amount of money to the cent: $1,234.56, −$12.30. */
@@ -503,7 +505,24 @@ export function renderAccount(parent: HTMLElement, source: string, host: Account
     const root = h(parent, 'div', 'bt-root bt-acct');
     h(root, 'div', 'bt-title', config.name ?? 'Account');
     for (const w of new Set(runs.flatMap((r) => r.out.warnings))) h(root, 'div', 'bt-warning', w);
-    drawOrders(root, config, runs);
+    let effectiveConfig = config;
+    if (host.project) {
+      const projected = await host.project(config.name ?? '', config);
+      if (stopped) return;
+      effectiveConfig = projected.config;
+      if (projected.eventCount > 0) {
+        h(root, 'div', 'bt-note', `Positions include ${plural(projected.eventCount, 'logged fill', 'logged fills')} from fills.jsonl.`);
+      }
+      if (projected.divergesFromBlock) {
+        h(
+          root,
+          'div',
+          'bt-warning',
+          'This block’s Markdown holdings or cash differ from the opening balance recorded in fills.jsonl. Orders use fills.jsonl as the source of truth.',
+        );
+      }
+    }
+    drawOrders(root, effectiveConfig, runs);
     if (entries.length > 1) drawSplit(root, entries, runs, host);
     if (config.fills === null) return;
     h(root, 'div', 'bt-acct-heading', 'Your fills, compared with the signals');

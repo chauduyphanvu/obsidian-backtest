@@ -296,3 +296,39 @@ test('the header guess finds the usual names, the saved ones, and a statement’
   assert.equal(f.header[f.at.price], 'Amount ($)');
   assert.equal(headerGuess('just one column\nand another line'), null);
 });
+
+test('renderAccount applies host.project fills.jsonl parity and displays fill count and divergence warning', async () => {
+  const { El } = await import('./page.ts');
+  const { renderAccount } = await import('../src/render-account.ts');
+  const { parseSpec } = await import('../src/dsl.ts');
+  const { runBacktest } = await import('../src/backtest.ts');
+  const spy = bars([100, 100, 100], { start: T });
+  const spec = parseSpec('name: Hold\nuniverse: SPY\nbuy when true').spec!;
+  const bt = runBacktest(spec, new Map([['SPY', spy]]));
+  const out = { spec, backtest: bt, data: new Map([['SPY', spy]]), warnings: [], prices: [] };
+
+  const root = new El('div');
+  const stop = renderAccount(
+    root as unknown as HTMLElement,
+    'name: Main\nholdings: SPY 10\ncash: 9,000\n[[Hold]] 100%',
+    {
+      run: async (entries) => [{ entry: entries[0], alloc: 1, label: 'Hold', out }],
+      read: async () => '',
+      raw: async () => ({ data: new Map(), warnings: [] }),
+      weights: null,
+      setting: null,
+      project: async (_name, config) => ({
+        config: { ...config, holdings: [{ ticker: 'SPY', shares: 100 }], cash: 0 },
+        eventCount: 2,
+        divergesFromBlock: true,
+      }),
+    },
+  );
+  await new Promise((r) => setTimeout(r, 0));
+  const text = root.textContent;
+  assert.match(text, /Positions include 2 logged fills from fills\.jsonl/);
+  assert.match(text, /differ from the opening balance recorded in fills\.jsonl/);
+  // Because projected holdings are already SPY 100 ($10,000) with $0 cash, target is 100 -> No order (not Buy 90!)
+  assert.match(text, /100 → 100/);
+  stop();
+});

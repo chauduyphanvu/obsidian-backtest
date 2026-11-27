@@ -1,6 +1,6 @@
 // The `backtests` block: one table with every strategy in the vault. Pure; the host finds and runs the strategies.
 
-import { extractBlocks } from './blocks.ts';
+import { blockDisplayName, extractBlocks } from './blocks.ts';
 import { priceFailure, type PriceFailure } from './data.ts';
 import type { Diagnostic } from './dsl.ts';
 import type { AssetState } from './engine.ts';
@@ -279,8 +279,8 @@ export function sortRows(rows: DashRow[], sort: SortState): DashRow[] {
 export interface DashboardHost {
   /** Every strategy block in the vault. Called once when a round starts, with whether it is forced: the place to drop saved results. */
   find(force: boolean): Promise<(Place & { source: string })[]>;
-  /** Runs one strategy, reusing a recent result. `force` fetches its prices again. */
-  run(source: string, force: boolean): Promise<RunOutput>;
+  /** Runs one strategy, reusing a recent result. `force` fetches its prices again. `notePath` resolves DAG links. */
+  run(source: string, force: boolean, notePath?: string): Promise<RunOutput>;
   /** Opens the note at the strategy's block, drawn open. */
   openBlock(note: string, name: string, line?: number): void;
   /** Asks for a starter strategy and makes a new note with it. */
@@ -322,7 +322,7 @@ export async function runRound(host: DashboardHost, config: DashboardConfig, for
     let row: DoneRow | FailedRow;
     let out: RunOutput | undefined;
     try {
-      out = await host.run(f.source, force);
+      out = await host.run(f.source, force, f.note);
       row = { ...rowFrom(f.note, f.name, out, host.now()), ...at(f) };
     } catch (e) {
       row = { ...failedRow(f.note, f.name, e, f.source), ...at(f) };
@@ -398,7 +398,7 @@ export async function findStrategies<N extends { path: string; basename: string 
     if (++read % NOTES_PER_PAUSE === 0) await vault.pause();
     const text = await vault.read(note);
     if (!text.includes(lang)) continue;
-    extractBlocks(text, lang).forEach((b, i, all) => found.push({ note: note.path, name: b.name ?? (all.length > 1 ? `${note.basename} ${i + 1}` : note.basename), source: b.source, line: b.line }));
+    extractBlocks(text, lang).forEach((b, i, all) => found.push({ note: note.path, name: blockDisplayName(note.basename, b.name, i, all.length), source: b.source, line: b.line }));
   }
   return found;
 }

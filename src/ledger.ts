@@ -197,20 +197,6 @@ export function trialSpread(ledger: Ledger, perYear: number): { trials: number; 
   return { trials: n, variance: srs.reduce((s, x) => s + (x - mean) ** 2, 0) / (n - 1) };
 }
 
-/**
- * Aggregates distinct trials across an `extends` inheritance family so branching child variants cannot reset Deflated
- * Sharpe Ratio trial counts. Each trial hash is counted once across all family ledgers.
- */
-export function familyTrialSpread(ledgers: readonly Ledger[], perYear: number): { trials: number; variance: number } {
-  const merged: Record<string, Trial> = {};
-  for (const ledger of ledgers) {
-    for (const [id, t] of Object.entries(ledger.trials)) {
-      if (!Object.hasOwn(merged, id) || t[2] < merged[id][2]) merged[id] = t;
-    }
-  }
-  return trialSpread({ trials: merged, versions: [], resetAt: 0 }, perYear);
-}
-
 /** One run as the block's tries count it. */
 export interface TrialRun {
   hash: string;

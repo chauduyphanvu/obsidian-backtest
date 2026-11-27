@@ -3,6 +3,7 @@
 // trigger prices are kept with it the same way.
 
 import type { Backtest } from './backtest.ts';
+import { hasDagRefs, type ResolvedStrategy } from './dag.ts';
 import type { DataDeps } from './data.ts';
 import type { Defaults, Spec } from './dsl.ts';
 import { HOUR } from './format.ts';
@@ -29,6 +30,8 @@ export interface ResultsOptions {
   modified: (path: string) => Promise<number | null>;
   /** Where single runs go; the plugin's background workers unless a test hands in its own. */
   runs?: () => BlockRuns;
+  /** Resolves `extends:`, `universe: [[...]]`, and `[[Signal]]` DAG links before parsing and running. */
+  resolveDag?: (source: string, notePath: string) => Promise<ResolvedStrategy>;
 }
 
 export class Results {
@@ -132,19 +135,32 @@ export class Results {
   }
 
   /**
+   * Resolves any DAG references (`extends:`, `universe: [[...]]`, `[[Signal]]`) when `notePath` is given and
+   * `resolveDag` is configured; otherwise returns the original source untouched.
+   */
+  async resolveSource(source: string, notePath?: string): Promise<{ source: string; dag: ResolvedStrategy | null }> {
+    if (!notePath || !this.o.resolveDag || !hasDagRefs(source)) return { source, dag: null };
+    const dag = await this.o.resolveDag(source, notePath);
+    return { source: dag.mergedSource, dag };
+  }
+
+  /**
    * Runs a block's text, reusing a recent result for the same text, defaults and CSV files. A block that does not parse rejects
    * with its first problem. With `cachedOnly` nothing runs: a block with no kept result rejects. `background` is for a scan
    * of the vault, whose runs wait for those of the blocks on screen. `freshForMs` is how old saved prices may be. With
    * `triggers`, the result's trigger prices are worked out before its runs close, while the worker still holds its prices,
-   * so asking for them afterwards (triggers) finds them kept.
+   * so asking for them afterwards (triggers) finds them kept. When `notePath` is provided, DAG references are resolved
+   * before parsing, keying, and execution.
    */
-  async runSource(source: string, opts: { force?: boolean; freshForMs?: number; cachedOnly?: boolean; background?: boolean; triggers?: boolean } = {}): Promise<RunOutput> {
+  async runSource(source: string, opts: { force?: boolean; freshForMs?: number; cachedOnly?: boolean; background?: boolean; triggers?: boolean; notePath?: string } = {}): Promise<RunOutput> {
     const runs = this.newRuns();
     try {
-      const drawing = this.drawing(source, runs, { freshForMs: opts.freshForMs, background: opts.background });
+      const { source: runSource, dag } = await this.resolveSource(source, opts.notePath);
+      if (dag && dag.errors.length > 0) throw new Error(`Line ${dag.errors[0].line}: ${dag.errors[0].message}`);
+      const drawing = this.drawing(runSource, runs, { freshForMs: opts.freshForMs, background: opts.background });
       const { spec, errors } = drawing.parse();
       if (!spec) throw new Error(`Line ${errors[0].line}: ${errors[0].message}`);
-      const key = await this.resultKey(spec, source, drawing.defaults);
+      const key = await this.resultKey(spec, runSource, drawing.defaults);
       if (opts.cachedOnly) {
         const hit = this.kept(key, drawing.freshForMs);
         if (!hit) throw new Error('This strategy did not run at this time.');

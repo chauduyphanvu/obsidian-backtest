@@ -6,7 +6,7 @@ import { runAblation } from '../ablation.ts';
 import { extractBlocks, fencedBlocks } from '../blocks.ts';
 import { hasDagRefs, resolveStrategyDag, type VaultReader } from '../dag.ts';
 import { ALL_DOCS, docFor, type Doc } from '../docs.ts';
-import { parseSpec, type Diagnostic } from '../dsl.ts';
+import { commentAt, parseSpec, type Diagnostic } from '../dsl.ts';
 import { applyFix, suggestions, type Fix } from '../fixes.ts';
 import { languageJson, llmsFull, wordList } from '../llm-files.ts';
 import type { DataDeps } from '../data.ts';
@@ -161,6 +161,81 @@ function diagnose(file: string, text: string, b: FoundBlock): { problem: Problem
 
 const problemsOf = (file: string, text: string, b: FoundBlock): Problem[] => diagnose(file, text, b).map((x) => x.problem);
 
+/** Maps diagnostics parsed from a DAG-merged source back onto the child block without pointing at phantom or unrelated lines. */
+function mapMergedDiagnostics(file: string, b: FoundBlock, mergedSource: string, list: readonly Diagnostic[], severity: Problem['severity']): Problem[] {
+  const childRaw = b.source.split('\n');
+  const childCode = childRaw.map((raw) => {
+    const c = commentAt(raw);
+    const code = (c < 0 ? raw : raw.slice(0, c)).trim();
+    return code.startsWith('~') ? '' : code;
+  });
+  const mergedLines = mergedSource.split('\n');
+  const extendsIdx = childCode.findIndex((line) => /^extends\s*:/i.test(line));
+  const fallbackOffset = extendsIdx >= 0 ? extendsIdx + 1 : 1;
+
+  return list.map((d) => {
+    const mergedRaw = mergedLines[d.line - 1] ?? '';
+    const mergedTrim = mergedRaw.trim();
+    // 1. Exact same non-empty code line at the same 1-based offset in the child block.
+    if (d.line >= 1 && d.line <= childCode.length && mergedTrim !== '' && childCode[d.line - 1] === mergedTrim) {
+      return { file, block: b.name, line: b.start + d.line, column: null, severity, message: d.message, fixes: [] };
+    }
+    // 2. Exact code line moved due to canonical DAG reordering.
+    if (mergedTrim !== '') {
+      const exactHits = childCode.flatMap((line, idx) => (line === mergedTrim ? [idx] : []));
+      if (exactHits.length === 1) {
+        return { file, block: b.name, line: b.start + exactHits[0] + 1, column: null, severity, message: `[resolved] ${d.message}`, fixes: [] };
+      }
+    }
+    // 3. Offending token span uniquely present in a non-comment, non-muted child line (e.g. expanded `base` / `[[Signal]]`).
+    if (d.from !== undefined && d.to !== undefined && d.to > d.from) {
+      const token = mergedRaw.slice(d.from, d.to).trim();
+      if (token.length >= 2) {
+        const tokenHits = childCode.flatMap((line, idx) => (line.includes(token) ? [idx] : []));
+        if (tokenHits.length === 1) {
+          return { file, block: b.name, line: b.start + tokenHits[0] + 1, column: null, severity, message: `[resolved] ${d.message}`, fixes: [] };
+        }
+      }
+    }
+    // 4. Error originated in an inherited parent/signal/universe block: anchor on `extends:` (or block start) and tag `[resolved]`.
+    return {
+      file,
+      block: b.name,
+      line: b.start + fallbackOffset,
+      column: null,
+      severity,
+      message: `[resolved] ${d.message}`,
+      fixes: [],
+    };
+  });
+}
+
+/** Checks a note or bare block, resolving DAG references against `vaultRoot` when provided. */
+export async function checkSourceWithVault(text: string, file: string, vaultRoot?: string): Promise<{ blocks: number; problems: Problem[] }> {
+  const found = blocksIn(text, isNote(file));
+  if (!vaultRoot) return { blocks: found.length, problems: found.flatMap((b) => problemsOf(file, text, b)) };
+  const problems: Problem[] = [];
+  const reader = fsVaultReader(vaultRoot);
+  for (const b of found) {
+    if (hasDagRefs(b.source)) {
+      const relNote = file !== '-' && isNote(file) ? relative(vaultRoot, resolve(file)).replace(/\\/g, '/') : file;
+      const dag = await resolveStrategyDag(b.source, relNote, reader);
+      if (dag.errors.length > 0) {
+        for (const d of dag.errors) {
+          problems.push({ file, block: b.name, line: b.start + d.line, column: null, severity: 'error', message: d.message, fixes: [] });
+        }
+        continue;
+      }
+      const { errors: mergedErrs, warnings: mergedWarns } = parseSpec(dag.mergedSource);
+      problems.push(...mapMergedDiagnostics(file, b, dag.mergedSource, mergedErrs, 'error'));
+      problems.push(...mapMergedDiagnostics(file, b, dag.mergedSource, mergedWarns, 'warning'));
+    } else {
+      problems.push(...problemsOf(file, text, b));
+    }
+  }
+  return { blocks: found.length, problems };
+}
+
 /** Every problem in the strategy blocks of a note, or of a bare block, with lines counted in the note. */
 export function checkSource(text: string, file: string): { blocks: number; problems: Problem[] } {
   const found = blocksIn(text, isNote(file));
@@ -190,6 +265,8 @@ export function correctSource(text: string, file: string): { text: string; fixed
     let changed = false;
     // From the last block up, so a change leaves the lines of the blocks above it where they are.
     for (const b of blocksIn(text, isNote(file)).reverse()) {
+      // Never auto-fix unresolved DAG blocks against the raw parser (base/[[Signal]]/extends require vault resolution).
+      if (hasDagRefs(b.source)) continue;
       const one = diagnose(file, text, b).find((x) => x.fixes.length === 1);
       if (!one) continue;
       const source = applyFix(b.source.split('\n'), one.fixes[0]).join('\n');
@@ -278,8 +355,8 @@ async function check(files: string[], o: { json: boolean; fix: boolean }, io: Io
           continue;
         }
         const { errors: mergedErrs, warnings: mergedWarns } = parseSpec(dag.mergedSource);
-        for (const d of mergedErrs) problems.push({ file, block: b.name, line: b.start + d.line, column: null, severity: 'error', message: d.message, fixes: [] });
-        for (const d of mergedWarns) problems.push({ file, block: b.name, line: b.start + d.line, column: null, severity: 'warning', message: d.message, fixes: [] });
+        problems.push(...mapMergedDiagnostics(file, b, dag.mergedSource, mergedErrs, 'error'));
+        problems.push(...mapMergedDiagnostics(file, b, dag.mergedSource, mergedWarns, 'warning'));
       } else {
         problems.push(...problemsOf(file, text, b));
       }

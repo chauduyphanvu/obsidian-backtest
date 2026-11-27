@@ -1,8 +1,9 @@
 // Saved prices: the files in the plugin's cache folder, the column names of the CSV files read, and whether a block's
 // prices are all saved and fresh. The plugin hands in the vault's file calls and the network.
 
-import { csvColumnNames, type DataDeps } from './data.ts';
+import { csvColumnNames, type Cached, type DataDeps } from './data.ts';
 import { parseSpec, type Defaults, type Spec } from './dsl.ts';
+import { WeighedCache } from './limits.ts';
 import { ReadyMemo, loadNeeds } from './live-core.ts';
 import { Runner } from './runner.ts';
 import type { Bars } from './types.ts';
@@ -34,12 +35,21 @@ export interface PriceStoreOptions {
   sleep?: DataDeps['sleep'];
 }
 
+const PARSED_CACHE_ENTRIES = 80;
+const PARSED_CACHE_BYTES = 64_000_000;
+
+const cachedBytes = (entry: Cached): number => 64 * entry.bars.t.length + 8 * entry.bars.t.length * (entry.bars.columns?.length ?? 0);
+
 export class PriceStore {
   /** Whether each kind of block's prices are all saved and fresh, which the preview panel asks at every pause in typing. */
   readonly ready = new ReadyMemo();
   private dataDeps: DataDeps | null = null;
   /** Column names of the CSV files read so far, for completion after `column(`. A file that is deleted or renamed is forgotten. */
   private csvColumns = new Map<string, string[]>();
+  /** Bounded in-memory LRU of parsed price cache entries so vault scans don't re-read & JSON.parse() multi-MB files on every strategy. */
+  private parsedCache = new WeighedCache<Cached>({ maxEntries: PARSED_CACHE_ENTRIES, maxAgeMs: Infinity, weigh: cachedBytes, maxWeight: PARSED_CACHE_BYTES });
+  /** Monotonic generation incremented on invalidation/writes so stale in-flight reads never repopulate `parsedCache`. */
+  private cacheGen = 0;
   private o: PriceStoreOptions;
 
   constructor(o: PriceStoreOptions) {
@@ -56,15 +66,21 @@ export class PriceStore {
     for (const known of this.csvColumns.keys()) if (known === path || known.startsWith(`${path}/`)) this.csvColumns.delete(known);
   }
 
-  /** Drops every answer about readiness; the saved files stay (see removeSaved). */
+  /** Drops every answer about readiness and in-memory parsed price cache; the saved files stay (see removeSaved). */
   forget(): void {
+    this.cacheGen++;
     this.ready.changed();
+    this.parsedCache.clear();
   }
 
-  /** Removes the folder of saved price files. */
+  /** Removes the folder of saved price files and clears the in-memory parsed cache. */
   async removeSaved(): Promise<void> {
+    this.cacheGen++;
+    this.parsedCache.clear();
     const dir = this.o.cacheDir;
     if (await this.o.files.exists(dir)) await this.o.files.rmdir(dir, true);
+    this.cacheGen++;
+    this.parsedCache.clear();
   }
 
   deps(): DataDeps {
@@ -72,6 +88,7 @@ export class PriceStore {
     const adapter = this.o.files;
     const normalizePath = this.o.normalize;
     const file = (key: string) => `${this.o.cacheDir}/${key}.json`;
+    const cacheRead = async (key: string) => ((await adapter.exists(file(key))) ? adapter.read(file(key)) : null);
     // One object for the plugin's life, so several blocks asking for the same ticker share a download.
     this.dataDeps = {
       now: () => Date.now(),
@@ -90,12 +107,33 @@ export class PriceStore {
         if (p.toLowerCase().endsWith('.csv')) this.csvColumns.set(p, csvColumnNames(text));
         return text;
       },
-      // Each load parses the file's text again, so keeping the text in memory would save only the read.
-      cacheRead: async (key) => ((await adapter.exists(file(key))) ? adapter.read(file(key)) : null),
+      cacheRead,
+      cacheReadParsed: async (key) => {
+        const hit = this.parsedCache.get(key);
+        if (hit) return hit;
+        const gen = this.cacheGen;
+        const raw = await cacheRead(key);
+        if (!raw) return null;
+        try {
+          const parsed = JSON.parse(raw) as Cached;
+          if (parsed && parsed.bars && Array.isArray(parsed.bars.t)) {
+            if (gen === this.cacheGen) this.parsedCache.set(key, parsed);
+            return parsed;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      },
       cacheWrite: async (key, text) => {
+        this.cacheGen++;
         this.ready.changed();
+        this.parsedCache.delete(key);
         if (!(await adapter.exists(this.o.cacheDir))) await adapter.mkdir(this.o.cacheDir);
         await adapter.write(file(key), text);
+      },
+      cacheWriteParsed: (key, entry) => {
+        this.parsedCache.set(key, entry);
       },
     };
     return this.dataDeps;
@@ -103,7 +141,7 @@ export class PriceStore {
 
   /** The prices a block reads, from the saved files only: nothing is downloaded or written. Null when one is not saved. */
   async savedData(spec: Spec, defaults: Defaults): Promise<Map<string, Bars> | null> {
-    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
+    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, cacheWriteParsed: undefined, sleep: async () => {} };
     try {
       const { data } = await new Runner(offline, defaults, { freshForMs: Infinity }).loadPrices(spec);
       return data;
@@ -124,7 +162,7 @@ export class PriceStore {
     const known = this.ready.get(needs);
     if (known !== undefined) return known;
     const turn = this.ready.turn();
-    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, sleep: async () => {} };
+    const offline: DataDeps = { ...this.deps(), fetchText: () => Promise.reject(new Error('offline')), cacheWrite: async () => {}, cacheWriteParsed: undefined, sleep: async () => {} };
     try {
       const { prices, warnings } = await new Runner(offline, defaults, { freshForMs }).loadPrices(spec);
       // Loading prices warns only when a download failed and a saved copy, or nothing for a ticker's smaller bars, stood in.

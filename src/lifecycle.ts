@@ -50,8 +50,8 @@ export interface RealityTape {
   t: number[];
   /** Track 1: Current backtest model equity rebased to 1.0 at `deployedAt`. */
   model: number[];
-  /** Track 2: Point-in-time frozen forward shadow equity rebased to 1.0 (immune to dividend revisions). */
-  shadow: number[];
+  /** Track 2: Point-in-time frozen forward shadow equity rebased to 1.0 (null when no live signal log exists). */
+  shadow: number[] | null;
   /** Track 3: Realized broker equity rebased to 1.0 (null when no fills are recorded for this account/strategy). */
   realized: number[] | null;
   /** Bootstrap cone percentiles interpolated onto `t.length` bars. */
@@ -61,10 +61,10 @@ export interface RealityTape {
 
 export interface ShortfallBreakdown {
   modelReturn: number;
-  shadowReturn: number;
+  shadowReturn: number | null;
   realizedReturn: number | null;
-  /** Model return minus Shadow return (impact of retroactive Yahoo/Tiingo data revisions). */
-  dataRevisionGap: number;
+  /** Model return minus Shadow return (impact of retroactive Yahoo/Tiingo data revisions); null when shadow is unavailable. */
+  dataRevisionGap: number | null;
   /** Average realized execution slippage minus modeled slippage, in bps (positive = worse than modeled). */
   slippageDriftBps: number;
   /** Return cost of fills executed later than the modeled signal bar. */
@@ -145,7 +145,7 @@ export function buildDeploymentCommit(input: {
 }): DeploymentCommit {
   const { t } = input.bt.run;
   const deployedAt = t[t.length - 1];
-  const commitHash = hash(`${deployedAt}\u0000${stable(input.defaults)}\u0000${input.source}`).toString(36).slice(0, 6);
+  const commitHash = hash(`${deployedAt}\u0000${stable(input.defaults)}\u0000${input.source}`).toString(36);
   return {
     commitHash,
     version: input.version,
@@ -208,6 +208,7 @@ export function computeRealityTape(
   fillEvents: readonly LedgerEvent[] = [],
   accountName?: string,
   openingCash?: number,
+  opts: { soleStrategyAccount?: boolean } = {},
 ): RealityTape | null {
   const { t: allT, equity: allEq, exposure: allExp, cashReturn: allCash } = currentBt.run;
   const startIdx = allT.findIndex((x) => x >= commit.deployedAt);
@@ -216,15 +217,16 @@ export function computeRealityTape(
   const t = allT.slice(startIdx);
   const baseEq = allEq[startIdx] > 0 ? allEq[startIdx] : 1;
   const model = allEq.slice(startIdx).map((x) => x / baseEq);
-  // Shadow track defaults to model until logged signals diverge due to dividend/split revisions.
-  const shadow = [...model];
+  // Shadow track is null until point-in-time signals have been recorded (never silently alias model).
+  const shadow: number[] | null = commit.signalLog.length > 0 ? [...model] : null;
 
-  // Track 3: Realized equity if execution/ledger events exist for this account after deployment (include fills, dividends, cash flows, opening_balance).
+  // Track 3: Realized equity matches events explicitly attributed to this strategy regardless of account name,
+  // or untagged events in `accountName` only when `soleStrategyAccount: true` is certified by the caller.
+  const acctLower = accountName?.toLowerCase();
   const accountEvents = fillEvents.filter(
     (e) =>
       e.t >= commit.deployedAt &&
-      (!accountName || e.account.toLowerCase() === accountName.toLowerCase()) &&
-      (!e.strategy || e.strategy === commit.blockKey),
+      (e.strategy === commit.blockKey || (opts.soleStrategyAccount === true && !!acctLower && e.account.toLowerCase() === acctLower && !e.strategy)),
   );
   const liveFills = accountEvents.filter((e) => e.kind === 'fill');
   let realized: number[] | null = null;
@@ -232,9 +234,10 @@ export function computeRealityTape(
   let slipReturnImpact = 0;
   let executionLagCost = 0;
 
-  if (accountEvents.length > 0 && accountName) {
+  const effectiveAccount = accountEvents[0]?.account ?? accountName;
+  if (accountEvents.length > 0 && effectiveAccount) {
     const startCap = openingCash ?? currentBt.spec.capital;
-    const rawRealized = realizedEquitySeries(t, accountEvents, accountName, currentBt.data, { cash: startCap });
+    const rawRealized = realizedEquitySeries(t, accountEvents, effectiveAccount, currentBt.data, { cash: startCap });
     const r0 = rawRealized[0] > 0 ? rawRealized[0] : startCap;
     realized = rawRealized.map((x) => x / r0);
 
@@ -297,13 +300,14 @@ export function computeRealityTape(
     p90: Array.from({ length: n }, (_, k) => interpCone(commit.bootstrapCone.bars, commit.bootstrapCone.p90, k)),
   };
 
-  const activeTrack = realized ?? shadow;
+  const activeTrack = realized ?? shadow ?? model;
   const liveBars = n - 1;
   const modelReturn = model[n - 1] - 1;
-  const shadowReturn = shadow[n - 1] - 1;
+  const shadowReturn = shadow ? shadow[n - 1] - 1 : null;
   const realizedReturn = realized ? realized[n - 1] - 1 : null;
-  const dataRevisionGap = modelReturn - shadowReturn;
-  const totalRealGap = realizedReturn !== null ? shadowReturn - realizedReturn : 0;
+  const dataRevisionGap = shadowReturn !== null ? modelReturn - shadowReturn : null;
+  const referenceReturn = shadowReturn ?? modelReturn;
+  const totalRealGap = realizedReturn !== null ? referenceReturn - realizedReturn : 0;
   const overrideCost = realizedReturn !== null ? totalRealGap - executionLagCost - slipReturnImpact : 0;
 
   const liveDrawdown = Math.abs(maxDrawdown(activeTrack));

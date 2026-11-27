@@ -964,7 +964,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     const tokenByPos = !tuned && view.scrubLiterals?.sites.length ? new Map<string, HTMLElement>() : undefined;
     const well = sourcePanel(body, view.source, new Set(view.notes.map((n) => n.line)), scrubs, tokenByPos);
 
-    // Phase 5: Ambient "Standalone" <-> "+ In My Book" segmented lens toggle (shown when an Active Book is available).
+    // Phase 5: Click-to-run "Standalone" <-> "In Book" segmented lens toggle (never calls `view.book()` on mount).
     const bookHost = h(body, 'div', 'bt-book-host');
     bookHost.hidden = true;
     const standaloneWrap = h(body, 'div', 'bt-standalone-wrap');
@@ -973,34 +973,59 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     let redrawBook = () => {};
     let forceChartRedraw = () => {};
     if (view.book) {
-      void view.book().then((snap) => {
-        if (!snap || !root.isConnected) return;
-        activeBook = snap;
-        const switcher = h(tools, 'div', 'bt-lens-toggle');
-        switcher.setAttribute('role', 'group');
-        switcher.setAttribute('aria-label', 'Evaluation lens');
-        const btnStd = h(switcher, 'button', 'bt-lens-btn is-active', 'Standalone');
-        const btnBook = h(switcher, 'button', 'bt-lens-btn', 'In Book');
-        btnStd.type = btnBook.type = 'button';
-        redrawBook = () => {
-          if (lens === 'book' && activeBook) {
-            bookHost.replaceChildren();
-            renderBookPanel(bookHost, activeBook, onScreen.backtest);
-          }
-        };
-        const setLens = (next: 'standalone' | 'book') => {
-          lens = next;
-          btnStd.classList.toggle('is-active', lens === 'standalone');
-          btnBook.classList.toggle('is-active', lens === 'book');
-          standaloneWrap.hidden = lens === 'book';
-          bookHost.hidden = lens === 'standalone';
-          if (lens === 'book') redrawBook();
-          else forceChartRedraw();
-        };
-        btnStd.addEventListener('click', () => setLens('standalone'));
-        btnBook.addEventListener('click', () => setLens('book'));
-        tools.prepend(switcher);
-      }, () => {});
+      const loadBook = view.book;
+      const switcher = h(tools, 'div', 'bt-lens-toggle');
+      switcher.setAttribute('role', 'group');
+      switcher.setAttribute('aria-label', 'Evaluation lens');
+      const btnStd = h(switcher, 'button', 'bt-lens-btn is-active', 'Standalone');
+      const btnBook = h(switcher, 'button', 'bt-lens-btn', 'In Book');
+      btnStd.type = btnBook.type = 'button';
+      let bookChecked = false;
+      let bookToken = 0;
+      redrawBook = () => {
+        if (lens !== 'book') return;
+        bookHost.replaceChildren();
+        if (activeBook) renderBookPanel(bookHost, activeBook, onScreen.backtest);
+        else if (bookChecked) h(bookHost, 'div', 'bt-note', 'Add "book: active" to an account block to evaluate portfolio fit.');
+      };
+      const ensureBook = () => {
+        const mine = ++bookToken;
+        if (!activeBook) {
+          bookHost.replaceChildren();
+          h(bookHost, 'div', 'bt-note', 'Loading active book…');
+        } else {
+          redrawBook();
+        }
+        void loadBook().then(
+          (snap) => {
+            if (mine !== bookToken || !root.isConnected) return;
+            activeBook = snap;
+            bookChecked = true;
+            redrawBook();
+          },
+          () => {
+            if (mine !== bookToken || !root.isConnected) return;
+            activeBook = null;
+            bookChecked = true;
+            redrawBook();
+          },
+        );
+      };
+      const setLens = (next: 'standalone' | 'book') => {
+        lens = next;
+        btnStd.classList.toggle('is-active', lens === 'standalone');
+        btnBook.classList.toggle('is-active', lens === 'book');
+        standaloneWrap.hidden = lens === 'book';
+        bookHost.hidden = lens === 'standalone';
+        if (lens === 'book') ensureBook();
+        else {
+          bookToken++;
+          forceChartRedraw();
+        }
+      };
+      btnStd.addEventListener('click', () => setLens('standalone'));
+      btnBook.addEventListener('click', () => setLens('book'));
+      tools.prepend(switcher);
     }
 
     // Phase 6: Continuous Reality Tape & Executable Kill-Switch strip.
@@ -1145,24 +1170,73 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
     staleNote.setAttribute('aria-hidden', 'true');
     current = () => ({ tab: tabName(sectionsIn(rest.querySelector('.bt-sections')).find((d) => d.open) ?? null), span: chart.span(), more: figs.more() });
 
-    let ambientToken = 0;
-    const refreshAmbient = (out: RunOutput) => {
-      const mine = ++ambientToken;
-      if (view.stress) {
-        void view.stress(out)?.then(
+    let stressToken = 0;
+    let ablationToken = 0;
+    const renderStressTrigger = (out: RunOutput) => {
+      stressToken++;
+      stressHost.replaceChildren();
+      chart.setStress(null, 'all');
+      if (!view.stress) return;
+      const bar = h(stressHost, 'div', 'bt-stress-trigger');
+      const btn = h(bar, 'button', 'bt-chip-button bt-stress-run', 'Run stress test');
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        const mine = ++stressToken;
+        btn.disabled = true;
+        btn.textContent = 'Running stress test…';
+        const pending = view.stress!(out);
+        if (!pending) {
+          btn.disabled = false;
+          btn.textContent = 'Run stress test';
+          return;
+        }
+        void pending.then(
           (report) => {
-            if (mine !== ambientToken || !report || !root.isConnected) return;
+            if (mine !== stressToken || !root.isConnected) return;
+            if (!report) {
+              btn.disabled = false;
+              btn.textContent = 'Run stress test';
+              return;
+            }
             stressHost.replaceChildren();
             renderStressPanel(stressHost, report, (axis) => chart.setStress(report, axis));
             chart.setStress(report, 'all');
           },
-          () => {},
+          () => {
+            if (mine !== stressToken || !root.isConnected) return;
+            btn.disabled = false;
+            btn.textContent = 'Run stress test';
+          },
         );
-      }
-      if (view.ablation) {
-        void view.ablation(out)?.then(
+      });
+    };
+
+    const renderAblationTrigger = (out: RunOutput) => {
+      ablationToken++;
+      ablationHost.replaceChildren();
+      if (!view.ablation) return;
+      const bar = h(ablationHost, 'div', 'bt-ablation-trigger');
+      const btn = h(bar, 'button', 'bt-chip-button bt-ablation-run', 'Analyze clauses');
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        const mine = ++ablationToken;
+        btn.disabled = true;
+        btn.textContent = 'Analyzing clauses…';
+        const pending = view.ablation!(out);
+        if (!pending) {
+          btn.disabled = false;
+          btn.textContent = 'Analyze clauses';
+          return;
+        }
+        void pending.then(
           (report) => {
-            if (mine !== ambientToken || !report || !root.isConnected || report.clauses.length === 0) return;
+            if (mine !== ablationToken || !root.isConnected) return;
+            if (!report || report.clauses.length === 0) {
+              ablationHost.replaceChildren();
+              h(ablationHost, 'div', 'bt-ablation-empty', 'No individual clauses to analyze.');
+              return;
+            }
+            ablationOpen = true;
             const drawAblation = () => {
               ablationHost.replaceChildren();
               renderAblationStrip(ablationHost, report, {
@@ -1188,9 +1262,18 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
             };
             drawAblation();
           },
-          () => {},
+          () => {
+            if (mine !== ablationToken || !root.isConnected) return;
+            btn.disabled = false;
+            btn.textContent = 'Analyze clauses';
+          },
         );
-      }
+      });
+    };
+
+    const resetAnalyticsTriggers = (out: RunOutput) => {
+      renderStressTrigger(out);
+      renderAblationTrigger(out);
     };
 
     // The run as written stays on the chart as a dashed line while a slider shows other values, and each figure says how
@@ -1229,7 +1312,7 @@ export function renderResult(el: HTMLElement, view: ResultView): DrawnResult {
       const again = sectionsIn(rest.querySelector('.bt-sections')).find((d) => tabName(d) === open);
       if (again) again.open = true;
       redrawBook();
-      if (runAmbient) refreshAmbient(out);
+      if (runAmbient) resetAnalyticsTriggers(out);
     };
     // Between two frames of a drag only what is at the top is worth redrawing; the rest says it is out of date.
     show = (out, settled) => {

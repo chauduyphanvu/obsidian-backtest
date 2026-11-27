@@ -1,4 +1,4 @@
-import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountConfig, type AccountOrder } from './account.ts';
+import { accountOrders, accountStrategy, borrowedError, errorsBeforeRun, orderSteps, orderText, parseAccount, runAccount, STEP_WORDS, type AccountConfig, type AccountOrder, type Holding } from './account.ts';
 import type { CompareHost } from './compare.ts';
 import { priceFailure, type PriceFailure } from './data.ts';
 import type { Fill } from './dsl.ts';
@@ -481,8 +481,8 @@ export interface ScanHost {
   clear(): void;
   /** Every strategy block in the vault, with the line each opens on when known. */
   find(): Promise<{ note: string; name: string; source: string; line?: number }[]>;
-  /** Runs a block's text (Results.runSource). */
-  run(source: string, opts: { freshForMs?: number; background: boolean }): Promise<RunOutput>;
+  /** Runs a block's text (Results.runSource), passing `notePath` so DAG references resolve. */
+  run(source: string, opts: { freshForMs?: number; background: boolean; notePath?: string }): Promise<RunOutput>;
   /** The trigger prices of a result `run` gave (Results.triggers); absent, or null for a result, when there are none. */
   triggers?(out: RunOutput): Promise<TriggerReport | null> | null;
 }
@@ -500,7 +500,7 @@ export async function scanOrders(host: ScanHost, force: boolean, onProgress: (do
     let status: StrategyStatus;
     try {
       const freshForMs = force ? Date.now() - started : undefined;
-      const out = await host.run(f.source, { freshForMs, background: true });
+      const out = await host.run(f.source, { freshForMs, background: true, notePath: f.note });
       // A strategy is listed without its closes to watch when those could not be worked out.
       const triggers = (await host.triggers?.(out)?.catch(() => null)) ?? null;
       status = statusFrom(f.note, f.name, out, Date.now(), undefined, triggers);
@@ -526,6 +526,10 @@ export interface AccountStatus {
   error: string | null;
   /** The 0-based line of its note that the block opens on, when the scan knew it. */
   line?: number;
+  /** The raw Markdown `holdings:`/`cash:` baseline of the account block (for establishing a one-time `opening_balance` watermark on first fill). */
+  opening?: { holdings: Holding[]; cash: number };
+  /** Strategy block key when this account follows a single strategy (for attributing confirmed fills cleanly). */
+  strategyKey?: string;
 }
 
 /** What the scan of the vault's accounts needs from the plugin. */
@@ -533,7 +537,7 @@ export interface AccountScanHost {
   /** Every `account` block in the vault, with the line each opens on when known. */
   find(): Promise<{ note: string; name: string; source: string; line?: number }[]>;
   /** How the block in `note` finds and runs the strategies it lists; runs already kept are reused. */
-  strategies(note: string): CompareHost<{ basename: string }>;
+  strategies(note: string): CompareHost<{ basename: string; path?: string }>;
   /** Optional event-sourced `fills.jsonl` projection overriding static holdings & cash for `accountName`. */
   project?(accountName: string, config: AccountConfig): Promise<AccountConfig>;
 }
@@ -558,7 +562,13 @@ export async function scanAccounts(host: AccountScanHost): Promise<AccountStatus
       const strategies = runs.map((r) => accountStrategy(r.label, r.alloc, r.out));
       const effectiveConfig = host.project ? await host.project(f.name, config) : config;
       const plan = accountOrders(effectiveConfig, strategies);
-      return { ...status, orders: plan.orders.filter((o) => o.shares !== 0), asOf: Math.max(...strategies.map((s) => s.asOf)) };
+      return {
+        ...status,
+        orders: plan.orders.filter((o) => o.shares !== 0),
+        asOf: Math.max(...strategies.map((s) => s.asOf)),
+        opening: { holdings: config.holdings, cash: config.cash },
+        ...(runs.length === 1 && runs[0].blockKey ? { strategyKey: runs[0].blockKey } : {}),
+      };
     } catch (e) {
       return { ...status, error: e instanceof Error ? e.message : String(e) };
     }

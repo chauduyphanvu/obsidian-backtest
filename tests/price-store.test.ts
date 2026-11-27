@@ -108,3 +108,96 @@ test('a block whose saved prices are too old, or missing, needs a download', asy
   const none = store(vault());
   assert.equal(await none.pricesReady('universe: SPY\nbuy when true', defaults, 3_600_000), false);
 });
+
+test('loadBars reuses in-memory parsed price cache across repeated loads and invalidates on cacheWrite, forget, and removeSaved', async () => {
+  const { loadBars } = await import('../src/data.ts');
+  const now = Date.now();
+  const v = vault({ 'plugin/cache/yahoo-SPY-1d.json': saved(now - 1000) });
+  const s = store(v);
+  const deps = s.deps();
+  const ref = { name: 'SPY', source: 'yahoo' as const, id: 'SPY' };
+
+  const first = await loadBars(ref, '1d', 0, deps, false, { freshForMs: 3_600_000 });
+  const second = await loadBars(ref, '1d', 0, deps, false, { freshForMs: 3_600_000 });
+  assert.equal(first.bars, second.bars);
+  assert.equal(v.reads.length, 1, 'second loadBars should hit in-memory parsed cache without re-reading disk');
+
+  // Writing a new cache entry invalidates the in-memory parsed entry.
+  await deps.cacheWrite('yahoo-SPY-1d', saved(now - 500));
+  const third = await loadBars(ref, '1d', 0, deps, false, { freshForMs: 3_600_000 });
+  assert.equal(third.fetched, now - 500);
+  assert.equal(v.reads.length, 2);
+
+  // forget() clears the in-memory parsed cache.
+  s.forget();
+  await loadBars(ref, '1d', 0, deps, false, { freshForMs: 3_600_000 });
+  assert.equal(v.reads.length, 3);
+});
+
+test('failed incremental Binance refresh does not mutate cached Bars in PriceStore.parsedCache', async () => {
+  const { loadBars } = await import('../src/data.ts');
+  const start = Date.UTC(2024, 0, 1);
+  const initialBars = bars([100, 101, 102], { start });
+  const oldFetched = start + 10 * 86_400_000;
+  const v = vault({ 'plugin/cache/binance-BTCUSDT-1d.json': JSON.stringify({ fetched: oldFetched, since: 0, bars: initialBars }) });
+
+  let calls = 0;
+  const page1 = Array.from({ length: 1000 }, (_, i) => {
+    const t = start + (3 + i) * 86_400_000;
+    return [t, '105', '106', '104', '105', '10', t + 86_400_000 - 1];
+  });
+  const s = new PriceStore({
+    files: v.io,
+    cacheDir: 'plugin/cache',
+    normalize,
+    fetchText: async () => {
+      calls++;
+      if (calls === 1) return JSON.stringify(page1);
+      throw new Error('network dropped on page 2');
+    },
+  });
+  const deps = s.deps();
+  const ref = { name: 'BTCUSDT', source: 'binance' as const, id: 'BTCUSDT' };
+
+  // First load populates parsedCache with the 3-bar saved entry (using freshForMs: Infinity).
+  const before = await loadBars(ref, '1d', 0, deps, false, { freshForMs: Infinity });
+  assert.equal(before.bars.t.length, 3);
+
+  // Forced refresh downloads page 1 (1000 rows) then fails on page 2 -> falls back to cached 3-bar copy untouched!
+  const afterFail = await loadBars(ref, '1d', 0, deps, true, { freshForMs: 0 });
+  assert.equal(afterFail.stale, true);
+  assert.equal(afterFail.bars.t.length, 3, 'cached Bars must NOT be mutated by failed incremental Binance refresh');
+  assert.equal(before.bars.t.length, 3);
+});
+
+test('PriceStore cacheGen prevents a stale in-flight cacheReadParsed from repopulating parsedCache after forget()', async () => {
+  const now = Date.now();
+  let releaseRead!: (text: string) => void;
+  let readCount = 0;
+  const io: PriceFiles = {
+    exists: async () => true,
+    read: () => {
+      readCount++;
+      if (readCount === 1) return new Promise<string>((r) => (releaseRead = r));
+      return Promise.resolve(saved(now));
+    },
+    write: async () => {},
+    mkdir: async () => {},
+    rmdir: async () => {},
+  };
+  const s = new PriceStore({ files: io, cacheDir: 'plugin/cache', normalize, fetchText: offline });
+  const deps = s.deps();
+
+  const firstPromise = deps.cacheReadParsed!('yahoo-SPY-1d');
+  await new Promise((r) => setTimeout(r, 0));
+  // Invalidate while first read is in flight.
+  s.forget();
+  releaseRead(saved(now - 50_000));
+  const first = await firstPromise;
+  assert.equal(first?.fetched, now - 50_000);
+
+  // Next read must NOT see the stale first entry in parsedCache; it reads the fresh copy from disk.
+  const second = await deps.cacheReadParsed!('yahoo-SPY-1d');
+  assert.equal(second?.fetched, now);
+  assert.equal(readCount, 2);
+});
